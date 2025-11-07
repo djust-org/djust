@@ -105,7 +105,10 @@ class LiveView(View):
         """Render the view to HTML"""
         self._initialize_rust_view()
         self._sync_state_to_rust()
-        return self._rust_view.render()
+        html = self._rust_view.render()
+        # Post-process to hydrate React components
+        html = self._hydrate_react_components(html)
+        return html
 
     def render_with_diff(self) -> tuple[str, Optional[str]]:
         """
@@ -176,6 +179,68 @@ class LiveView(View):
             traceback.print_exc()
             return JsonResponse({'error': str(e)}, status=500)
 
+    def _hydrate_react_components(self, html: str) -> str:
+        """
+        Post-process HTML to hydrate React component placeholders with server-rendered content.
+
+        The Rust renderer creates <div data-react-component="Name" data-react-props='{...}'>children</div>
+        We need to call the Python renderer functions and inject their output.
+        """
+        import re
+        from .react import react_components
+        import json as json_module
+
+        # Pattern to match React component divs
+        pattern = r'<div data-react-component="([^"]+)" data-react-props=\'([^\']+)\'>(.*?)</div>'
+
+        def replace_component(match):
+            component_name = match.group(1)
+            props_json = match.group(2)
+            children = match.group(3)
+
+            # Parse props
+            try:
+                props = json_module.loads(props_json)
+            except json_module.JSONDecodeError:
+                props = {}
+
+            # Resolve any Django template variables in props (like {{ client_count }})
+            context = self.get_context_data()
+            resolved_props = {}
+            for key, value in props.items():
+                if isinstance(value, str) and '{{' in value and '}}' in value:
+                    # Extract variable name from {{ var_name }}
+                    var_match = re.search(r'\{\{\s*(\w+)\s*\}\}', value)
+                    if var_match:
+                        var_name = var_match.group(1)
+                        if var_name in context:
+                            resolved_props[key] = context[var_name]
+                        else:
+                            resolved_props[key] = value
+                    else:
+                        resolved_props[key] = value
+                else:
+                    resolved_props[key] = value
+
+            # Get the renderer for this component
+            renderer = react_components.get(component_name)
+
+            if renderer:
+                # Call the server-side renderer with resolved props
+                rendered_content = renderer(resolved_props, children)
+                # Create updated props JSON for client-side hydration
+                resolved_props_json = json_module.dumps(resolved_props).replace('"', '&quot;')
+                # Wrap with data attributes for client-side hydration
+                return f'<div data-react-component="{component_name}" data-react-props=\'{resolved_props_json}\'>{rendered_content}</div>'
+            else:
+                # No renderer found, return placeholder
+                return match.group(0)
+
+        # Replace all React component placeholders
+        html = re.sub(pattern, replace_component, html, flags=re.DOTALL)
+
+        return html
+
     def _inject_client_script(self, html: str) -> str:
         """Inject the LiveView client JavaScript into the HTML"""
         # For now, use a simple HTTP-based reactive approach
@@ -183,6 +248,33 @@ class LiveView(View):
         script = """
         <script>
             // Simple HTTP-based LiveView (fallback until WebSocket integration is complete)
+
+            // Client-side React Counter component (vanilla JS implementation)
+            function initReactCounters() {
+                document.querySelectorAll('[data-react-component="Counter"]').forEach(container => {
+                    const propsJson = container.dataset.reactProps;
+                    let props = {};
+                    try {
+                        props = JSON.parse(propsJson.replace(/&quot;/g, '"'));
+                    } catch(e) {}
+
+                    let count = props.initialCount || 0;
+                    const display = container.querySelector('.counter-display');
+                    const minusBtn = container.querySelectorAll('.btn-sm')[0];
+                    const plusBtn = container.querySelectorAll('.btn-sm')[1];
+
+                    if (display && minusBtn && plusBtn) {
+                        minusBtn.addEventListener('click', () => {
+                            count--;
+                            display.textContent = count;
+                        });
+                        plusBtn.addEventListener('click', () => {
+                            count++;
+                            display.textContent = count;
+                        });
+                    }
+                });
+            }
 
             function bindLiveViewEvents() {
                 // Find all interactive elements
@@ -284,6 +376,7 @@ class LiveView(View):
 
             document.addEventListener('DOMContentLoaded', function() {
                 console.log('[LiveView] Using HTTP mode (WebSocket integration pending)');
+                initReactCounters();  // Initialize client-side React components
                 bindLiveViewEvents();
             });
         </script>
