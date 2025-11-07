@@ -359,10 +359,43 @@ class LiveView(View):
             }
 
             // DOM patching utilities
+            // Find the root LiveView container (first child of body that's not a script)
+            function getLiveViewRoot() {
+                for (const child of document.body.childNodes) {
+                    if (child.nodeType === Node.ELEMENT_NODE && child.tagName !== 'SCRIPT') {
+                        return child;
+                    }
+                }
+                return document.body;
+            }
+
             function getNodeByPath(path) {
-                let node = document.body;
-                for (const index of path) {
-                    node = node.childNodes[index];
+                // Start from the LiveView root container, not body
+                let node = getLiveViewRoot();
+
+                // Empty path means the root itself
+                if (path.length === 0) {
+                    return node;
+                }
+
+                // Skip the first index if it's 0 (since we're already at the root)
+                const adjustedPath = path[0] === 0 ? path.slice(1) : path;
+
+                // Traverse the path, filtering out whitespace-only text nodes
+                // to match how the Rust HTML parser handles whitespace
+                for (const index of adjustedPath) {
+                    // Get non-whitespace children
+                    const children = Array.from(node.childNodes).filter(child => {
+                        // Keep element nodes
+                        if (child.nodeType === Node.ELEMENT_NODE) return true;
+                        // Keep non-empty text nodes
+                        if (child.nodeType === Node.TEXT_NODE) {
+                            return child.textContent.trim().length > 0;
+                        }
+                        return false;
+                    });
+
+                    node = children[index];
                     if (!node) return null;
                 }
                 return node;
@@ -397,7 +430,7 @@ class LiveView(View):
                 for (const patch of parsedPatches) {
                     const node = getNodeByPath(patch.path);
                     if (!node) {
-                        console.warn('[LiveView] Node not found at path:', patch.path);
+                        console.warn('[LiveView] Node not found at path:', patch.path, 'Patch type:', Object.keys(patch).filter(k => k !== 'path')[0]);
                         continue;
                     }
 
