@@ -181,3 +181,133 @@ class ChatView(LiveView):
                 'text': message,
                 'time': datetime.datetime.now().strftime("%H:%M"),
             })
+
+
+class ReactDemoView(LiveView):
+    """
+    React integration demo - showcases React components within LiveView templates
+
+    This demonstrates:
+    - Using JSX-style component syntax in templates
+    - Server-side rendering of React components with Rust
+    - Client-side hydration for interactivity
+    - Mixing server-side LiveView state with client-side React state
+    """
+    template_string = """
+    <div class="container">
+        <h1>React Integration Demo</h1>
+
+        <div class="demo-section">
+            <h2>Server Counter (LiveView)</h2>
+            <p>This counter is managed server-side with LiveView:</p>
+            <div class="server-counter">
+                <h3>Server Count: {{ server_count }}</h3>
+                <button @click="increment_server" class="btn btn-primary">Increment Server</button>
+            </div>
+        </div>
+
+        <div class="demo-section">
+            <h2>Client Counter (React)</h2>
+            <p>This counter is a React component with client-side state:</p>
+            <Counter initialCount="{{ client_count }}" label="Client Count" />
+        </div>
+
+        <div class="demo-section">
+            <h2>React Components</h2>
+            <Button variant="primary">Primary Button</Button>
+            <Button variant="secondary">Secondary Button</Button>
+            <Button variant="danger">Danger Button</Button>
+        </div>
+
+        <div class="demo-section">
+            <h2>Cards</h2>
+            <div class="card-grid">
+                <Card title="Welcome">
+                    This is a server-rendered React card component that will be hydrated on the client.
+                </Card>
+                <Card title="Features">
+                    <ul>
+                        <li>Server-side rendering with Rust</li>
+                        <li>Client-side React hydration</li>
+                        <li>Mix LiveView and React seamlessly</li>
+                    </ul>
+                </Card>
+            </div>
+        </div>
+
+        <div class="demo-section">
+            <h2>Todo List (React + LiveView)</h2>
+            <p>Todos managed server-side, rendered with React components:</p>
+            <div class="todo-list-react">
+                {% for todo in todos %}
+                <TodoItem text="{{ todo.text }}" completed="{{ todo.done }}" />
+                {% endfor %}
+            </div>
+            <form @submit="add_todo_item" class="todo-form">
+                <input type="text" name="text" placeholder="New todo..." class="form-control" />
+                <button type="submit" class="btn btn-primary">Add Todo</button>
+            </form>
+        </div>
+
+        <div class="demo-section">
+            <h2>Alerts</h2>
+            <Alert type="success">Operation completed successfully!</Alert>
+            <Alert type="warning" dismissible="true">This is a warning message.</Alert>
+            <Alert type="info">React components rendered with Django Rust Live.</Alert>
+        </div>
+
+        <style>
+            .container { max-width: 1200px; margin: 50px auto; font-family: Arial; }
+            .demo-section { margin: 30px 0; padding: 20px; background: #f9f9f9; border-radius: 8px; }
+            .demo-section h2 { margin-top: 0; color: #333; }
+            .server-counter { background: #e3f2fd; padding: 20px; border-radius: 5px; margin: 10px 0; }
+            .server-counter h3 { margin: 0 0 10px 0; color: #1976d2; }
+            .btn { padding: 10px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; }
+            .btn-primary { background: #007bff; color: white; }
+            .btn-secondary { background: #6c757d; color: white; }
+            .btn-danger { background: #dc3545; color: white; }
+            .btn:hover { opacity: 0.9; }
+            .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+            .card { background: white; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
+            .card-header { background: #f8f9fa; padding: 15px; border-bottom: 1px solid #ddd; }
+            .card-header h3 { margin: 0; font-size: 18px; color: #333; }
+            .card-body { padding: 15px; }
+            .todo-list-react { margin: 15px 0; }
+            .todo-form { display: flex; gap: 10px; margin-top: 15px; }
+            .form-control { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
+            .alert { padding: 15px; margin: 10px 0; border-radius: 5px; position: relative; }
+            .alert-success { background: #d4edda; border: 1px solid #c3e6cb; color: #155724; }
+            .alert-warning { background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; }
+            .alert-info { background: #d1ecf1; border: 1px solid #bee5eb; color: #0c5460; }
+            .counter-widget { background: white; padding: 20px; border-radius: 8px; text-align: center; }
+            .counter-label { font-size: 14px; color: #666; margin-bottom: 10px; }
+            .counter-display { font-size: 48px; font-weight: bold; color: #007bff; margin: 20px 0; }
+            .counter-controls { display: flex; justify-content: center; gap: 10px; }
+            .btn-sm { padding: 5px 15px; font-size: 12px; }
+            .todo-item { display: flex; align-items: center; gap: 10px; padding: 10px; background: white; margin: 5px 0; border-radius: 5px; }
+            .todo-item.completed .todo-text { text-decoration: line-through; color: #999; }
+            .todo-text { flex: 1; }
+        </style>
+    </div>
+    """
+
+    def mount(self, request, **kwargs):
+        """Initialize component state"""
+        # Import React components
+        from . import react_components  # Ensure components are registered
+
+        self.server_count = 0
+        self.client_count = 0
+        self.todos = [
+            {'text': 'Try React integration', 'done': False},
+            {'text': 'Build amazing apps', 'done': False},
+        ]
+
+    def increment_server(self):
+        """Increment server-side counter (LiveView state)"""
+        self.server_count += 1
+
+    def add_todo_item(self, text=""):
+        """Add a new todo item"""
+        if text.strip():
+            self.todos.append({'text': text, 'done': False})

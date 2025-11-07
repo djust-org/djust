@@ -8,6 +8,7 @@ powered by Rust for maximum performance.
 from .live_view import LiveView, live_view
 from .component import Component
 from .decorators import reactive, event_handler
+from .react import react_components, register_react_component, ReactMixin
 
 # Import Rust functions
 try:
@@ -30,4 +31,7 @@ __all__ = [
     "event_handler",
     "render_template",
     "diff_html",
+    "react_components",
+    "register_react_component",
+    "ReactMixin",
 ]
