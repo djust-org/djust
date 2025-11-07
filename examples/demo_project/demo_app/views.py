@@ -2,7 +2,7 @@
 Demo LiveView examples
 """
 
-from django_rust_live import LiveView
+from django_rust_live.simple_live_view import LiveView
 from django.views.generic import TemplateView
 
 

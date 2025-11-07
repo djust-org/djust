@@ -11,16 +11,16 @@ use pyo3::types::{PyBytes, PyDict};
 use serde_json;
 use std::collections::HashMap;
 
-/// A LiveView component that manages state and rendering
-#[pyclass]
-pub struct LiveView {
+/// A LiveView component that manages state and rendering (Rust backend)
+#[pyclass(name = "RustLiveView")]
+pub struct RustLiveViewBackend {
     template_source: String,
     state: HashMap<String, Value>,
     last_vdom: Option<VNode>,
 }
 
 #[pymethods]
-impl LiveView {
+impl RustLiveViewBackend {
     #[new]
     fn new(template_source: String) -> Self {
         Self {
@@ -149,8 +149,8 @@ fn diff_html(old_html: String, new_html: String) -> PyResult<String> {
 
 /// Python module
 #[pymodule]
-fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<LiveView>()?;
+fn django_rust_live(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<RustLiveViewBackend>()?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
     Ok(())

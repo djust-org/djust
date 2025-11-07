@@ -8,7 +8,11 @@ from typing import Any, Dict, Optional, Callable
 from django.http import HttpResponse, JsonResponse
 from django.views import View
 from django.template.loader import render_to_string
-from ._rust import LiveView as RustLiveView
+
+try:
+    from .django_rust_live import RustLiveView
+except ImportError:
+    RustLiveView = None
 
 
 class LiveView(View):
