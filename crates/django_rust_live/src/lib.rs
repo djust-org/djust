@@ -3,9 +3,9 @@
 //! This is the main crate that ties together templates, virtual DOM, and
 //! provides Python bindings for reactive server-side rendering.
 
-use django_rust_core::{Context, DjangoRustError, Result, Value};
+use django_rust_core::{Context, Value};
 use django_rust_templates::Template;
-use django_rust_vdom::{diff, parse_html, Patch, VNode};
+use django_rust_vdom::{diff, parse_html, VNode};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 use serde_json;
@@ -42,7 +42,7 @@ impl LiveView {
 
     /// Get current state
     fn get_state(&self, py: Python) -> PyResult<PyObject> {
-        let dict = PyDict::new(py);
+        let dict = PyDict::new_bound(py);
         for (k, v) in &self.state {
             dict.set_item(k, v.to_object(py))?;
         }
@@ -104,7 +104,7 @@ impl LiveView {
                 let bytes = rmp_serde::to_vec(&patches).map_err(|e| {
                     PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
                 })?;
-                Some(PyBytes::new(py, &bytes).into())
+                Some(PyBytes::new_bound(py, &bytes).into())
             } else {
                 None
             }
@@ -149,7 +149,7 @@ fn diff_html(old_html: String, new_html: String) -> PyResult<String> {
 
 /// Python module
 #[pymodule]
-fn _rust(_py: Python, m: &PyModule) -> PyResult<()> {
+fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<LiveView>()?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;

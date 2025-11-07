@@ -3,7 +3,7 @@
 //! This crate provides a virtual DOM with fast diffing algorithms to
 //! minimize DOM updates for reactive server-side rendering.
 
-use django_rust_core::{DjangoRustError, Result};
+use django_rust_core::Result;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -12,13 +12,11 @@ pub mod diff;
 pub mod patch;
 pub mod parser;
 
-use ahash::AHashMap;
-
 /// A virtual DOM node
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VNode {
     pub tag: String,
-    pub attrs: AHashMap<String, String>,
+    pub attrs: HashMap<String, String>,
     pub children: Vec<VNode>,
     pub text: Option<String>,
     pub key: Option<String>,
@@ -28,7 +26,7 @@ impl VNode {
     pub fn element(tag: impl Into<String>) -> Self {
         Self {
             tag: tag.into(),
-            attrs: AHashMap::new(),
+            attrs: HashMap::new(),
             children: Vec::new(),
             text: None,
             key: None,
@@ -38,7 +36,7 @@ impl VNode {
     pub fn text(content: impl Into<String>) -> Self {
         Self {
             tag: "#text".to_string(),
-            attrs: AHashMap::new(),
+            attrs: HashMap::new(),
             children: Vec::new(),
             text: Some(content.into()),
             key: None,
@@ -165,7 +163,7 @@ fn diff_html(old_html: String, new_html: String) -> PyResult<String> {
 }
 
 #[pymodule]
-fn django_rust_vdom(_py: Python, m: &PyModule) -> PyResult<()> {
+fn django_rust_vdom(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyVNode>()?;
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
     Ok(())

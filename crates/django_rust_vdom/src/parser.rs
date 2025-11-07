@@ -2,7 +2,7 @@
 
 use crate::VNode;
 use django_rust_core::{DjangoRustError, Result};
-use ahash::AHashMap;
+use std::collections::HashMap;
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
@@ -40,7 +40,7 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
             let mut vnode = VNode::element(tag);
 
             // Convert attributes
-            let mut attributes = AHashMap::new();
+            let mut attributes = HashMap::new();
             for attr in attrs.borrow().iter() {
                 attributes.insert(
                     attr.name.local.to_string(),

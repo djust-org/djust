@@ -53,8 +53,8 @@ impl Value {
     }
 }
 
-impl<'source> FromPyObject<'source> for Value {
-    fn extract(ob: &'source PyAny) -> PyResult<Self> {
+impl<'py> FromPyObject<'py> for Value {
+    fn extract_bound(ob: &pyo3::Bound<'py, PyAny>) -> PyResult<Self> {
         if ob.is_none() {
             Ok(Value::Null)
         } else if let Ok(b) = ob.extract::<bool>() {
