@@ -288,7 +288,7 @@ class LiveView(View):
                             e.preventDefault();
                             const params = {};
                             if (element.dataset.id) {
-                                params.todo_id = element.dataset.id;
+                                params.id = element.dataset.id;
                             }
                             await handleEvent(clickHandler, params);
                         });
