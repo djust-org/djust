@@ -13,4 +13,10 @@ urlpatterns = [
     path('react/', views.ReactDemoView.as_view(), name='react-demo'),
     path('performance/', views.PerformanceTestView.as_view(), name='performance-test'),
     path('datatable/', views.ProductDataTableView.as_view(), name='datatable'),
+
+    # Django Forms Integration
+    path('forms/', views.FormsIndexView.as_view(), name='forms-index'),
+    path('forms/registration/', views.RegistrationFormView.as_view(), name='forms-registration'),
+    path('forms/contact/', views.ContactFormView.as_view(), name='forms-contact'),
+    path('forms/profile/', views.ProfileFormView.as_view(), name='forms-profile'),
 ]
