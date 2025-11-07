@@ -4,6 +4,7 @@ LiveView base class and decorator for reactive Django views
 
 import json
 import asyncio
+import hashlib
 from typing import Any, Dict, Optional, Callable
 from django.http import HttpResponse, JsonResponse
 from django.views import View
@@ -13,6 +14,9 @@ try:
     from ._rust import RustLiveView
 except ImportError:
     RustLiveView = None
+
+# Global cache for RustLiveView instances (keyed by session_id + view_key)
+_rust_view_cache = {}
 
 
 class LiveView(View):
@@ -40,6 +44,7 @@ class LiveView(View):
         super().__init__(**kwargs)
         self._rust_view: Optional[RustLiveView] = None
         self._session_id: Optional[str] = None
+        self._cache_key: Optional[str] = None
 
     def get_template(self) -> str:
         """Get the template source for this view"""
@@ -89,11 +94,31 @@ class LiveView(View):
 
         return context
 
-    def _initialize_rust_view(self):
+    def _initialize_rust_view(self, request=None):
         """Initialize the Rust LiveView backend"""
         if self._rust_view is None:
+            # Try to get from cache if we have a session
+            if request and hasattr(request, 'session'):
+                view_key = f'liveview_{request.path}'
+                session_key = request.session.session_key
+                if not session_key:
+                    request.session.create()
+                    session_key = request.session.session_key
+
+                self._cache_key = f'{session_key}_{view_key}'
+
+                # Try to get cached RustLiveView
+                if self._cache_key in _rust_view_cache:
+                    self._rust_view = _rust_view_cache[self._cache_key]
+                    return
+
+            # Create new RustLiveView
             template_source = self.get_template()
             self._rust_view = RustLiveView(template_source)
+
+            # Cache it if we have a cache key
+            if self._cache_key:
+                _rust_view_cache[self._cache_key] = self._rust_view
 
     def _sync_state_to_rust(self):
         """Sync Python state to Rust backend"""
@@ -101,23 +126,23 @@ class LiveView(View):
             context = self.get_context_data()
             self._rust_view.update_state(context)
 
-    def render(self) -> str:
+    def render(self, request=None) -> str:
         """Render the view to HTML"""
-        self._initialize_rust_view()
+        self._initialize_rust_view(request)
         self._sync_state_to_rust()
         html = self._rust_view.render()
         # Post-process to hydrate React components
         html = self._hydrate_react_components(html)
         return html
 
-    def render_with_diff(self) -> tuple[str, Optional[str]]:
+    def render_with_diff(self, request=None) -> tuple[str, Optional[str]]:
         """
         Render the view and compute diff from last render.
 
         Returns:
             Tuple of (html, patches_json)
         """
-        self._initialize_rust_view()
+        self._initialize_rust_view(request)
         self._sync_state_to_rust()
         return self._rust_view.render_with_diff()
 
@@ -129,7 +154,8 @@ class LiveView(View):
         view_key = f'liveview_{request.path}'
         request.session[view_key] = self.get_context_data()
 
-        html = self.render()
+        # Initialize and render to establish baseline VDOM
+        html = self.render(request)
 
         # Inject LiveView client script
         html = self._inject_client_script(html)
@@ -168,7 +194,7 @@ class LiveView(View):
             request.session[view_key] = self.get_context_data()
 
             # Render with diff to get patches
-            html, patches_json = self.render_with_diff()
+            html, patches_json = self.render_with_diff(request)
 
             # Return patches if available, otherwise full HTML
             response = {}
