@@ -119,17 +119,36 @@ fn parse_jsx_component(chars: &mut std::iter::Peekable<std::str::Chars>) -> Resu
 
     while let Some(ch) = chars.next() {
         if ch == '<' && chars.peek() == Some(&'/') {
-            // Closing tag
-            if !child_text.is_empty() {
-                children.push(Token::Text(child_text.trim().to_string()));
+            // Potential closing tag - verify it matches our component name
+            // Save position by peeking ahead
+            let mut tag_name = String::new();
+            let mut temp_chars = chars.clone();
+            temp_chars.next(); // consume / in temp iterator
+
+            while let Some(&ch) = temp_chars.peek() {
+                if ch == '>' || ch.is_whitespace() {
+                    break;
+                }
+                tag_name.push(ch);
+                temp_chars.next();
             }
-            chars.next(); // consume /
-            // Skip to >
-            while chars.peek() != Some(&'>') {
-                chars.next();
+
+            if tag_name == name {
+                // This is our closing tag
+                chars.next(); // consume /
+                if !child_text.is_empty() {
+                    children.push(Token::Text(child_text.trim().to_string()));
+                }
+                // Skip to >
+                while chars.peek() != Some(&'>') {
+                    chars.next();
+                }
+                chars.next(); // consume >
+                break;
+            } else {
+                // This is a closing tag for nested HTML, add it as-is
+                child_text.push(ch); // add the '<'
             }
-            chars.next(); // consume >
-            break;
         } else {
             child_text.push(ch);
         }

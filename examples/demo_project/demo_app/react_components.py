@@ -64,14 +64,22 @@ def render_counter(props, children):
 def render_todo_item(props, children):
     """Server-side renderer for Todo item component."""
     text = props.get('text', '')
-    completed = props.get('completed', False)
+    completed_val = props.get('completed', False)
+    # Handle boolean string values
+    if isinstance(completed_val, str):
+        completed = completed_val.lower() in ('true', '1', 'yes')
+    else:
+        completed = bool(completed_val)
+
     class_name = 'todo-item' + (' completed' if completed else '')
+    # Escape text for use in data attribute
+    escaped_text = text.replace('"', '&quot;').replace("'", '&#39;')
 
     return f'''
-    <div class="{class_name}">
-        <input type="checkbox" {'checked' if completed else ''} />
+    <div class="{class_name}" data-todo-text="{escaped_text}">
+        <input type="checkbox" class="todo-checkbox" {'checked' if completed else ''} />
         <span class="todo-text">{text}</span>
-        <button class="btn btn-sm btn-danger">Delete</button>
+        <button class="btn btn-sm btn-danger todo-delete" data-todo-text="{escaped_text}">Delete</button>
     </div>
     '''
 

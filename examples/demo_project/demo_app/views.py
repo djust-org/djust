@@ -311,3 +311,7 @@ class ReactDemoView(LiveView):
         """Add a new todo item"""
         if text.strip():
             self.todos.append({'text': text, 'done': False})
+
+    def delete_todo_item(self, text=""):
+        """Delete a todo item by text"""
+        self.todos = [t for t in self.todos if t['text'] != text]

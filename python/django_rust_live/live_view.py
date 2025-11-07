@@ -351,6 +351,8 @@ class LiveView(View):
                             const doc = parser.parseFromString(data.html, 'text/html');
                             document.body.innerHTML = doc.body.innerHTML;
                             // Re-bind event handlers to new elements
+                            initReactCounters();  // Re-initialize React components
+                            initTodoItems();      // Re-initialize todo items
                             bindLiveViewEvents();
                         }
                     }
@@ -374,9 +376,33 @@ class LiveView(View):
                 return cookieValue;
             }
 
+            // Client-side TodoItem interactions
+            function initTodoItems() {
+                // Handle checkbox changes
+                document.querySelectorAll('.todo-checkbox').forEach(checkbox => {
+                    checkbox.addEventListener('change', function() {
+                        const todoItem = this.closest('.todo-item');
+                        if (this.checked) {
+                            todoItem.classList.add('completed');
+                        } else {
+                            todoItem.classList.remove('completed');
+                        }
+                    });
+                });
+
+                // Handle delete button clicks
+                document.querySelectorAll('.todo-delete').forEach(button => {
+                    button.addEventListener('click', async function() {
+                        const todoText = this.dataset.todoText;
+                        await handleEvent('delete_todo_item', { text: todoText });
+                    });
+                });
+            }
+
             document.addEventListener('DOMContentLoaded', function() {
                 console.log('[LiveView] Using HTTP mode (WebSocket integration pending)');
                 initReactCounters();  // Initialize client-side React components
+                initTodoItems();      // Initialize todo item checkboxes
                 bindLiveViewEvents();
             });
         </script>

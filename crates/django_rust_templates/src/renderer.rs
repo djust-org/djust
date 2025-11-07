@@ -80,8 +80,22 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
                 output.push_str(" data-react-props='");
                 let props_json: Vec<String> = props.iter()
                     .map(|(k, v)| {
-                        // Resolve variable references from context
-                        let resolved_value = if let Some(ctx_value) = context.get(v) {
+                        // Resolve Django template variable syntax: {{ var.path }}
+                        let resolved_value = if v.starts_with("{{") && v.ends_with("}}") {
+                            // Extract variable name from {{ ... }}
+                            let var_name = v.trim_start_matches("{{")
+                                .trim_end_matches("}}")
+                                .trim();
+
+                            // Try to resolve from context
+                            if let Some(ctx_value) = context.get(var_name) {
+                                ctx_value.to_string()
+                            } else {
+                                // Keep the original template syntax for Python-side resolution
+                                v.clone()
+                            }
+                        } else if let Some(ctx_value) = context.get(v) {
+                            // Direct variable reference (no {{ }})
                             ctx_value.to_string()
                         } else {
                             v.clone()
