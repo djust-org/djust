@@ -1,0 +1,21 @@
+[package]
+name = "django_rust_live"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "django_rust_live"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rmp-serde.workspace = true
+tokio.workspace = true
+ahash.workspace = true
+django_rust_core = { path = "../django_rust_core" }
+django_rust_templates = { path = "../django_rust_templates" }
+django_rust_vdom = { path = "../django_rust_vdom" }

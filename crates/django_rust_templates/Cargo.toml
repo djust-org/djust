@@ -1,0 +1,23 @@
+[package]
+name = "django_rust_templates"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ahash.workspace = true
+smallvec.workspace = true
+regex.workspace = true
+once_cell.workspace = true
+thiserror.workspace = true
+django_rust_core = { path = "../django_rust_core" }
+
+[dev-dependencies]
+criterion = "0.5"
