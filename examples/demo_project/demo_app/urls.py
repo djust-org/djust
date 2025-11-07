@@ -12,4 +12,5 @@ urlpatterns = [
     path('chat/', views.ChatView.as_view(), name='chat'),
     path('react/', views.ReactDemoView.as_view(), name='react-demo'),
     path('performance/', views.PerformanceTestView.as_view(), name='performance-test'),
+    path('datatable/', views.ProductDataTableView.as_view(), name='datatable'),
 ]

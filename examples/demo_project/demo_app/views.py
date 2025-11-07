@@ -4,6 +4,7 @@ Demo LiveView examples
 
 from django_rust_live import LiveView
 from django.views.generic import TemplateView
+from django.http import JsonResponse
 
 
 class IndexView(TemplateView):
@@ -702,3 +703,630 @@ class PerformanceTestView(LiveView):
         if item_id and hasattr(self, '_items'):
             item_id = int(item_id)
             self._items = [item for item in self._items if item['id'] != item_id]
+
+
+class ProductDataTableView(LiveView):
+    """
+    React DataTable demo - showcases hybrid LiveView + React components
+    
+    This view demonstrates how to integrate React components into LiveView:
+    - Server manages the data state  
+    - React handles rich UI (sorting, filtering, pagination)
+    - Custom POST handler returns JSON instead of patches
+    """
+    
+    # Disable normal LiveView patching for this view
+    use_dom_patching = False
+    
+    def get_template(self):
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Product DataTable - Django Rust Live</title>
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+            <link rel="stylesheet" href="/static/css/datatable.css">
+            <style>
+                body {
+                    background-color: #f5f5f5;
+                    padding: 20px;
+                }
+                .header {
+                    background: white;
+                    padding: 30px;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                    margin-bottom: 20px;
+                }
+                .stats {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                    gap: 15px;
+                    margin-top: 20px;
+                }
+                .stat-card {
+                    background: #f8f9fa;
+                    padding: 15px;
+                    border-radius: 6px;
+                    text-align: center;
+                }
+                .stat-value {
+                    font-size: 24px;
+                    font-weight: bold;
+                    color: #007bff;
+                }
+                .stat-label {
+                    font-size: 14px;
+                    color: #6c757d;
+                    margin-top: 5px;
+                }
+                .actions {
+                    display: flex;
+                    gap: 10px;
+                    margin-top: 15px;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container-fluid">
+                <div class="header">
+                    <h1>Product DataTable</h1>
+                    <p class="text-muted">Hybrid LiveView + React DataTable Example</p>
+                    
+                    <div class="stats">
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-total">{{ total_products }}</div>
+                            <div class="stat-label">Total Products</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-active">{{ active_products }}</div>
+                            <div class="stat-label">Active</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-value">${{ total_value }}</div>
+                            <div class="stat-label">Total Inventory Value</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-low-stock">{{ low_stock_count }}</div>
+                            <div class="stat-label">Low Stock Items</div>
+                        </div>
+                    </div>
+
+                    <div class="actions">
+                        <button onclick="handleAction('add_sample_products')" class="btn btn-primary">Add Sample Products</button>
+                        <button onclick="handleAction('clear_products')" class="btn btn-danger">Clear All</button>
+                        <button onclick="handleAction('toggle_inactive')" class="btn btn-secondary">Toggle Inactive</button>
+                    </div>
+                </div>
+
+                <!-- React DataTable Mount Point -->
+                <div id="react-datatable-root"></div>
+            </div>
+
+            <!-- React and Babel -->
+            <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+            <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+            <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+            <!-- Initial data from server -->
+            <script>
+                window.INITIAL_PRODUCTS = {{ products_json }};
+            </script>
+
+            <!-- DataTable Component + Initialization -->
+            <script type="text/babel">
+                const { useState, useEffect, useMemo } = React;
+
+                // DataTable Component
+                function DataTable({ data, columns, onEvent }) {
+                    console.log('[DataTable] Component called with', data?.length, 'items');
+                    const [sortColumn, setSortColumn] = useState(null);
+                    const [sortDirection, setSortDirection] = useState('asc');
+                    const [filterText, setFilterText] = useState('');
+                    const [currentPage, setCurrentPage] = useState(1);
+                    const [pageSize, setPageSize] = useState(10);
+
+                    // Sort data
+                    const sortedData = useMemo(() => {
+                        if (!sortColumn) return data;
+                        return [...data].sort((a, b) => {
+                            const aVal = a[sortColumn];
+                            const bVal = b[sortColumn];
+                            if (aVal === bVal) return 0;
+                            const comparison = aVal < bVal ? -1 : 1;
+                            return sortDirection === 'asc' ? comparison : -comparison;
+                        });
+                    }, [data, sortColumn, sortDirection]);
+
+                    // Filter data
+                    const filteredData = useMemo(() => {
+                        if (!filterText) return sortedData;
+                        const lowerFilter = filterText.toLowerCase();
+                        return sortedData.filter(row => {
+                            return columns.some(col => {
+                                const value = String(row[col.key] || '').toLowerCase();
+                                return value.includes(lowerFilter);
+                            });
+                        });
+                    }, [sortedData, filterText, columns]);
+
+                    // Paginate data
+                    const paginatedData = useMemo(() => {
+                        const start = (currentPage - 1) * pageSize;
+                        return filteredData.slice(start, start + pageSize);
+                    }, [filteredData, currentPage, pageSize]);
+
+                    const totalPages = Math.ceil(filteredData.length / pageSize);
+
+                    const handleSort = (columnKey) => {
+                        if (sortColumn === columnKey) {
+                            setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+                        } else {
+                            setSortColumn(columnKey);
+                            setSortDirection('asc');
+                        }
+                    };
+
+                    const handleRowClick = (row) => {
+                        if (onEvent) {
+                            onEvent('row_click', { id: row.id });
+                        }
+                    };
+
+                    const handlePageChange = (page) => {
+                        setCurrentPage(page);
+                    };
+
+                    // Define styles to avoid Django template {{ }} conflicts
+                    const thStyle = { cursor: 'pointer', userSelect: 'none' };
+                    const rowStyle = { cursor: 'pointer' };
+
+                    return (
+                        <div className="datatable-container">
+                            {/* Filter */}
+                            <div className="datatable-filter">
+                                <input
+                                    type="text"
+                                    className="form-control"
+                                    placeholder="Search..."
+                                    value={filterText}
+                                    onChange={(e) => {
+                                        setFilterText(e.target.value);
+                                        setCurrentPage(1);
+                                    }}
+                                />
+                            </div>
+
+                            {/* Table */}
+                            <div className="table-responsive">
+                                <table className="table table-striped table-hover">
+                                    <thead>
+                                        <tr>
+                                            {columns.map((col) => (
+                                                <th
+                                                    key={col.key}
+                                                    onClick={() => handleSort(col.key)}
+                                                    style={thStyle}
+                                                >
+                                                    {col.label}
+                                                    {sortColumn === col.key && (
+                                                        <span className="sort-indicator">
+                                                            {sortDirection === 'asc' ? ' ▲' : ' ▼'}
+                                                        </span>
+                                                    )}
+                                                </th>
+                                            ))}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {paginatedData.length === 0 ? (
+                                            <tr>
+                                                <td colSpan={columns.length} className="text-center text-muted">
+                                                    No data found
+                                                </td>
+                                            </tr>
+                                        ) : (
+                                            paginatedData.map((row, idx) => (
+                                                <tr
+                                                    key={row.id || idx}
+                                                    onClick={() => handleRowClick(row)}
+                                                    style={rowStyle}
+                                                >
+                                                    {columns.map((col) => (
+                                                        <td key={col.key}>
+                                                            {col.render
+                                                                ? col.render(row[col.key], row)
+                                                                : row[col.key]}
+                                                        </td>
+                                                    ))}
+                                                </tr>
+                                            ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            {/* Pagination */}
+                            <div className="datatable-pagination">
+                                <div className="pagination-info">
+                                    Showing {(currentPage - 1) * pageSize + 1} to{' '}
+                                    {Math.min(currentPage * pageSize, filteredData.length)} of{' '}
+                                    {filteredData.length} entries
+                                    {filterText && ` (filtered from ${data.length} total)`}
+                                </div>
+
+                                <div className="pagination-controls">
+                                    <select
+                                        className="form-control form-control-sm"
+                                        value={pageSize}
+                                        onChange={(e) => {
+                                            setPageSize(Number(e.target.value));
+                                            setCurrentPage(1);
+                                        }}
+                                    >
+                                        <option value="10">10</option>
+                                        <option value="25">25</option>
+                                        <option value="50">50</option>
+                                        <option value="100">100</option>
+                                    </select>
+
+                                    <nav>
+                                        <ul className="pagination pagination-sm mb-0">
+                                            <li className={`page-item ${currentPage === 1 ? 'disabled' : ''}`}>
+                                                <button
+                                                    className="page-link"
+                                                    onClick={() => handlePageChange(1)}
+                                                    disabled={currentPage === 1}
+                                                >
+                                                    First
+                                                </button>
+                                            </li>
+                                            <li className={`page-item ${currentPage === 1 ? 'disabled' : ''}`}>
+                                                <button
+                                                    className="page-link"
+                                                    onClick={() => handlePageChange(currentPage - 1)}
+                                                    disabled={currentPage === 1}
+                                                >
+                                                    Previous
+                                                </button>
+                                            </li>
+
+                                            {/* Page numbers */}
+                                            {[...Array(Math.min(5, totalPages))].map((_, i) => {
+                                                let pageNum;
+                                                if (totalPages <= 5) {
+                                                    pageNum = i + 1;
+                                                } else if (currentPage <= 3) {
+                                                    pageNum = i + 1;
+                                                } else if (currentPage >= totalPages - 2) {
+                                                    pageNum = totalPages - 4 + i;
+                                                } else {
+                                                    pageNum = currentPage - 2 + i;
+                                                }
+
+                                                return (
+                                                    <li
+                                                        key={pageNum}
+                                                        className={`page-item ${currentPage === pageNum ? 'active' : ''}`}
+                                                    >
+                                                        <button
+                                                            className="page-link"
+                                                            onClick={() => handlePageChange(pageNum)}
+                                                        >
+                                                            {pageNum}
+                                                        </button>
+                                                    </li>
+                                                );
+                                            })}
+
+                                            <li className={`page-item ${currentPage === totalPages ? 'disabled' : ''}`}>
+                                                <button
+                                                    className="page-link"
+                                                    onClick={() => handlePageChange(currentPage + 1)}
+                                                    disabled={currentPage === totalPages}
+                                                >
+                                                    Next
+                                                </button>
+                                            </li>
+                                            <li className={`page-item ${currentPage === totalPages ? 'disabled' : ''}`}>
+                                                <button
+                                                    className="page-link"
+                                                    onClick={() => handlePageChange(totalPages)}
+                                                    disabled={currentPage === totalPages}
+                                                >
+                                                    Last
+                                                </button>
+                                            </li>
+                                        </ul>
+                                    </nav>
+                                </div>
+                            </div>
+                        </div>
+                    );
+                }
+
+                // Bridge between server and React
+                let reactSetData = null;  // Will be set by React component
+
+                // Bridge between server and React
+                function LiveViewDataTable({ initialData }) {
+                    console.log('[DataTable] LiveViewDataTable rendering with', initialData?.length, 'products');
+                    const [data, setData] = useState(initialData);
+
+                    // Expose setData globally so server events can update it
+                    React.useEffect(() => {
+                        console.log('[DataTable] Setting up reactSetData');
+                        reactSetData = setData;
+                    }, []);
+
+                    // Handle events from React back to server
+                    const handleEvent = async (eventName, params) => {
+                        console.log('[React->Server] Event:', eventName, params);
+                        // Could send to server if needed
+                    };
+
+                    // Define columns
+                    const columns = [
+                        { key: 'id', label: 'ID' },
+                        { key: 'name', label: 'Product Name' },
+                        { key: 'category', label: 'Category' },
+                        {
+                            key: 'price',
+                            label: 'Price',
+                            render: (value) => (
+                                <span className="price">${value}</span>
+                            )
+                        },
+                        {
+                            key: 'stock',
+                            label: 'Stock',
+                            render: (value) => {
+                                const className = value < 10 ? 'stock low' : value < 50 ? 'stock medium' : 'stock high';
+                                return <span className={className}>{value}</span>;
+                            }
+                        },
+                        {
+                            key: 'is_active',
+                            label: 'Status',
+                            render: (value) => (
+                                <span className={`badge ${value ? 'badge-success' : 'badge-danger'}`}>
+                                    {value ? 'Active' : 'Inactive'}
+                                </span>
+                            )
+                        }
+                    ];
+
+                    console.log('[DataTable] Rendering DataTable component...');
+                    console.log('[DataTable] Data length:', data?.length);
+                    console.log('[DataTable] Columns:', columns);
+
+                    // Test simple render first
+                    if (!data || data.length === 0) {
+                        console.log('[DataTable] No data, rendering empty message');
+                        return React.createElement('div', { style: { padding: '20px', background: 'yellow' } },
+                            'No data available'
+                        );
+                    }
+
+                    console.log('[DataTable] Calling DataTable component');
+                    const result = React.createElement(DataTable, { data, columns, onEvent: handleEvent });
+                    console.log('[DataTable] Created element:', result);
+                    return result;
+                }
+
+                // Error Boundary
+                class ErrorBoundary extends React.Component {
+                    constructor(props) {
+                        super(props);
+                        this.state = { hasError: false, error: null };
+                    }
+
+                    static getDerivedStateFromError(error) {
+                        return { hasError: true, error };
+                    }
+
+                    componentDidCatch(error, errorInfo) {
+                        console.error('[ErrorBoundary] Caught error:', error, errorInfo);
+                    }
+
+                    render() {
+                        if (this.state.hasError) {
+                            return React.createElement('div', { style: { color: 'red', padding: '20px' } },
+                                React.createElement('h2', null, 'Something went wrong'),
+                                React.createElement('pre', null, this.state.error?.toString())
+                            );
+                        }
+                        return this.props.children;
+                    }
+                }
+
+                // Initial render
+                try {
+                    const rootElement = document.getElementById('react-datatable-root');
+                    console.log('[DataTable] Root element:', rootElement);
+
+                    if (!rootElement) {
+                        console.error('[DataTable] Could not find react-datatable-root element!');
+                    } else {
+                        const root = ReactDOM.createRoot(rootElement);
+                        console.log('[DataTable] ReactDOM root created, rendering...');
+                        console.log('[DataTable] INITIAL_PRODUCTS:', window.INITIAL_PRODUCTS);
+
+                        // Test with simple component first
+                        root.render(
+                            React.createElement(ErrorBoundary, null,
+                                React.createElement(LiveViewDataTable, { initialData: window.INITIAL_PRODUCTS })
+                            )
+                        );
+                        console.log('[DataTable] Render called successfully');
+                    }
+                } catch (error) {
+                    console.error('[DataTable] Error during initialization:', error);
+                }
+            </script>
+
+            <!-- Handle server actions -->
+            <script>
+                function getCookie(name) {
+                    let cookieValue = null;
+                    if (document.cookie && document.cookie !== '') {
+                        const cookies = document.cookie.split(';');
+                        for (let i = 0; i < cookies.length; i++) {
+                            const cookie = cookies[i].trim();
+                            if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                                break;
+                            }
+                        }
+                    }
+                    return cookieValue;
+                }
+
+                async function handleAction(action) {
+                    console.log('[Client] Action:', action);
+                    
+                    try {
+                        const response = await fetch(window.location.href, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-CSRFToken': getCookie('csrftoken'),
+                            },
+                            body: JSON.stringify({
+                                event: action,
+                                params: {}
+                            })
+                        });
+
+                        if (response.ok) {
+                            const data = await response.json();
+                            console.log('[Server] Response:', data);
+                            
+                            // Update stats
+                            if (data.stats) {
+                                document.getElementById('stat-total').textContent = data.stats.total_products;
+                                document.getElementById('stat-active').textContent = data.stats.active_products;
+                                document.getElementById('stat-value').textContent = '$' + data.stats.total_value;
+                                document.getElementById('stat-low-stock').textContent = data.stats.low_stock_count;
+                            }
+                            
+                            // Update React table data
+                            if (data.products && reactSetData) {
+                                reactSetData(data.products);
+                            }
+                        }
+                    } catch (error) {
+                        console.error('[Client] Error:', error);
+                    }
+                }
+            </script>
+        </body>
+        </html>
+        """
+
+    def post(self, request, *args, **kwargs):
+        """Override POST to return JSON instead of patches"""
+        import json
+
+        try:
+            # Ensure products is initialized
+            if not hasattr(self, 'products'):
+                self.products = self._generate_sample_products(20)
+
+            data = json.loads(request.body)
+            event = data.get('event')
+            params = data.get('params', {})
+
+            # Call the event handler
+            handler = getattr(self, event, None)
+            if handler and callable(handler):
+                if params:
+                    handler(**params)
+                else:
+                    handler()
+
+            # Return JSON with updated data and stats
+            total_value = sum(float(p['price']) * p['stock'] for p in self.products)
+            active_products = sum(1 for p in self.products if p['is_active'])
+            low_stock = sum(1 for p in self.products if p['stock'] < 10)
+
+            return JsonResponse({
+                'products': self.products,
+                'stats': {
+                    'total_products': len(self.products),
+                    'active_products': active_products,
+                    'total_value': f"{total_value:,.2f}",
+                    'low_stock_count': low_stock,
+                }
+            })
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return JsonResponse({'error': str(e)}, status=500)
+
+    def mount(self, request, **kwargs):
+        """Initialize with sample data"""
+        self.products = self._generate_sample_products(20)
+
+    def add_sample_products(self):
+        """Add more sample products"""
+        new_products = self._generate_sample_products(10, start_id=len(self.products) + 1)
+        self.products.extend(new_products)
+
+    def clear_products(self):
+        """Clear all products"""
+        self.products = []
+
+    def toggle_inactive(self):
+        """Toggle active status of some products"""
+        import random
+        for product in random.sample(self.products, min(5, len(self.products))):
+            product['is_active'] = not product['is_active']
+
+    def get_context_data(self):
+        """Provide data to template"""
+        import json
+        
+        total_value = sum(float(p['price']) * p['stock'] for p in self.products)
+        active_products = sum(1 for p in self.products if p['is_active'])
+        low_stock = sum(1 for p in self.products if p['stock'] < 10)
+
+        return {
+            'products': self.products,
+            'products_json': json.dumps(self.products),
+            'total_products': len(self.products),
+            'active_products': active_products,
+            'total_value': f"{total_value:,.2f}",
+            'low_stock_count': low_stock,
+        }
+
+    def _generate_sample_products(self, count, start_id=1):
+        """Generate sample product data"""
+        import random
+        
+        categories = ['Electronics', 'Clothing', 'Food', 'Books', 'Toys', 'Sports', 'Home & Garden']
+        adjectives = ['Premium', 'Deluxe', 'Standard', 'Economy', 'Pro', 'Ultra', 'Mini', 'Max']
+        nouns = ['Widget', 'Gadget', 'Device', 'Tool', 'Item', 'Product', 'Kit', 'Set']
+        
+        products = []
+        for i in range(count):
+            product_id = start_id + i
+            name = f"{random.choice(adjectives)} {random.choice(nouns)} {product_id}"
+            category = random.choice(categories)
+            price = round(random.uniform(9.99, 499.99), 2)
+            stock = random.randint(0, 200)
+            is_active = random.choice([True, True, True, False])  # 75% active
+            
+            products.append({
+                'id': product_id,
+                'name': name,
+                'category': category,
+                'price': str(price),
+                'stock': stock,
+                'is_active': is_active,
+            })
+        
+        return products
