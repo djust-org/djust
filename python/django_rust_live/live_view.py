@@ -193,17 +193,13 @@ class LiveView(View):
             # Save updated state back to session
             request.session[view_key] = self.get_context_data()
 
-            # Render with diff to get patches
-            html, patches_json = self.render_with_diff(request)
+            # TODO: Enable DOM diffing once parser whitespace handling is aligned
+            # Current issue: Rust scraper and browser DOM parsers handle whitespace
+            # and tree structure differently, causing path mismatches.
+            # For now, use full HTML replacement (still very fast with Rust rendering)
+            html = self.render(request)
 
-            # Return patches if available, otherwise full HTML
-            response = {}
-            if patches_json:
-                response['patches'] = patches_json
-            else:
-                response['html'] = html
-
-            return JsonResponse(response)
+            return JsonResponse({'html': html})
 
         except Exception as e:
             import traceback
@@ -556,7 +552,7 @@ class LiveView(View):
             }
 
             document.addEventListener('DOMContentLoaded', function() {
-                console.log('[LiveView] Initialized with Rust-powered DOM diffing');
+                console.log('[LiveView] Initialized with Rust-powered rendering');
                 initReactCounters();  // Initialize client-side React components
                 initTodoItems();      // Initialize todo item checkboxes
                 bindLiveViewEvents();
