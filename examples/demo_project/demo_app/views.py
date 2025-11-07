@@ -111,16 +111,20 @@ class TodoView(LiveView):
             })
             self.next_id += 1
 
-    def toggle_todo(self, todo_id=None):
-        if todo_id:
+    def toggle_todo(self, id=None, **kwargs):
+        # Accept both 'id' and 'todo_id' for backwards compatibility
+        item_id = id or kwargs.get('todo_id')
+        if item_id:
             for todo in self.todos:
-                if todo['id'] == int(todo_id):
+                if todo['id'] == int(item_id):
                     todo['done'] = not todo['done']
                     break
 
-    def delete_todo(self, todo_id=None):
-        if todo_id:
-            self.todos = [t for t in self.todos if t['id'] != int(todo_id)]
+    def delete_todo(self, id=None, **kwargs):
+        # Accept both 'id' and 'todo_id' for backwards compatibility
+        item_id = id or kwargs.get('todo_id')
+        if item_id:
+            self.todos = [t for t in self.todos if t['id'] != int(item_id)]
 
     @property
     def active_count(self):

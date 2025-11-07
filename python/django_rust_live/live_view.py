@@ -317,9 +317,9 @@ class LiveView(View):
                             if (e.target.type !== 'checkbox') {
                                 params.value = e.target.value;
                             }
-                            // Include data-id if present
+                            // Include data-id if present (use generic 'id' param name)
                             if (e.target.dataset.id) {
-                                params.todo_id = e.target.dataset.id;
+                                params.id = e.target.dataset.id;
                             }
                             await handleEvent(changeHandler, params);
                         });
@@ -376,26 +376,32 @@ class LiveView(View):
                 return cookieValue;
             }
 
-            // Client-side TodoItem interactions
+            // Client-side TodoItem interactions (only for React demo TodoItems)
             function initTodoItems() {
-                // Handle checkbox changes
+                // Handle checkbox changes for .todo-checkbox (React demo TodoItems)
                 document.querySelectorAll('.todo-checkbox').forEach(checkbox => {
-                    checkbox.addEventListener('change', function() {
-                        const todoItem = this.closest('.todo-item');
-                        if (this.checked) {
-                            todoItem.classList.add('completed');
-                        } else {
-                            todoItem.classList.remove('completed');
-                        }
-                    });
+                    if (!checkbox.dataset.reactInitialized) {
+                        checkbox.dataset.reactInitialized = 'true';
+                        checkbox.addEventListener('change', function() {
+                            const todoItem = this.closest('.todo-item');
+                            if (this.checked) {
+                                todoItem.classList.add('completed');
+                            } else {
+                                todoItem.classList.remove('completed');
+                            }
+                        });
+                    }
                 });
 
-                // Handle delete button clicks
+                // Handle delete button clicks for React demo TodoItems
                 document.querySelectorAll('.todo-delete').forEach(button => {
-                    button.addEventListener('click', async function() {
-                        const todoText = this.dataset.todoText;
-                        await handleEvent('delete_todo_item', { text: todoText });
-                    });
+                    if (!button.dataset.reactInitialized) {
+                        button.dataset.reactInitialized = 'true';
+                        button.addEventListener('click', async function() {
+                            const todoText = this.dataset.todoText;
+                            await handleEvent('delete_todo_item', { text: todoText });
+                        });
+                    }
                 });
             }
 
