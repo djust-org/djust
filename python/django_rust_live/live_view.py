@@ -154,6 +154,15 @@ class LiveView(View):
         view_key = f'liveview_{request.path}'
         request.session[view_key] = self.get_context_data()
 
+        # Clear any cached RustLiveView for this session/view to ensure fresh start
+        session_key = request.session.session_key
+        if not session_key:
+            request.session.create()
+            session_key = request.session.session_key
+        cache_key = f'{session_key}_{view_key}'
+        if cache_key in _rust_view_cache:
+            del _rust_view_cache[cache_key]
+
         # Initialize and render to establish baseline VDOM
         html = self.render(request)
 
