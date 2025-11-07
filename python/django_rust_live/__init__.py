@@ -9,6 +9,7 @@ from .live_view import LiveView, live_view
 from .component import Component
 from .decorators import reactive, event_handler
 from .react import react_components, register_react_component, ReactMixin
+from .forms import FormMixin, LiveViewForm, form_field
 
 # Import Rust functions
 try:
@@ -34,4 +35,7 @@ __all__ = [
     "react_components",
     "register_react_component",
     "ReactMixin",
+    "FormMixin",
+    "LiveViewForm",
+    "form_field",
 ]
