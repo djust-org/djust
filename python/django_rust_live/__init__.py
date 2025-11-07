@@ -11,7 +11,7 @@ from .decorators import reactive, event_handler
 
 # Import Rust functions
 try:
-    from .django_rust_live import render_template, diff_html, RustLiveView
+    from ._rust import render_template, diff_html, RustLiveView
 except ImportError as e:
     # Fallback for when Rust extension isn't built
     import warnings

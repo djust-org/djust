@@ -59,6 +59,7 @@ features = ["pyo3/extension-module"]
 module-name = "django_rust_live._rust"
 python-source = "python"
 bindings = "pyo3"
+manifest-path = "crates/django_rust_live/Cargo.toml"
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "tests.settings"

@@ -149,7 +149,7 @@ fn diff_html(old_html: String, new_html: String) -> PyResult<String> {
 
 /// Python module
 #[pymodule]
-fn django_rust_live(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustLiveViewBackend>()?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;

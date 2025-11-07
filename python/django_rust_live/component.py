@@ -3,7 +3,7 @@ Reusable LiveView components
 """
 
 from typing import Dict, Any, Optional
-from ._rust import LiveView as RustLiveView
+from ._rust import RustLiveView
 
 
 class Component:
