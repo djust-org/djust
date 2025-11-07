@@ -2,7 +2,7 @@
 
 use crate::VNode;
 use django_rust_core::{DjangoRustError, Result};
-use ahash::AHashMap;
+use std::collections::HashMap;
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
@@ -19,6 +19,31 @@ pub fn parse_html(html: &str) -> Result<VNode> {
 }
 
 fn find_root(handle: &Handle) -> Handle {
+    // html5ever wraps fragments in <html><head/><body>content</body></html>
+    // We want to find the actual content element, not the html wrapper
+
+    // First, find the <html> element
+    for child in handle.children.borrow().iter() {
+        if let NodeData::Element { ref name, .. } = child.data {
+            if name.local.as_ref() == "html" {
+                // Found <html>, now look for <body>
+                for html_child in child.children.borrow().iter() {
+                    if let NodeData::Element { ref name, .. } = html_child.data {
+                        if name.local.as_ref() == "body" {
+                            // Found <body>, return its first element child
+                            for body_child in html_child.children.borrow().iter() {
+                                if let NodeData::Element { .. } = body_child.data {
+                                    return body_child.clone();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: return first element found
     for child in handle.children.borrow().iter() {
         match child.data {
             NodeData::Element { .. } => return child.clone(),
@@ -40,7 +65,7 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
             let mut vnode = VNode::element(tag);
 
             // Convert attributes
-            let mut attributes = AHashMap::new();
+            let mut attributes = HashMap::new();
             for attr in attrs.borrow().iter() {
                 attributes.insert(
                     attr.name.local.to_string(),

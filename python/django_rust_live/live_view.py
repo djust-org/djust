@@ -8,7 +8,11 @@ from typing import Any, Dict, Optional, Callable
 from django.http import HttpResponse, JsonResponse
 from django.views import View
 from django.template.loader import render_to_string
-from ._rust import LiveView as RustLiveView
+
+try:
+    from ._rust import RustLiveView
+except ImportError:
+    RustLiveView = None
 
 
 class LiveView(View):
@@ -67,8 +71,14 @@ class LiveView(View):
 
         # Add all non-private attributes as context
         for key in dir(self):
-            if not key.startswith('_') and not callable(getattr(self, key)):
-                context[key] = getattr(self, key)
+            if not key.startswith('_'):
+                try:
+                    value = getattr(self, key)
+                    if not callable(value):
+                        context[key] = value
+                except (AttributeError, TypeError):
+                    # Skip class-only methods and other inaccessible attributes
+                    continue
 
         return context
 

@@ -1,6 +1,6 @@
 //! Template context management
 
-use crate::{errors::Result, Value};
+use crate::Value;
 use ahash::AHashMap;
 use std::collections::HashMap;
 

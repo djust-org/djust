@@ -4,7 +4,7 @@
 //! with Django template syntax, including variables, filters, tags, and
 //! template inheritance.
 
-use django_rust_core::{Context, DjangoRustError, Result, Value};
+use django_rust_core::{Context, Result, Value};
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use regex::Regex;
@@ -16,7 +16,6 @@ pub mod parser;
 pub mod renderer;
 pub mod tags;
 
-use lexer::Token;
 use parser::Node;
 use renderer::render_nodes;
 
@@ -79,7 +78,7 @@ fn render_template(source: String, context: HashMap<String, Value>) -> PyResult<
 
 /// Python module for template functionality
 #[pymodule]
-fn django_rust_templates(_py: Python, m: &PyModule) -> PyResult<()> {
+fn django_rust_templates(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Template>()?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     Ok(())

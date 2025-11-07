@@ -2,7 +2,7 @@
 
 use crate::filters;
 use crate::parser::Node;
-use django_rust_core::{Context, DjangoRustError, Result, Value};
+use django_rust_core::{Context, Result, Value};
 
 pub fn render_nodes(nodes: &[Node], context: &Context) -> Result<String> {
     let mut output = String::new();

@@ -1,6 +1,6 @@
 //! Template lexer for tokenizing Django template syntax
 
-use django_rust_core::{DjangoRustError, Result};
+use django_rust_core::Result;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
