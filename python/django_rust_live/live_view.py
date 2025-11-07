@@ -515,21 +515,45 @@ class LiveView(View):
                         node.removeAttribute(patch.RemoveAttr.key);
                     } else if (patch.InsertChild) {
                         const newChild = createNodeFromVNode(patch.InsertChild.node);
-                        const refChild = node.childNodes[patch.InsertChild.index];
+                        // Use filtered children to match path traversal
+                        const children = Array.from(node.childNodes).filter(child => {
+                            if (child.nodeType === Node.ELEMENT_NODE) return true;
+                            if (child.nodeType === Node.TEXT_NODE) {
+                                return child.textContent.trim().length > 0;
+                            }
+                            return false;
+                        });
+                        const refChild = children[patch.InsertChild.index];
                         if (refChild) {
                             node.insertBefore(newChild, refChild);
                         } else {
                             node.appendChild(newChild);
                         }
                     } else if (patch.RemoveChild) {
-                        const child = node.childNodes[patch.RemoveChild.index];
+                        // Use filtered children to match path traversal
+                        const children = Array.from(node.childNodes).filter(child => {
+                            if (child.nodeType === Node.ELEMENT_NODE) return true;
+                            if (child.nodeType === Node.TEXT_NODE) {
+                                return child.textContent.trim().length > 0;
+                            }
+                            return false;
+                        });
+                        const child = children[patch.RemoveChild.index];
                         if (child) {
                             node.removeChild(child);
                         }
                     } else if (patch.MoveChild) {
-                        const child = node.childNodes[patch.MoveChild.from];
+                        // Use filtered children to match path traversal
+                        const children = Array.from(node.childNodes).filter(child => {
+                            if (child.nodeType === Node.ELEMENT_NODE) return true;
+                            if (child.nodeType === Node.TEXT_NODE) {
+                                return child.textContent.trim().length > 0;
+                            }
+                            return false;
+                        });
+                        const child = children[patch.MoveChild.from];
                         if (child) {
-                            const refChild = node.childNodes[patch.MoveChild.to];
+                            const refChild = children[patch.MoveChild.to];
                             if (refChild) {
                                 node.insertBefore(child, refChild);
                             } else {
