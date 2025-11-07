@@ -231,4 +231,167 @@ mod tests {
         assert_eq!(patches.len(), 1);
         assert!(matches!(patches[0], Patch::Replace { .. }));
     }
+
+    #[test]
+    fn test_diff_with_whitespace_text_nodes() {
+        // Simulate what html5ever creates: element children interspersed with whitespace text nodes
+        // This is the structure we see in the real bug: form has 11 children in Rust VDOM
+        // (elements at even indices 0,2,4,6,8,10 and whitespace at odd indices 1,3,5,7,9)
+        let old = VNode::element("form").with_children(vec![
+            VNode::element("div").with_attr("class", "mb-3"),    // index 0
+            VNode::text("\n            "),                         // index 1 (whitespace)
+            VNode::element("div").with_attr("class", "mb-3"),    // index 2
+            VNode::text("\n            "),                         // index 3 (whitespace)
+            VNode::element("div").with_attr("class", "mb-3"),    // index 4
+            VNode::text("\n            "),                         // index 5 (whitespace)
+            VNode::element("button"),                             // index 6
+            VNode::text("\n        "),                            // index 7 (whitespace)
+        ]);
+
+        // After removing some validation error divs, we have fewer element children
+        let new = VNode::element("form").with_children(vec![
+            VNode::element("div").with_attr("class", "mb-3"),    // index 0
+            VNode::text("\n            "),                         // index 1 (whitespace)
+            VNode::element("div").with_attr("class", "mb-3"),    // index 2
+            VNode::text("\n            "),                         // index 3 (whitespace)
+            VNode::element("button"),                             // index 4
+            VNode::text("\n        "),                            // index 5 (whitespace)
+        ]);
+
+        let patches = diff_nodes(&old, &new, &[0, 0, 0, 1, 2]);
+
+        // Should generate RemoveChild patches for indices 6 and 7 (removed in reverse order)
+        assert!(patches.iter().any(|p| matches!(p,
+            Patch::RemoveChild { index: 7, .. }
+        )));
+        assert!(patches.iter().any(|p| matches!(p,
+            Patch::RemoveChild { index: 6, .. }
+        )));
+    }
+
+    #[test]
+    fn test_form_validation_error_removal() {
+        // Simulates the exact bug we encountered:
+        // Form field with conditional validation error div
+        //
+        // Before: <div class="mb-3">
+        //           <input>
+        //           <div class="invalid-feedback">Error message</div>
+        //         </div>
+        //
+        // After:  <div class="mb-3">
+        //           <input>
+        //         </div>
+
+        let old_field = VNode::element("div")
+            .with_attr("class", "mb-3")
+            .with_children(vec![
+                VNode::element("input").with_attr("class", "form-control is-invalid"),
+                VNode::text("\n                "),
+                VNode::element("div")
+                    .with_attr("class", "invalid-feedback")
+                    .with_child(VNode::text("Username is required")),
+                VNode::text("\n            "),
+            ]);
+
+        let new_field = VNode::element("div")
+            .with_attr("class", "mb-3")
+            .with_children(vec![
+                VNode::element("input").with_attr("class", "form-control"),
+                VNode::text("\n                "),
+                VNode::text("\n            "),
+            ]);
+
+        let patches = diff_nodes(&old_field, &new_field, &[0, 0, 0, 1, 2, 7]);
+
+        // Should remove the "is-invalid" class from input
+        assert!(patches.iter().any(|p| matches!(p,
+            Patch::SetAttr { key, value, .. }
+            if key == "class" && value == "form-control"
+        )));
+
+        // Should remove the validation error div at index 3 (removed after whitespace at index 2)
+        assert!(patches.iter().any(|p| matches!(p,
+            Patch::RemoveChild { index: 3, .. }
+        )));
+    }
+
+    #[test]
+    fn test_multiple_conditional_divs_removal() {
+        // Test the scenario where multiple form fields have validation errors cleared
+        // This creates patches targeting multiple child indices
+        let form_old = VNode::element("form").with_children(vec![
+            // Field 1 WITH error
+            VNode::element("div").with_attr("class", "mb-3").with_children(vec![
+                VNode::element("input"),
+                VNode::element("div").with_attr("class", "invalid-feedback"),
+            ]),
+            VNode::text("\n            "),
+            // Field 2 WITH error
+            VNode::element("div").with_attr("class", "mb-3").with_children(vec![
+                VNode::element("input"),
+                VNode::element("div").with_attr("class", "invalid-feedback"),
+            ]),
+            VNode::text("\n            "),
+            // Submit button
+            VNode::element("button"),
+        ]);
+
+        let form_new = VNode::element("form").with_children(vec![
+            // Field 1 WITHOUT error
+            VNode::element("div").with_attr("class", "mb-3").with_children(vec![
+                VNode::element("input"),
+            ]),
+            VNode::text("\n            "),
+            // Field 2 WITHOUT error
+            VNode::element("div").with_attr("class", "mb-3").with_children(vec![
+                VNode::element("input"),
+            ]),
+            VNode::text("\n            "),
+            // Submit button
+            VNode::element("button"),
+        ]);
+
+        let patches = diff_nodes(&form_old, &form_new, &[0, 0, 0, 1, 2]);
+
+        // Should generate patches to remove validation error divs from both fields
+        // These patches target child indices within each field div
+        let remove_patches: Vec<_> = patches.iter()
+            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
+            .collect();
+
+        assert_eq!(remove_patches.len(), 2, "Should remove 2 validation error divs");
+    }
+
+    #[test]
+    fn test_path_traversal_with_whitespace() {
+        // Ensure patches have correct paths when whitespace nodes are present
+        // Path should account for ALL children including whitespace
+        let old = VNode::element("div").with_children(vec![
+            VNode::element("span").with_child(VNode::text("A")),
+            VNode::text("\n    "),  // whitespace at index 1
+            VNode::element("span").with_child(VNode::text("B")),
+            VNode::text("\n    "),  // whitespace at index 3
+            VNode::element("span").with_child(VNode::text("C")),
+        ]);
+
+        let new = VNode::element("div").with_children(vec![
+            VNode::element("span").with_child(VNode::text("A")),
+            VNode::text("\n    "),  // whitespace at index 1
+            VNode::element("span").with_child(VNode::text("B-modified")),  // Changed
+            VNode::text("\n    "),  // whitespace at index 3
+            VNode::element("span").with_child(VNode::text("C")),
+        ]);
+
+        let patches = diff_nodes(&old, &new, &[5]);
+
+        // The text change in the second span should have path [5, 2, 0]
+        // [5] = parent div
+        // [2] = second span (accounting for whitespace at index 1)
+        // [0] = text node inside span
+        assert!(patches.iter().any(|p| matches!(p,
+            Patch::SetText { path, text, .. }
+            if path == &[5, 2, 0] && text == "B-modified"
+        )));
+    }
 }

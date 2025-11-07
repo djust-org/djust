@@ -5,6 +5,7 @@ LiveView base class and decorator for reactive Django views
 import json
 import asyncio
 import hashlib
+import sys
 from typing import Any, Dict, Optional, Callable
 from django.http import HttpResponse, JsonResponse
 from django.views import View
@@ -135,12 +136,12 @@ class LiveView(View):
         html = self._hydrate_react_components(html)
         return html
 
-    def render_with_diff(self, request=None) -> tuple[str, Optional[str]]:
+    def render_with_diff(self, request=None) -> tuple[str, Optional[str], int]:
         """
         Render the view and compute diff from last render.
 
         Returns:
-            Tuple of (html, patches_json)
+            Tuple of (html, patches_json, version)
         """
         self._initialize_rust_view(request)
         self._sync_state_to_rust()
@@ -148,7 +149,12 @@ class LiveView(View):
 
     def get(self, request, *args, **kwargs):
         """Handle GET requests - initial page load"""
+        # IMPORTANT: mount() must be called first to initialize clean state
         self.mount(request, **kwargs)
+
+        # Debug: Check field_errors state after mount
+        field_errors = getattr(self, 'field_errors', None)
+        print(f"[LiveView] GET request - field_errors after mount: {field_errors}", file=sys.stderr)
 
         # Store initial state in session
         view_key = f'liveview_{request.path}'
@@ -160,11 +166,31 @@ class LiveView(View):
             request.session.create()
             session_key = request.session.session_key
         cache_key = f'{session_key}_{view_key}'
+
+        print(f"[LiveView] GET request - cache_key: {cache_key}, exists: {cache_key in _rust_view_cache}", file=sys.stderr)
+
         if cache_key in _rust_view_cache:
+            print(f"[LiveView] Clearing cached RustLiveView for fresh session", file=sys.stderr)
             del _rust_view_cache[cache_key]
+            # Also clear our reference so a new one will be created
+            self._rust_view = None
+            self._cache_key = None
 
         # Initialize and render to establish baseline VDOM
+        # The render() call will create a new RustLiveView with the initial HTML,
+        # establishing the correct baseline VDOM that matches what the browser will have.
         html = self.render(request)
+
+        # Debug: Save the rendered HTML to a file for inspection
+        if 'registration' in request.path:
+            form_start = html.find('<form')
+            if form_start != -1:
+                form_end = html.find('</form>', form_start) + 7
+                form_html = html[form_start:form_end]
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.html', prefix='registration_form_') as f:
+                    f.write(form_html)
+                    print(f"[LiveView] Saved form HTML to {f.name}", file=sys.stderr)
 
         # Inject LiveView client script
         html = self._inject_client_script(html)
@@ -203,11 +229,13 @@ class LiveView(View):
             request.session[view_key] = self.get_context_data()
 
             # Render with diff to get patches
-            html, patches_json = self.render_with_diff(request)
+            html, patches_json, version = self.render_with_diff(request)
 
-            # Debug: log patch count
+            # Debug: log patch count and version
             import sys
             import json as json_module
+
+            print(f"[LiveView] VDOM version: {version}", file=sys.stderr)
 
             # Threshold for when to use patches vs full HTML
             PATCH_THRESHOLD = 100
@@ -217,22 +245,35 @@ class LiveView(View):
                 patch_count = len(patches)
                 print(f"[LiveView] Generated {patch_count} patches", file=sys.stderr)
 
-                if patch_count <= 20:
-                    for i, patch in enumerate(patches[:5]):  # Log first 5
-                        patch_type = patch.get('type', 'Unknown')
-                        print(f"  [{i}] {patch_type} at {patch.get('path', [])}", file=sys.stderr)
+                # Log ALL patches for debugging
+                for i, patch in enumerate(patches):
+                    patch_type = patch.get('type', 'Unknown')
+                    path = patch.get('path', [])
+                    index = patch.get('index', 'N/A')
 
-                # If patches are reasonable size, send only patches
+                    # Highlight patches that might target form children
+                    if len(path) >= 6 and path[4] == 2:  # Path suggests form element
+                        form_child_idx = path[5]
+                        print(f"  [{i}] {patch_type:12} path={path} index={index} <- FORM CHILD {form_child_idx}", file=sys.stderr)
+                    else:
+                        print(f"  [{i}] {patch_type:12} path={path} index={index}", file=sys.stderr)
+
+                # If patches are reasonable size, send patches with HTML fallback
                 # Otherwise send full HTML for efficiency
                 if patch_count <= PATCH_THRESHOLD:
-                    print(f"[LiveView] Sending patches only ({patch_count} patches)", file=sys.stderr)
-                    return JsonResponse({'patches': patches_json})
+                    print(f"[LiveView] Sending patches with HTML fallback ({patch_count} patches)", file=sys.stderr)
+                    # Include HTML as fallback in case patches fail on client
+                    # Note: We include a flag so client can tell us if it used the fallback
+                    return JsonResponse({'patches': patches_json, 'html': html, 'version': version, 'reset_on_fallback': True})
                 else:
-                    print(f"[LiveView] Too many patches ({patch_count}), sending full HTML", file=sys.stderr)
-                    return JsonResponse({'html': html})
+                    print(f"[LiveView] Too many patches ({patch_count}), sending full HTML and resetting VDOM cache", file=sys.stderr)
+                    # Reset VDOM cache since we're sending full HTML
+                    # This ensures next patches are calculated from the browser's normalized DOM
+                    self._rust_view.reset()
+                    return JsonResponse({'html': html, 'version': version})
             else:
                 # No changes, just send HTML
-                return JsonResponse({'html': html})
+                return JsonResponse({'html': html, 'version': version})
 
         except Exception as e:
             import traceback
@@ -309,6 +350,9 @@ class LiveView(View):
         <script>
             // Simple HTTP-based LiveView (fallback until WebSocket integration is complete)
 
+            // Track VDOM version for synchronization
+            let clientVdomVersion = null;
+
             // Client-side React Counter component (vanilla JS implementation)
             function initReactCounters() {
                 document.querySelectorAll('[data-react-component="Counter"]').forEach(container => {
@@ -373,9 +417,17 @@ class LiveView(View):
                         element.dataset.liveviewChangeBound = 'true';
                         element.addEventListener('change', async (e) => {
                             const params = {};
-                            // For non-checkbox inputs, include the value
-                            if (e.target.type !== 'checkbox') {
+                            // For checkboxes, send the checked state
+                            if (e.target.type === 'checkbox') {
+                                params.value = e.target.checked;
+                            } else {
+                                // For other inputs, send the value
                                 params.value = e.target.value;
+                            }
+                            // Include data-field if present (for form field validation)
+                            if (e.target.dataset.field) {
+                                params.field_name = e.target.dataset.field;
+                                console.log('[LiveView] Sending field_name:', params.field_name, 'value:', params.value);
                             }
                             // Include data-id if present (use generic 'id' param name)
                             if (e.target.dataset.id) {
@@ -388,10 +440,11 @@ class LiveView(View):
             }
 
             // DOM patching utilities
-            // Find the root LiveView container (first child of body that's not a script)
+            // Find the root LiveView container (first content element, skipping <link>, <style>, <script>)
             function getLiveViewRoot() {
+                const NON_CONTENT_TAGS = ['LINK', 'STYLE', 'SCRIPT'];
                 for (const child of document.body.childNodes) {
-                    if (child.nodeType === Node.ELEMENT_NODE && child.tagName !== 'SCRIPT') {
+                    if (child.nodeType === Node.ELEMENT_NODE && !NON_CONTENT_TAGS.includes(child.tagName)) {
                         return child;
                     }
                 }
@@ -399,33 +452,72 @@ class LiveView(View):
             }
 
             function getNodeByPath(path) {
-                // The Rust VDOM starts at the first element child of <body>
-                // Path [0] = root element, [0,0] = first child of root, etc.
+                // The Rust VDOM root matches getLiveViewRoot() (first content element)
+                // Path [0] = first child of root, [0,0] = first child of that, etc.
                 let node = getLiveViewRoot();
+
+                // DEBUG: Log root info
+                if (path.length > 0) {
+                    console.log(`[DEBUG-ROOT] Starting traversal from <${node.tagName}>, path length=${path.length}, path=${JSON.stringify(path)}`);
+                }
 
                 // Empty path means the root itself
                 if (path.length === 0) {
                     return node;
                 }
 
-                // Path starts at root (which we already have), so skip first index if it's 0
-                const adjustedPath = path[0] === 0 && path.length > 1 ? path.slice(1) : path;
+                // Traverse the path directly - no adjustment needed since roots are aligned
+                for (let i = 0; i < path.length; i++) {
+                    const index = path[i];
 
-                // Traverse the path, filtering out whitespace-only text nodes
-                // to match how the Rust HTML parser handles whitespace
-                for (let i = 0; i < adjustedPath.length; i++) {
-                    const index = adjustedPath[i];
-
-                    // Get non-whitespace children (matching Rust parser behavior)
+                    // Get children - Rust DOES filter whitespace-only text nodes
+                    // The parser.rs code filters with: if !text.trim().is_empty()
+                    // So we should do the same here
                     const children = Array.from(node.childNodes).filter(child => {
                         // Keep element nodes
                         if (child.nodeType === Node.ELEMENT_NODE) return true;
-                        // Keep non-empty text nodes (matching lines 82-87 in parser.rs)
+                        // Keep text nodes that have non-whitespace content
                         if (child.nodeType === Node.TEXT_NODE) {
                             return child.textContent.trim().length > 0;
                         }
                         return false;
                     });
+
+                    // DEBUG: Log at first few iterations
+                    if (i < 3) {
+                        console.log(`[DEBUG-PATH] Step ${i}: index=${index}, children=${children.length}, node=<${node.tagName || node.nodeName}>`);
+                        if (children.length === 0) {
+                            console.log(`[DEBUG-PATH] ZERO CHILDREN! node.childNodes.length=${node.childNodes.length}`);
+                            for (let j = 0; j < node.childNodes.length; j++) {
+                                const child = node.childNodes[j];
+                                console.log(`  Raw child[${j}]: type=${child.nodeType}, tag=${child.tagName || child.nodeName}`);
+                            }
+                        }
+                    }
+
+                    // DEBUG: Log when accessing the form's parent (card-body)
+                    if (i === 4 && path[0] === 0 && path[1] === 0 && path[2] === 0 && path[3] === 1 && path[4] === 2 && path.length > 5) {
+                        console.log(`[DEBUG] About to descend into child[${index}] of card-body`);
+                        console.log(`[DEBUG] card-body has ${children.length} children, about to access index ${index}`);
+                        if (index < children.length && children[index].nodeType === Node.ELEMENT_NODE) {
+                            const target = children[index];
+                            console.log(`[DEBUG] Target is <${target.tagName.toLowerCase()}>`);
+                            // Now show what THIS element's children are
+                            const targetChildren = Array.from(target.childNodes).filter(child => {
+                                if (child.nodeType === Node.ELEMENT_NODE) return true;
+                                if (child.nodeType === Node.TEXT_NODE) {
+                                    return child.textContent.trim().length > 0;
+                                }
+                                return false;
+                            });
+                            console.log(`[DEBUG] This element has ${targetChildren.length} filtered children`);
+                            targetChildren.forEach((child, idx) => {
+                                if (child.nodeType === Node.ELEMENT_NODE) {
+                                    console.log(`  [${idx}] <${child.tagName.toLowerCase()} class="${child.className || ''}">`);
+                                }
+                            });
+                        }
+                    }
 
                     if (index >= children.length) {
                         console.warn(`[LiveView] Index ${index} out of bounds, only ${children.length} children at path`, path.slice(0, i+1));
@@ -457,6 +549,10 @@ class LiveView(View):
                                 handleEvent(value, e);
                             });
                         } else {
+                            // Special handling for input value property
+                            if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
+                                elem.value = value;
+                            }
                             // Regular HTML attributes
                             elem.setAttribute(key, value);
                         }
@@ -498,6 +594,21 @@ class LiveView(View):
                 const parsedPatches = JSON.parse(patches);
                 console.log('[LiveView] Applying', parsedPatches.length, 'patches');
 
+                // Sort patches to ensure RemoveChild operations are applied in descending index order
+                // within the same path. This prevents index invalidation when removing multiple children.
+                parsedPatches.sort((a, b) => {
+                    // RemoveChild patches should come before other types at the same path
+                    if (a.type === 'RemoveChild' && b.type === 'RemoveChild') {
+                        // Same path? Sort by index descending (higher indices first)
+                        const pathA = JSON.stringify(a.path);
+                        const pathB = JSON.stringify(b.path);
+                        if (pathA === pathB) {
+                            return b.index - a.index; // Descending order
+                        }
+                    }
+                    return 0; // Maintain relative order for other patches
+                });
+
                 // Debug: log patch types for small patch sets
                 if (parsedPatches.length > 0 && parsedPatches.length <= 20) {
                     console.log('[LiveView] Patch count:', parsedPatches.length);
@@ -520,24 +631,23 @@ class LiveView(View):
 
                             // Try to traverse as far as we can to see where it breaks
                             let debugNode = getLiveViewRoot();
-                            const adjustedPath = patch.path[0] === 0 && patch.path.length > 1 ? patch.path.slice(1) : patch.path;
 
-                            for (let i = 0; i < adjustedPath.length; i++) {
+                            for (let i = 0; i < patch.path.length; i++) {
                                 const children = Array.from(debugNode.childNodes).filter(child => {
                                     if (child.nodeType === Node.ELEMENT_NODE) return true;
                                     if (child.nodeType === Node.TEXT_NODE) return child.textContent.trim().length > 0;
                                     return false;
                                 });
 
-                                console.warn(`  Path[${i}] = ${adjustedPath[i]}, available children:`, children.length,
+                                console.warn(`  Path[${i}] = ${patch.path[i]}, available children:`, children.length,
                                     children.map((c,idx) => `[${idx}]=${c.tagName||'TEXT'}`).join(', '));
 
-                                if (adjustedPath[i] >= children.length) {
-                                    console.warn(`  FAILED: Index ${adjustedPath[i]} out of bounds (only ${children.length} children)`);
+                                if (patch.path[i] >= children.length) {
+                                    console.warn(`  FAILED: Index ${patch.path[i]} out of bounds (only ${children.length} children)`);
                                     break;
                                 }
 
-                                debugNode = children[adjustedPath[i]];
+                                debugNode = children[patch.path[i]];
                             }
                         }
                         continue;
@@ -551,7 +661,17 @@ class LiveView(View):
                     } else if (patch.type === 'SetText') {
                         node.textContent = patch.text;
                     } else if (patch.type === 'SetAttr') {
-                        node.setAttribute(patch.key, patch.value);
+                        // Special handling for input value to preserve user input
+                        if (patch.key === 'value' && (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA')) {
+                            // Only update if the element is not currently focused (user is typing)
+                            if (document.activeElement !== node) {
+                                node.value = patch.value;
+                            }
+                            // Always update the attribute for consistency
+                            node.setAttribute(patch.key, patch.value);
+                        } else {
+                            node.setAttribute(patch.key, patch.value);
+                        }
                     } else if (patch.type === 'RemoveAttr') {
                         node.removeAttribute(patch.key);
                     } else if (patch.type === 'InsertChild') {
@@ -605,7 +725,14 @@ class LiveView(View):
                 }
 
                 console.log(`[LiveView] Patch summary: ${successCount} succeeded, ${failedCount} failed`);
-                return true; // Patches applied successfully
+
+                // If any patches failed, return false to trigger full HTML fallback
+                if (failedCount > 0) {
+                    console.warn(`[LiveView] ${failedCount} patches failed, will fall back to full HTML`);
+                    return false;
+                }
+
+                return true; // All patches applied successfully
             }
 
             async function handleEvent(eventName, params) {
@@ -626,11 +753,41 @@ class LiveView(View):
 
                     if (response.ok) {
                         const data = await response.json();
+
+                        // Check for version mismatch
+                        if (data.version !== undefined) {
+                            if (clientVdomVersion === null) {
+                                // First response, initialize version
+                                clientVdomVersion = data.version;
+                                console.log('[LiveView] Initialized VDOM version:', clientVdomVersion);
+                            } else if (clientVdomVersion !== data.version - 1) {
+                                // Version mismatch detected! Client and server are out of sync
+                                console.warn('[LiveView] VDOM version mismatch detected!');
+                                console.warn(`  Client expected version ${clientVdomVersion + 1}, but server is at ${data.version}`);
+                                console.warn('  Clearing client VDOM cache and using full HTML');
+
+                                // Force full HTML reload to resync
+                                if (data.html) {
+                                    const parser = new DOMParser();
+                                    const doc = parser.parseFromString(data.html, 'text/html');
+                                    document.body.innerHTML = doc.body.innerHTML;
+                                    clientVdomVersion = data.version;
+                                    initReactCounters();
+                                    initTodoItems();
+                                    bindLiveViewEvents();
+                                }
+                                return;
+                            }
+                            // Update client version
+                            clientVdomVersion = data.version;
+                        }
+
                         if (data.patches) {
                             // Try to apply DOM patches (efficient!)
                             const success = applyPatches(data.patches);
                             if (success === false && data.html) {
-                                // Patches failed/too many, fall back to HTML
+                                // Patches failed, fall back to HTML
+                                console.warn('[LiveView] Patches failed, falling back to full HTML');
                                 const parser = new DOMParser();
                                 const doc = parser.parseFromString(data.html, 'text/html');
                                 document.body.innerHTML = doc.body.innerHTML;

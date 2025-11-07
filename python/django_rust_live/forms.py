@@ -79,6 +79,14 @@ class FormMixin:
         if not field_name:
             return
 
+        # Ensure form state is initialized (defensive check)
+        if not hasattr(self, 'form_data'):
+            self.form_data = {}
+        if not hasattr(self, 'field_errors'):
+            self.field_errors = {}
+        if not hasattr(self, 'form_instance'):
+            self.form_instance = None
+
         # Update form data
         self.form_data[field_name] = value
 
@@ -99,6 +107,11 @@ class FormMixin:
 
                 # Run field-specific validators
                 field.run_validators(cleaned_value)
+
+                # Set up cleaned_data for custom clean methods
+                if not hasattr(form, 'cleaned_data'):
+                    form.cleaned_data = {}
+                form.cleaned_data[field_name] = cleaned_value
 
                 # Run form's clean method for this field if it exists
                 clean_method = getattr(form, f'clean_{field_name}', None)

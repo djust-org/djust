@@ -17,6 +17,8 @@ pub struct RustLiveViewBackend {
     template_source: String,
     state: HashMap<String, Value>,
     last_vdom: Option<VNode>,
+    /// Version number incremented on each render, used for VDOM synchronization
+    version: u64,
 }
 
 #[pymethods]
@@ -27,6 +29,7 @@ impl RustLiveViewBackend {
             template_source,
             state: HashMap::new(),
             last_vdom: None,
+            version: 0,
         }
     }
 
@@ -58,8 +61,8 @@ impl RustLiveViewBackend {
     }
 
     /// Render and compute diff from last render
-    /// Returns a tuple of (html, patches_json)
-    fn render_with_diff(&mut self) -> PyResult<(String, Option<String>)> {
+    /// Returns a tuple of (html, patches_json, version)
+    fn render_with_diff(&mut self) -> PyResult<(String, Option<String>, u64)> {
         let template = Template::new(&self.template_source)?;
         let context = Context::from_dict(self.state.clone());
         let html = template.render(&context)?;
@@ -84,12 +87,13 @@ impl RustLiveViewBackend {
         };
 
         self.last_vdom = Some(new_vdom);
+        self.version += 1;
 
-        Ok((html, patches))
+        Ok((html, patches, self.version))
     }
 
     /// Render and return patches as MessagePack bytes
-    fn render_binary_diff(&mut self, py: Python) -> PyResult<(String, Option<PyObject>)> {
+    fn render_binary_diff(&mut self, py: Python) -> PyResult<(String, Option<PyObject>, u64)> {
         let template = Template::new(&self.template_source)?;
         let context = Context::from_dict(self.state.clone());
         let html = template.render(&context)?;
@@ -113,13 +117,15 @@ impl RustLiveViewBackend {
         };
 
         self.last_vdom = Some(new_vdom);
+        self.version += 1;
 
-        Ok((html, patches_bytes))
+        Ok((html, patches_bytes, self.version))
     }
 
     /// Reset the view state
     fn reset(&mut self) {
         self.last_vdom = None;
+        self.version = 0;
     }
 }
 
