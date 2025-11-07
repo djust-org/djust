@@ -205,12 +205,34 @@ class LiveView(View):
             # Render with diff to get patches
             html, patches_json = self.render_with_diff(request)
 
-            # Always send both patches and HTML for fallback
-            response = {'html': html}
-            if patches_json:
-                response['patches'] = patches_json
+            # Debug: log patch count
+            import sys
+            import json as json_module
 
-            return JsonResponse(response)
+            # Threshold for when to use patches vs full HTML
+            PATCH_THRESHOLD = 100
+
+            if patches_json:
+                patches = json_module.loads(patches_json)
+                patch_count = len(patches)
+                print(f"[LiveView] Generated {patch_count} patches", file=sys.stderr)
+
+                if patch_count <= 20:
+                    for i, patch in enumerate(patches[:5]):  # Log first 5
+                        patch_type = patch.get('type', 'Unknown')
+                        print(f"  [{i}] {patch_type} at {patch.get('path', [])}", file=sys.stderr)
+
+                # If patches are reasonable size, send only patches
+                # Otherwise send full HTML for efficiency
+                if patch_count <= PATCH_THRESHOLD:
+                    print(f"[LiveView] Sending patches only ({patch_count} patches)", file=sys.stderr)
+                    return JsonResponse({'patches': patches_json})
+                else:
+                    print(f"[LiveView] Too many patches ({patch_count}), sending full HTML", file=sys.stderr)
+                    return JsonResponse({'html': html})
+            else:
+                # No changes, just send HTML
+                return JsonResponse({'html': html})
 
         except Exception as e:
             import traceback
@@ -416,25 +438,42 @@ class LiveView(View):
             }
 
             function createNodeFromVNode(vnode) {
-                if (vnode.type === 'Text') {
+                // VNode structure from Rust: { tag, text?, attrs, children, key? }
+                // Text nodes have tag === "#text" and a text field
+                if (vnode.tag === '#text') {
                     return document.createTextNode(vnode.text || '');
-                } else if (vnode.type === 'Element') {
-                    const elem = document.createElement(vnode.tag);
-                    // Set attributes
-                    if (vnode.attrs) {
-                        for (const [key, value] of Object.entries(vnode.attrs)) {
+                }
+
+                // Element nodes
+                const elem = document.createElement(vnode.tag);
+
+                // Set attributes and handle events
+                if (vnode.attrs) {
+                    for (const [key, value] of Object.entries(vnode.attrs)) {
+                        // Handle LiveView event attributes (@click, @change, etc.)
+                        if (key.startsWith('@')) {
+                            const eventName = key.substring(1);
+                            elem.addEventListener(eventName, (e) => {
+                                handleEvent(value, e);
+                            });
+                        } else {
+                            // Regular HTML attributes
                             elem.setAttribute(key, value);
                         }
                     }
-                    // Add children
-                    if (vnode.children) {
-                        for (const child of vnode.children) {
-                            elem.appendChild(createNodeFromVNode(child));
+                }
+
+                // Add children recursively
+                if (vnode.children && vnode.children.length > 0) {
+                    for (const child of vnode.children) {
+                        const childNode = createNodeFromVNode(child);
+                        if (childNode) {
+                            elem.appendChild(childNode);
                         }
                     }
-                    return elem;
                 }
-                return null;
+
+                return elem;
             }
 
             // Debug helper: log DOM structure
@@ -459,16 +498,16 @@ class LiveView(View):
                 const parsedPatches = JSON.parse(patches);
                 console.log('[LiveView] Applying', parsedPatches.length, 'patches');
 
-                // If there are too many patches (like adding 1000 items), it might be
-                // more efficient to just replace the whole container. This threshold
-                // can be tuned based on performance testing.
-                const PATCH_THRESHOLD = 100;
-                if (parsedPatches.length > PATCH_THRESHOLD) {
-                    console.log(`[LiveView] Too many patches (${parsedPatches.length}), falling back to full HTML replacement`);
-                    return false; // Signal to caller to use full HTML
+                // Debug: log patch types for small patch sets
+                if (parsedPatches.length > 0 && parsedPatches.length <= 20) {
+                    console.log('[LiveView] Patch count:', parsedPatches.length);
+                    for (let i = 0; i < Math.min(5, parsedPatches.length); i++) {
+                        console.log('  Patch', i, ':', parsedPatches[i].type, 'at', parsedPatches[i].path);
+                    }
                 }
 
                 let failedCount = 0;
+                let successCount = 0;
                 for (const patch of parsedPatches) {
                     const node = getNodeByPath(patch.path);
                     if (!node) {
@@ -504,17 +543,19 @@ class LiveView(View):
                         continue;
                     }
 
-                    if (patch.Replace) {
-                        const newNode = createNodeFromVNode(patch.Replace.node);
+                    successCount++;
+
+                    if (patch.type === 'Replace') {
+                        const newNode = createNodeFromVNode(patch.node);
                         node.parentNode.replaceChild(newNode, node);
-                    } else if (patch.SetText) {
-                        node.textContent = patch.SetText.text;
-                    } else if (patch.SetAttr) {
-                        node.setAttribute(patch.SetAttr.key, patch.SetAttr.value);
-                    } else if (patch.RemoveAttr) {
-                        node.removeAttribute(patch.RemoveAttr.key);
-                    } else if (patch.InsertChild) {
-                        const newChild = createNodeFromVNode(patch.InsertChild.node);
+                    } else if (patch.type === 'SetText') {
+                        node.textContent = patch.text;
+                    } else if (patch.type === 'SetAttr') {
+                        node.setAttribute(patch.key, patch.value);
+                    } else if (patch.type === 'RemoveAttr') {
+                        node.removeAttribute(patch.key);
+                    } else if (patch.type === 'InsertChild') {
+                        const newChild = createNodeFromVNode(patch.node);
                         // Use filtered children to match path traversal
                         const children = Array.from(node.childNodes).filter(child => {
                             if (child.nodeType === Node.ELEMENT_NODE) return true;
@@ -523,13 +564,13 @@ class LiveView(View):
                             }
                             return false;
                         });
-                        const refChild = children[patch.InsertChild.index];
+                        const refChild = children[patch.index];
                         if (refChild) {
                             node.insertBefore(newChild, refChild);
                         } else {
                             node.appendChild(newChild);
                         }
-                    } else if (patch.RemoveChild) {
+                    } else if (patch.type === 'RemoveChild') {
                         // Use filtered children to match path traversal
                         const children = Array.from(node.childNodes).filter(child => {
                             if (child.nodeType === Node.ELEMENT_NODE) return true;
@@ -538,11 +579,11 @@ class LiveView(View):
                             }
                             return false;
                         });
-                        const child = children[patch.RemoveChild.index];
+                        const child = children[patch.index];
                         if (child) {
                             node.removeChild(child);
                         }
-                    } else if (patch.MoveChild) {
+                    } else if (patch.type === 'MoveChild') {
                         // Use filtered children to match path traversal
                         const children = Array.from(node.childNodes).filter(child => {
                             if (child.nodeType === Node.ELEMENT_NODE) return true;
@@ -551,9 +592,9 @@ class LiveView(View):
                             }
                             return false;
                         });
-                        const child = children[patch.MoveChild.from];
+                        const child = children[patch.from];
                         if (child) {
-                            const refChild = children[patch.MoveChild.to];
+                            const refChild = children[patch.to];
                             if (refChild) {
                                 node.insertBefore(child, refChild);
                             } else {
@@ -562,6 +603,9 @@ class LiveView(View):
                         }
                     }
                 }
+
+                console.log(`[LiveView] Patch summary: ${successCount} succeeded, ${failedCount} failed`);
+                return true; // Patches applied successfully
             }
 
             async function handleEvent(eventName, params) {
