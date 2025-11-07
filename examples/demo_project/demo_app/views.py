@@ -1332,10 +1332,6 @@ class ProductDataTableView(LiveView):
                 'stock': stock,
                 'is_active': is_active,
             })
-<<<<<<< HEAD
-        
-        return products
-=======
 
         return products
 
@@ -2147,4 +2143,3 @@ class MyFormView(FormMixin, LiveView):
         </style>
     </div>
     """
->>>>>>> 62d42e8 (feat: Add comprehensive Django Forms integration with LiveView)
