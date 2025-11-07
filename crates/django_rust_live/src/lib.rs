@@ -7,7 +7,7 @@ use django_rust_core::{Context, Value};
 use django_rust_templates::Template;
 use django_rust_vdom::{diff, parse_html, VNode};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
+use pyo3::types::{PyBytes, PyDict, PyList};
 use serde_json;
 use std::collections::HashMap;
 
@@ -147,11 +147,68 @@ fn diff_html(old_html: String, new_html: String) -> PyResult<String> {
     })
 }
 
+/// Fast JSON serialization for Python objects
+/// Converts Python list/dict to JSON string using Rust's serde_json
+///
+/// Benefits:
+/// - Releases Python GIL during serialization (better for concurrent workloads)
+/// - More memory efficient for large datasets
+/// - Similar performance to Python json.dumps for small datasets
+#[pyfunction]
+fn fast_json_dumps(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<String> {
+    // Convert Python object to serde_json::Value
+    let value = python_to_json_value(py, obj)?;
+
+    // Release GIL and serialize to JSON string
+    py.allow_threads(|| {
+        serde_json::to_string(&value).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("JSON serialization error: {}", e))
+        })
+    })
+}
+
+/// Helper function to convert Python objects to serde_json::Value
+fn python_to_json_value(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    use serde_json::Value as JsonValue;
+
+    if obj.is_none() {
+        Ok(JsonValue::Null)
+    } else if let Ok(b) = obj.extract::<bool>() {
+        Ok(JsonValue::Bool(b))
+    } else if let Ok(i) = obj.extract::<i64>() {
+        Ok(JsonValue::Number(i.into()))
+    } else if let Ok(f) = obj.extract::<f64>() {
+        Ok(serde_json::Number::from_f64(f)
+            .map(JsonValue::Number)
+            .unwrap_or(JsonValue::Null))
+    } else if let Ok(s) = obj.extract::<String>() {
+        Ok(JsonValue::String(s))
+    } else if let Ok(list) = obj.downcast::<PyList>() {
+        let mut vec = Vec::new();
+        for item in list.iter() {
+            vec.push(python_to_json_value(py, &item)?);
+        }
+        Ok(JsonValue::Array(vec))
+    } else if let Ok(dict) = obj.downcast::<PyDict>() {
+        let mut map = serde_json::Map::new();
+        for (key, value) in dict.iter() {
+            let key_str = key.extract::<String>()?;
+            map.insert(key_str, python_to_json_value(py, &value)?);
+        }
+        Ok(JsonValue::Object(map))
+    } else {
+        // Try to convert to string as fallback
+        let s = obj.str()?.extract::<String>()?;
+        Ok(JsonValue::String(s))
+    }
+}
+
 /// Python module
 #[pymodule]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustLiveViewBackend>()?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
+    m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     Ok(())
 }

@@ -3,6 +3,7 @@ Demo LiveView examples
 """
 
 from django_rust_live import LiveView
+from django_rust_live._rust import fast_json_dumps
 from django.views.generic import TemplateView
 from django.http import JsonResponse
 
@@ -1288,15 +1289,17 @@ class ProductDataTableView(LiveView):
 
     def get_context_data(self):
         """Provide data to template"""
-        import json
-        
+        # Use Rust-powered JSON serialization
+        # Benefits: Releases GIL (better for concurrent workloads), more memory efficient
+        # Trade-off: Slightly slower than Python json.dumps for small datasets due to PyO3 overhead
+
         total_value = sum(float(p['price']) * p['stock'] for p in self.products)
         active_products = sum(1 for p in self.products if p['is_active'])
         low_stock = sum(1 for p in self.products if p['stock'] < 10)
 
         return {
             'products': self.products,
-            'products_json': json.dumps(self.products),
+            'products_json': fast_json_dumps(self.products),  # Rust-powered serialization
             'total_products': len(self.products),
             'active_products': active_products,
             'total_value': f"{total_value:,.2f}",
