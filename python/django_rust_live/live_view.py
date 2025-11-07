@@ -193,13 +193,17 @@ class LiveView(View):
             # Save updated state back to session
             request.session[view_key] = self.get_context_data()
 
-            # TODO: Enable DOM diffing once parser whitespace handling is aligned
-            # Current issue: Rust scraper and browser DOM parsers handle whitespace
-            # and tree structure differently, causing path mismatches.
-            # For now, use full HTML replacement (still very fast with Rust rendering)
-            html = self.render(request)
+            # Render with diff to get patches
+            html, patches_json = self.render_with_diff(request)
 
-            return JsonResponse({'html': html})
+            # Return patches if available, otherwise full HTML
+            response = {}
+            if patches_json:
+                response['patches'] = patches_json
+            else:
+                response['html'] = html
+
+            return JsonResponse(response)
 
         except Exception as e:
             import traceback
@@ -366,7 +370,8 @@ class LiveView(View):
             }
 
             function getNodeByPath(path) {
-                // Start from the LiveView root container, not body
+                // The Rust VDOM starts at the first element child of <body>
+                // Path [0] = root element, [0,0] = first child of root, etc.
                 let node = getLiveViewRoot();
 
                 // Empty path means the root itself
@@ -374,25 +379,31 @@ class LiveView(View):
                     return node;
                 }
 
-                // Skip the first index if it's 0 (since we're already at the root)
-                const adjustedPath = path[0] === 0 ? path.slice(1) : path;
+                // Path starts at root (which we already have), so skip first index if it's 0
+                const adjustedPath = path[0] === 0 && path.length > 1 ? path.slice(1) : path;
 
                 // Traverse the path, filtering out whitespace-only text nodes
                 // to match how the Rust HTML parser handles whitespace
-                for (const index of adjustedPath) {
-                    // Get non-whitespace children
+                for (let i = 0; i < adjustedPath.length; i++) {
+                    const index = adjustedPath[i];
+
+                    // Get non-whitespace children (matching Rust parser behavior)
                     const children = Array.from(node.childNodes).filter(child => {
                         // Keep element nodes
                         if (child.nodeType === Node.ELEMENT_NODE) return true;
-                        // Keep non-empty text nodes
+                        // Keep non-empty text nodes (matching lines 82-87 in parser.rs)
                         if (child.nodeType === Node.TEXT_NODE) {
                             return child.textContent.trim().length > 0;
                         }
                         return false;
                     });
 
+                    if (index >= children.length) {
+                        console.warn(`[LiveView] Index ${index} out of bounds, only ${children.length} children at path`, path.slice(0, i+1));
+                        return null;
+                    }
+
                     node = children[index];
-                    if (!node) return null;
                 }
                 return node;
             }
@@ -419,14 +430,60 @@ class LiveView(View):
                 return null;
             }
 
+            // Debug helper: log DOM structure
+            function debugNode(node, prefix = '') {
+                const children = Array.from(node.childNodes).filter(child => {
+                    if (child.nodeType === Node.ELEMENT_NODE) return true;
+                    if (child.nodeType === Node.TEXT_NODE) {
+                        return child.textContent.trim().length > 0;
+                    }
+                    return false;
+                });
+
+                return {
+                    tag: node.tagName || 'TEXT',
+                    text: node.nodeType === Node.TEXT_NODE ? node.textContent.substring(0, 20) : null,
+                    childCount: children.length,
+                    children: children.slice(0, 3).map((c, i) => `[${i}]: ${c.tagName || 'TEXT'}`)
+                };
+            }
+
             function applyPatches(patches) {
                 const parsedPatches = JSON.parse(patches);
                 console.log('[LiveView] Applying', parsedPatches.length, 'patches');
 
+                let failedCount = 0;
                 for (const patch of parsedPatches) {
                     const node = getNodeByPath(patch.path);
                     if (!node) {
-                        console.warn('[LiveView] Node not found at path:', patch.path, 'Patch type:', Object.keys(patch).filter(k => k !== 'path')[0]);
+                        failedCount++;
+                        if (failedCount === 1) {
+                            // Log first failure in detail
+                            console.warn('[LiveView] First failed patch at path:', patch.path);
+                            console.warn('Patch type:', Object.keys(patch).filter(k => k !== 'path')[0]);
+
+                            // Try to traverse as far as we can to see where it breaks
+                            let debugNode = getLiveViewRoot();
+                            const adjustedPath = patch.path[0] === 0 && patch.path.length > 1 ? patch.path.slice(1) : patch.path;
+
+                            for (let i = 0; i < adjustedPath.length; i++) {
+                                const children = Array.from(debugNode.childNodes).filter(child => {
+                                    if (child.nodeType === Node.ELEMENT_NODE) return true;
+                                    if (child.nodeType === Node.TEXT_NODE) return child.textContent.trim().length > 0;
+                                    return false;
+                                });
+
+                                console.warn(`  Path[${i}] = ${adjustedPath[i]}, available children:`, children.length,
+                                    children.map((c,idx) => `[${idx}]=${c.tagName||'TEXT'}`).join(', '));
+
+                                if (adjustedPath[i] >= children.length) {
+                                    console.warn(`  FAILED: Index ${adjustedPath[i]} out of bounds (only ${children.length} children)`);
+                                    break;
+                                }
+
+                                debugNode = children[adjustedPath[i]];
+                            }
+                        }
                         continue;
                     }
 
