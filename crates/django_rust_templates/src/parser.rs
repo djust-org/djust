@@ -23,6 +23,11 @@ pub enum Node {
     },
     Include(String),
     Comment,
+    ReactComponent {
+        name: String,
+        props: Vec<(String, String)>,
+        children: Vec<Node>,
+    },
 }
 
 pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
@@ -113,6 +118,22 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     Ok(Some(Node::Comment))
                 }
             }
+        }
+
+        Token::JsxComponent { name, props, children, .. } => {
+            // Convert token children to Node children
+            let mut child_nodes = Vec::new();
+            for child in children {
+                if let Token::Text(text) = child {
+                    child_nodes.push(Node::Text(text.clone()));
+                }
+            }
+
+            Ok(Some(Node::ReactComponent {
+                name: name.clone(),
+                props: props.clone(),
+                children: child_nodes,
+            }))
         }
 
         Token::Comment => Ok(Some(Node::Comment)),

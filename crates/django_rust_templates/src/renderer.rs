@@ -70,6 +70,40 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
             Ok(String::new())
         }
 
+        Node::ReactComponent { name, props, children } => {
+            // Render React component as data attributes for client-side hydration
+            let mut output = String::new();
+            output.push_str(&format!("<div data-react-component=\"{}\"", name));
+
+            // Add props as data attributes
+            if !props.is_empty() {
+                output.push_str(" data-react-props='");
+                let props_json: Vec<String> = props.iter()
+                    .map(|(k, v)| {
+                        // Resolve variable references from context
+                        let resolved_value = if let Some(ctx_value) = context.get(v) {
+                            ctx_value.to_string()
+                        } else {
+                            v.clone()
+                        };
+                        format!("\"{}\":\"{}\"", k, resolved_value.replace('"', "\\\""))
+                    })
+                    .collect();
+                output.push_str(&format!("{{{}}}", props_json.join(",")));
+                output.push('\'');
+            }
+
+            output.push('>');
+
+            // Render children
+            for child in children {
+                output.push_str(&render_node(child, context)?);
+            }
+
+            output.push_str("</div>");
+            Ok(output)
+        }
+
         Node::Comment => Ok(String::new()),
     }
 }
