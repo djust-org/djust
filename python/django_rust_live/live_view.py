@@ -167,12 +167,17 @@ class LiveView(View):
             # Save updated state back to session
             request.session[view_key] = self.get_context_data()
 
-            # Render full HTML
-            html = self.render()
+            # Render with diff to get patches
+            html, patches_json = self.render_with_diff()
 
-            return JsonResponse({
-                'html': html,
-            })
+            # Return patches if available, otherwise full HTML
+            response = {}
+            if patches_json:
+                response['patches'] = patches_json
+            else:
+                response['html'] = html
+
+            return JsonResponse(response)
 
         except Exception as e:
             import traceback
@@ -327,6 +332,85 @@ class LiveView(View):
                 });
             }
 
+            // DOM patching utilities
+            function getNodeByPath(path) {
+                let node = document.body;
+                for (const index of path) {
+                    node = node.childNodes[index];
+                    if (!node) return null;
+                }
+                return node;
+            }
+
+            function createNodeFromVNode(vnode) {
+                if (vnode.type === 'Text') {
+                    return document.createTextNode(vnode.text || '');
+                } else if (vnode.type === 'Element') {
+                    const elem = document.createElement(vnode.tag);
+                    // Set attributes
+                    if (vnode.attrs) {
+                        for (const [key, value] of Object.entries(vnode.attrs)) {
+                            elem.setAttribute(key, value);
+                        }
+                    }
+                    // Add children
+                    if (vnode.children) {
+                        for (const child of vnode.children) {
+                            elem.appendChild(createNodeFromVNode(child));
+                        }
+                    }
+                    return elem;
+                }
+                return null;
+            }
+
+            function applyPatches(patches) {
+                const parsedPatches = JSON.parse(patches);
+                console.log('[LiveView] Applying', parsedPatches.length, 'patches');
+
+                for (const patch of parsedPatches) {
+                    const node = getNodeByPath(patch.path);
+                    if (!node) {
+                        console.warn('[LiveView] Node not found at path:', patch.path);
+                        continue;
+                    }
+
+                    if (patch.Replace) {
+                        const newNode = createNodeFromVNode(patch.Replace.node);
+                        node.parentNode.replaceChild(newNode, node);
+                    } else if (patch.SetText) {
+                        node.textContent = patch.SetText.text;
+                    } else if (patch.SetAttr) {
+                        node.setAttribute(patch.SetAttr.key, patch.SetAttr.value);
+                    } else if (patch.RemoveAttr) {
+                        node.removeAttribute(patch.RemoveAttr.key);
+                    } else if (patch.InsertChild) {
+                        const newChild = createNodeFromVNode(patch.InsertChild.node);
+                        const refChild = node.childNodes[patch.InsertChild.index];
+                        if (refChild) {
+                            node.insertBefore(newChild, refChild);
+                        } else {
+                            node.appendChild(newChild);
+                        }
+                    } else if (patch.RemoveChild) {
+                        const child = node.childNodes[patch.RemoveChild.index];
+                        if (child) {
+                            node.removeChild(child);
+                        }
+                    } else if (patch.MoveChild) {
+                        const child = node.childNodes[patch.MoveChild.from];
+                        if (child) {
+                            const refChild = node.childNodes[patch.MoveChild.to];
+                            if (refChild) {
+                                node.insertBefore(child, refChild);
+                            } else {
+                                node.appendChild(child);
+                            }
+                        }
+                    }
+                }
+            }
+
             async function handleEvent(eventName, params) {
                 console.log('[LiveView] Event:', eventName, params);
 
@@ -345,14 +429,21 @@ class LiveView(View):
 
                     if (response.ok) {
                         const data = await response.json();
-                        if (data.html) {
-                            // Replace body content with new HTML
+                        if (data.patches) {
+                            // Apply DOM patches (efficient!)
+                            applyPatches(data.patches);
+                            // Re-bind event handlers to new/modified elements
+                            initReactCounters();
+                            initTodoItems();
+                            bindLiveViewEvents();
+                        } else if (data.html) {
+                            // Fallback: replace full HTML
                             const parser = new DOMParser();
                             const doc = parser.parseFromString(data.html, 'text/html');
                             document.body.innerHTML = doc.body.innerHTML;
                             // Re-bind event handlers to new elements
-                            initReactCounters();  // Re-initialize React components
-                            initTodoItems();      // Re-initialize todo items
+                            initReactCounters();
+                            initTodoItems();
                             bindLiveViewEvents();
                         }
                     }
@@ -406,7 +497,7 @@ class LiveView(View):
             }
 
             document.addEventListener('DOMContentLoaded', function() {
-                console.log('[LiveView] Using HTTP mode (WebSocket integration pending)');
+                console.log('[LiveView] Initialized with Rust-powered DOM diffing');
                 initReactCounters();  // Initialize client-side React components
                 initTodoItems();      // Initialize todo item checkboxes
                 bindLiveViewEvents();
