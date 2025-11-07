@@ -196,12 +196,10 @@ class LiveView(View):
             # Render with diff to get patches
             html, patches_json = self.render_with_diff(request)
 
-            # Return patches if available, otherwise full HTML
-            response = {}
+            # Always send both patches and HTML for fallback
+            response = {'html': html}
             if patches_json:
                 response['patches'] = patches_json
-            else:
-                response['html'] = html
 
             return JsonResponse(response)
 
@@ -452,15 +450,25 @@ class LiveView(View):
                 const parsedPatches = JSON.parse(patches);
                 console.log('[LiveView] Applying', parsedPatches.length, 'patches');
 
+                // If there are too many patches (like adding 1000 items), it might be
+                // more efficient to just replace the whole container. This threshold
+                // can be tuned based on performance testing.
+                const PATCH_THRESHOLD = 100;
+                if (parsedPatches.length > PATCH_THRESHOLD) {
+                    console.log(`[LiveView] Too many patches (${parsedPatches.length}), falling back to full HTML replacement`);
+                    return false; // Signal to caller to use full HTML
+                }
+
                 let failedCount = 0;
                 for (const patch of parsedPatches) {
                     const node = getNodeByPath(patch.path);
                     if (!node) {
                         failedCount++;
-                        if (failedCount === 1) {
-                            // Log first failure in detail
-                            console.warn('[LiveView] First failed patch at path:', patch.path);
-                            console.warn('Patch type:', Object.keys(patch).filter(k => k !== 'path')[0]);
+                        if (failedCount <= 3) {
+                            // Log first 3 failures in detail
+                            const patchType = Object.keys(patch).filter(k => k !== 'path')[0];
+                            console.warn(`[LiveView] Failed patch #${failedCount} at path:`, patch.path);
+                            console.warn('Patch type:', patchType, patch[patchType]);
 
                             // Try to traverse as far as we can to see where it breaks
                             let debugNode = getLiveViewRoot();
@@ -542,14 +550,20 @@ class LiveView(View):
                     if (response.ok) {
                         const data = await response.json();
                         if (data.patches) {
-                            // Apply DOM patches (efficient!)
-                            applyPatches(data.patches);
+                            // Try to apply DOM patches (efficient!)
+                            const success = applyPatches(data.patches);
+                            if (success === false && data.html) {
+                                // Patches failed/too many, fall back to HTML
+                                const parser = new DOMParser();
+                                const doc = parser.parseFromString(data.html, 'text/html');
+                                document.body.innerHTML = doc.body.innerHTML;
+                            }
                             // Re-bind event handlers to new/modified elements
                             initReactCounters();
                             initTodoItems();
                             bindLiveViewEvents();
                         } else if (data.html) {
-                            // Fallback: replace full HTML
+                            // Replace full HTML
                             const parser = new DOMParser();
                             const doc = parser.parseFromString(data.html, 'text/html');
                             document.body.innerHTML = doc.body.innerHTML;
