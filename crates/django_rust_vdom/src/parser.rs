@@ -19,6 +19,31 @@ pub fn parse_html(html: &str) -> Result<VNode> {
 }
 
 fn find_root(handle: &Handle) -> Handle {
+    // html5ever wraps fragments in <html><head/><body>content</body></html>
+    // We want to find the actual content element, not the html wrapper
+
+    // First, find the <html> element
+    for child in handle.children.borrow().iter() {
+        if let NodeData::Element { ref name, .. } = child.data {
+            if name.local.as_ref() == "html" {
+                // Found <html>, now look for <body>
+                for html_child in child.children.borrow().iter() {
+                    if let NodeData::Element { ref name, .. } = html_child.data {
+                        if name.local.as_ref() == "body" {
+                            // Found <body>, return its first element child
+                            for body_child in html_child.children.borrow().iter() {
+                                if let NodeData::Element { .. } = body_child.data {
+                                    return body_child.clone();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: return first element found
     for child in handle.children.borrow().iter() {
         match child.data {
             NodeData::Element { .. } => return child.clone(),
