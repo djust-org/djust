@@ -46,6 +46,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def receive(self, text_data=None, bytes_data=None):
         """Handle incoming WebSocket messages"""
+        import logging
+        import traceback
+
+        logger = logging.getLogger(__name__)
+
         try:
             # Decode message
             if bytes_data:
@@ -61,12 +66,37 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.handle_mount(data)
             elif msg_type == 'ping':
                 await self.send_json({'type': 'pong'})
+            else:
+                logger.warning(f'Unknown message type: {msg_type}')
+                await self.send_json({
+                    'type': 'error',
+                    'error': f'Unknown message type: {msg_type}',
+                })
 
-        except Exception as e:
+        except json.JSONDecodeError as e:
+            error_msg = f'Invalid JSON in WebSocket message: {str(e)}'
+            logger.error(error_msg)
             await self.send_json({
                 'type': 'error',
-                'error': str(e),
+                'error': error_msg,
             })
+        except Exception as e:
+            error_msg = f'Error in WebSocket receive: {type(e).__name__}: {str(e)}'
+            logger.error(error_msg, exc_info=True)
+
+            # In debug mode, include traceback
+            from django.conf import settings
+            if settings.DEBUG:
+                await self.send_json({
+                    'type': 'error',
+                    'error': error_msg,
+                    'traceback': traceback.format_exc(),
+                })
+            else:
+                await self.send_json({
+                    'type': 'error',
+                    'error': 'An error occurred. Please check server logs.',
+                })
 
     async def handle_mount(self, data: Dict[str, Any]):
         """Handle view mounting"""
@@ -84,13 +114,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def handle_event(self, data: Dict[str, Any]):
         """Handle client events"""
+        import logging
+        import traceback
+
+        logger = logging.getLogger(__name__)
+
         event_name = data.get('event')
         params = data.get('params', {})
 
         if not self.view_instance:
             await self.send_json({
                 'type': 'error',
-                'error': 'View not mounted',
+                'error': 'View not mounted. Please reload the page.',
             })
             return
 
@@ -105,7 +140,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     handler()
 
                 # Get updated HTML and patches
-                html, patches = self.view_instance.render_with_diff()
+                html, patches, version = self.view_instance.render_with_diff()
 
                 # Send patches to client
                 if patches:
@@ -118,17 +153,41 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         await self.send_json({
                             'type': 'patch',
                             'patches': json.loads(patches),
+                            'version': version,
                         })
 
             except Exception as e:
-                await self.send_json({
-                    'type': 'error',
-                    'error': str(e),
-                })
+                view_class = self.view_instance.__class__.__name__ if self.view_instance else 'Unknown'
+                error_msg = f'Error in {view_class}.{event_name}(): {type(e).__name__}: {str(e)}'
+                logger.error(error_msg, exc_info=True)
+
+                # In debug mode, send detailed error
+                from django.conf import settings
+                if settings.DEBUG:
+                    await self.send_json({
+                        'type': 'error',
+                        'error': error_msg,
+                        'traceback': traceback.format_exc(),
+                        'event': event_name,
+                        'params': params,
+                    })
+                else:
+                    await self.send_json({
+                        'type': 'error',
+                        'error': 'An error occurred processing your request.',
+                    })
         else:
+            error_msg = f'Unknown event handler: {event_name}'
+            if self.view_instance:
+                view_class = self.view_instance.__class__.__name__
+                available_handlers = [m for m in dir(self.view_instance)
+                                    if not m.startswith('_') and callable(getattr(self.view_instance, m))]
+                error_msg += f' in {view_class}. Available handlers: {", ".join(available_handlers[:5])}'
+
+            logger.warning(error_msg)
             await self.send_json({
                 'type': 'error',
-                'error': f'Unknown event handler: {event_name}',
+                'error': error_msg,
             })
 
     async def send_json(self, data: Dict[str, Any]):

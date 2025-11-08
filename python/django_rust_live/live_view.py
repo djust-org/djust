@@ -16,8 +16,76 @@ try:
 except ImportError:
     RustLiveView = None
 
-# Global cache for RustLiveView instances (keyed by session_id + view_key)
+# Global cache for RustLiveView instances
+# Structure: {cache_key: (rust_view, timestamp)}
 _rust_view_cache = {}
+
+# Default TTL for sessions (1 hour)
+DEFAULT_SESSION_TTL = 3600
+
+
+def cleanup_expired_sessions(ttl: Optional[int] = None) -> int:
+    """
+    Clean up expired LiveView sessions from cache.
+
+    Args:
+        ttl: Time to live in seconds. Defaults to DEFAULT_SESSION_TTL.
+
+    Returns:
+        Number of sessions cleaned up
+    """
+    import time
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    if ttl is None:
+        ttl = DEFAULT_SESSION_TTL
+
+    cutoff = time.time() - ttl
+    expired_keys = []
+
+    # Find expired sessions
+    for key, (view, timestamp) in list(_rust_view_cache.items()):
+        if timestamp < cutoff:
+            expired_keys.append(key)
+
+    # Remove expired sessions
+    for key in expired_keys:
+        del _rust_view_cache[key]
+
+    if expired_keys:
+        logger.info(f'Cleaned up {len(expired_keys)} expired LiveView sessions')
+
+    return len(expired_keys)
+
+
+def get_session_stats() -> Dict[str, Any]:
+    """
+    Get statistics about cached LiveView sessions.
+
+    Returns:
+        Dictionary with cache statistics
+    """
+    import time
+
+    if not _rust_view_cache:
+        return {
+            'total_sessions': 0,
+            'oldest_session_age': 0,
+            'newest_session_age': 0,
+            'average_age': 0,
+        }
+
+    current_time = time.time()
+    ages = [current_time - timestamp for _, timestamp in _rust_view_cache.values()]
+
+    return {
+        'total_sessions': len(_rust_view_cache),
+        'oldest_session_age': max(ages) if ages else 0,
+        'newest_session_age': min(ages) if ages else 0,
+        'average_age': sum(ages) / len(ages) if ages else 0,
+    }
 
 
 class LiveView(View):
@@ -119,7 +187,11 @@ class LiveView(View):
 
                 # Try to get cached RustLiveView
                 if self._cache_key in _rust_view_cache:
-                    self._rust_view = _rust_view_cache[self._cache_key]
+                    cached_view, timestamp = _rust_view_cache[self._cache_key]
+                    self._rust_view = cached_view
+                    # Update timestamp on access
+                    import time
+                    _rust_view_cache[self._cache_key] = (cached_view, time.time())
                     return
 
             # Create new RustLiveView
@@ -128,7 +200,8 @@ class LiveView(View):
 
             # Cache it if we have a cache key
             if self._cache_key:
-                _rust_view_cache[self._cache_key] = self._rust_view
+                import time
+                _rust_view_cache[self._cache_key] = (self._rust_view, time.time())
 
     def _sync_state_to_rust(self):
         """Sync Python state to Rust backend"""
@@ -286,8 +359,36 @@ class LiveView(View):
 
         except Exception as e:
             import traceback
-            traceback.print_exc()
-            return JsonResponse({'error': str(e)}, status=500)
+            import logging
+            from django.conf import settings
+
+            logger = logging.getLogger(__name__)
+
+            # Build detailed error message
+            error_msg = f"Error in {self.__class__.__name__}"
+            if event_name:
+                error_msg += f".{event_name}()"
+            error_msg += f": {type(e).__name__}: {str(e)}"
+
+            # Log error with full traceback
+            logger.error(error_msg, exc_info=True)
+
+            # In DEBUG mode, include stack trace in response
+            if settings.DEBUG:
+                error_details = {
+                    'error': error_msg,
+                    'type': type(e).__name__,
+                    'traceback': traceback.format_exc(),
+                    'event': event_name,
+                    'params': params,
+                }
+                return JsonResponse(error_details, status=500)
+            else:
+                # In production, just send user-friendly message
+                return JsonResponse({
+                    'error': 'An error occurred processing your request. Please try again.',
+                    'debug_hint': 'Check server logs for details'
+                }, status=500)
 
     def _hydrate_react_components(self, html: str) -> str:
         """
