@@ -77,6 +77,8 @@ class LiveView(View):
             Dictionary of context variables
         """
         import json
+        from .components.base import LiveComponent
+
         context = {}
 
         # Add all non-private attributes as context
@@ -85,13 +87,17 @@ class LiveView(View):
                 try:
                     value = getattr(self, key)
                     if not callable(value):
-                        # Only include JSON-serializable values
-                        try:
-                            json.dumps(value)
+                        # Include LiveComponent instances (for template rendering)
+                        # OR JSON-serializable values (for state storage)
+                        if isinstance(value, LiveComponent):
                             context[key] = value
-                        except (TypeError, ValueError):
-                            # Skip non-serializable objects (like request, etc)
-                            pass
+                        else:
+                            try:
+                                json.dumps(value)
+                                context[key] = value
+                            except (TypeError, ValueError):
+                                # Skip non-serializable objects (like request, etc)
+                                pass
                 except (AttributeError, TypeError):
                     # Skip class-only methods and other inaccessible attributes
                     continue
@@ -127,8 +133,20 @@ class LiveView(View):
     def _sync_state_to_rust(self):
         """Sync Python state to Rust backend"""
         if self._rust_view:
+            from .components.base import LiveComponent
+
             context = self.get_context_data()
-            self._rust_view.update_state(context)
+
+            # Pre-render components since Rust can't call Python methods
+            rendered_context = {}
+            for key, value in context.items():
+                if isinstance(value, LiveComponent):
+                    # Create a dict with the pre-rendered HTML so {{ component.render }} works
+                    rendered_context[key] = {'render': str(value.render())}
+                else:
+                    rendered_context[key] = value
+
+            self._rust_view.update_state(rendered_context)
 
     def render(self, request=None) -> str:
         """Render the view to HTML"""
@@ -159,15 +177,15 @@ class LiveView(View):
         if not request.session.session_key:
             request.session.create()
 
-        # Store initial state in session
+        # Store initial state in session (exclude components)
         view_key = f'liveview_{request.path}'
-        request.session[view_key] = self.get_context_data()
+        from .components.base import LiveComponent
+        state = {k: v for k, v in self.get_context_data().items() if not isinstance(v, LiveComponent)}
+        request.session[view_key] = state
         request.session.modified = True  # Force session save
 
         session_key = request.session.session_key
         cache_key = f'{session_key}_{view_key}'
-
-        print(f"[LiveView] GET request - cache_key: {cache_key}, exists: {cache_key in _rust_view_cache}", file=sys.stderr)
 
         # NOTE: Don't clear the cache on GET! The cache persists across requests
         # to maintain VDOM state. Only clear if we detect the user explicitly
@@ -212,6 +230,10 @@ class LiveView(View):
             view_key = f'liveview_{request.path}'
             saved_state = request.session.get(view_key, {})
 
+            # IMPORTANT: Call mount() to recreate component instances
+            # This ensures all components are available for event handlers
+            self.mount(request, **kwargs)
+
             # Restore state to self (skip read-only properties)
             for key, value in saved_state.items():
                 if not key.startswith('_') and not callable(value):
@@ -229,20 +251,16 @@ class LiveView(View):
                 else:
                     handler()
 
-            # Save updated state back to session
+            # Save updated state back to session (exclude components)
             updated_context = self.get_context_data()
-            request.session[view_key] = updated_context
-            print(f"[LiveView POST] Saved context to session: form_data={updated_context.get('form_data', 'MISSING')}", file=sys.stderr)
+            from .components.base import LiveComponent
+            state = {k: v for k, v in updated_context.items() if not isinstance(v, LiveComponent)}
+            request.session[view_key] = state
 
             # Render with diff to get patches
             html, patches_json, version = self.render_with_diff(request)
-            print(f"[LiveView POST] After render_with_diff, form_data={self.form_data if hasattr(self, 'form_data') else 'NO ATTR'}", file=sys.stderr)
 
-            # Debug: log patch count and version
-            import sys
             import json as json_module
-
-            print(f"[LiveView] VDOM version: {version}", file=sys.stderr)
 
             # Threshold for when to use patches vs full HTML
             PATCH_THRESHOLD = 100
@@ -250,30 +268,14 @@ class LiveView(View):
             if patches_json:
                 patches = json_module.loads(patches_json)
                 patch_count = len(patches)
-                print(f"[LiveView] Generated {patch_count} patches", file=sys.stderr)
-
-                # Log ALL patches for debugging
-                for i, patch in enumerate(patches):
-                    patch_type = patch.get('type', 'Unknown')
-                    path = patch.get('path', [])
-                    index = patch.get('index', 'N/A')
-
-                    # Highlight patches that might target form children
-                    if len(path) >= 6 and path[4] == 2:  # Path suggests form element
-                        form_child_idx = path[5]
-                        print(f"  [{i}] {patch_type:12} path={path} index={index} <- FORM CHILD {form_child_idx}", file=sys.stderr)
-                    else:
-                        print(f"  [{i}] {patch_type:12} path={path} index={index}", file=sys.stderr)
 
                 # If patches are reasonable size, send patches with HTML fallback
                 # Otherwise send full HTML for efficiency
                 if patch_count <= PATCH_THRESHOLD:
-                    print(f"[LiveView] Sending patches with HTML fallback ({patch_count} patches)", file=sys.stderr)
                     # Include HTML as fallback in case patches fail on client
                     # Note: We include a flag so client can tell us if it used the fallback
                     return JsonResponse({'patches': patches_json, 'html': html, 'version': version, 'reset_on_fallback': True})
                 else:
-                    print(f"[LiveView] Too many patches ({patch_count}), sending full HTML and resetting VDOM cache", file=sys.stderr)
                     # Reset VDOM cache since we're sending full HTML
                     # This ensures next patches are calculated from the browser's normalized DOM
                     self._rust_view.reset()
