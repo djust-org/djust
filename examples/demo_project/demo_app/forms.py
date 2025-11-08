@@ -279,6 +279,49 @@ class ProfileForm(LiveViewForm):
         return phone
 
 
+class SimpleContactForm(LiveViewForm):
+    """Simplified contact form with just name, email, and message"""
+
+    name = forms.CharField(
+        max_length=100,
+        required=True,
+        widget=forms.TextInput(attrs={
+            'class': 'form-control',
+            'placeholder': 'Your name'
+        })
+    )
+
+    email = forms.EmailField(
+        required=True,
+        widget=forms.EmailInput(attrs={
+            'class': 'form-control',
+            'placeholder': 'your.email@example.com'
+        })
+    )
+
+    message = forms.CharField(
+        min_length=10,
+        required=True,
+        widget=forms.Textarea(attrs={
+            'class': 'form-control',
+            'rows': 4,
+            'placeholder': 'Enter your message here...'
+        })
+    )
+
+    def clean_message(self):
+        """Validate message"""
+        message = self.cleaned_data.get('message')
+        if message:
+            # Check for spam-like content
+            spam_words = ['spam', 'viagra', 'casino', 'lottery']
+            if any(word in message.lower() for word in spam_words):
+                raise forms.ValidationError(
+                    "Your message appears to contain spam content"
+                )
+        return message
+
+
 class SearchForm(LiveViewForm):
     """Simple search form"""
 

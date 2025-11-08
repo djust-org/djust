@@ -52,7 +52,10 @@ class LiveView(View):
         if self.template_string:
             return self.template_string
         elif self.template_name:
-            return render_to_string(self.template_name, {})
+            # Get raw template source without rendering
+            from django.template import loader
+            template = loader.get_template(self.template_name)
+            return template.template.source
         else:
             raise ValueError("Either template_name or template_string must be set")
 
@@ -152,29 +155,29 @@ class LiveView(View):
         # IMPORTANT: mount() must be called first to initialize clean state
         self.mount(request, **kwargs)
 
-        # Debug: Check field_errors state after mount
-        field_errors = getattr(self, 'field_errors', None)
-        print(f"[LiveView] GET request - field_errors after mount: {field_errors}", file=sys.stderr)
+        # Ensure session exists and is saved
+        if not request.session.session_key:
+            request.session.create()
 
         # Store initial state in session
         view_key = f'liveview_{request.path}'
         request.session[view_key] = self.get_context_data()
+        request.session.modified = True  # Force session save
 
-        # Clear any cached RustLiveView for this session/view to ensure fresh start
         session_key = request.session.session_key
-        if not session_key:
-            request.session.create()
-            session_key = request.session.session_key
         cache_key = f'{session_key}_{view_key}'
 
         print(f"[LiveView] GET request - cache_key: {cache_key}, exists: {cache_key in _rust_view_cache}", file=sys.stderr)
 
-        if cache_key in _rust_view_cache:
-            print(f"[LiveView] Clearing cached RustLiveView for fresh session", file=sys.stderr)
-            del _rust_view_cache[cache_key]
-            # Also clear our reference so a new one will be created
-            self._rust_view = None
-            self._cache_key = None
+        # NOTE: Don't clear the cache on GET! The cache persists across requests
+        # to maintain VDOM state. Only clear if we detect the user explicitly
+        # wants a fresh page (e.g., query param ?refresh=1)
+        # if cache_key in _rust_view_cache:
+        #     print(f"[LiveView] Clearing cached RustLiveView for fresh session", file=sys.stderr)
+        #     del _rust_view_cache[cache_key]
+        #     # Also clear our reference so a new one will be created
+        #     self._rust_view = None
+        #     self._cache_key = None
 
         # Initialize and render to establish baseline VDOM
         # The render() call will create a new RustLiveView with the initial HTML,
@@ -199,6 +202,7 @@ class LiveView(View):
 
     def post(self, request, *args, **kwargs):
         """Handle POST requests - event handling"""
+        import sys
         try:
             data = json.loads(request.body)
             event_name = data.get('event')
@@ -226,10 +230,13 @@ class LiveView(View):
                     handler()
 
             # Save updated state back to session
-            request.session[view_key] = self.get_context_data()
+            updated_context = self.get_context_data()
+            request.session[view_key] = updated_context
+            print(f"[LiveView POST] Saved context to session: form_data={updated_context.get('form_data', 'MISSING')}", file=sys.stderr)
 
             # Render with diff to get patches
             html, patches_json, version = self.render_with_diff(request)
+            print(f"[LiveView POST] After render_with_diff, form_data={self.form_data if hasattr(self, 'form_data') else 'NO ATTR'}", file=sys.stderr)
 
             # Debug: log patch count and version
             import sys
@@ -411,12 +418,29 @@ class LiveView(View):
                         });
                     }
 
+                    // Helper: Extract field name from element attributes
+                    // Priority: data-field (explicit) > name (standard) > id (fallback)
+                    function getFieldName(element) {
+                        if (element.dataset.field) {
+                            return element.dataset.field;
+                        }
+                        if (element.name) {
+                            return element.name;
+                        }
+                        if (element.id) {
+                            // Strip common prefixes like 'id_' (Django convention)
+                            return element.id.replace(/^id_/, '');
+                        }
+                        return null;
+                    }
+
                     // Handle @change events
                     const changeHandler = element.getAttribute('@change');
                     if (changeHandler && !element.dataset.liveviewChangeBound) {
                         element.dataset.liveviewChangeBound = 'true';
                         element.addEventListener('change', async (e) => {
                             const params = {};
+
                             // For checkboxes, send the checked state
                             if (e.target.type === 'checkbox') {
                                 params.value = e.target.checked;
@@ -424,15 +448,19 @@ class LiveView(View):
                                 // For other inputs, send the value
                                 params.value = e.target.value;
                             }
-                            // Include data-field if present (for form field validation)
-                            if (e.target.dataset.field) {
-                                params.field_name = e.target.dataset.field;
+
+                            // Auto-extract field name from element attributes
+                            const fieldName = getFieldName(e.target);
+                            if (fieldName) {
+                                params.field_name = fieldName;
                                 console.log('[LiveView] Sending field_name:', params.field_name, 'value:', params.value);
                             }
+
                             // Include data-id if present (use generic 'id' param name)
                             if (e.target.dataset.id) {
                                 params.id = e.target.dataset.id;
                             }
+
                             await handleEvent(changeHandler, params);
                         });
                     }

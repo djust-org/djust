@@ -36,8 +36,19 @@ class FormMixin:
         """Initialize form on view mount"""
         super().mount(request, **kwargs)
 
-        # Initialize form state
+        # Initialize form state with all form fields set to empty strings
+        # This ensures that when template renders {{ form_data.field_name }},
+        # it doesn't render missing keys as empty, which would clear user input
         self.form_data = {}
+        if self.form_class:
+            form = self.form_class()
+            # Initialize all fields with their initial values or empty string
+            for field_name, field in form.fields.items():
+                initial = field.initial
+                if initial is None:
+                    initial = ""
+                self.form_data[field_name] = initial
+
         self.form_errors = {}
         self.field_errors = {}
         self.is_valid = False
@@ -89,6 +100,7 @@ class FormMixin:
 
         # Update form data
         self.form_data[field_name] = value
+        print(f"[FormMixin] validate_field called: field={field_name}, value={value}, form_data={self.form_data}")
 
         # Create form with current data
         form = self._create_form(self.form_data)
@@ -321,6 +333,95 @@ class FormMixin:
     def _attrs_to_string(self, attrs: Dict[str, str]) -> str:
         """Convert attributes dict to HTML string"""
         return ' '.join(f'{k}="{v}"' for k, v in attrs.items())
+
+    def as_live(self, **kwargs) -> str:
+        """
+        Render the entire form automatically using the configured CSS framework.
+
+        This eliminates the need for manual field-by-field rendering. The form
+        will use the framework adapter (Bootstrap 5, Tailwind, etc.) to render
+        all fields with proper styling, labels, errors, and event handlers.
+
+        Args:
+            **kwargs: Rendering options
+                - framework: Override the configured CSS framework
+                - render_labels: Whether to render field labels (default: True)
+                - render_help_text: Whether to render help text (default: True)
+                - render_errors: Whether to render errors (default: True)
+                - auto_validate: Whether to add validation on change (default: True)
+                - wrapper_class: Custom wrapper class for each field
+
+        Returns:
+            HTML string for the entire form
+
+        Example:
+            # In template:
+            <form @submit="submit_form">
+                {{ form.as_live }}
+                <button type="submit">Submit</button>
+            </form>
+        """
+        from .frameworks import get_adapter
+
+        if not hasattr(self, 'form_instance') or not self.form_instance:
+            return "<!-- ERROR: form_instance not initialized. Did you call super().mount()? -->"
+
+        framework = kwargs.pop('framework', None)
+        adapter = get_adapter(framework)
+
+        html = ""
+        for field_name in self.form_instance.fields.keys():
+            html += self.as_live_field(field_name, adapter=adapter, **kwargs)
+
+        return html
+
+    def as_live_field(self, field_name: str, adapter=None, **kwargs) -> str:
+        """
+        Render a single form field automatically using the configured CSS framework.
+
+        This method uses the framework adapter to render a field with proper styling,
+        labels, errors, help text, and LiveView event handlers automatically.
+
+        Args:
+            field_name: Name of the field to render
+            adapter: Framework adapter to use (if None, uses configured framework)
+            **kwargs: Rendering options
+                - framework: Override the configured CSS framework
+                - render_labels: Whether to render field labels (default: True)
+                - render_help_text: Whether to render help text (default: True)
+                - render_errors: Whether to render errors (default: True)
+                - auto_validate: Whether to add validation on change (default: True)
+                - wrapper_class: Custom wrapper class for the field
+                - label: Custom label text
+
+        Returns:
+            HTML string for the field
+
+        Example:
+            # In template:
+            {{ form.as_live_field("email") }}
+            {{ form.as_live_field("password", label="Custom Password Label") }}
+        """
+        from .frameworks import get_adapter
+
+        if not self.form_instance:
+            return ""
+
+        field = self.form_instance.fields.get(field_name)
+        if not field:
+            return ""
+
+        # Get adapter
+        if adapter is None:
+            framework = kwargs.pop('framework', None)
+            adapter = get_adapter(framework)
+
+        # Get current value and errors
+        value = self.get_field_value(field_name, default="")
+        errors = self.get_field_errors(field_name)
+
+        # Render using adapter
+        return adapter.render_field(field, field_name, value, errors, **kwargs)
 
 
 class LiveViewForm(forms.Form):

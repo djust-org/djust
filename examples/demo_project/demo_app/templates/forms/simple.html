@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple Contact Form (as_live Demo)</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-md-6 mx-auto">
+                <h2>Contact Form - LiveView Integration</h2>
+                <p class="text-muted">Django Forms with real-time validation</p>
+
+                {% if success_message %}
+                <div class="alert alert-success">
+                    {{ success_message }}
+                    <button type="button" class="btn-close float-end" @click="clear_message"></button>
+                </div>
+                {% endif %}
+
+                {% if error_message %}
+                <div class="alert alert-danger">
+                    {{ error_message }}
+                    <button type="button" class="btn-close float-end" @click="clear_message"></button>
+                </div>
+                {% endif %}
+
+                <form @submit="submit_form" onsubmit="return false;">
+                    <!-- Name Field -->
+                    <div class="mb-3">
+                        <label for="name" class="form-label">Name</label>
+                        <input
+                            type="text"
+                            class="form-control {% if field_errors.name %}is-invalid{% endif %}"
+                            id="name"
+                            name="name"
+                            value="{{ form_data.name }}"
+                            @change="validate_field"
+                            data-field="name"
+                            required
+                        >
+                        {% if field_errors.name %}
+                        <div class="invalid-feedback d-block">
+                            {% for error in field_errors.name %}
+                                <div>{{ error }}</div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Email Field -->
+                    <div class="mb-3">
+                        <label for="email" class="form-label">Email</label>
+                        <input
+                            type="email"
+                            class="form-control {% if field_errors.email %}is-invalid{% endif %}"
+                            id="email"
+                            name="email"
+                            value="{{ form_data.email }}"
+                            @change="validate_field"
+                            data-field="email"
+                            required
+                        >
+                        {% if field_errors.email %}
+                        <div class="invalid-feedback d-block">
+                            {% for error in field_errors.email %}
+                                <div>{{ error }}</div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Message Field -->
+                    <div class="mb-3">
+                        <label for="message" class="form-label">Message</label>
+                        <textarea
+                            class="form-control {% if field_errors.message %}is-invalid{% endif %}"
+                            id="message"
+                            name="message"
+                            rows="4"
+                            @change="validate_field"
+                            data-field="message"
+                            required
+                        >{{ form_data.message }}</textarea>
+                        {% if field_errors.message %}
+                        <div class="invalid-feedback d-block">
+                            {% for error in field_errors.message %}
+                                <div>{{ error }}</div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    <div class="d-grid gap-2">
+                        <button type="submit" class="btn btn-primary">Send Message</button>
+                        <button type="button" class="btn btn-secondary" @click="reset_form">Reset</button>
+                    </div>
+                </form>
+
+                <div class="mt-4">
+                    <h5>How it works:</h5>
+                    <ul class="small text-muted">
+                        <li>Forms use Django's FormMixin for validation</li>
+                        <li>Real-time field validation with @change events</li>
+                        <li>Inline error display with Bootstrap styling</li>
+                        <li>LiveView handles form state reactively</li>
+                        <li>No page refresh required for validation!</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
