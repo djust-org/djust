@@ -25,9 +25,8 @@ help: ## Display this help message
 .PHONY: start
 start: ## Start the Django development server with hot reload
 	@echo "$(GREEN)Starting Django Rust Live development server on $(HOST):$(PORT)...$(NC)"
-	@source .venv/bin/activate && \
-		cd examples/demo_project && \
-		uvicorn demo_project.asgi:application \
+	@cd examples/demo_project && \
+		uv run uvicorn demo_project.asgi:application \
 			--host $(HOST) \
 			--port $(PORT) \
 			--log-level info \
@@ -38,9 +37,8 @@ start: ## Start the Django development server with hot reload
 .PHONY: start-bg
 start-bg: stop ## Start server in background (stops existing servers first)
 	@echo "$(GREEN)Starting server in background on $(HOST):$(PORT)...$(NC)"
-	@(source .venv/bin/activate && \
-		cd examples/demo_project && \
-		nohup uvicorn demo_project.asgi:application \
+	@(cd examples/demo_project && \
+		nohup uv run uvicorn demo_project.asgi:application \
 			--host $(HOST) \
 			--port $(PORT) \
 			--log-level info \
@@ -93,37 +91,33 @@ logs: ## Tail server logs (for background server)
 
 .PHONY: install
 install: ## Install Python and Rust dependencies
-	@echo "$(GREEN)Installing dependencies...$(NC)"
-	@if [ ! -d .venv ]; then \
-		echo "$(YELLOW)Creating virtual environment...$(NC)"; \
-		python3 -m venv .venv; \
-	fi
-	@source .venv/bin/activate && pip install -e ".[dev]"
+	@echo "$(GREEN)Installing dependencies with uv...$(NC)"
+	@uv sync --extra dev
 	@echo "$(GREEN)Building Rust extensions...$(NC)"
-	@source .venv/bin/activate && maturin develop
+	@uv run maturin develop --release
 	@echo "$(GREEN)Installation complete!$(NC)"
 
 .PHONY: install-quick
 install-quick: ## Quick install without rebuilding Rust
 	@echo "$(GREEN)Installing Python dependencies only...$(NC)"
-	@source .venv/bin/activate && pip install -e ".[dev]"
+	@uv sync --extra dev
 
 .PHONY: build
 build: ## Build Rust extensions in release mode
 	@echo "$(GREEN)Building Rust extensions (release mode)...$(NC)"
-	@source .venv/bin/activate && maturin develop --release
+	@uv run maturin develop --release
 
 .PHONY: dev-build
 dev-build: ## Build Rust extensions in development mode
 	@echo "$(GREEN)Building Rust extensions (dev mode)...$(NC)"
-	@source .venv/bin/activate && maturin develop
+	@uv run maturin develop
 
 ##@ Testing & Quality
 
 .PHONY: test
 test: ## Run all tests
 	@echo "$(GREEN)Running tests...$(NC)"
-	@source .venv/bin/activate && pytest
+	@PYTHONPATH=. uv run pytest
 
 .PHONY: test-rust
 test-rust: ## Run Rust tests
@@ -133,18 +127,18 @@ test-rust: ## Run Rust tests
 .PHONY: test-python
 test-python: ## Run Python tests
 	@echo "$(GREEN)Running Python tests...$(NC)"
-	@source .venv/bin/activate && pytest python/
+	@PYTHONPATH=. uv run pytest python/
 
 .PHONY: lint
 lint: ## Run linters
 	@echo "$(GREEN)Running linters...$(NC)"
-	@source .venv/bin/activate && ruff check python/
+	@uv run ruff check python/
 	@cargo clippy
 
 .PHONY: format
 format: ## Format code
 	@echo "$(GREEN)Formatting code...$(NC)"
-	@source .venv/bin/activate && ruff format python/
+	@uv run ruff format python/
 	@cargo fmt
 
 .PHONY: check
@@ -155,12 +149,12 @@ check: lint test ## Run linters and tests
 .PHONY: migrate
 migrate: ## Run Django migrations
 	@echo "$(GREEN)Running migrations...$(NC)"
-	@source .venv/bin/activate && cd examples/demo_project && python manage.py migrate
+	@cd examples/demo_project && uv run python manage.py migrate
 
 .PHONY: migrations
 migrations: ## Create new Django migrations
 	@echo "$(GREEN)Creating migrations...$(NC)"
-	@source .venv/bin/activate && cd examples/demo_project && python manage.py makemigrations
+	@cd examples/demo_project && uv run python manage.py makemigrations
 
 .PHONY: db-reset
 db-reset: ## Reset database (WARNING: destroys all data)
@@ -194,11 +188,11 @@ clean-all: clean ## Remove all generated files including venv
 
 .PHONY: shell
 shell: ## Open Django shell
-	@source .venv/bin/activate && cd examples/demo_project && python manage.py shell
+	@cd examples/demo_project && uv run python manage.py shell
 
 .PHONY: urls
 urls: ## Show all URL patterns
-	@source .venv/bin/activate && cd examples/demo_project && python manage.py show_urls 2>/dev/null || python manage.py shell -c "from django.urls import get_resolver; print('\\n'.join(str(p) for p in get_resolver().url_patterns))"
+	@cd examples/demo_project && uv run python manage.py show_urls 2>/dev/null || uv run python manage.py shell -c "from django.urls import get_resolver; print('\\n'.join(str(p) for p in get_resolver().url_patterns))"
 
 .PHONY: open
 open: ## Open the application in browser
@@ -212,9 +206,9 @@ open: ## Open the application in browser
 info: ## Show project information
 	@echo "$(BLUE)Django Rust Live - Project Information$(NC)"
 	@echo "Server URL:    http://localhost:$(PORT)"
-	@echo "Python:        $$(source .venv/bin/activate && python --version)"
+	@echo "Python:        $$(uv run python --version)"
 	@echo "Rust:          $$(rustc --version)"
-	@echo "Django:        $$(source .venv/bin/activate && python -c 'import django; print(django.get_version())')"
+	@echo "Django:        $$(uv run python -c 'import django; print(django.get_version())')"
 	@echo ""
 	@echo "$(BLUE)Useful URLs:$(NC)"
 	@echo "  Home:              http://localhost:$(PORT)/"
