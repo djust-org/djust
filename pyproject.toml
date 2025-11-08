@@ -47,6 +47,8 @@ dev = [
     "black>=23.0",
     "ruff>=0.1",
     "mypy>=1.0",
+    "uvicorn[standard]>=0.30.0",
+    "whitenoise>=6.0.0",
 ]
 
 [project.urls]

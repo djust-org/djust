@@ -25,34 +25,36 @@ help: ## Display this help message
 .PHONY: start
 start: ## Start the Django development server with hot reload
 	@echo "$(GREEN)Starting Django Rust Live development server on $(HOST):$(PORT)...$(NC)"
-	@cd examples/demo_project && \
-		uv run uvicorn demo_project.asgi:application \
-			--host $(HOST) \
-			--port $(PORT) \
-			--log-level info \
-			--reload \
-			--reload-include '*.html' \
-			--reload-include '*.py'
+	@uv run python -m uvicorn demo_project.asgi:application \
+		--host $(HOST) \
+		--port $(PORT) \
+		--log-level info \
+		--reload \
+		--reload-dir examples/demo_project \
+		--reload-include '*.html' \
+		--reload-include '*.py' \
+		--app-dir examples/demo_project
 
 .PHONY: start-bg
 start-bg: stop ## Start server in background (stops existing servers first)
 	@echo "$(GREEN)Starting server in background on $(HOST):$(PORT)...$(NC)"
-	@(cd examples/demo_project && \
-		nohup uv run uvicorn demo_project.asgi:application \
+	@(nohup uv run python -m uvicorn demo_project.asgi:application \
 			--host $(HOST) \
 			--port $(PORT) \
 			--log-level info \
 			--reload \
+			--reload-dir examples/demo_project \
 			--reload-include '*.html' \
 			--reload-include '*.py' \
-			> server.log 2>&1 & echo $$! > server.pid; \
+			--app-dir examples/demo_project \
+			> examples/demo_project/server.log 2>&1 & echo $$! > examples/demo_project/server.pid; \
 		sleep 1; \
-		if [ -f server.pid ]; then \
-			echo "$(GREEN)Server started with PID: $$(cat server.pid)$(NC)"; \
+		if [ -f examples/demo_project/server.pid ]; then \
+			echo "$(GREEN)Server started with PID: $$(cat examples/demo_project/server.pid)$(NC)"; \
 		else \
 			echo "$(GREEN)Server started$(NC)"; \
 		fi; \
-		echo "$(YELLOW)Logs: $$(pwd)/server.log$(NC)")
+		echo "$(YELLOW)Logs: $$(pwd)/examples/demo_project/server.log$(NC)")
 
 .PHONY: stop
 stop: ## Stop the development server
