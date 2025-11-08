@@ -10,6 +10,13 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 use serde_json;
 use std::collections::HashMap;
+use std::sync::Arc;
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
+
+/// Global template cache - parse once, reuse for all sessions
+/// Using Arc<Template> for cheap cloning across threads
+static TEMPLATE_CACHE: Lazy<DashMap<String, Arc<Template>>> = Lazy::new(|| DashMap::new());
 
 /// A LiveView component that manages state and rendering (Rust backend)
 #[pyclass(name = "RustLiveView")]
@@ -54,18 +61,36 @@ impl RustLiveViewBackend {
 
     /// Render the template and return HTML
     fn render(&mut self) -> PyResult<String> {
-        let template = Template::new(&self.template_source)?;
+        // Get template from cache or parse and cache it
+        let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&self.template_source) {
+            cached.clone()
+        } else {
+            let template = Template::new(&self.template_source)?;
+            let arc = Arc::new(template);
+            TEMPLATE_CACHE.insert(self.template_source.clone(), arc.clone());
+            arc
+        };
+
         let context = Context::from_dict(self.state.clone());
-        let html = template.render(&context)?;
+        let html = template_arc.render(&context)?;
         Ok(html)
     }
 
     /// Render and compute diff from last render
     /// Returns a tuple of (html, patches_json, version)
     fn render_with_diff(&mut self) -> PyResult<(String, Option<String>, u64)> {
-        let template = Template::new(&self.template_source)?;
+        // Get template from cache or parse and cache it
+        let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&self.template_source) {
+            cached.clone()
+        } else {
+            let template = Template::new(&self.template_source)?;
+            let arc = Arc::new(template);
+            TEMPLATE_CACHE.insert(self.template_source.clone(), arc.clone());
+            arc
+        };
+
         let context = Context::from_dict(self.state.clone());
-        let html = template.render(&context)?;
+        let html = template_arc.render(&context)?;
 
         // Parse new HTML to VDOM
         let new_vdom = parse_html(&html).map_err(|e| {
@@ -94,9 +119,18 @@ impl RustLiveViewBackend {
 
     /// Render and return patches as MessagePack bytes
     fn render_binary_diff(&mut self, py: Python) -> PyResult<(String, Option<PyObject>, u64)> {
-        let template = Template::new(&self.template_source)?;
+        // Get template from cache or parse and cache it
+        let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&self.template_source) {
+            cached.clone()
+        } else {
+            let template = Template::new(&self.template_source)?;
+            let arc = Arc::new(template);
+            TEMPLATE_CACHE.insert(self.template_source.clone(), arc.clone());
+            arc
+        };
+
         let context = Context::from_dict(self.state.clone());
-        let html = template.render(&context)?;
+        let html = template_arc.render(&context)?;
 
         let new_vdom = parse_html(&html).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
@@ -132,9 +166,18 @@ impl RustLiveViewBackend {
 /// Fast template rendering
 #[pyfunction]
 fn render_template(template_source: String, context: HashMap<String, Value>) -> PyResult<String> {
-    let template = Template::new(&template_source)?;
+    // Get template from cache or parse and cache it
+    let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {
+        cached.clone()
+    } else {
+        let template = Template::new(&template_source)?;
+        let arc = Arc::new(template);
+        TEMPLATE_CACHE.insert(template_source.clone(), arc.clone());
+        arc
+    };
+
     let ctx = Context::from_dict(context);
-    Ok(template.render(&ctx)?)
+    Ok(template_arc.render(&ctx)?)
 }
 
 /// Compute diff between two HTML strings
