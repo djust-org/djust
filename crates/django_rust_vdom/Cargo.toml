@@ -18,7 +18,9 @@ smallvec.workspace = true
 html5ever.workspace = true
 markup5ever_rcdom.workspace = true
 thiserror.workspace = true
+regex.workspace = true
 django_rust_core = { path = "../django_rust_core" }
 
 [dev-dependencies]
 criterion = "0.5"
+tempfile = "3.8"

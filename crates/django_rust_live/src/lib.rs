@@ -11,6 +11,7 @@ use pyo3::types::{PyBytes, PyDict, PyList};
 use serde_json;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::path::PathBuf;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
 
@@ -252,6 +253,38 @@ fn python_to_json_value(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<serde_js
     }
 }
 
+/// Resolve template inheritance
+///
+/// Given a template path and list of template directories, resolves
+/// {% extends %} and {% block %} tags to produce a final merged template string.
+///
+/// # Arguments
+/// * `template_path` - Path to the child template (e.g., "products.html")
+/// * `template_dirs` - List of directories to search for templates
+///
+/// # Returns
+/// The merged template string with all inheritance resolved
+#[pyfunction]
+fn resolve_template_inheritance(
+    template_path: String,
+    template_dirs: Vec<String>,
+) -> PyResult<String> {
+    use django_rust_vdom::template::{TemplateLoader, resolve_inheritance};
+
+    // Convert string paths to PathBuf
+    let dirs: Vec<PathBuf> = template_dirs.iter().map(|s| PathBuf::from(s)).collect();
+
+    // Create template loader
+    let mut loader = TemplateLoader::new(dirs);
+
+    // Resolve inheritance
+    let resolved = resolve_inheritance(&template_path, &mut loader).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+    })?;
+
+    Ok(resolved)
+}
+
 /// Python module
 #[pymodule]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -259,5 +292,6 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
+    m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
     Ok(())
 }
