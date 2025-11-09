@@ -38,6 +38,14 @@ from .docs import DocsView
 # Import demos index view
 from .demos import DemosIndexView
 
+# Import homepage demo views
+from .homepage import (
+    HomeCounterDemo,
+    HomeSearchDemo,
+    HomeLiveDataDemo,
+    HomeTodoDemo,
+)
+
 __all__ = [
     'IndexView',
     'CounterView',
@@ -58,4 +66,8 @@ __all__ = [
     'AutoFormComparisonView',
     'KitchenSinkView',
     'DocsView',
+    'HomeCounterDemo',
+    'HomeSearchDemo',
+    'HomeLiveDataDemo',
+    'HomeTodoDemo',
 ]

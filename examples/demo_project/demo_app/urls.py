@@ -8,6 +8,12 @@ from . import views
 urlpatterns = [
     path('', views.IndexView.as_view(), name='index'),
 
+    # Homepage Embedded Demos
+    path('home-demos/counter/', views.HomeCounterDemo.as_view(), name='home-counter'),
+    path('home-demos/search/', views.HomeSearchDemo.as_view(), name='home-search'),
+    path('home-demos/data/', views.HomeLiveDataDemo.as_view(), name='home-data'),
+    path('home-demos/todo/', views.HomeTodoDemo.as_view(), name='home-todo'),
+
     # Live Demos
     path('demos/', views.DemosIndexView.as_view(), name='demos-index'),
     path('demos/counter/', views.CounterView.as_view(), name='demos-counter'),

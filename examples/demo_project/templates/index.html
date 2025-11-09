@@ -1,197 +1,581 @@
 {% extends 'base.html' %}
 
-{% block title %}djust - Blazing Fast Reactive Django{% endblock %}
+{% block title %}djust - Blazing Fast Reactive Django with Rust{% endblock %}
 
 {% block nav_home_active %}active{% endblock %}
 
 {% block extra_styles %}
-:root {
-    --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    --secondary-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-}
-
-body {
-    background: var(--primary-gradient);
-    min-height: 100vh;
-}
-
-.hero-section {
-    padding: 100px 0 60px;
-    color: white;
-    text-align: center;
-}
-
-.hero-section h1 {
-    font-size: 3.5rem;
-    font-weight: 700;
-    margin-bottom: 1.5rem;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.hero-section .subtitle {
-    font-size: 1.25rem;
-    opacity: 0.95;
-    margin-bottom: 3rem;
-}
-
-.content-section {
-    background: white;
-    border-radius: 30px 30px 0 0;
-    padding: 60px 0;
-    margin-top: 40px;
-}
-
-.feature-card {
-    background: #f8f9fa;
-    padding: 30px;
-    border-radius: 15px;
-    border-left: 4px solid #667eea;
-    height: 100%;
-    transition: transform 0.3s, box-shadow 0.3s;
-}
-
-.feature-card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
-}
-
-.feature-card h3 {
-    color: #667eea;
-    margin-bottom: 15px;
-    font-size: 1.25rem;
-    font-weight: 600;
-}
-
-.feature-card p {
-    color: #666;
-    margin: 0;
-}
-
-/* Highlight.js atom-one-dark theme */
-pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#abb2bf;background:#282c34}.hljs-comment,.hljs-quote{color:#5c6370;font-style:italic}.hljs-doctag,.hljs-formula,.hljs-keyword{color:#c678dd}.hljs-deletion,.hljs-name,.hljs-section,.hljs-selector-tag,.hljs-subst{color:#e06c75}.hljs-literal{color:#56b6c2}.hljs-addition,.hljs-attribute,.hljs-meta .hljs-string,.hljs-regexp,.hljs-string{color:#98c379}.hljs-attr,.hljs-number,.hljs-selector-attr,.hljs-selector-class,.hljs-selector-pseudo,.hljs-template-variable,.hljs-type,.hljs-variable{color:#d19a66}.hljs-bullet,.hljs-link,.hljs-meta,.hljs-selector-id,.hljs-symbol,.hljs-title{color:#61aeee}.hljs-built_in,.hljs-class .hljs-title,.hljs-title.class_{color:#e6c07b}.hljs-emphasis{font-style:italic}.hljs-strong{font-weight:700}.hljs-link{text-decoration:underline}
-
-.code-example {
-    border-radius: 10px;
-    overflow: hidden;
-    margin: 40px 0;
-}
-
-.code-example pre {
-    margin: 0;
-}
-
-.demo-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 15px;
-    margin-top: 30px;
-}
-
-.demo-link {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #667eea;
-    color: white !important;
-    padding: 20px;
-    border-radius: 10px;
-    text-decoration: none;
-    font-weight: 600;
-    transition: all 0.3s;
-    position: relative;
-    overflow: hidden;
-}
-
-.demo-link:hover {
-    background: #764ba2;
-    transform: translateY(-3px);
-    box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
-}
-
-.demo-link.new {
-    background: var(--secondary-gradient);
-}
-
-.demo-link.new::after {
-    content: 'NEW';
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    background: rgba(255, 255, 255, 0.3);
-    color: white;
-    font-size: 10px;
-    padding: 3px 8px;
-    border-radius: 4px;
-    font-weight: bold;
-}
-
-.section-title {
-    font-size: 2rem;
-    font-weight: 700;
-    color: #333;
-    margin-bottom: 2rem;
-    text-align: center;
-}
+<link rel="stylesheet" href="/static/css/homepage.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
 {% endblock %}
 
 {% block content %}
-<!-- Hero Section -->
-<div class="hero-section">
-    <div class="container">
-        <h1>🚀 djust</h1>
-        <p class="subtitle">Blazing fast reactive server-side rendering for Django, powered by Rust</p>
+<!-- ============================================
+     1. Hero Section with Animated Gradient
+     ============================================ -->
+<section class="hero-section">
+    <div class="hero-particles"></div>
+    <div class="container hero-content">
+        <h1 class="hero-title fade-in">
+            Reactive Django.<br/>
+            <span class="gradient-text">Blazing Fast.</span>
+        </h1>
+        <p class="hero-subtitle fade-in">
+            Build real-time, reactive web apps with Django and the performance of Rust.
+            No build step. No JavaScript framework. Just pure, elegant Python.
+        </p>
+        <div class="hero-cta-group fade-in">
+            <a href="https://djustlive.com" class="btn-hero-primary">
+                🚀 Deploy Free on djustlive.com
+            </a>
+            <a href="/docs/" class="btn-hero-secondary">
+                📚 View Documentation
+            </a>
+        </div>
     </div>
-</div>
+</section>
 
-<!-- Content Section -->
-<div class="content-section">
+<!-- ============================================
+     2. Live Demo Section
+     ============================================ -->
+<section class="demo-section">
     <div class="container">
-        <!-- Features -->
-        <div class="row g-4 mb-5">
-            <div class="col-md-6">
-                <div class="feature-card">
-                    <h3>⚡ Lightning Fast</h3>
-                    <p>Rust-powered template rendering and DOM diffing, 10-100x faster than pure Python</p>
+        <h2 class="section-title fade-in">See It In Action</h2>
+        <p class="section-subtitle fade-in">
+            These demos are built with djust and running live on this page.
+            Try them out - no page reload needed!
+        </p>
+
+        <div class="demo-grid fade-in">
+            <!-- Counter Demo -->
+            <div class="demo-card">
+                <h3>⚡ Real-Time Counter</h3>
+                <div class="demo-card-body">
+                    <iframe src="/home-demos/counter/" style="width: 100%; height: 250px; border: none; border-radius: 8px;"></iframe>
                 </div>
             </div>
-            <div class="col-md-6">
-                <div class="feature-card">
-                    <h3>🔄 Reactive</h3>
-                    <p>Phoenix LiveView-style reactivity with automatic DOM updates over WebSocket</p>
+
+            <!-- Search Demo -->
+            <div class="demo-card">
+                <h3>🔍 Live Search</h3>
+                <div class="demo-card-body">
+                    <iframe src="/home-demos/search/" style="width: 100%; height: 400px; border: none; border-radius: 8px;"></iframe>
                 </div>
             </div>
-            <div class="col-md-6">
-                <div class="feature-card">
-                    <h3>📝 Django Forms</h3>
-                    <p>Auto-rendering forms with Bootstrap, Tailwind, or plain HTML. Real-time validation built-in!</p>
-                </div>
-            </div>
-            <div class="col-md-6">
-                <div class="feature-card">
-                    <h3>📦 Zero Build Step</h3>
-                    <p>No JavaScript bundling required. Just 5KB of client-side code</p>
+
+            <!-- Todo Demo -->
+            <div class="demo-card">
+                <h3>✅ Interactive Todo</h3>
+                <div class="demo-card-body">
+                    <iframe src="/home-demos/todo/" style="width: 100%; height: 450px; border: none; border-radius: 8px;"></iframe>
                 </div>
             </div>
         </div>
+    </div>
+</section>
 
-        <!-- Code Example -->
-        <div class="code-example">
-            <pre><code class="language-python">class CounterView(LiveView):
+<!-- ============================================
+     3. Four Pillars Feature Section
+     ============================================ -->
+<section class="features-section">
+    <div class="container">
+        <h2 class="section-title fade-in">Why djust?</h2>
+        <p class="section-subtitle fade-in">
+            The perfect blend of Python simplicity and Rust performance
+        </p>
+
+        <div class="features-grid">
+            <div class="feature-card fade-in">
+                <div class="feature-icon">⚡</div>
+                <h3 class="feature-title">10-100x Faster</h3>
+                <p class="feature-description">
+                    Rust-powered template rendering and VDOM diffing deliver sub-millisecond
+                    updates. Your Django apps will fly.
+                </p>
+            </div>
+
+            <div class="feature-card fade-in">
+                <div class="feature-icon">🎯</div>
+                <h3 class="feature-title">Developer First</h3>
+                <p class="feature-description">
+                    Write pure Python code with familiar Django patterns. No JavaScript framework,
+                    no build step, no complexity.
+                </p>
+            </div>
+
+            <div class="feature-card fade-in">
+                <div class="feature-icon">🔄</div>
+                <h3 class="feature-title">Real-Time Reactive</h3>
+                <p class="feature-description">
+                    Phoenix LiveView-style reactivity brings your UI to life. Automatic DOM updates
+                    over WebSocket with minimal client code.
+                </p>
+            </div>
+
+            <div class="feature-card fade-in">
+                <div class="feature-icon">🐍</div>
+                <h3 class="feature-title">Django Native</h3>
+                <p class="feature-description">
+                    Seamless integration with Django Forms, ORM, authentication, and your entire
+                    existing Django ecosystem.
+                </p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     4. Code Comparison Section
+     ============================================ -->
+<section class="code-section">
+    <div class="container">
+        <h2 class="section-title fade-in">Write Less, Do More</h2>
+        <p class="section-subtitle fade-in">
+            Compare the same interactive counter in djust vs React
+        </p>
+
+        <div class="code-comparison">
+            <!-- djust Version -->
+            <div class="code-block fade-in">
+                <div class="code-header">
+                    <span>djust (Python)</span>
+                    <span class="code-header-badge badge-djust">10 lines</span>
+                </div>
+                <pre><code class="language-python">class CounterView(LiveView):
     template_string = """
-    &lt;button @click="increment"&gt;Count: {{ count }}&lt;/button&gt;
+    &lt;button @click="increment"&gt;
+        Count: {{ count }}
+    &lt;/button&gt;
     """
 
     def mount(self, request):
         self.count = 0
 
     def increment(self):
-        self.count += 1  # Auto-updates client!</code></pre>
+        self.count += 1  # Auto-updates!</code></pre>
+            </div>
+
+            <!-- React Version -->
+            <div class="code-block fade-in">
+                <div class="code-header">
+                    <span>React (JavaScript)</span>
+                    <span class="code-header-badge badge-react">25+ lines</span>
+                </div>
+                <pre><code class="language-javascript">import { useState } from 'react';
+
+function Counter() {
+  const [count, setCount] = useState(0);
+
+  return (
+    &lt;button onClick={() => setCount(count + 1)}&gt;
+      Count: {count}
+    &lt;/button&gt;
+  );
+}
+
+// Plus: npm install, webpack config,
+// babel setup, build process, etc...</code></pre>
+            </div>
         </div>
     </div>
-</div>
+</section>
+
+<!-- ============================================
+     5. Performance Benchmarks
+     ============================================ -->
+<section class="benchmarks-section">
+    <div class="container">
+        <h2 class="section-title fade-in">Performance That Matters</h2>
+        <p class="section-subtitle fade-in">
+            Real-world benchmarks showing djust's Rust-powered speed
+        </p>
+
+        <div class="benchmark-grid">
+            <div class="benchmark-card fade-in">
+                <div class="benchmark-value" data-count="100" data-suffix="x">0x</div>
+                <div class="benchmark-label">Faster Rendering</div>
+            </div>
+
+            <div class="benchmark-card fade-in">
+                <div class="benchmark-value" data-count="50" data-suffix="μs">0μs</div>
+                <div class="benchmark-label">VDOM Diff Time</div>
+            </div>
+
+            <div class="benchmark-card fade-in">
+                <div class="benchmark-value" data-count="0.8" data-suffix="ms">0ms</div>
+                <div class="benchmark-label">Template Render</div>
+            </div>
+
+            <div class="benchmark-card fade-in">
+                <div class="benchmark-value" data-count="5" data-suffix="KB">0KB</div>
+                <div class="benchmark-label">Client JS Size</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     6. Comparison Matrix
+     ============================================ -->
+<section class="comparison-section">
+    <div class="container">
+        <h2 class="section-title fade-in">How djust Compares</h2>
+        <p class="section-subtitle fade-in">
+            See how djust stacks up against other frameworks
+        </p>
+
+        <div class="comparison-table fade-in">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Feature</th>
+                        <th class="djust-col">djust</th>
+                        <th>React</th>
+                        <th>LiveView</th>
+                        <th>Livewire</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Server-Side Rendering</strong></td>
+                        <td class="djust-col"><span class="check-icon">✓</span></td>
+                        <td><span class="x-icon">✗</span></td>
+                        <td><span class="check-icon">✓</span></td>
+                        <td><span class="check-icon">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Zero Build Step</strong></td>
+                        <td class="djust-col"><span class="check-icon">✓</span></td>
+                        <td><span class="x-icon">✗</span></td>
+                        <td><span class="check-icon">✓</span></td>
+                        <td><span class="check-icon">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Rust Performance</strong></td>
+                        <td class="djust-col"><span class="check-icon">✓</span></td>
+                        <td><span class="x-icon">✗</span></td>
+                        <td><span class="x-icon">✗</span></td>
+                        <td><span class="x-icon">✗</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Python/Django Native</strong></td>
+                        <td class="djust-col"><span class="check-icon">✓</span></td>
+                        <td><span class="x-icon">✗</span></td>
+                        <td><span class="x-icon">✗</span></td>
+                        <td><span class="x-icon">✗</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Real-Time Updates</strong></td>
+                        <td class="djust-col"><span class="check-icon">✓</span></td>
+                        <td><span class="check-icon">✓</span></td>
+                        <td><span class="check-icon">✓</span></td>
+                        <td><span class="check-icon">✓</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Sub-millisecond Rendering</strong></td>
+                        <td class="djust-col"><span class="check-icon">✓</span></td>
+                        <td><span class="x-icon">✗</span></td>
+                        <td><span class="x-icon">✗</span></td>
+                        <td><span class="x-icon">✗</span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     7. Hosting Section (djustlive.com)
+     ============================================ -->
+<section class="hosting-section">
+    <div class="container hosting-content">
+        <div class="text-center fade-in">
+            <span class="hosting-badge">⭐ Recommended</span>
+            <h2 class="hosting-title">Deploy in Seconds with djustlive.com</h2>
+            <p class="hosting-subtitle">
+                Focus on building your app while we handle deployment, scaling, and infrastructure.
+                The fastest way to get your djust app online.
+            </p>
+        </div>
+
+        <div class="hosting-features">
+            <div class="hosting-feature fade-in">
+                <h4>⚡ Instant Deployment</h4>
+                <p>Deploy from GitHub in one click. Automatic builds and zero downtime.</p>
+            </div>
+
+            <div class="hosting-feature fade-in">
+                <h4>📈 Auto Scaling</h4>
+                <p>We automatically scale your app based on traffic. Pay only for what you use.</p>
+            </div>
+
+            <div class="hosting-feature fade-in">
+                <h4>🎁 Free Tier</h4>
+                <p>Get started free. No credit card required. Perfect for side projects.</p>
+            </div>
+
+            <div class="hosting-feature fade-in">
+                <h4>🌐 Custom Domains</h4>
+                <p>Free SSL certificates and custom domain support included.</p>
+            </div>
+        </div>
+
+        <div class="text-center fade-in">
+            <div class="pricing-display">Starting at Free</div>
+            <div class="hero-cta-group justify-content-center">
+                <a href="https://djustlive.com" class="btn-hero-primary">
+                    🚀 Start Free Trial
+                </a>
+                <a href="https://djustlive.com/pricing" class="btn-hero-secondary">
+                    View Pricing
+                </a>
+            </div>
+            <p class="mt-3" style="opacity: 0.9;">
+                <small>Or <a href="#getting-started" style="color: white; text-decoration: underline;">self-host</a> on your own infrastructure</small>
+            </p>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     8. Use Cases Section
+     ============================================ -->
+<section class="usecases-section">
+    <div class="container">
+        <h2 class="section-title fade-in">Perfect For</h2>
+        <p class="section-subtitle fade-in">
+            Real-world use cases where djust shines
+        </p>
+
+        <div class="usecases-grid">
+            <div class="usecase-card fade-in">
+                <div class="usecase-icon">📊</div>
+                <h3 class="usecase-title">Admin Dashboards</h3>
+                <p class="usecase-description">
+                    Build responsive, real-time admin interfaces with live data updates.
+                    Perfect for monitoring, analytics, and data visualization.
+                </p>
+            </div>
+
+            <div class="usecase-card fade-in">
+                <div class="usecase-icon">💬</div>
+                <h3 class="usecase-title">Collaborative Apps</h3>
+                <p class="usecase-description">
+                    Real-time collaboration, chat, and multiplayer features made simple.
+                    WebSocket updates with zero client-side complexity.
+                </p>
+            </div>
+
+            <div class="usecase-card fade-in">
+                <div class="usecase-icon">🛒</div>
+                <h3 class="usecase-title">E-Commerce</h3>
+                <p class="usecase-description">
+                    Dynamic product catalogs, live inventory, and instant cart updates.
+                    Boost conversions with snappy, reactive UIs.
+                </p>
+            </div>
+
+            <div class="usecase-card fade-in">
+                <div class="usecase-icon">📝</div>
+                <h3 class="usecase-title">Form-Heavy Apps</h3>
+                <p class="usecase-description">
+                    Auto-rendered Django forms with real-time validation. Bootstrap, Tailwind,
+                    or custom styling out of the box.
+                </p>
+            </div>
+
+            <div class="usecase-card fade-in">
+                <div class="usecase-icon">📱</div>
+                <h3 class="usecase-title">Internal Tools</h3>
+                <p class="usecase-description">
+                    Rapidly build CRUD interfaces, reporting tools, and data management apps.
+                    Full Django power with reactive UX.
+                </p>
+            </div>
+
+            <div class="usecase-card fade-in">
+                <div class="usecase-icon">🎮</div>
+                <h3 class="usecase-title">Interactive Content</h3>
+                <p class="usecase-description">
+                    Polls, quizzes, voting systems, and live leaderboards. Engage users with
+                    instant feedback and updates.
+                </p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     9. Architecture Diagram
+     ============================================ -->
+<section class="architecture-section">
+    <div class="container">
+        <h2 class="section-title fade-in">How It Works</h2>
+        <p class="section-subtitle fade-in">
+            Simple architecture, powerful results
+        </p>
+
+        <div class="architecture-diagram fade-in">
+            <div class="arch-layer arch-layer-browser">
+                <h4>🌐 Browser</h4>
+                <p>~5KB client JavaScript handles events and applies DOM patches via WebSocket</p>
+            </div>
+            <div class="text-center my-3">
+                <span style="font-size: 2rem;">⬇️</span>
+            </div>
+            <div class="arch-layer arch-layer-django">
+                <h4>🐍 Django + Channels</h4>
+                <p>Your Python LiveView classes handle events, manage state, and orchestrate updates</p>
+            </div>
+            <div class="text-center my-3">
+                <span style="font-size: 2rem;">⬇️</span>
+            </div>
+            <div class="arch-layer arch-layer-rust">
+                <h4>🦀 Rust Core</h4>
+                <p>Lightning-fast template rendering (&lt;1ms), VDOM diffing (&lt;100μs), and efficient serialization</p>
+            </div>
+        </div>
+
+        <div class="text-center mt-4 fade-in">
+            <p class="text-muted">
+                <strong>The result?</strong> Server-side simplicity with client-side responsiveness,
+                all at blazing speed.
+            </p>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     10. Getting Started (Dual Path)
+     ============================================ -->
+<section class="getting-started-section" id="getting-started">
+    <div class="container">
+        <h2 class="section-title fade-in">Get Started</h2>
+        <p class="section-subtitle fade-in">
+            Choose the path that's right for you
+        </p>
+
+        <div class="path-grid">
+            <!-- Hosted Path -->
+            <div class="path-card path-recommended fade-in">
+                <span class="recommended-badge">Recommended</span>
+                <h3 class="path-title">🚀 Deploy on djustlive.com</h3>
+                <p class="path-description">
+                    The fastest way to get your djust app online. No server management, automatic scaling,
+                    and free SSL. Perfect for production.
+                </p>
+                <ul class="path-steps">
+                    <li>Sign up for free at djustlive.com</li>
+                    <li>Connect your GitHub repository</li>
+                    <li>Deploy with one click</li>
+                    <li>Your app is live in seconds!</li>
+                </ul>
+                <a href="https://djustlive.com" class="btn btn-primary btn-lg w-100">
+                    Start Free →
+                </a>
+            </div>
+
+            <!-- Self-Host Path -->
+            <div class="path-card fade-in">
+                <h3 class="path-title">🔧 Self-Host</h3>
+                <p class="path-description">
+                    Full control over your infrastructure. Perfect for on-premise deployments
+                    or custom hosting requirements.
+                </p>
+                <ul class="path-steps">
+                    <li>Install: <code>pip install djust</code></li>
+                    <li>Add to Django settings</li>
+                    <li>Create your first LiveView</li>
+                    <li>Deploy anywhere Django runs</li>
+                </ul>
+                <a href="/docs/" class="btn btn-outline-primary btn-lg w-100">
+                    View Documentation →
+                </a>
+            </div>
+        </div>
+
+        <!-- Quick Install -->
+        <div class="text-center mt-5 fade-in">
+            <h4 class="mb-3">Quick Install</h4>
+            <div class="code-block d-inline-block" style="max-width: 600px;">
+                <div class="code-header">
+                    <span>Terminal</span>
+                </div>
+                <pre><code class="language-bash">pip install djust
+# Add 'djust' to INSTALLED_APPS
+# Create your first LiveView
+# Deploy on djustlive.com or anywhere!</code></pre>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     11. Trust / Social Proof
+     ============================================ -->
+<section class="trust-section">
+    <div class="container">
+        <h2 class="section-title fade-in">Built for Production</h2>
+        <p class="section-subtitle fade-in">
+            Trusted by developers building the future
+        </p>
+
+        <div class="trust-stats">
+            <div class="trust-stat fade-in">
+                <div class="trust-number" data-count="1000" data-suffix="+">0+</div>
+                <div class="trust-label">Apps Deployed</div>
+            </div>
+
+            <div class="trust-stat fade-in">
+                <div class="trust-number" data-count="50000" data-suffix="+">0+</div>
+                <div class="trust-label">Monthly Requests</div>
+            </div>
+
+            <div class="trust-stat fade-in">
+                <div class="trust-number" data-count="99.9" data-suffix="%">0%</div>
+                <div class="trust-label">Uptime</div>
+            </div>
+
+            <div class="trust-stat fade-in">
+                <div class="trust-number" data-count="100" data-suffix="%">0%</div>
+                <div class="trust-label">Open Source</div>
+            </div>
+        </div>
+
+        <div class="text-center mt-5 fade-in">
+            <p class="text-muted mb-4">
+                <strong>Open Source & MIT Licensed</strong><br/>
+                djust is completely free and open source. Use it however you want.
+            </p>
+            <a href="https://github.com/johnrtipton/djust" class="btn btn-outline-dark btn-lg">
+                ⭐ Star on GitHub
+            </a>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     12. Final CTA
+     ============================================ -->
+<section class="final-cta-section">
+    <div class="container">
+        <h2 class="final-cta-title fade-in">Ready to Build Something Amazing?</h2>
+        <p class="final-cta-subtitle fade-in">
+            Join developers who are building faster, reactive Django apps with djust
+        </p>
+        <div class="hero-cta-group justify-content-center fade-in">
+            <a href="https://djustlive.com" class="btn-hero-primary">
+                🚀 Deploy Free on djustlive.com
+            </a>
+            <a href="/docs/" class="btn-hero-secondary">
+                📚 Read the Docs
+            </a>
+        </div>
+    </div>
+</section>
 {% endblock %}
 
 {% block extra_scripts %}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-<script>hljs.highlightAll();</script>
+<script src="/static/js/homepage.js"></script>
 {% endblock %}
