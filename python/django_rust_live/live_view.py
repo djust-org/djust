@@ -10,6 +10,8 @@ from typing import Any, Dict, Optional, Callable
 from django.http import HttpResponse, JsonResponse
 from django.views import View
 from django.template.loader import render_to_string
+from django.views.decorators.csrf import ensure_csrf_cookie
+from django.utils.decorators import method_decorator
 
 try:
     from ._rust import RustLiveView
@@ -356,6 +358,51 @@ class LiveView(View):
 
         return result
 
+    def _extract_component_state(self, component) -> dict:
+        """
+        Extract state from a component for session storage.
+
+        Args:
+            component: LiveComponent instance
+
+        Returns:
+            Dictionary of component state
+        """
+        import json as json_module
+        state = {}
+        for key in dir(component):
+            if not key.startswith('_') and key not in ('template_name',):
+                try:
+                    value = getattr(component, key)
+                    if not callable(value):
+                        # Only store JSON-serializable values
+                        try:
+                            json_module.dumps(value)
+                            state[key] = value
+                        except (TypeError, ValueError):
+                            # Skip non-serializable values
+                            pass
+                except (AttributeError, TypeError):
+                    pass
+        return state
+
+    def _restore_component_state(self, component, state: dict):
+        """
+        Restore state to a component from session storage.
+
+        Args:
+            component: LiveComponent instance
+            state: Dictionary of component state
+        """
+        for key, value in state.items():
+            if not key.startswith('_'):
+                try:
+                    setattr(component, key, value)
+                except (AttributeError, TypeError):
+                    # Skip read-only properties
+                    pass
+
+    @method_decorator(ensure_csrf_cookie)
     def get(self, request, *args, **kwargs):
         """Handle GET requests - initial page load"""
         # IMPORTANT: mount() must be called first to initialize clean state
@@ -368,8 +415,22 @@ class LiveView(View):
         # Store initial state in session (exclude components)
         view_key = f'liveview_{request.path}'
         from .components.base import LiveComponent
-        state = {k: v for k, v in self.get_context_data().items() if not isinstance(v, LiveComponent)}
+        context = self.get_context_data()
+        state = {k: v for k, v in context.items() if not isinstance(v, LiveComponent)}
         request.session[view_key] = state
+
+        # Store component state separately and assign stable IDs based on attribute names
+        # This is the magic that enables automatic component identification:
+        # When you write `self.alert_success = AlertComponent(...)`, the attribute name
+        # "alert_success" becomes the stable component_id automatically.
+        component_state = {}
+        for key, component in context.items():
+            if isinstance(component, LiveComponent):
+                # Automatic ID assignment: attribute name -> component_id
+                # e.g., self.alert_success gets component_id="alert_success"
+                component.component_id = key
+                component_state[key] = self._extract_component_state(component)
+        request.session[f'{view_key}_components'] = component_state
         request.session.modified = True  # Force session save
 
         session_key = request.session.session_key
@@ -435,6 +496,7 @@ class LiveView(View):
     def post(self, request, *args, **kwargs):
         """Handle POST requests - event handling"""
         import sys
+        from .components.base import LiveComponent
         try:
             data = json.loads(request.body)
             event_name = data.get('event')
@@ -457,6 +519,13 @@ class LiveView(View):
                         # Skip read-only properties
                         pass
 
+            # Restore component state
+            component_state = request.session.get(f'{view_key}_components', {})
+            for key, state in component_state.items():
+                component = getattr(self, key, None)
+                if component and isinstance(component, LiveComponent):
+                    self._restore_component_state(component, state)
+
             # Call the event handler
             handler = getattr(self, event_name, None)
             if handler and callable(handler):
@@ -467,9 +536,19 @@ class LiveView(View):
 
             # Save updated state back to session (exclude components)
             updated_context = self.get_context_data()
-            from .components.base import LiveComponent
             state = {k: v for k, v in updated_context.items() if not isinstance(v, LiveComponent)}
             request.session[view_key] = state
+
+            # Save updated component state with stable IDs based on attribute names
+            # Maintain automatic component ID assignment after event processing
+            component_state = {}
+            for key, component in updated_context.items():
+                if isinstance(component, LiveComponent):
+                    # Automatic ID assignment: attribute name -> component_id
+                    # Ensures IDs remain stable across WebSocket events
+                    component.component_id = key
+                    component_state[key] = self._extract_component_state(component)
+            request.session[f'{view_key}_components'] = component_state
 
             # Render with diff to get patches
             html, patches_json, version = self.render_with_diff(request)
@@ -642,10 +721,17 @@ class LiveView(View):
                         element.dataset.liveviewClickBound = 'true';
                         element.addEventListener('click', async (e) => {
                             e.preventDefault();
+
+                            // Extract all data-* attributes
                             const params = {};
-                            if (element.dataset.id) {
-                                params.id = element.dataset.id;
-                            }
+                            Array.from(element.attributes).forEach(attr => {
+                                if (attr.name.startsWith('data-') && !attr.name.startsWith('data-liveview')) {
+                                    // Convert data-foo-bar to foo_bar
+                                    const key = attr.name.substring(5).replace(/-/g, '_');
+                                    params[key] = attr.value;
+                                }
+                            });
+
                             await handleEvent(clickHandler, params);
                         });
                     }
@@ -826,7 +912,18 @@ class LiveView(View):
                         if (key.startsWith('@')) {
                             const eventName = key.substring(1);
                             elem.addEventListener(eventName, (e) => {
-                                handleEvent(value, e);
+                                e.preventDefault();
+
+                                // Extract data-* attributes just like bindLiveViewEvents() does
+                                const params = {};
+                                Array.from(elem.attributes).forEach(attr => {
+                                    if (attr.name.startsWith('data-') && !attr.name.startsWith('data-liveview')) {
+                                        const key = attr.name.substring(5).replace(/-/g, '_');
+                                        params[key] = attr.value;
+                                    }
+                                });
+
+                                handleEvent(value, params);
                             });
                         } else {
                             // Special handling for input value property

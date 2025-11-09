@@ -309,3 +309,19 @@ class KitchenSinkView(LiveView):
         """Handle pagination page change"""
         self.alert_info.set_message(f"Navigated to page {page}")
         self.alert_info.show()
+
+    def dismiss(self, component_id: str = None, **kwargs):
+        """Handle component dismiss/hide - works for alerts, modals, etc."""
+        # Get the component by its attribute name (which is now used as component_id)
+        if component_id and hasattr(self, component_id):
+            component = getattr(self, component_id)
+            # Try dismiss() first (for alerts), then hide() (for modals)
+            if hasattr(component, 'dismiss'):
+                component.dismiss()
+            elif hasattr(component, 'hide'):
+                component.hide()
+
+    def activate_tab(self, tab: str = None):
+        """Handle tab activation"""
+        if tab:
+            self.tabs_example.activate_tab(tab)
