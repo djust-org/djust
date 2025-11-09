@@ -1,4 +1,4 @@
-# Django Rust Live - Makefile
+# djust - Makefile
 # Default port for development server
 PORT ?= 8002
 HOST ?= 0.0.0.0
@@ -16,7 +16,7 @@ NC := \033[0m # No Color
 
 .PHONY: help
 help: ## Display this help message
-	@echo "$(BLUE)Django Rust Live - Development Commands$(NC)"
+	@echo "$(BLUE)djust - Development Commands$(NC)"
 	@echo ""
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n  make $(YELLOW)<target>$(NC)\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  $(GREEN)%-15s$(NC) %s\n", $$1, $$2 } /^##@/ { printf "\n$(BLUE)%s$(NC)\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
@@ -24,7 +24,7 @@ help: ## Display this help message
 
 .PHONY: start
 start: ## Start the Django development server with hot reload
-	@echo "$(GREEN)Starting Django Rust Live development server on $(HOST):$(PORT)...$(NC)"
+	@echo "$(GREEN)Starting djust development server on $(HOST):$(PORT)...$(NC)"
 	@uv run python -m uvicorn demo_project.asgi:application \
 		--host $(HOST) \
 		--port $(PORT) \
@@ -247,7 +247,7 @@ open: ## Open the application in browser
 
 .PHONY: info
 info: ## Show project information
-	@echo "$(BLUE)Django Rust Live - Project Information$(NC)"
+	@echo "$(BLUE)djust - Project Information$(NC)"
 	@echo "Server URL:    http://localhost:$(PORT)"
 	@echo "Python:        $$(uv run python --version)"
 	@echo "Rust:          $$(rustc --version)"
