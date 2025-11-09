@@ -119,16 +119,52 @@ class LiveView(View):
         """
         Get the Rust template source for this view.
 
-        LiveView uses pure Rust templates with {{ var }} syntax.
-        For layouts (nav, head, etc.), use Django templates that wrap the LiveView.
+        Supports template inheritance via {% extends %} and {% block %} tags.
+        Templates are resolved using Rust template inheritance for performance.
         """
         if self.template_string:
             return self.template_string
         elif self.template_name:
-            # For simple file-based templates, read the raw source
+            # Load the raw template source
             from django.template import loader
+            from django.conf import settings
             template = loader.get_template(self.template_name)
-            return template.template.source
+            template_source = template.template.source
+
+            # Check if template uses {% extends %} - if so, resolve inheritance in Rust
+            if '{% extends' in template_source or '{%extends' in template_source:
+                # Get template directories from Django settings
+                template_dirs = []
+                for template_config in settings.TEMPLATES:
+                    if 'DIRS' in template_config:
+                        template_dirs.extend(template_config['DIRS'])
+
+                # Also add app template directories
+                for template_config in settings.TEMPLATES:
+                    if template_config['BACKEND'] == 'django.template.backends.django.DjangoTemplates':
+                        if template_config.get('APP_DIRS', False):
+                            from django.apps import apps
+                            for app_config in apps.get_app_configs():
+                                templates_dir = app_config.path / 'templates'
+                                if templates_dir.exists():
+                                    template_dirs.append(str(templates_dir))
+
+                # Convert to strings
+                template_dirs_str = [str(d) for d in template_dirs]
+
+                # Use Rust template inheritance resolution
+                try:
+                    from django_rust_live._rust import resolve_template_inheritance
+                    resolved = resolve_template_inheritance(self.template_name, template_dirs_str)
+                    return resolved
+                except Exception as e:
+                    # Fallback to raw template if Rust resolution fails
+                    print(f"[LiveView] Template inheritance resolution failed: {e}")
+                    print(f"[LiveView] Falling back to raw template source")
+                    return template_source
+
+            # No template inheritance - return raw source
+            return template_source
         else:
             raise ValueError("Either template_name or template_string must be set")
 
