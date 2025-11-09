@@ -2,185 +2,21 @@
 Forms demo views - showcasing Django forms integration with LiveView
 """
 
+from django.views.generic import TemplateView
 from django_rust_live import LiveView, FormMixin
 from ..forms import RegistrationForm, ContactForm, ProfileForm, SimpleContactForm
 
 
-class FormsIndexView(LiveView):
+class FormsIndexView(TemplateView):
     """
-    Forms demo index page showing all available form examples
+    Forms demo index page showing all available form examples.
+
+    Note: This is a regular Django TemplateView (not LiveView) because it's
+    a static page using Django template inheritance. LiveView is used for
+    the individual form pages which have reactive behavior.
     """
+    template_name = 'forms/index.html'
 
-    template_string = """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>FormsIndex - Django Rust Live</title>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-        <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; }
-            .card { transition: transform 0.2s; }
-            .card:hover { transform: translateY(-5px); }
-            pre { overflow-x: auto; }
-            code { font-size: 14px; }
-        </style>
-    </head>
-    <body>
-    <div class="container">
-        <div class="row mt-5">
-            <div class="col-12">
-                <h1 class="display-4 mb-4">Django Forms Integration</h1>
-                <p class="lead">
-                    Comprehensive forms integration with Django Rust Live, featuring real-time validation,
-                    error handling, and seamless LiveView integration.
-                </p>
-            </div>
-        </div>
-
-        <div class="row mt-4">
-            <!-- Registration Form -->
-            <div class="col-md-6 mb-4">
-                <div class="card h-100 shadow-sm">
-                    <div class="card-body">
-                        <h3 class="card-title">
-                            <span class="badge bg-primary">Demo</span>
-                            Registration Form
-                        </h3>
-                        <p class="card-text">
-                            User registration with password matching, username validation,
-                            and terms acceptance. Demonstrates field-level validation.
-                        </p>
-                        <ul class="list-unstyled">
-                            <li>✓ Real-time field validation</li>
-                            <li>✓ Password matching</li>
-                            <li>✓ Custom clean methods</li>
-                            <li>✓ Checkbox validation</li>
-                        </ul>
-                        <a href="/forms/registration/" class="btn btn-primary">Try Demo</a>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Contact Form -->
-            <div class="col-md-6 mb-4">
-                <div class="card h-100 shadow-sm">
-                    <div class="card-body">
-                        <h3 class="card-title">
-                            <span class="badge bg-success">Demo</span>
-                            Contact Form
-                        </h3>
-                        <p class="card-text">
-                            Contact form with dropdowns, radio buttons, and text areas.
-                            Shows various field types working together.
-                        </p>
-                        <ul class="list-unstyled">
-                            <li>✓ Select dropdowns</li>
-                            <li>✓ Radio buttons</li>
-                            <li>✓ Text areas</li>
-                            <li>✓ Spam detection</li>
-                        </ul>
-                        <a href="/forms/contact/" class="btn btn-success">Try Demo</a>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Profile Form -->
-            <div class="col-md-6 mb-4">
-                <div class="card h-100 shadow-sm">
-                    <div class="card-body">
-                        <h3 class="card-title">
-                            <span class="badge bg-info">Demo</span>
-                            Profile Form
-                        </h3>
-                        <p class="card-text">
-                            Profile editing with dates, URLs, and optional fields.
-                            Demonstrates complex field types and validation.
-                        </p>
-                        <ul class="list-unstyled">
-                            <li>✓ Date fields</li>
-                            <li>✓ URL validation</li>
-                            <li>✓ Phone validation</li>
-                            <li>✓ Optional fields</li>
-                        </ul>
-                        <a href="/forms/profile/" class="btn btn-info text-white">Try Demo</a>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Features -->
-            <div class="col-md-6 mb-4">
-                <div class="card h-100 shadow-sm bg-light">
-                    <div class="card-body">
-                        <h3 class="card-title">Features</h3>
-                        <ul class="list-unstyled">
-                            <li class="mb-2">
-                                <strong>Real-time Validation:</strong> Fields validate as you type
-                            </li>
-                            <li class="mb-2">
-                                <strong>Django Forms:</strong> Uses actual Django forms on backend
-                            </li>
-                            <li class="mb-2">
-                                <strong>LiveView Integration:</strong> Seamless reactive updates
-                            </li>
-                            <li class="mb-2">
-                                <strong>Error Display:</strong> Clear, Bootstrap-styled errors
-                            </li>
-                            <li class="mb-2">
-                                <strong>Form Helpers:</strong> Easy field rendering
-                            </li>
-                            <li class="mb-2">
-                                <strong>Custom Validation:</strong> Field and form-level validation
-                            </li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="row mt-4 mb-5">
-            <div class="col-12">
-                <div class="card border-primary">
-                    <div class="card-header bg-primary text-white">
-                        <h4 class="mb-0">Documentation</h4>
-                    </div>
-                    <div class="card-body">
-                        <h5>Using FormMixin in Your Views</h5>
-                        <pre class="bg-light p-3 rounded"><code>from django_rust_live import LiveView, FormMixin
-from django import forms
-
-class MyForm(forms.Form):
-    name = forms.CharField(max_length=100)
-    email = forms.EmailField()
-
-class MyFormView(FormMixin, LiveView):
-    form_class = MyForm
-
-    def form_valid(self, form):
-        # Handle valid form submission
-        self.success_message = "Form submitted!"
-
-    def form_invalid(self, form):
-        # Handle errors
-        self.error_message = "Please fix errors"</code></pre>
-
-                        <h5 class="mt-4">Template Usage</h5>
-                        <pre class="bg-light p-3 rounded"><code>&lt;form @submit="submit_form"&gt;
-    &lt;input name="name" @change="validate_field" data-field="name" /&gt;
-    {% if field_errors.name %}
-        &lt;div class="error"&gt;{{ field_errors.name }}&lt;/div&gt;
-    {% endif %}
-    &lt;button type="submit"&gt;Submit&lt;/button&gt;
-&lt;/form&gt;</code></pre>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    </body>
-    </html>
-    """
 
 
 class RegistrationFormView(FormMixin, LiveView):
@@ -863,3 +699,101 @@ class SimpleContactFormView(FormMixin, LiveView):
         """Clear success/error messages"""
         self.success_message = ""
         self.error_message = ""
+
+
+class AutoContactFormView(FormMixin, LiveView):
+    """
+    Auto-rendered contact form using as_live() method with Bootstrap 5.
+
+    Demonstrates automatic form rendering by calling as_live() in Python
+    and passing the HTML to the template context.
+    """
+    form_class = SimpleContactForm
+    template_name = 'forms/auto.html'
+
+    def get_context_data(self, **kwargs):
+        """Add pre-rendered form HTML to context"""
+        context = super().get_context_data(**kwargs)
+        # Render the form using as_live() and add to context
+        from django.utils.safestring import mark_safe
+        context['auto_form_html'] = mark_safe(self.as_live())  # Default: Bootstrap 5
+        return context
+
+    def form_valid(self, form):
+        """Handle successful form submission"""
+        self.success_message = f"Thanks {form.cleaned_data['name']}! We received your message."
+        self.reset_form()
+
+    def form_invalid(self, form):
+        """Handle failed form submission"""
+        self.error_message = "Please correct the errors below."
+
+    def clear_message(self, **kwargs):
+        """Clear success/error messages"""
+        self.success_message = ""
+        self.error_message = ""
+
+
+class AutoContactFormTailwindView(FormMixin, LiveView):
+    """
+    Auto-rendered contact form using Tailwind CSS framework.
+    """
+    form_class = SimpleContactForm
+    template_name = 'forms/auto_tailwind.html'
+
+    def get_context_data(self, **kwargs):
+        """Add pre-rendered form HTML to context using Tailwind adapter"""
+        context = super().get_context_data(**kwargs)
+        from django.utils.safestring import mark_safe
+        context['auto_form_html'] = mark_safe(self.as_live(framework='tailwind'))
+        return context
+
+    def form_valid(self, form):
+        """Handle successful form submission"""
+        self.success_message = f"Thanks {form.cleaned_data['name']}! We received your message."
+        self.reset_form()
+
+    def form_invalid(self, form):
+        """Handle failed form submission"""
+        self.error_message = "Please correct the errors below."
+
+    def clear_message(self, **kwargs):
+        """Clear success/error messages"""
+        self.success_message = ""
+        self.error_message = ""
+
+
+class AutoContactFormPlainView(FormMixin, LiveView):
+    """
+    Auto-rendered contact form using plain HTML (minimal styling).
+    """
+    form_class = SimpleContactForm
+    template_name = 'forms/auto_plain.html'
+
+    def get_context_data(self, **kwargs):
+        """Add pre-rendered form HTML to context using Plain adapter"""
+        context = super().get_context_data(**kwargs)
+        from django.utils.safestring import mark_safe
+        context['auto_form_html'] = mark_safe(self.as_live(framework='plain'))
+        return context
+
+    def form_valid(self, form):
+        """Handle successful form submission"""
+        self.success_message = f"Thanks {form.cleaned_data['name']}! We received your message."
+        self.reset_form()
+
+    def form_invalid(self, form):
+        """Handle failed form submission"""
+        self.error_message = "Please correct the errors below."
+
+    def clear_message(self, **kwargs):
+        """Clear success/error messages"""
+        self.success_message = ""
+        self.error_message = ""
+
+
+class AutoFormComparisonView(LiveView):
+    """
+    Framework comparison page showing all three CSS framework adapters.
+    """
+    template_name = 'forms/auto_comparison.html'
