@@ -116,11 +116,16 @@ class LiveView(View):
         self._cache_key: Optional[str] = None
 
     def get_template(self) -> str:
-        """Get the template source for this view"""
+        """
+        Get the Rust template source for this view.
+
+        LiveView uses pure Rust templates with {{ var }} syntax.
+        For layouts (nav, head, etc.), use Django templates that wrap the LiveView.
+        """
         if self.template_string:
             return self.template_string
         elif self.template_name:
-            # Get raw template source without rendering
+            # For simple file-based templates, read the raw source
             from django.template import loader
             template = loader.get_template(self.template_name)
             return template.template.source
@@ -194,7 +199,7 @@ class LiveView(View):
                     _rust_view_cache[self._cache_key] = (cached_view, time.time())
                     return
 
-            # Create new RustLiveView
+            # Create new RustLiveView with the template
             template_source = self.get_template()
             self._rust_view = RustLiveView(template_source)
 
@@ -237,9 +242,24 @@ class LiveView(View):
         Returns:
             Tuple of (html, patches_json, version)
         """
+        import sys
+        print(f"[LiveView] render_with_diff() called", file=sys.stderr)
+        print(f"[LiveView] _rust_view before init: {self._rust_view}", file=sys.stderr)
+
         self._initialize_rust_view(request)
+
+        print(f"[LiveView] _rust_view after init: {self._rust_view}", file=sys.stderr)
+
         self._sync_state_to_rust()
-        return self._rust_view.render_with_diff()
+
+        result = self._rust_view.render_with_diff()
+        html, patches_json, version = result
+
+        print(f"[LiveView] Rust returned: version={version}, patches={'YES' if patches_json else 'NO'}", file=sys.stderr)
+        if not patches_json:
+            print(f"[LiveView] NO PATCHES GENERATED!", file=sys.stderr)
+
+        return result
 
     def get(self, request, *args, **kwargs):
         """Handle GET requests - initial page load"""
@@ -270,10 +290,24 @@ class LiveView(View):
         #     self._rust_view = None
         #     self._cache_key = None
 
-        # Initialize and render to establish baseline VDOM
-        # The render() call will create a new RustLiveView with the initial HTML,
-        # establishing the correct baseline VDOM that matches what the browser will have.
-        html = self.render(request)
+        # Initialize and render the LiveView content
+        # Use render_with_diff() to establish baseline VDOM for future patches
+        self._initialize_rust_view(request)
+        self._sync_state_to_rust()
+        html, _, _ = self.render_with_diff(request)  # Ignore patches_json and version on GET
+        liveview_content = html
+
+        # Wrap in Django template if wrapper_template is specified
+        if hasattr(self, 'wrapper_template') and self.wrapper_template:
+            from django.template import loader
+            wrapper = loader.get_template(self.wrapper_template)
+            html = wrapper.render({'liveview_content': liveview_content}, request)
+            # Inject LiveView content into [data-liveview-root] placeholder
+            # Note: liveview_content already includes <div data-liveview-root>...</div>
+            html = html.replace('<div data-liveview-root></div>', liveview_content)
+        else:
+            # No wrapper, return LiveView content directly
+            html = liveview_content
 
         # Debug: Save the rendered HTML to a file for inspection
         if 'registration' in request.path:
@@ -342,19 +376,20 @@ class LiveView(View):
                 patches = json_module.loads(patches_json)
                 patch_count = len(patches)
 
-                # If patches are reasonable size, send patches with HTML fallback
+                # If patches are reasonable size, send ONLY patches (efficient!)
                 # Otherwise send full HTML for efficiency
                 if patch_count <= PATCH_THRESHOLD:
-                    # Include HTML as fallback in case patches fail on client
-                    # Note: We include a flag so client can tell us if it used the fallback
-                    return JsonResponse({'patches': patches_json, 'html': html, 'version': version, 'reset_on_fallback': True})
+                    # Send only patches - client will apply them
+                    # If patches fail on client, it should reload the page
+                    return JsonResponse({'patches': patches_json, 'version': version})
                 else:
+                    # Too many patches - send full HTML instead
                     # Reset VDOM cache since we're sending full HTML
                     # This ensures next patches are calculated from the browser's normalized DOM
                     self._rust_view.reset()
                     return JsonResponse({'html': html, 'version': version})
             else:
-                # No changes, just send HTML
+                # No patches generated - send full HTML
                 return JsonResponse({'html': html, 'version': version})
 
         except Exception as e:
@@ -571,8 +606,15 @@ class LiveView(View):
             }
 
             // DOM patching utilities
-            // Find the root LiveView container (first content element, skipping <link>, <style>, <script>)
+            // Find the root LiveView container
             function getLiveViewRoot() {
+                // First, look for explicit LiveView container (used with template inheritance)
+                const liveviewContainer = document.querySelector('[data-liveview-root]');
+                if (liveviewContainer) {
+                    return liveviewContainer;
+                }
+
+                // Fallback: first content element, skipping <link>, <style>, <script>
                 const NON_CONTENT_TAGS = ['LINK', 'STYLE', 'SCRIPT'];
                 for (const child of document.body.childNodes) {
                     if (child.nodeType === Node.ELEMENT_NODE && !NON_CONTENT_TAGS.includes(child.tagName)) {
@@ -857,9 +899,9 @@ class LiveView(View):
 
                 console.log(`[LiveView] Patch summary: ${successCount} succeeded, ${failedCount} failed`);
 
-                // If any patches failed, return false to trigger full HTML fallback
+                // If any patches failed, return false to trigger page reload
                 if (failedCount > 0) {
-                    console.warn(`[LiveView] ${failedCount} patches failed, will fall back to full HTML`);
+                    console.error(`[LiveView] ${failedCount} patches failed, page will reload`);
                     return false;
                 }
 
@@ -916,19 +958,18 @@ class LiveView(View):
                         if (data.patches) {
                             // Try to apply DOM patches (efficient!)
                             const success = applyPatches(data.patches);
-                            if (success === false && data.html) {
-                                // Patches failed, fall back to HTML
-                                console.warn('[LiveView] Patches failed, falling back to full HTML');
-                                const parser = new DOMParser();
-                                const doc = parser.parseFromString(data.html, 'text/html');
-                                document.body.innerHTML = doc.body.innerHTML;
+                            if (success === false) {
+                                // Patches failed - reload the page to get fresh state
+                                console.error('[LiveView] Patches failed to apply, reloading page...');
+                                window.location.reload();
+                                return;
                             }
                             // Re-bind event handlers to new/modified elements
                             initReactCounters();
                             initTodoItems();
                             bindLiveViewEvents();
                         } else if (data.html) {
-                            // Replace full HTML
+                            // Server sent full HTML (no patches available)
                             const parser = new DOMParser();
                             const doc = parser.parseFromString(data.html, 'text/html');
                             document.body.innerHTML = doc.body.innerHTML;
