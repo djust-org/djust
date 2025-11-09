@@ -1,0 +1,241 @@
+{% extends 'base.html' %}
+
+{% block title %}Live Demos - Django Rust Live{% endblock %}
+
+{% block nav_demos_active %}active{% endblock %}
+
+{% block extra_styles %}
+.hero-section {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 2rem 0;
+    margin-bottom: 3rem;
+}
+{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<div class="hero-section">
+    <div class="container">
+        <h1 class="display-4">Interactive Live Demos</h1>
+        <p class="lead">
+            Explore real-time, reactive examples showcasing Django Rust Live's capabilities.
+            All demos feature instant updates without page reloads.
+        </p>
+    </div>
+</div>
+
+<div class="container">
+    <div class="row">
+        <!-- Counter Demo -->
+        <div class="col-md-6 mb-4">
+            <div class="demo-card">
+                <h3>
+                    <span class="badge bg-primary">Demo</span>
+                    Counter
+                </h3>
+                <p>
+                    Simple counter demonstrating real-time state management and event handling.
+                    Click buttons to increment, decrement, or reset the value.
+                </p>
+                <ul class="list-unstyled">
+                    <li>✓ Real-time updates</li>
+                    <li>✓ Event handling (@click)</li>
+                    <li>✓ State synchronization</li>
+                    <li>✓ No page reloads</li>
+                </ul>
+                <a href="/demos/counter/" class="btn btn-primary">Try Demo</a>
+            </div>
+        </div>
+
+        <!-- Todo List Demo -->
+        <div class="col-md-6 mb-4">
+            <div class="demo-card">
+                <h3>
+                    <span class="badge bg-success">Demo</span>
+                    Todo List
+                </h3>
+                <p>
+                    Full-featured todo list with add, complete, and delete functionality.
+                    Shows complex state management and list rendering.
+                </p>
+                <ul class="list-unstyled">
+                    <li>✓ Add/remove items</li>
+                    <li>✓ Mark complete</li>
+                    <li>✓ Filter by status</li>
+                    <li>✓ Persistent state</li>
+                </ul>
+                <a href="/demos/todo/" class="btn btn-success">Try Demo</a>
+            </div>
+        </div>
+
+        <!-- Chat Demo -->
+        <div class="col-md-6 mb-4">
+            <div class="demo-card">
+                <h3>
+                    <span class="badge bg-info">Demo</span>
+                    Live Chat
+                </h3>
+                <p>
+                    Real-time chat interface with message history and user presence.
+                    Demonstrates WebSocket communication patterns.
+                </p>
+                <ul class="list-unstyled">
+                    <li>✓ Instant messaging</li>
+                    <li>✓ Message history</li>
+                    <li>✓ Typing indicators</li>
+                    <li>✓ Auto-scroll</li>
+                </ul>
+                <a href="/demos/chat/" class="btn btn-info text-white">Try Demo</a>
+            </div>
+        </div>
+
+        <!-- React Demo -->
+        <div class="col-md-6 mb-4">
+            <div class="demo-card">
+                <h3>
+                    <span class="badge bg-warning text-dark">Demo</span>
+                    React-like UI
+                </h3>
+                <p>
+                    Demonstrates React-style component patterns and reactive rendering
+                    with Django Rust Live's VDOM engine.
+                </p>
+                <ul class="list-unstyled">
+                    <li>✓ Component composition</li>
+                    <li>✓ VDOM diffing</li>
+                    <li>✓ Efficient updates</li>
+                    <li>✓ Nested components</li>
+                </ul>
+                <a href="/demos/react/" class="btn btn-warning text-dark">Try Demo</a>
+            </div>
+        </div>
+
+        <!-- Data Table Demo -->
+        <div class="col-md-6 mb-4">
+            <div class="demo-card">
+                <h3>
+                    <span class="badge bg-danger">Demo</span>
+                    Data Table
+                </h3>
+                <p>
+                    Interactive data table with sorting, filtering, and pagination.
+                    Perfect for displaying large datasets efficiently.
+                </p>
+                <ul class="list-unstyled">
+                    <li>✓ Sort columns</li>
+                    <li>✓ Search/filter</li>
+                    <li>✓ Pagination</li>
+                    <li>✓ Row selection</li>
+                </ul>
+                <a href="/demos/datatable/" class="btn btn-danger">Try Demo</a>
+            </div>
+        </div>
+
+        <!-- Performance Test Demo -->
+        <div class="col-md-6 mb-4">
+            <div class="demo-card">
+                <h3>
+                    <span class="badge bg-secondary">Demo</span>
+                    Performance Test
+                </h3>
+                <p>
+                    Stress test the VDOM rendering engine with rapid updates.
+                    See how Django Rust Live handles high-frequency changes.
+                </p>
+                <ul class="list-unstyled">
+                    <li>✓ Rapid updates</li>
+                    <li>✓ Performance metrics</li>
+                    <li>✓ Benchmark tools</li>
+                    <li>✓ Optimized diffing</li>
+                </ul>
+                <a href="/demos/performance/" class="btn btn-secondary">Try Demo</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Features Section -->
+    <div class="row mt-4">
+        <div class="col-md-6 mb-4">
+            <div class="card h-100 shadow-sm bg-light">
+                <div class="card-body">
+                    <h3 class="card-title">Key Features</h3>
+                    <ul class="list-unstyled">
+                        <li class="mb-2">
+                            <strong>Real-time Updates:</strong> Changes sync instantly via WebSocket
+                        </li>
+                        <li class="mb-2">
+                            <strong>Event Handling:</strong> Simple @click, @change, @submit directives
+                        </li>
+                        <li class="mb-2">
+                            <strong>VDOM Rendering:</strong> Efficient DOM updates like React
+                        </li>
+                        <li class="mb-2">
+                            <strong>State Management:</strong> Python-based state on the server
+                        </li>
+                        <li class="mb-2">
+                            <strong>No JavaScript:</strong> Write Python, get reactive UI
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6 mb-4">
+            <div class="card h-100 shadow-sm bg-light">
+                <div class="card-body">
+                    <h3 class="card-title">How It Works</h3>
+                    <ul class="list-unstyled">
+                        <li class="mb-2">
+                            <strong>1. Define View:</strong> Create LiveView class with state
+                        </li>
+                        <li class="mb-2">
+                            <strong>2. Add Template:</strong> Use @ directives for events
+                        </li>
+                        <li class="mb-2">
+                            <strong>3. Handle Events:</strong> Write Python methods
+                        </li>
+                        <li class="mb-2">
+                            <strong>4. Auto Updates:</strong> VDOM patches DOM automatically
+                        </li>
+                        <li class="mb-2">
+                            <strong>5. Zero Config:</strong> Works out of the box
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Getting Started -->
+    <div class="row mt-4 mb-5">
+        <div class="col-12">
+            <div class="card border-primary">
+                <div class="card-header bg-primary text-white">
+                    <h4 class="mb-0">Quick Start</h4>
+                </div>
+                <div class="card-body">
+                    <h5>Creating a LiveView</h5>
+                    <pre class="bg-light p-3 rounded"><code>from django_rust_live import LiveView
+
+class CounterView(LiveView):
+    count = 0
+
+    def increment(self, **kwargs):
+        self.count += 1
+
+    def decrement(self, **kwargs):
+        self.count -= 1</code></pre>
+
+                    <h5 class="mt-4">Template with Event Handlers</h5>
+                    <pre class="bg-light p-3 rounded"><code>&lt;div&gt;
+    &lt;h1&gt;Count: {% templatetag openvariable %} count {% templatetag closevariable %}&lt;/h1&gt;
+    &lt;button @click="increment"&gt;+&lt;/button&gt;
+    &lt;button @click="decrement"&gt;-&lt;/button&gt;
+&lt;/div&gt;</code></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

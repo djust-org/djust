@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Performance Test Demo - Django Rust Live</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .navbar-custom {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        .navbar-brand strong { color: #667eea; }
+        .nav-link { color: #666 !important; font-weight: 500; transition: color 0.3s; }
+        .nav-link:hover, .nav-link.active { color: #667eea !important; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; padding-top: 56px; background-color: #f8f9fa; }
+        .performance-demo { max-width: 1400px; margin: 20px auto; font-family: 'Segoe UI', Arial, sans-serif; }
+
+        .performance-demo .stats-bar {
+            display: flex;
+            gap: 20px;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 10px;
+            margin-bottom: 20px;
+            color: white;
+        }
+
+        .performance-demo .stat { display: flex; gap: 8px; align-items: center; }
+        .performance-demo .stat strong { font-weight: 600; }
+
+        .performance-demo .controls {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .performance-demo .control-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+
+        .performance-demo .control-group:last-child { margin-bottom: 0; }
+
+        .performance-demo .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .performance-demo .btn:hover { transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .performance-demo .btn:active { transform: translateY(0); }
+
+        .performance-demo .btn-primary { background: #007bff; color: white; }
+        .performance-demo .btn-secondary { background: #6c757d; color: white; }
+        .performance-demo .btn-danger { background: #dc3545; color: white; }
+        .performance-demo .btn-warning { background: #ffc107; color: #000; }
+        .performance-demo .btn-info { background: #17a2b8; color: white; }
+        .performance-demo .btn-xs { padding: 5px 10px; font-size: 12px; }
+
+        .performance-demo .filter-input, .performance-demo .sort-select {
+            flex: 1;
+            min-width: 200px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        .performance-demo .items-container {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            max-height: 600px;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .performance-demo .performance-item {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 12px 15px;
+            margin: 5px 0;
+            background: #f8f9fa;
+            border: 2px solid transparent;
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+
+        .performance-demo .performance-item:hover {
+            background: #e9ecef;
+            border-color: #dee2e6;
+        }
+
+        .performance-demo .performance-item.selected {
+            background: #d1ecf1;
+            border-color: #17a2b8;
+        }
+
+        .performance-demo .performance-item.high-priority {
+            border-left: 4px solid #ffc107;
+        }
+
+        .performance-demo .item-checkbox {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+        .performance-demo .item-content {
+            flex: 1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .performance-demo .item-name {
+            font-weight: 500;
+            color: #333;
+        }
+
+        .performance-demo .item-timestamp {
+            font-size: 12px;
+            color: #6c757d;
+        }
+
+        .performance-demo .item-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .performance-demo .priority-badge {
+            background: #ffc107;
+            color: #000;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        /* Scrollbar styling */
+        .performance-demo .items-container::-webkit-scrollbar { width: 10px; }
+        .performance-demo .items-container::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 10px; }
+        .performance-demo .items-container::-webkit-scrollbar-thumb { background: #888; border-radius: 10px; }
+        .performance-demo .items-container::-webkit-scrollbar-thumb:hover { background: #555; }
+    </style>
+</head>
+<body>
+    {% include "partials/nav.html" with nav_demos_active=True %}
+
+    <div class="container performance-demo">
+        <h1>Performance Test Demo</h1>
+
+        <div class="stats-bar">
+            <div class="stat">
+                <strong>Items:</strong> {{ item_count }}
+            </div>
+            <div class="stat">
+                <strong>Selected:</strong> {{ selected_count }}
+            </div>
+            <div class="stat">
+                <strong>Filter:</strong> {% if filter_text %}{{ filter_text }}{% else %}None{% endif %}
+            </div>
+            <div class="stat">
+                <strong>Sort:</strong> {{ sort_by }}
+            </div>
+        </div>
+
+        <div class="controls">
+            <div class="control-group">
+                <button @click="add_items_10" class="btn btn-primary">Add 10 Items</button>
+                <button @click="add_items_100" class="btn btn-primary">Add 100 Items</button>
+                <button @click="add_items_1000" class="btn btn-warning">Add 1000 Items</button>
+                <button @click="clear_all" class="btn btn-danger">Clear All</button>
+            </div>
+
+            <div class="control-group">
+                <input type="text"
+                       placeholder="Filter items..."
+                       value="{{ filter_text }}"
+                       @change="filter_items"
+                       class="filter-input" />
+
+                <select @change="sort_items" class="sort-select">
+                    <option value="name" {% if sort_by == 'name' %}selected{% endif %}>Sort by Name</option>
+                    <option value="priority" {% if sort_by == 'priority' %}selected{% endif %}>Sort by Priority</option>
+                    <option value="timestamp" {% if sort_by == 'timestamp' %}selected{% endif %}>Sort by Time</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <button @click="select_all" class="btn btn-secondary">Select All</button>
+                <button @click="deselect_all" class="btn btn-secondary">Deselect All</button>
+                <button @click="delete_selected" class="btn btn-danger">Delete Selected</button>
+                <button @click="toggle_priority_selected" class="btn btn-info">Toggle Priority</button>
+            </div>
+        </div>
+
+        <div class="items-container">
+            {% for item in items %}
+            <div class="performance-item {% if item.selected %}selected{% endif %} {% if item.priority %}high-priority{% endif %}"
+                 data-id="{{ item.id }}">
+                <input type="checkbox"
+                       class="item-checkbox"
+                       {% if item.selected %}checked{% endif %}
+                       @change="toggle_item"
+                       data-id="{{ item.id }}" />
+                <div class="item-content">
+                    <span class="item-name">{{ item.name }}</span>
+                    <span class="item-timestamp">{{ item.timestamp }}</span>
+                </div>
+                <div class="item-actions">
+                    {% if item.priority %}
+                    <span class="priority-badge">High Priority</span>
+                    {% endif %}
+                    <button @click="toggle_priority"
+                            data-id="{{ item.id }}"
+                            class="btn btn-xs">★</button>
+                    <button @click="delete_item"
+                            data-id="{{ item.id }}"
+                            class="btn btn-xs btn-danger">×</button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

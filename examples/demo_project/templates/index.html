@@ -1,145 +1,197 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Django Rust Live - Demo</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        .container {
-            background: white;
-            border-radius: 20px;
-            padding: 50px;
-            max-width: 800px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-        }
-        h1 {
-            font-size: 48px;
-            color: #333;
-            margin-bottom: 10px;
-        }
-        .subtitle {
-            color: #666;
-            font-size: 18px;
-            margin-bottom: 40px;
-        }
-        .features {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 20px;
-            margin: 40px 0;
-        }
-        .feature {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 10px;
-            border-left: 4px solid #667eea;
-        }
-        .feature h3 {
-            color: #667eea;
-            margin-bottom: 10px;
-        }
-        .feature p {
-            color: #666;
-            font-size: 14px;
-        }
-        .demos {
-            margin-top: 40px;
-        }
-        .demos h2 {
-            margin-bottom: 20px;
-            color: #333;
-        }
-        .demo-links {
-            display: flex;
-            gap: 15px;
-            flex-wrap: wrap;
-        }
-        .demo-link {
-            display: inline-block;
-            background: #667eea;
-            color: white;
-            padding: 15px 30px;
-            border-radius: 10px;
-            text-decoration: none;
-            font-weight: 600;
-            transition: all 0.3s;
-        }
-        .demo-link:hover {
-            background: #764ba2;
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
-        }
-        .code-example {
-            background: #1e1e1e;
-            color: #d4d4d4;
-            padding: 20px;
-            border-radius: 10px;
-            margin: 20px 0;
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
-            overflow-x: auto;
-        }
-        .highlight { color: #4ec9b0; }
-        .keyword { color: #569cd6; }
-        .string { color: #ce9178; }
-    </style>
-</head>
-<body>
+{% extends 'base.html' %}
+
+{% block title %}Django Rust Live - Blazing Fast Reactive Django{% endblock %}
+
+{% block nav_home_active %}active{% endblock %}
+
+{% block extra_styles %}
+:root {
+    --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    --secondary-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+}
+
+body {
+    background: var(--primary-gradient);
+    min-height: 100vh;
+}
+
+.hero-section {
+    padding: 100px 0 60px;
+    color: white;
+    text-align: center;
+}
+
+.hero-section h1 {
+    font-size: 3.5rem;
+    font-weight: 700;
+    margin-bottom: 1.5rem;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.hero-section .subtitle {
+    font-size: 1.25rem;
+    opacity: 0.95;
+    margin-bottom: 3rem;
+}
+
+.content-section {
+    background: white;
+    border-radius: 30px 30px 0 0;
+    padding: 60px 0;
+    margin-top: 40px;
+}
+
+.feature-card {
+    background: #f8f9fa;
+    padding: 30px;
+    border-radius: 15px;
+    border-left: 4px solid #667eea;
+    height: 100%;
+    transition: transform 0.3s, box-shadow 0.3s;
+}
+
+.feature-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+}
+
+.feature-card h3 {
+    color: #667eea;
+    margin-bottom: 15px;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.feature-card p {
+    color: #666;
+    margin: 0;
+}
+
+/* Highlight.js atom-one-dark theme */
+pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#abb2bf;background:#282c34}.hljs-comment,.hljs-quote{color:#5c6370;font-style:italic}.hljs-doctag,.hljs-formula,.hljs-keyword{color:#c678dd}.hljs-deletion,.hljs-name,.hljs-section,.hljs-selector-tag,.hljs-subst{color:#e06c75}.hljs-literal{color:#56b6c2}.hljs-addition,.hljs-attribute,.hljs-meta .hljs-string,.hljs-regexp,.hljs-string{color:#98c379}.hljs-attr,.hljs-number,.hljs-selector-attr,.hljs-selector-class,.hljs-selector-pseudo,.hljs-template-variable,.hljs-type,.hljs-variable{color:#d19a66}.hljs-bullet,.hljs-link,.hljs-meta,.hljs-selector-id,.hljs-symbol,.hljs-title{color:#61aeee}.hljs-built_in,.hljs-class .hljs-title,.hljs-title.class_{color:#e6c07b}.hljs-emphasis{font-style:italic}.hljs-strong{font-weight:700}.hljs-link{text-decoration:underline}
+
+.code-example {
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 40px 0;
+}
+
+.code-example pre {
+    margin: 0;
+}
+
+.demo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    margin-top: 30px;
+}
+
+.demo-link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #667eea;
+    color: white !important;
+    padding: 20px;
+    border-radius: 10px;
+    text-decoration: none;
+    font-weight: 600;
+    transition: all 0.3s;
+    position: relative;
+    overflow: hidden;
+}
+
+.demo-link:hover {
+    background: #764ba2;
+    transform: translateY(-3px);
+    box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
+}
+
+.demo-link.new {
+    background: var(--secondary-gradient);
+}
+
+.demo-link.new::after {
+    content: 'NEW';
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: rgba(255, 255, 255, 0.3);
+    color: white;
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+.section-title {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #333;
+    margin-bottom: 2rem;
+    text-align: center;
+}
+{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<div class="hero-section">
     <div class="container">
         <h1>🚀 Django Rust Live</h1>
         <p class="subtitle">Blazing fast reactive server-side rendering for Django, powered by Rust</p>
+    </div>
+</div>
 
-        <div class="features">
-            <div class="feature">
-                <h3>⚡ Lightning Fast</h3>
-                <p>Rust-powered template rendering and DOM diffing, 10-100x faster than pure Python</p>
+<!-- Content Section -->
+<div class="content-section">
+    <div class="container">
+        <!-- Features -->
+        <div class="row g-4 mb-5">
+            <div class="col-md-6">
+                <div class="feature-card">
+                    <h3>⚡ Lightning Fast</h3>
+                    <p>Rust-powered template rendering and DOM diffing, 10-100x faster than pure Python</p>
+                </div>
             </div>
-            <div class="feature">
-                <h3>🔄 Reactive</h3>
-                <p>Phoenix LiveView-style reactivity with automatic DOM updates over WebSocket</p>
+            <div class="col-md-6">
+                <div class="feature-card">
+                    <h3>🔄 Reactive</h3>
+                    <p>Phoenix LiveView-style reactivity with automatic DOM updates over WebSocket</p>
+                </div>
             </div>
-            <div class="feature">
-                <h3>🔌 Django Compatible</h3>
-                <p>Works with existing Django templates, views, and components</p>
+            <div class="col-md-6">
+                <div class="feature-card">
+                    <h3>📝 Django Forms</h3>
+                    <p>Auto-rendering forms with Bootstrap, Tailwind, or plain HTML. Real-time validation built-in!</p>
+                </div>
             </div>
-            <div class="feature">
-                <h3>📦 Zero Build Step</h3>
-                <p>No JavaScript bundling required. Just 5KB of client-side code</p>
+            <div class="col-md-6">
+                <div class="feature-card">
+                    <h3>📦 Zero Build Step</h3>
+                    <p>No JavaScript bundling required. Just 5KB of client-side code</p>
+                </div>
             </div>
         </div>
 
+        <!-- Code Example -->
         <div class="code-example">
-<span class="keyword">class</span> <span class="highlight">CounterView</span>(LiveView):
-    template_string = <span class="string">"""
+            <pre><code class="language-python">class CounterView(LiveView):
+    template_string = """
     &lt;button @click="increment"&gt;Count: {{ count }}&lt;/button&gt;
-    """</span>
+    """
 
-    <span class="keyword">def</span> <span class="highlight">mount</span>(self, request):
-        self.count = <span class="string">0</span>
+    def mount(self, request):
+        self.count = 0
 
-    <span class="keyword">def</span> <span class="highlight">increment</span>(self):
-        self.count += <span class="string">1</span>  <span class="comment"># Auto-updates client!</span>
-        </div>
-
-        <div class="demos">
-            <h2>Live Demos</h2>
-            <div class="demo-links">
-                <a href="/counter/" class="demo-link">📊 Counter</a>
-                <a href="/todo/" class="demo-link">✅ Todo List</a>
-                <a href="/chat/" class="demo-link">💬 Chat</a>
-                <a href="/react/" class="demo-link">⚛️ React Integration</a>
-                <a href="/performance/" class="demo-link">⚡ Performance Test</a>
-            </div>
+    def increment(self):
+        self.count += 1  # Auto-updates client!</code></pre>
         </div>
     </div>
-</body>
-</html>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+{% endblock %}

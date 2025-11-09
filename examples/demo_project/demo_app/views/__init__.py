@@ -14,14 +14,14 @@ from ..views_old import (
     ReactDemoView,
     PerformanceTestView,
     ProductDataTableView,
-    FormsIndexView,
-    RegistrationFormView,
-    ContactFormView,
-    ProfileFormView,
 )
 
 # Import the refactored view from the new package
 from .forms_demo import (
+    FormsIndexView,
+    RegistrationFormView,
+    ContactFormView,
+    ProfileFormView,
     SimpleContactFormView,
     AutoContactFormView,
     AutoContactFormTailwindView,
@@ -32,6 +32,12 @@ from .forms_demo import (
 # Import kitchen sink view
 from .kitchen_sink import KitchenSinkView
 
+# Import docs view
+from .docs import DocsView
+
+# Import demos index view
+from .demos import DemosIndexView
+
 __all__ = [
     'IndexView',
     'CounterView',
@@ -40,6 +46,7 @@ __all__ = [
     'ReactDemoView',
     'PerformanceTestView',
     'ProductDataTableView',
+    'DemosIndexView',
     'FormsIndexView',
     'RegistrationFormView',
     'ContactFormView',
@@ -50,4 +57,5 @@ __all__ = [
     'AutoContactFormPlainView',
     'AutoFormComparisonView',
     'KitchenSinkView',
+    'DocsView',
 ]

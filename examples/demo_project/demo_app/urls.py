@@ -7,15 +7,21 @@ from . import views
 
 urlpatterns = [
     path('', views.IndexView.as_view(), name='index'),
-    path('counter/', views.CounterView.as_view(), name='counter'),
-    path('todo/', views.TodoView.as_view(), name='todo'),
-    path('chat/', views.ChatView.as_view(), name='chat'),
-    path('react/', views.ReactDemoView.as_view(), name='react-demo'),
-    path('performance/', views.PerformanceTestView.as_view(), name='performance-test'),
-    path('datatable/', views.ProductDataTableView.as_view(), name='datatable'),
+
+    # Live Demos
+    path('demos/', views.DemosIndexView.as_view(), name='demos-index'),
+    path('demos/counter/', views.CounterView.as_view(), name='demos-counter'),
+    path('demos/todo/', views.TodoView.as_view(), name='demos-todo'),
+    path('demos/chat/', views.ChatView.as_view(), name='demos-chat'),
+    path('demos/react/', views.ReactDemoView.as_view(), name='demos-react'),
+    path('demos/performance/', views.PerformanceTestView.as_view(), name='demos-performance'),
+    path('demos/datatable/', views.ProductDataTableView.as_view(), name='demos-datatable'),
 
     # Component Library Kitchen Sink
     path('kitchen-sink/', views.KitchenSinkView.as_view(), name='kitchen-sink'),
+
+    # Documentation
+    path('docs/', views.DocsView.as_view(), name='docs'),
 
     # Django Forms Integration
     path('forms/', views.FormsIndexView.as_view(), name='forms-index'),

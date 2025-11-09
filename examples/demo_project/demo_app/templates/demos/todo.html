@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Todo List Demo - Django Rust Live</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .navbar-custom {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        .navbar-brand strong { color: #667eea; }
+        .nav-link { color: #666 !important; font-weight: 500; transition: color 0.3s; }
+        .nav-link:hover, .nav-link.active { color: #667eea !important; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; padding-top: 56px; background-color: #f8f9fa; }
+        .todo-demo { max-width: 600px; margin: 50px auto; font-family: Arial; }
+        .todo-demo .todo-form { display: flex; gap: 10px; margin: 20px 0; }
+        .todo-demo .todo-input { flex: 1; padding: 10px; font-size: 16px; border: 1px solid #ddd; border-radius: 5px; }
+        .todo-demo .todo-list { background: #f9f9f9; padding: 20px; border-radius: 5px; min-height: 200px; }
+        .todo-demo .todo-item { display: flex; align-items: center; gap: 10px; padding: 10px; background: white; margin: 5px 0; border-radius: 5px; }
+        .todo-demo .todo-item.done span { text-decoration: line-through; color: #999; }
+        .todo-demo .todo-item span { flex: 1; }
+        .todo-demo .btn-delete { padding: 5px 10px; background: #dc3545; color: white; border: none; border-radius: 3px; cursor: pointer; }
+        .todo-demo .todo-stats { margin-top: 20px; text-align: center; color: #666; }
+        .todo-demo .btn { padding: 10px 20px; font-size: 16px; border: none; border-radius: 5px; cursor: pointer; }
+        .todo-demo .btn-primary { background: #007bff; color: white; }
+    </style>
+</head>
+<body>
+    {% include "partials/nav.html" with nav_demos_active=True %}
+
+    <div class="container todo-demo">
+        <h1>Todo List Demo</h1>
+        <form @submit="add_todo" class="todo-form">
+            <input type="text" name="text" placeholder="What needs to be done?" class="todo-input" />
+            <button type="submit" class="btn btn-primary">Add</button>
+        </form>
+        <div class="todo-list">
+            {% for todo in todos %}
+            <div class="todo-item {% if todo.done %}done{% endif %}">
+                <input type="checkbox"
+                       {% if todo.done %}checked{% endif %}
+                       @change="toggle_todo"
+                       data-id="{{ todo.id }}" />
+                <span>{{ todo.text }}</span>
+                <button @click="delete_todo"
+                        data-id="{{ todo.id }}"
+                        class="btn-delete">Delete</button>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="todo-stats">
+            <span>{{ active_count }} active</span>
+            <span>{{ done_count }} completed</span>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

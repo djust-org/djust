@@ -4,13 +4,15 @@
 
 {% block nav_components_active %}active{% endblock %}
 
-{% block nav_container_class %}-fluid{% endblock %}
-
 {% block extra_styles %}
+    /* Highlight.js atom-one-dark theme */
+    pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#abb2bf;background:#282c34}.hljs-comment,.hljs-quote{color:#5c6370;font-style:italic}.hljs-doctag,.hljs-formula,.hljs-keyword{color:#c678dd}.hljs-deletion,.hljs-name,.hljs-section,.hljs-selector-tag,.hljs-subst{color:#e06c75}.hljs-literal{color:#56b6c2}.hljs-addition,.hljs-attribute,.hljs-meta .hljs-string,.hljs-regexp,.hljs-string{color:#98c379}.hljs-attr,.hljs-number,.hljs-selector-attr,.hljs-selector-class,.hljs-selector-pseudo,.hljs-template-variable,.hljs-type,.hljs-variable{color:#d19a66}.hljs-bullet,.hljs-link,.hljs-meta,.hljs-selector-id,.hljs-symbol,.hljs-title{color:#61aeee}.hljs-built_in,.hljs-class .hljs-title,.hljs-title.class_{color:#e6c07b}.hljs-emphasis{font-style:italic}.hljs-strong{font-weight:700}.hljs-link{text-decoration:underline}
+
+
     .hero-section {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 4rem 0;
+            padding: 2rem 0;
             margin-bottom: 3rem;
         }
         .component-section {
@@ -55,17 +57,25 @@
         .btn-interactive {
             margin: 0.5rem 0.5rem 0.5rem 0;
         }
-        code {
+        /* Inline code (not in pre blocks) */
+        :not(pre) > code {
             background: #f4f4f4;
             padding: 0.2rem 0.4rem;
             border-radius: 4px;
             font-size: 0.875rem;
             color: #e83e8c;
         }
+
+        /* Pre blocks styling */
+        pre {
+            border-radius: 8px;
+            margin: 0;
+        }
         .section-divider {
             margin: 3rem 0;
             border-top: 2px solid #e9ecef;
         }
+    </style>
 {% endblock %}
 
 {% block content %}
@@ -73,7 +83,7 @@
     <!-- Hero Section -->
     <div class="hero-section">
         <div class="container">
-            <h1 class="display-4 fw-bold mb-3">Component Kitchen Sink</h1>
+            <h1 class="display-4">Component Kitchen Sink</h1>
             <p class="lead mb-0">
                 Explore all Django Rust Live components with live, interactive examples.
                 All components support Bootstrap 5, Tailwind CSS, and plain HTML rendering.
@@ -91,6 +101,48 @@
                 <div class="mb-3">{{ alert_success.render }}</div>
                 <div class="mb-3">{{ alert_info.render }}</div>
                 <div>{{ alert_warning.render }}</div>
+            </div>
+
+            <div class="mt-3">
+                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
+                <pre><code class="language-python">from django_rust_live.components import AlertComponent
+
+# In your mount() method:
+self.alert_success = AlertComponent(
+    message="Operation completed successfully!",
+    type="success",               # info, success, warning, danger, error
+    dismissible=True
+)
+
+self.alert_info = AlertComponent(
+    message="Here's some helpful information.",
+    type="info",
+    icon=True
+)
+
+self.alert_warning = AlertComponent(
+    message="Warning: Please review your changes.",
+    type="warning",
+    dismissible=True
+)
+
+# Event handler for dismissing alerts (automatically routes to correct component):
+def dismiss(self, component_id: str = None):
+    """Dismiss event automatically routes to the component by attribute name"""
+    if component_id and hasattr(self, component_id):
+        component = getattr(self, component_id)
+        if hasattr(component, 'dismiss'):
+            component.dismiss()
+
+# Update message dynamically:
+def show_alert(self):
+    self.alert_success.set_message("Updated message!")
+    self.alert_success.show()</code></pre>
+
+                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
+                <pre><code class="language-html">&#123;&#123; alert_success.render &#125;&#125;
+&#123;&#123; alert_info.render &#125;&#125;
+&#123;&#123; alert_warning.render &#125;&#125;</code></pre>
             </div>
         </div>
 
@@ -111,6 +163,35 @@
                     </p>
                 </div>
             </div>
+
+            <div class="mt-3">
+                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
+                <pre><code class="language-python">from django_rust_live.components import ButtonComponent
+
+# In your mount() method:
+self.button_primary = ButtonComponent(
+    label="Primary Button",
+    variant="primary",      # primary, secondary, success, danger, warning, info
+    size="md",             # sm, md, lg
+    on_click="handle_button_click"  # Method name to call
+)
+
+self.button_with_icon = ButtonComponent(
+    label="Success",
+    variant="success",
+    icon="✓",             # Add icon (emoji or HTML)
+    outline=True          # Outline style button
+)
+
+# Event handler:
+def handle_button_click(self):
+    self.button_click_count += 1
+    # State changes automatically trigger re-render</code></pre>
+
+                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
+                <pre><code class="language-html">&#123;&#123; button_primary.render &#125;&#125;
+&#123;&#123; button_with_icon.render &#125;&#125;</code></pre>
+            </div>
         </div>
 
         <!-- Badges Section -->
@@ -125,6 +206,39 @@
                     {{ badge_dismissible.render }}
                 </div>
             </div>
+
+            <div class="mt-3">
+                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
+                <pre><code class="language-python">from django_rust_live.components import BadgeComponent
+
+# In your mount() method:
+self.badge_primary = BadgeComponent(
+    text="Primary",
+    variant="primary"      # primary, secondary, success, danger, warning, info
+)
+
+self.badge_success = BadgeComponent(
+    text="Active",
+    variant="success",
+    pill=True             # Rounded pill style
+)
+
+self.badge_dismissible = BadgeComponent(
+    text="Python",
+    variant="info",
+    dismissible=True,     # Add close button
+    on_dismiss="dismiss_tag"  # Method to call when dismissed
+)
+
+# Event handler:
+def dismiss_tag(self):
+    self.badge_dismissible.dismiss()</code></pre>
+
+                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
+                <pre><code class="language-html">&#123;&#123; badge_primary.render &#125;&#125;
+&#123;&#123; badge_success.render &#125;&#125;
+&#123;&#123; badge_dismissible.render &#125;&#125;</code></pre>
+            </div>
         </div>
 
         <!-- Dropdowns Section -->
@@ -136,6 +250,46 @@
                     {{ dropdown_actions.render }}
                     <span class="ms-2">{{ dropdown_split.render }}</span>
                 </div>
+            </div>
+
+            <div class="mt-3">
+                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
+                <pre><code class="language-python">from django_rust_live.components import DropdownComponent
+
+# In your mount() method:
+self.dropdown_actions = DropdownComponent(
+    label="Actions",
+    variant="primary",
+    items=[
+        {'text': 'Edit', 'action': 'edit_item', 'icon': '✏️'},
+        {'text': 'Delete', 'action': 'delete_item', 'icon': '🗑️', 'variant': 'danger'},
+        {'divider': True},  # Add separator line
+        {'text': 'Archive', 'action': 'archive_item'},
+    ]
+)
+
+self.dropdown_split = DropdownComponent(
+    label="Split Dropdown",
+    variant="success",
+    split=True,          # Split button style
+    items=[
+        {'text': 'Action 1', 'action': 'action1'},
+        {'text': 'Action 2', 'action': 'action2'},
+    ]
+)
+
+# Event handlers for dropdown items:
+def edit_item(self):
+    # Handle edit action
+    pass
+
+def delete_item(self):
+    # Handle delete action
+    pass</code></pre>
+
+                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
+                <pre><code class="language-html">&#123;&#123; dropdown_actions.render &#125;&#125;
+&#123;&#123; dropdown_split.render &#125;&#125;</code></pre>
             </div>
         </div>
 
@@ -150,6 +304,36 @@
                     {{ card_with_footer.render }}
                 </div>
             </div>
+
+            <div class="mt-3">
+                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
+                <pre><code class="language-python">from django_rust_live.components import CardComponent
+
+# In your mount() method:
+self.card_basic = CardComponent(
+    title="Basic Card",
+    body="This is a simple card component with a title and body text.",
+    variant="default"     # default, primary, success, info, warning, danger
+)
+
+self.card_with_footer = CardComponent(
+    title="Featured Card",
+    body="This card has a footer with additional information.",
+    footer="Last updated 3 mins ago",
+    variant="primary"
+)
+
+# Cards can also include custom HTML in body/footer
+self.card_custom = CardComponent(
+    title="Custom Card",
+    body="&lt;p&gt;You can include &lt;strong&gt;HTML&lt;/strong&gt; content.&lt;/p&gt;",
+    footer="&lt;button class='btn btn-sm btn-primary'&gt;Action&lt;/button&gt;"
+)</code></pre>
+
+                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
+                <pre><code class="language-html">&#123;&#123; card_basic.render &#125;&#125;
+&#123;&#123; card_with_footer.render &#125;&#125;</code></pre>
+            </div>
         </div>
 
         <!-- Modal Section -->
@@ -163,6 +347,44 @@
                 </p>
             </div>
             {{ modal_example.render }}
+
+            <div class="mt-3">
+                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
+                <pre><code class="language-python">from django_rust_live.components import ModalComponent
+
+# In your mount() method:
+self.modal_example = ModalComponent(
+    title="Example Modal",
+    body="This is a modal dialog with customizable content.",
+    show=False,          # Initially hidden
+    size="lg"            # sm, md, lg, xl
+)
+
+self.modal_open_count = 0
+
+# Event handlers:
+def show_modal(self):
+    """Show the modal and update its content"""
+    self.modal_open_count += 1
+    self.modal_example.set_body(f"This modal has been opened {self.modal_open_count} time(s).")
+    self.modal_example.show()
+
+def close_modal(self):
+    """Close the modal"""
+    self.modal_example.hide()
+
+# Update modal content dynamically:
+def update_modal_content(self):
+    self.modal_example.set_title("New Title")
+    self.modal_example.set_body("&lt;p&gt;Updated content with &lt;strong&gt;HTML&lt;/strong&gt;&lt;/p&gt;")</code></pre>
+
+                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
+                <pre><code class="language-html">&lt;!-- Trigger button --&gt;
+&lt;button class="btn btn-primary" @click="show_modal"&gt;Open Modal&lt;/button&gt;
+
+&lt;!-- Modal component --&gt;
+&#123;&#123; modal_example.render &#125;&#125;</code></pre>
+            </div>
         </div>
 
         <!-- Progress Bars Section -->
@@ -187,6 +409,54 @@
                     <button class="btn btn-sm btn-secondary ms-2" @click="reset_progress">Reset</button>
                 </div>
             </div>
+
+            <div class="mt-3">
+                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
+                <pre><code class="language-python">from django_rust_live.components import ProgressComponent
+
+# In your mount() method:
+self.progress_simple = ProgressComponent(
+    value=45,            # 0-100
+    variant="primary",   # primary, success, info, warning, danger
+    show_label=True      # Show percentage label
+)
+
+self.progress_striped = ProgressComponent(
+    value=65,
+    variant="success",
+    striped=True,        # Add striped pattern
+    animated=True,       # Animate the stripes
+    show_label=True
+)
+
+self.progress_custom = ProgressComponent(
+    value=30,
+    variant="warning",
+    custom_label="Processing...",  # Custom text instead of percentage
+    striped=True
+)
+
+self.current_progress = 45
+
+# Event handlers:
+def increment_progress(self):
+    """Increment progress bar value"""
+    if self.current_progress < 100:
+        self.current_progress += 10
+        self.progress_simple.set_value(self.current_progress)
+        self.progress_striped.set_value(min(self.current_progress + 20, 100))
+
+def reset_progress(self):
+    """Reset progress bars to 0"""
+    self.current_progress = 0
+    self.progress_simple.reset()
+    self.progress_striped.reset()</code></pre>
+
+                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
+                <pre><code class="language-html">&#123;&#123; progress_simple.render &#125;&#125;
+&#123;&#123; progress_striped.render &#125;&#125;
+&#123;&#123; progress_custom.render &#125;&#125;</code></pre>
+            </div>
         </div>
 
         <!-- Spinners Section -->
@@ -199,6 +469,42 @@
                     {{ spinner_grow.render }}
                 </div>
             </div>
+
+            <div class="mt-3">
+                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
+                <pre><code class="language-python">from django_rust_live.components import SpinnerComponent
+
+# In your mount() method:
+self.spinner_border = SpinnerComponent(
+    variant="primary",    # primary, success, info, warning, danger, secondary
+    size="md",           # sm, md, lg
+    type="border",       # border (default) or grow
+    label="Loading..."   # Screen reader text
+)
+
+self.spinner_grow = SpinnerComponent(
+    variant="success",
+    size="sm",
+    type="grow"          # Growing spinner animation
+)
+
+# Use spinners to show loading states:
+def load_data(self):
+    self.is_loading = True
+    # ... fetch data ...
+    self.is_loading = False</code></pre>
+
+                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
+                <pre><code class="language-html">&lt;!-- Show spinner while loading --&gt;
+{&#37; if is_loading &#37;}
+    &#123;&#123; spinner_border.render &#125;&#125;
+{&#37; else &#37;}
+    &lt;!-- Your content here --&gt;
+{&#37; endif &#37;}
+
+&lt;!-- Or inline with buttons --&gt;
+&#123;&#123; spinner_grow.render &#125;&#125;</code></pre>
+            </div>
         </div>
 
         <!-- Tabs Section -->
@@ -207,6 +513,48 @@
             <div class="component-demo">
                 <div class="demo-label">Tabbed Interface</div>
                 {{ tabs_example.render }}
+            </div>
+
+            <div class="mt-3">
+                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
+                <pre><code class="language-python">from django_rust_live.components import TabsComponent
+
+# In your mount() method:
+self.tabs_example = TabsComponent(
+    tabs=[
+        {
+            'id': 'home',
+            'label': 'Home',
+            'content': '&lt;p&gt;Welcome to the Home tab!&lt;/p&gt;'
+        },
+        {
+            'id': 'profile',
+            'label': 'Profile',
+            'content': '&lt;p&gt;User profile information goes here.&lt;/p&gt;'
+        },
+        {
+            'id': 'messages',
+            'label': 'Messages',
+            'content': '&lt;p&gt;Your messages appear here.&lt;/p&gt;',
+            'badge': '5'         # Add notification badge
+        },
+        {
+            'id': 'settings',
+            'label': 'Settings',
+            'content': '&lt;p&gt;Configure your settings.&lt;/p&gt;',
+            'disabled': True     # Disable tab
+        },
+    ],
+    active='home',              # Initially active tab
+    variant='tabs'              # 'tabs' or 'pills'
+)
+
+# Change active tab programmatically:
+def switch_to_profile(self):
+    self.tabs_example.set_active('profile')</code></pre>
+
+                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
+                <pre><code class="language-html">&#123;&#123; tabs_example.render &#125;&#125;</code></pre>
             </div>
         </div>
 
@@ -217,6 +565,40 @@
                 <div class="demo-label">Sortable Data Table</div>
                 <p class="text-muted mb-3"><small>Click column headers to sort</small></p>
                 {{ table_users.render }}
+            </div>
+
+            <div class="mt-3">
+                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
+                <pre><code class="language-python">from django_rust_live.components import TableComponent
+
+# In your mount() method:
+self.table_users = TableComponent(
+    columns=[
+        {'key': 'id', 'label': 'ID', 'sortable': True},
+        {'key': 'name', 'label': 'Name', 'sortable': True},
+        {'key': 'email', 'label': 'Email', 'sortable': True},
+        {'key': 'role', 'label': 'Role', 'badge': True},      # Render as badge
+        {'key': 'status', 'label': 'Status', 'badge': True},
+    ],
+    rows=[
+        {'id': 1, 'name': 'Alice Johnson', 'email': 'alice@example.com',
+         'role': 'Admin', 'status': 'active'},
+        {'id': 2, 'name': 'Bob Smith', 'email': 'bob@example.com',
+         'role': 'User', 'status': 'active'},
+        {'id': 3, 'name': 'Charlie Brown', 'email': 'charlie@example.com',
+         'role': 'User', 'status': 'inactive'},
+    ],
+    striped=True,        # Alternating row colors
+    hoverable=True,      # Highlight row on hover
+    bordered=True        # Add borders
+)
+
+# Can also use Django QuerySet:
+# rows = User.objects.all().values('id', 'name', 'email', 'role', 'status')
+# self.table_users = TableComponent(columns=columns, rows=rows)</code></pre>
+
+                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
+                <pre><code class="language-html">&#123;&#123; table_users.render &#125;&#125;</code></pre>
             </div>
         </div>
 
@@ -233,6 +615,53 @@
                 <div>
                     {{ pagination_large.render }}
                 </div>
+            </div>
+
+            <div class="mt-3">
+                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
+                <pre><code class="language-python">from django_rust_live.components import PaginationComponent
+
+# In your mount() method:
+self.pagination_basic = PaginationComponent(
+    current_page=3,
+    total_pages=10,
+    show_page_info=True,     # Show "Page 3 of 10"
+    alignment='center'       # left, center, right
+)
+
+self.pagination_large = PaginationComponent(
+    current_page=1,
+    total_items=250,         # Total number of items
+    items_per_page=25,       # Items shown per page
+    size='lg',              # sm, md, lg
+    on_page_change='handle_page_change'  # Event handler
+)
+
+# Event handler:
+def handle_page_change(self, page: int):
+    """Called when user clicks a page number"""
+    self.current_page = page
+    # Fetch new data for this page
+    self.load_data(page)
+
+# Using with Django Paginator:
+from django.core.paginator import Paginator
+
+def mount(self, request):
+    items = MyModel.objects.all()
+    paginator = Paginator(items, 25)
+    page_number = request.GET.get('page', 1)
+    page_obj = paginator.get_page(page_number)
+
+    self.pagination = PaginationComponent(
+        current_page=page_obj.number,
+        total_pages=paginator.num_pages,
+        on_page_change='change_page'
+    )</code></pre>
+
+                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
+                <pre><code class="language-html">&#123;&#123; pagination_basic.render &#125;&#125;
+&#123;&#123; pagination_large.render &#125;&#125;</code></pre>
             </div>
         </div>
 
@@ -262,27 +691,434 @@
         <!-- Code Example Section -->
         <div class="component-section">
             <h3>Usage Examples</h3>
-            <div class="component-demo">
-                <div class="demo-label">Python Code</div>
-                <pre style="background: #2d2d2d; color: #f8f8f2; padding: 1rem; border-radius: 8px; overflow-x: auto;"><code>from django_rust_live.components import ButtonComponent
-
-class MyView(LiveView):
-    def mount(self, request):
-        self.submit_btn = ButtonComponent(
-            label="Submit",
-            variant="primary",
-            on_click="handle_submit"
-        )
-
-    def handle_submit(self):
-        # Handle button click
-        pass</code></pre>
+            <div class="alert alert-info mb-4">
+                <strong>Note:</strong> Each page/route has <strong>one LiveView class</strong> that manages the entire page's state and interactivity.
+                Within that LiveView, you can use <strong>multiple components</strong>, manage <strong>multiple state variables</strong>,
+                and handle <strong>many different events</strong>. Think: One LiveView per page, many components per LiveView.
             </div>
 
+            <!-- Basic Component Example -->
+            <div class="component-demo">
+                <div class="demo-label">1. Basic Counter - Complete Example</div>
+                <p class="text-muted mb-2"><small>Shows LiveView initialization, components, event handlers, and template integration</small></p>
+                <pre><code class="language-python"># views.py
+from django_rust_live import LiveView
+from django_rust_live.components import ButtonComponent, AlertComponent
+
+class CounterView(LiveView):
+    template_name = "counter.html"
+
+    def mount(self, request):
+        """Called when the view first loads - initialize state here"""
+        # State variables - these are automatically synced with the template
+        self.counter = 0
+        self.message = ""
+
+        # Create interactive components
+        # on_click="increment" calls the increment() method below
+        self.increment_btn = ButtonComponent(
+            label="Increment Counter",
+            variant="primary",
+            on_click="increment"
+        )
+
+        self.reset_btn = ButtonComponent(
+            label="Reset",
+            variant="secondary",
+            on_click="reset"
+        )
+
+        # Alert component to show messages
+        self.alert = AlertComponent(
+            message=self.message,
+            variant="success",
+            dismissible=True
+        )
+
+    def increment(self):
+        """Called when increment button is clicked - updates sent via WebSocket"""
+        self.counter += 1
+        self.message = f"Counter incremented to {self.counter}"
+        # State changes automatically trigger a re-render
+
+    def reset(self):
+        """Reset counter to zero"""
+        self.counter = 0
+        self.message = "Counter reset"</code></pre>
+
+                <div class="mt-3">
+                    <p class="text-muted mb-2"><small><strong>Template:</strong> Shows how to use the view state and components</small></p>
+                    <pre><code class="language-html">&lt;!-- counter.html --&gt;
+{&#37; extends "base.html" &#37;}
+
+{&#37; block content &#37;}
+&lt;!-- All interactive content must be inside data-liveview-root --&gt;
+&lt;div data-liveview-root&gt;
+    &lt;div class="card"&gt;
+        &lt;div class="card-body"&gt;
+            &lt;!-- Access state variables directly from the view --&gt;
+            &lt;h2&gt;Current Count: &#123;&#123; counter &#125;&#125;&lt;/h2&gt;
+
+            &lt;!-- Render components created in mount() --&gt;
+            &lt;div class="mt-3"&gt;
+                &#123;&#123; increment_btn.render &#125;&#125;
+                &#123;&#123; reset_btn.render &#125;&#125;
+            &lt;/div&gt;
+
+            &lt;!-- Conditionally show alert when there's a message --&gt;
+            {&#37; if message &#37;}
+                &lt;div class="mt-3"&gt;
+                    &#123;&#123; alert.render &#125;&#125;
+                &lt;/div&gt;
+            {&#37; endif &#37;}
+        &lt;/div&gt;
+    &lt;/div&gt;
+&lt;/div&gt;
+{&#37; endblock &#37;}</code></pre>
+                </div>
+            </div>
+
+            <!-- Form Integration Example -->
             <div class="component-demo mt-3">
-                <div class="demo-label">Template Usage</div>
-                <pre style="background: #2d2d2d; color: #f8f8f2; padding: 1rem; border-radius: 8px; overflow-x: auto;"><code>&lt;!-- In your Django template --&gt;
-{% verbatim %}{{ submit_btn.render }}{% endverbatim %}</code></pre>
+                <div class="demo-label">2. Real-time Form Validation</div>
+                <p class="text-muted mb-2"><small>Shows Django form integration with live field validation and error display</small></p>
+                <pre><code class="language-python"># views.py
+from django import forms
+from django_rust_live import LiveView, FormMixin
+
+class ContactForm(forms.Form):
+    """Standard Django form - works with LiveView automatically"""
+    name = forms.CharField(
+        max_length=100,
+        required=True,
+        help_text="Your full name"
+    )
+    email = forms.EmailField(
+        required=True,
+        help_text="We'll never share your email"
+    )
+    message = forms.CharField(
+        widget=forms.Textarea,
+        min_length=10,
+        help_text="At least 10 characters"
+    )
+
+class ContactFormView(FormMixin, LiveView):
+    """FormMixin adds automatic form handling and validation"""
+    form_class = ContactForm
+    template_name = "contact.html"
+
+    def mount(self, request):
+        """Initialize form state"""
+        self.success_message = ""
+        self.error_message = ""
+
+    def validate_field(self, field_name, value):
+        """Called when a field loses focus (@change event)
+        Returns errors in real-time before form submission"""
+        # Validate single field and return errors
+        pass
+
+    def form_valid(self, form):
+        """Called when form is submitted and all validation passes"""
+        # Access cleaned data
+        name = form.cleaned_data['name']
+        email = form.cleaned_data['email']
+        message = form.cleaned_data['message']
+
+        # Process the data (send email, save to DB, etc.)
+        # send_email(email, message)
+
+        self.success_message = f"Thanks {name}! We'll be in touch."
+        form = ContactForm()  # Reset form
+
+    def form_invalid(self, form):
+        """Called when validation fails
+        Errors are automatically shown in the template"""
+        self.error_message = "Please fix the errors below"</code></pre>
+
+                <div class="mt-3">
+                    <p class="text-muted mb-2"><small><strong>Template:</strong> Form with live validation and error display</small></p>
+                    <pre><code class="language-html">&lt;!-- contact.html --&gt;
+{&#37; extends "base.html" &#37;}
+
+{&#37; block content &#37;}
+&lt;div data-liveview-root&gt;
+    &lt;!-- Success/Error Messages --&gt;
+    {&#37; if success_message &#37;}
+        &lt;div class="alert alert-success"&gt;&#123;&#123; success_message &#125;&#125;&lt;/div&gt;
+    {&#37; endif &#37;}
+
+    {&#37; if error_message &#37;}
+        &lt;div class="alert alert-danger"&gt;&#123;&#123; error_message &#125;&#125;&lt;/div&gt;
+    {&#37; endif &#37;}
+
+    &lt;!-- @submit calls form_valid() or form_invalid() based on validation --&gt;
+    &lt;form @submit="submit_form"&gt;
+        &lt;!-- Name Field --&gt;
+        &lt;div class="mb-3"&gt;
+            &lt;label&gt;Name&lt;/label&gt;
+            &lt;input
+                type="text"
+                name="name"
+                class="form-control {&#37; if field_errors.name &#37;}is-invalid{&#37; endif &#37;}"
+                value="&#123;&#123; form_data.name &#125;&#125;"
+                @change="validate_field"
+                data-field="name"
+            /&gt;
+            &lt;!-- Errors shown in real-time as user types --&gt;
+            {&#37; if field_errors.name &#37;}
+                &lt;div class="invalid-feedback d-block"&gt;
+                    {&#37; for error in field_errors.name &#37;}
+                        &#123;&#123; error &#125;&#125;
+                    {&#37; endfor &#37;}
+                &lt;/div&gt;
+            {&#37; endif &#37;}
+        &lt;/div&gt;
+
+        &lt;!-- Email Field (similar structure) --&gt;
+        &lt;div class="mb-3"&gt;
+            &lt;label&gt;Email&lt;/label&gt;
+            &lt;input
+                type="email"
+                name="email"
+                class="form-control {&#37; if field_errors.email &#37;}is-invalid{&#37; endif &#37;}"
+                value="&#123;&#123; form_data.email &#125;&#125;"
+                @change="validate_field"
+                data-field="email"
+            /&gt;
+            {&#37; if field_errors.email &#37;}
+                &lt;div class="invalid-feedback d-block"&gt;
+                    {&#37; for error in field_errors.email &#37;}&#123;&#123; error &#125;&#125;{&#37; endfor &#37;}
+                &lt;/div&gt;
+            {&#37; endif &#37;}
+        &lt;/div&gt;
+
+        &lt;button type="submit" class="btn btn-primary"&gt;Send Message&lt;/button&gt;
+    &lt;/form&gt;
+&lt;/div&gt;
+{&#37; endblock &#37;}</code></pre>
+                </div>
+            </div>
+
+            <!-- Event Handling Example -->
+            <div class="component-demo mt-3">
+                <div class="demo-label">3. Interactive Todo List - Event Parameters & Lists</div>
+                <p class="text-muted mb-2"><small>Shows handling events with parameters, working with lists, and dynamic rendering</small></p>
+                <pre><code class="language-python"># views.py
+from django_rust_live import LiveView
+
+class TodoListView(LiveView):
+    template_name = "todos.html"
+
+    def mount(self, request):
+        """Initialize the todo list"""
+        self.todos = [
+            {"id": 1, "text": "Learn Django Rust Live", "done": False},
+            {"id": 2, "text": "Build an app", "done": False},
+        ]
+        self.next_id = 3  # Track next ID for new todos
+        self.new_todo_text = ""  # Bind to input field
+
+    def add_todo(self):
+        """Add new todo from form submission
+        Form data is automatically available in self.form_data"""
+        text = self.new_todo_text.strip()
+        if text:
+            self.todos.append({
+                "id": self.next_id,
+                "text": text,
+                "done": False
+            })
+            self.next_id += 1
+            self.new_todo_text = ""  # Clear input
+
+    def toggle_todo(self, todo_id):
+        """Toggle completion status - receives ID from data-todo-id"""
+        for todo in self.todos:
+            if todo["id"] == int(todo_id):
+                todo["done"] = not todo["done"]
+                break
+
+    def delete_todo(self, todo_id):
+        """Delete todo by ID"""
+        self.todos = [t for t in self.todos if t["id"] != int(todo_id)]
+
+    def get_context_data(self, **kwargs):
+        """Add computed values to template context"""
+        context = super().get_context_data(**kwargs)
+        context["total_count"] = len(self.todos)
+        context["done_count"] = sum(1 for t in self.todos if t["done"])
+        context["pending_count"] = context["total_count"] - context["done_count"]
+        return context</code></pre>
+
+                <div class="mt-3">
+                    <p class="text-muted mb-2"><small><strong>Template:</strong> Dynamic list with event parameters</small></p>
+                    <pre><code class="language-html">&lt;!-- todos.html --&gt;
+{&#37; extends "base.html" &#37;}
+
+{&#37; block content &#37;}
+&lt;div data-liveview-root&gt;
+    &lt;h2&gt;My Todos&lt;/h2&gt;
+
+    &lt;!-- Stats from get_context_data() --&gt;
+    &lt;p&gt;&#123;&#123; done_count &#125;&#125; done, &#123;&#123; pending_count &#125;&#125; pending (&#123;&#123; total_count &#125;&#125; total)&lt;/p&gt;
+
+    &lt;!-- Add new todo form --&gt;
+    &lt;form @submit="add_todo" class="mb-4"&gt;
+        &lt;div class="input-group"&gt;
+            &lt;input
+                type="text"
+                name="new_todo_text"
+                class="form-control"
+                placeholder="Add a new task..."
+                value="&#123;&#123; new_todo_text &#125;&#125;"
+            /&gt;
+            &lt;button type="submit" class="btn btn-primary"&gt;Add&lt;/button&gt;
+        &lt;/div&gt;
+    &lt;/form&gt;
+
+    &lt;!-- Todo list - loops through self.todos --&gt;
+    &lt;ul class="list-group"&gt;
+        {&#37; for todo in todos &#37;}
+        &lt;li class="list-group-item d-flex align-items-center"&gt;
+            &lt;!-- Checkbox to toggle - passes todo.id via data attribute --&gt;
+            &lt;input
+                type="checkbox"
+                class="form-check-input me-2"
+                {&#37; if todo.done &#37;}checked{&#37; endif &#37;}
+                @change="toggle_todo"
+                data-todo-id="&#123;&#123; todo.id &#125;&#125;"
+            /&gt;
+
+            &lt;!-- Todo text with strikethrough if done --&gt;
+            &lt;span class="{&#37; if todo.done &#37;}text-decoration-line-through{&#37; endif &#37;}"&gt;
+                &#123;&#123; todo.text &#125;&#125;
+            &lt;/span&gt;
+
+            &lt;!-- Delete button - also passes todo.id --&gt;
+            &lt;button
+                class="btn btn-sm btn-danger ms-auto"
+                @click="delete_todo"
+                data-todo-id="&#123;&#123; todo.id &#125;&#125;"
+            &gt;
+                Delete
+            &lt;/button&gt;
+        &lt;/li&gt;
+        {&#37; empty &#37;}
+        &lt;li class="list-group-item text-muted"&gt;No todos yet. Add one above!&lt;/li&gt;
+        {&#37; endfor &#37;}
+    &lt;/ul&gt;
+&lt;/div&gt;
+{&#37; endblock &#37;}</code></pre>
+                </div>
+            </div>
+
+            <!-- Custom Component Example -->
+            <div class="component-demo mt-3">
+                <div class="demo-label">4. Custom Reusable Components</div>
+                <p class="text-muted mb-2"><small>Create your own components with their own class, template, and logic</small></p>
+                <pre><code class="language-python"># components/user_card.py
+from django_rust_live.components.base import LiveComponent
+
+class UserCardComponent(LiveComponent):
+    """Reusable user profile card component"""
+    template_name = 'components/user_card.html'
+
+    def mount(self, user, show_email=True):
+        """Initialize component with user data"""
+        self.user = user
+        self.show_email = show_email
+        self.is_expanded = False
+
+    def get_context(self):
+        """Return data for template rendering"""
+        return {
+            'user': self.user,
+            'show_email': self.show_email,
+            'is_expanded': self.is_expanded,
+        }
+
+    def toggle_expand(self):
+        """Event handler - can be called from template"""
+        self.is_expanded = not self.is_expanded
+        self.trigger_update()  # Notify parent to re-render
+
+
+# Use the component in a LiveView
+from .components.user_card import UserCardComponent
+
+class TeamView(LiveView):
+    template_name = "team.html"
+
+    def mount(self, request):
+        # Create multiple instances of your custom component
+        self.user_cards = [
+            UserCardComponent(user=user, show_email=True)
+            for user in User.objects.all()[:5]
+        ]</code></pre>
+
+                <div class="mt-3">
+                    <p class="text-muted mb-2"><small><strong>Component Template:</strong> components/user_card.html</small></p>
+                    <pre><code class="language-html">&lt;!-- components/user_card.html --&gt;
+&lt;div class="card mb-3" id="&#123;&#123; component_id &#125;&#125;"&gt;
+    &lt;div class="card-body"&gt;
+        &lt;div class="d-flex align-items-center"&gt;
+            &lt;img src="&#123;&#123; user.avatar_url &#125;&#125;" class="rounded-circle me-3" width="50"&gt;
+            &lt;div class="flex-grow-1"&gt;
+                &lt;h5 class="mb-0"&gt;&#123;&#123; user.get_full_name &#125;&#125;&lt;/h5&gt;
+                {&#37; if show_email &#37;}
+                    &lt;small class="text-muted"&gt;&#123;&#123; user.email &#125;&#125;&lt;/small&gt;
+                {&#37; endif &#37;}
+            &lt;/div&gt;
+            &lt;button class="btn btn-sm btn-outline-primary" @click="toggle_expand"&gt;
+                {&#37; if is_expanded &#37;}Less{&#37; else &#37;}More{&#37; endif &#37;}
+            &lt;/button&gt;
+        &lt;/div&gt;
+
+        &lt;!-- Expanded content --&gt;
+        {&#37; if is_expanded &#37;}
+            &lt;div class="mt-3 pt-3 border-top"&gt;
+                &lt;p&gt;&lt;strong&gt;Role:&lt;/strong&gt; &#123;&#123; user.role &#125;&#125;&lt;/p&gt;
+                &lt;p&gt;&lt;strong&gt;Joined:&lt;/strong&gt; &#123;&#123; user.date_joined|date:"M d, Y" &#125;&#125;&lt;/p&gt;
+            &lt;/div&gt;
+        {&#37; endif &#37;}
+    &lt;/div&gt;
+&lt;/div&gt;</code></pre>
+                </div>
+
+                <div class="mt-3">
+                    <p class="text-muted mb-2"><small><strong>Using in Parent Template:</strong> team.html</small></p>
+                    <pre><code class="language-html">&lt;!-- team.html --&gt;
+{&#37; extends "base.html" &#37;}
+
+{&#37; block content &#37;}
+&lt;div data-liveview-root&gt;
+    &lt;h2&gt;Team Members&lt;/h2&gt;
+
+    &lt;!-- Render each user card component --&gt;
+    {&#37; for card in user_cards &#37;}
+        &#123;&#123; card.render &#125;&#125;
+    {&#37; endfor &#37;}
+&lt;/div&gt;
+{&#37; endblock &#37;}</code></pre>
+                </div>
+            </div>
+
+            <!-- URL Configuration Example -->
+            <div class="component-demo mt-3">
+                <div class="demo-label">5. URL Configuration & Setup</div>
+                <p class="text-muted mb-2"><small>Wire up LiveViews like regular Django class-based views</small></p>
+                <pre><code class="language-python"># urls.py
+from django.urls import path
+from .views import CounterView, ContactFormView, TodoListView
+
+urlpatterns = [
+    # LiveViews work like any Django CBV
+    path('counter/', CounterView.as_view(), name='counter'),
+    path('contact/', ContactFormView.as_view(), name='contact'),
+    path('todos/', TodoListView.as_view(), name='todos'),
+]</code></pre>
             </div>
         </div>
 
@@ -310,4 +1146,34 @@ class MyView(LiveView):
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+    <!-- Highlight.js JavaScript for syntax highlighting -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>
+        // Initial highlighting
+        hljs.highlightAll();
+
+        // Re-highlight after LiveView updates
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                    // Re-highlight all code blocks
+                    document.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
+                        hljs.highlightElement(block);
+                    });
+                }
+            });
+        });
+
+        // Observe the LiveView root for changes
+        const liveviewRoot = document.querySelector('[data-liveview-root]');
+        if (liveviewRoot) {
+            observer.observe(liveviewRoot, {
+                childList: true,
+                subtree: true
+            });
+        }
+    </script>
 {% endblock %}

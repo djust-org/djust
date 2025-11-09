@@ -12,6 +12,23 @@ DEBUG = True
 
 ALLOWED_HOSTS = ['*']
 
+# CSRF trusted origins for production
+CSRF_TRUSTED_ORIGINS = [
+    'https://django-rust.k8.trylinux.org',
+    'http://localhost:8002',
+    'http://127.0.0.1:8002',
+]
+
+# CSRF cookie settings for production HTTPS
+CSRF_COOKIE_SECURE = False  # Set to True only when DEBUG=False
+CSRF_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_HTTPONLY = False  # Allow JavaScript to read the cookie
+CSRF_USE_SESSIONS = False  # Keep CSRF token in cookie, not session
+
+# Session cookie settings
+SESSION_COOKIE_SECURE = False  # Set to True only when DEBUG=False
+SESSION_COOKIE_SAMESITE = 'Lax'
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',

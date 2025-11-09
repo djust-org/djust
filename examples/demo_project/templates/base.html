@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Django Rust Live{% endblock %}</title>
+
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Common Styles -->
+    <style>
+        .navbar-custom {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        .navbar-brand strong {
+            color: #667eea;
+        }
+        .nav-link {
+            color: #666 !important;
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        .nav-link:hover, .nav-link.active {
+            color: #667eea !important;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+            padding-top: 56px;
+            background-color: #f8f9fa;
+        }
+        /* Global demo card styles */
+        .demo-card {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            border: 1px solid #e9ecef;
+            transition: all 0.3s;
+            height: 100%;
+        }
+        .demo-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+        .demo-card h3 {
+            color: #2c3e50;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            font-size: 1.25rem;
+        }
+        .demo-card .badge {
+            margin-right: 0.5rem;
+        }
+        .demo-card ul {
+            color: #666;
+            margin: 1rem 0 1.5rem 0;
+        }
+        .demo-card ul li {
+            margin-bottom: 0.5rem;
+        }
+        {% block extra_styles %}{% endblock %}
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-custom fixed-top">
+        <div class="container{% block nav_container_class %}{% endblock %}">
+            <a class="navbar-brand d-flex align-items-center" href="/">
+                <img src="/static/images/django_rust.png" alt="Django Rust" width="30" height="30" class="me-2">
+                <strong>Django Rust Live</strong>
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <a class="nav-link {% block nav_home_active %}{% endblock %}" href="/">Home</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% block nav_demos_active %}{% endblock %}" href="/demos/">Demos</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% block nav_components_active %}{% endblock %}" href="/kitchen-sink/">Components</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% block nav_forms_active %}{% endblock %}" href="/forms/">Forms</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% block nav_docs_active %}{% endblock %}" href="/docs/">Docs</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    {% block content %}{% endblock %}
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>
