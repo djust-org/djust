@@ -49,3 +49,9 @@ Thumbs.db
 *.orig
 .env
 /.venv/
+
+# Temporary/Debug files
+*.pid
+server.log
+scratch/
+test-*.js

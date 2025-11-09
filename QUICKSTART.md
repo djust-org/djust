@@ -123,6 +123,30 @@ def increment(self):
 ```
 
 ### Components
+
+Pre-built and custom components with automatic ID management:
+
+```python
+from django_rust_live.components import AlertComponent
+
+class MyView(LiveView):
+    def mount(self, request):
+        # Component IDs are automatically set from attribute names
+        self.alert_success = AlertComponent(
+            message="Success!",
+            type="success",
+            dismissible=True
+        )
+        # component_id is now "alert_success" automatically!
+
+    def dismiss(self, component_id: str = None):
+        """Event handlers can reference components by their attribute names"""
+        if component_id and hasattr(self, component_id):
+            getattr(self, component_id).dismiss()
+```
+
+Create custom components:
+
 ```python
 from django_rust_live import Component
 

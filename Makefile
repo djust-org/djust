@@ -196,6 +196,37 @@ clean-all: clean ## Remove all generated files including venv
 	@rm -rf .venv
 	@echo "$(GREEN)Deep clean complete!$(NC)"
 
+##@ Deployment
+
+.PHONY: docker-build
+docker-build: ## Build and push Docker image to ghcr.io
+	@echo "$(GREEN)Building and pushing Docker image...$(NC)"
+	@./k8s/build.sh
+
+.PHONY: k8s-deploy
+k8s-deploy: ## Deploy to Kubernetes cluster
+	@echo "$(GREEN)Deploying to Kubernetes...$(NC)"
+	@./k8s/deploy.sh
+
+.PHONY: deploy
+deploy: docker-build k8s-deploy ## Build Docker image and deploy to Kubernetes
+
+.PHONY: k8s-status
+k8s-status: ## Check Kubernetes deployment status
+	@echo "$(BLUE)Kubernetes Deployment Status$(NC)"
+	@kubectl get pods,svc,ingress -n django-rust
+	@echo ""
+	@echo "$(BLUE)Certificate Status$(NC)"
+	@kubectl get certificate -n django-rust
+
+.PHONY: k8s-logs
+k8s-logs: ## View Kubernetes pod logs
+	@kubectl logs -f deployment/django-rust-live -n django-rust
+
+.PHONY: k8s-restart
+k8s-restart: ## Restart Kubernetes deployment
+	@kubectl rollout restart deployment/django-rust-live -n django-rust
+
 ##@ Utilities
 
 .PHONY: shell

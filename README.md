@@ -77,7 +77,35 @@ pip install django-rust-live
 
 ### Build from Source
 
-#### Using uv (Recommended - Fastest)
+#### Using Make (Easiest - Recommended for Development)
+
+```bash
+# Clone the repository
+git clone https://github.com/django-rust/django-rust-live.git
+cd django-rust-live
+
+# Install Rust (if needed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Install everything and build
+make install
+
+# Start the development server
+make start
+
+# See all available commands
+make help
+```
+
+**Common Make Commands:**
+- `make start` - Start development server with hot reload
+- `make stop` - Stop the development server
+- `make status` - Check if server is running
+- `make test` - Run all tests
+- `make clean` - Clean build artifacts
+- `make help` - Show all available commands
+
+#### Using uv (Fast)
 
 ```bash
 # Clone the repository
@@ -248,6 +276,67 @@ Django Rust Live supports Django template syntax with event binding:
 - `@submit` - Form submission (passes form data as dict)
 
 ### Reusable Components
+
+Django Rust Live provides a powerful component system with automatic state management and stable component IDs.
+
+#### Basic Component Example
+
+```python
+from django_rust_live.components import AlertComponent
+
+class MyView(LiveView):
+    def mount(self, request):
+        # Components get automatic IDs based on attribute names
+        self.alert_success = AlertComponent(
+            message="Operation successful!",
+            type="success",
+            dismissible=True
+        )
+        # component_id automatically becomes "alert_success"
+```
+
+#### Component ID Management
+
+Components automatically receive a stable `component_id` based on their **attribute name** in your view. This eliminates manual ID management:
+
+```python
+# When you write:
+self.alert_success = AlertComponent(message="Success!")
+
+# The framework automatically:
+# 1. Sets component.component_id = "alert_success"
+# 2. Persists this ID across renders and events
+# 3. Uses it in HTML: data-component-id="alert_success"
+# 4. Routes events back to the correct component
+```
+
+**Why it works:**
+- The attribute name (`alert_success`) is already unique within your view
+- It's stable across re-renders and WebSocket reconnections
+- Event handlers can reference components by their attribute names
+- No manual ID strings to keep in sync
+
+**Event Routing Example:**
+
+```python
+class MyView(LiveView):
+    def mount(self, request):
+        self.alert_warning = AlertComponent(
+            message="Warning message",
+            dismissible=True
+        )
+
+    def dismiss(self, component_id: str = None):
+        """Handle dismissal - automatically routes to correct component"""
+        if component_id and hasattr(self, component_id):
+            component = getattr(self, component_id)
+            if hasattr(component, 'dismiss'):
+                component.dismiss()  # component_id="alert_warning"
+```
+
+When the dismiss button is clicked, the client sends `component_id="alert_warning"`, and the handler uses `getattr(self, "alert_warning")` to find the component.
+
+#### Creating Custom Components
 
 ```python
 from django_rust_live import Component, register_component
