@@ -15,6 +15,30 @@ class LiveComponent(ABC):
     Components are self-contained UI elements with their own state and event handlers.
     They can be embedded in LiveViews or other components.
 
+    Automatic Component ID Management:
+        Components automatically receive a stable `component_id` based on the attribute
+        name used when assigning them in your LiveView. This eliminates manual ID management.
+
+        Example:
+            class MyView(LiveView):
+                def mount(self, request):
+                    # component_id is automatically set to "alert_success"
+                    self.alert_success = AlertComponent(
+                        message="Success!",
+                        type="success"
+                    )
+
+        The framework automatically:
+        1. Sets component.component_id = "alert_success" (the attribute name)
+        2. Persists this ID across renders and WebSocket events
+        3. Includes it in HTML as data-component-id="alert_success"
+        4. Routes events back to the correct component instance
+
+        This means you can reference components by their attribute names in event handlers:
+            def dismiss(self, component_id: str = None):
+                if component_id and hasattr(self, component_id):
+                    getattr(self, component_id).dismiss()
+
     Usage:
         class AlertComponent(LiveComponent):
             template_name = 'components/alert.html'

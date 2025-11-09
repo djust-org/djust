@@ -100,7 +100,6 @@ class FormMixin:
 
         # Update form data
         self.form_data[field_name] = value
-        print(f"[FormMixin] validate_field called: field={field_name}, value={value}, form_data={self.form_data}")
 
         # Create form with current data
         form = self._create_form(self.form_data)

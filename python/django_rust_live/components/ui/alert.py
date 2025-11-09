@@ -43,7 +43,7 @@ class AlertComponent(LiveComponent):
         self.message = kwargs.get('message', '')
         self.type = kwargs.get('type', 'info')  # info, success, warning, danger, error
         self.dismissible = kwargs.get('dismissible', True)
-        self.visible = True
+        self.visible = kwargs.get('visible', True)
 
     def get_context(self) -> Dict[str, Any]:
         """Get alert context"""
@@ -111,7 +111,7 @@ class AlertComponent(LiveComponent):
         html += f'{self.message}'
 
         if self.dismissible:
-            html += f'<button type="button" class="btn-close" @click="dismiss" aria-label="Close"></button>'
+            html += f'<button type="button" class="btn-close" @click="dismiss" data-component-id="{self.component_id}" aria-label="Close"></button>'
 
         html += '</div>'
         return html
@@ -132,7 +132,7 @@ class AlertComponent(LiveComponent):
         html += f'<div class="flex-1">{self.message}</div>'
 
         if self.dismissible:
-            html += f'<button type="button" @click="dismiss" class="ml-3 inline-flex rounded-md p-1.5 hover:bg-opacity-20">'
+            html += f'<button type="button" @click="dismiss" data-component-id="{self.component_id}" class="ml-3 inline-flex rounded-md p-1.5 hover:bg-opacity-20">'
             html += f'<span class="sr-only">Dismiss</span>'
             html += f'<svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>'
             html += f'</button>'
@@ -147,7 +147,7 @@ class AlertComponent(LiveComponent):
         html += f'{self.message}'
 
         if self.dismissible:
-            html += f'<button type="button" @click="dismiss">×</button>'
+            html += f'<button type="button" @click="dismiss" data-component-id="{self.component_id}">×</button>'
 
         html += '</div>'
         return html
