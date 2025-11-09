@@ -119,7 +119,7 @@ dev-build: ## Build Rust extensions in development mode
 .PHONY: test
 test: ## Run all tests
 	@echo "$(GREEN)Running tests...$(NC)"
-	@PYTHONPATH=. uv run pytest
+	@PYTHONPATH=. uv run pytest tests/ python/tests/
 
 .PHONY: test-rust
 test-rust: ## Run Rust tests
@@ -130,6 +130,16 @@ test-rust: ## Run Rust tests
 test-python: ## Run Python tests
 	@echo "$(GREEN)Running Python tests...$(NC)"
 	@PYTHONPATH=. uv run pytest python/
+
+.PHONY: test-vdom
+test-vdom: ## Run VDOM patching tests
+	@echo "$(GREEN)Running VDOM patching tests...$(NC)"
+	@PYTHONPATH=. uv run pytest python/tests/test_vdom_patching_wrapper.py -v
+
+.PHONY: test-liveview
+test-liveview: ## Run LiveView core tests
+	@echo "$(GREEN)Running LiveView tests...$(NC)"
+	@PYTHONPATH=. uv run pytest tests/unit/test_live_view.py -v
 
 .PHONY: lint
 lint: ## Run linters

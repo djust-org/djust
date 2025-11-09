@@ -121,6 +121,9 @@ class LiveView(View):
 
         Supports template inheritance via {% extends %} and {% block %} tags.
         Templates are resolved using Rust template inheritance for performance.
+
+        For templates with inheritance, extracts only [data-liveview-root] content
+        for VDOM tracking to avoid tracking the entire document.
         """
         if self.template_string:
             return self.template_string
@@ -157,7 +160,32 @@ class LiveView(View):
                 try:
                     from django_rust_live._rust import resolve_template_inheritance
                     resolved = resolve_template_inheritance(self.template_name, template_dirs_str)
-                    return resolved
+
+                    # Store full template for initial GET rendering
+                    self._full_template = resolved
+
+                    # For VDOM tracking, use the child template only (without base.html)
+                    # This prevents tracking the entire document (DOCTYPE, head, nav, etc.)
+                    # The child template contains {% block content %}...{% endblock %} which wraps
+                    # the LiveView root content
+                    import re
+                    import sys
+
+                    # Remove {% extends %} and extract all blocks
+                    child_content = re.sub(r'{%\s*extends\s+["\'].*?["\']\s*%}', '', template_source)
+
+                    # Extract content from all {% block %} tags and concatenate
+                    blocks = re.findall(r'{%\s*block\s+\w+\s*%}(.*?){%\s*endblock\s*%}', child_content, re.DOTALL)
+                    if blocks:
+                        # Join all block contents
+                        vdom_template = ''.join(blocks)
+                        print(f"[LiveView] Using child template blocks for VDOM tracking ({len(vdom_template)} chars), full template for rendering ({len(resolved)} chars)", file=sys.stderr)
+                        return vdom_template
+                    else:
+                        # No blocks found, use the child template as-is (minus extends)
+                        print(f"[LiveView] Using child template for VDOM tracking ({len(child_content)} chars)", file=sys.stderr)
+                        return child_content
+
                 except Exception as e:
                     # Fallback to raw template if Rust resolution fails
                     print(f"[LiveView] Template inheritance resolution failed: {e}")
@@ -272,6 +300,36 @@ class LiveView(View):
         html = self._hydrate_react_components(html)
         return html
 
+    def render_full_template(self, request=None) -> str:
+        """
+        Render the full template including base template inheritance.
+        Used for initial GET requests when using template inheritance.
+
+        Returns the complete HTML document (DOCTYPE, html, head, body, etc.)
+        """
+        # Check if we have a full template from template inheritance
+        if hasattr(self, '_full_template') and self._full_template:
+            # Render the full template using Rust
+            from django_rust_live._rust import RustLiveView
+            temp_rust = RustLiveView(self._full_template)
+
+            # Sync state to this temporary view
+            from .components.base import LiveComponent
+            context = self.get_context_data()
+            rendered_context = {}
+            for key, value in context.items():
+                if isinstance(value, LiveComponent):
+                    rendered_context[key] = {'render': str(value.render())}
+                else:
+                    rendered_context[key] = value
+
+            temp_rust.update_state(rendered_context)
+            html = temp_rust.render()
+            return self._hydrate_react_components(html)
+        else:
+            # No full template - use regular render
+            return self.render(request)
+
     def render_with_diff(self, request=None) -> tuple[str, Optional[str], int]:
         """
         Render the view and compute diff from last render.
@@ -328,13 +386,25 @@ class LiveView(View):
         #     self._cache_key = None
 
         # Initialize and render the LiveView content
-        # Use render_with_diff() to establish baseline VDOM for future patches
+        # For initial GET request, render the full template (with template inheritance)
+        # This ensures the browser gets the complete HTML (DOCTYPE, head, nav, etc.)
         self._initialize_rust_view(request)
         self._sync_state_to_rust()
-        html, _, _ = self.render_with_diff(request)  # Ignore patches_json and version on GET
+
+        # Initialize baseline VDOM for future patches (using LiveView root content only)
+        _, _, _ = self.render_with_diff(request)  # Establish VDOM baseline
+
+        # IMPORTANT: Always call get_template() on GET requests to set _full_template
+        # This is needed even if the Rust view is cached, because _full_template
+        # is used by render_full_template() to return the complete HTML document
+        self.get_template()
+
+        # Render full template for the browser (includes full HTML structure)
+        html = self.render_full_template(request)
         liveview_content = html
 
         # Wrap in Django template if wrapper_template is specified
+        # (This is for the older wrapper pattern, not template inheritance)
         if hasattr(self, 'wrapper_template') and self.wrapper_template:
             from django.template import loader
             wrapper = loader.get_template(self.wrapper_template)
@@ -980,7 +1050,9 @@ class LiveView(View):
                                 if (data.html) {
                                     const parser = new DOMParser();
                                     const doc = parser.parseFromString(data.html, 'text/html');
-                                    document.body.innerHTML = doc.body.innerHTML;
+                                    const liveviewRoot = getLiveViewRoot();
+                                    const newRoot = doc.querySelector('[data-liveview-root]') || doc.body;
+                                    liveviewRoot.innerHTML = newRoot.innerHTML;
                                     clientVdomVersion = data.version;
                                     initReactCounters();
                                     initTodoItems();
@@ -1009,7 +1081,9 @@ class LiveView(View):
                             // Server sent full HTML (no patches available)
                             const parser = new DOMParser();
                             const doc = parser.parseFromString(data.html, 'text/html');
-                            document.body.innerHTML = doc.body.innerHTML;
+                            const liveviewRoot = getLiveViewRoot();
+                            const newRoot = doc.querySelector('[data-liveview-root]') || doc.body;
+                            liveviewRoot.innerHTML = newRoot.innerHTML;
                             // Re-bind event handlers to new elements
                             initReactCounters();
                             initTodoItems();

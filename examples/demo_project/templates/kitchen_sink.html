@@ -1,20 +1,13 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kitchen Sink - Django Rust Live Components</title>
+{% extends "base.html" %}
 
-    <!-- Bootstrap 5 CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+{% block title %}Kitchen Sink - Django Rust Live Components{% endblock %}
 
-    <!-- Custom Styles -->
-    <style>
-        body {
-            background-color: #f8f9fa;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-        }
-        .hero-section {
+{% block nav_components_active %}active{% endblock %}
+
+{% block nav_container_class %}-fluid{% endblock %}
+
+{% block extra_styles %}
+    .hero-section {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             padding: 4rem 0;
@@ -59,10 +52,6 @@
             gap: 0.5rem;
             flex-wrap: wrap;
         }
-        .navbar-custom {
-            background: white;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
         .btn-interactive {
             margin: 0.5rem 0.5rem 0.5rem 0;
         }
@@ -77,35 +66,10 @@
             margin: 3rem 0;
             border-top: 2px solid #e9ecef;
         }
-    </style>
-</head>
-<body>
-    <!-- Navigation -->
-    <nav class="navbar navbar-expand-lg navbar-custom">
-        <div class="container-fluid">
-            <a class="navbar-brand d-flex align-items-center" href="/">
-                <img src="/static/images/django_rust.png" alt="Django Rust" height="30" class="me-2">
-                <strong>Django Rust Live</strong>
-            </a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav ms-auto">
-                    <li class="nav-item">
-                        <a class="nav-link" href="/">Home</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link active" href="/kitchen-sink">Components</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="/forms">Forms</a>
-                    </li>
-                </ul>
-            </div>
-        </div>
-    </nav>
+{% endblock %}
 
+{% block content %}
+<div data-liveview-root>
     <!-- Hero Section -->
     <div class="hero-section">
         <div class="container">
@@ -345,8 +309,5 @@ class MyView(LiveView):
             </div>
         </div>
     </div>
-
-    <!-- Bootstrap JS -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-</body>
-</html>
+</div>
+{% endblock %}
