@@ -1,11 +1,11 @@
-# Contributing to Django Rust Live
+# Contributing to djust
 
 Thank you for your interest in contributing! We welcome contributions from everyone.
 
 ## Getting Started
 
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/django-rust-live.git`
+2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/djust.git`
 3. Create a branch: `git checkout -b feature/your-feature-name`
 4. Make your changes
 5. Run tests: `cargo test && pytest`
@@ -74,7 +74,7 @@ cargo test --release  # Run with optimizations
 ### Python Tests
 ```bash
 pytest
-pytest --cov=django_rust_live  # With coverage
+pytest --cov=djust  # With coverage
 ```
 
 ### Integration Tests
@@ -135,8 +135,8 @@ python benchmark.py
 ## Questions?
 
 - Open a discussion on GitHub
-- Join our Discord: https://discord.gg/django-rust
-- Email: dev@django-rust.org
+- Join our Discord: https://discord.gg/djust
+- Email: dev@djust.org
 
 ## Code of Conduct
 

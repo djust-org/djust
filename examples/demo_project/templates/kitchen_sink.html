@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Kitchen Sink - Django Rust Live Components{% endblock %}
+{% block title %}Kitchen Sink - djust Components{% endblock %}
 
 {% block nav_components_active %}active{% endblock %}
 
@@ -85,7 +85,7 @@
         <div class="container">
             <h1 class="display-4">Component Kitchen Sink</h1>
             <p class="lead mb-0">
-                Explore all Django Rust Live components with live, interactive examples.
+                Explore all djust components with live, interactive examples.
                 All components support Bootstrap 5, Tailwind CSS, and plain HTML rendering.
             </p>
         </div>
@@ -105,7 +105,7 @@
 
             <div class="mt-3">
                 <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from django_rust_live.components import AlertComponent
+                <pre><code class="language-python">from djust.components import AlertComponent
 
 # In your mount() method:
 self.alert_success = AlertComponent(
@@ -166,7 +166,7 @@ def show_alert(self):
 
             <div class="mt-3">
                 <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from django_rust_live.components import ButtonComponent
+                <pre><code class="language-python">from djust.components import ButtonComponent
 
 # In your mount() method:
 self.button_primary = ButtonComponent(
@@ -209,7 +209,7 @@ def handle_button_click(self):
 
             <div class="mt-3">
                 <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from django_rust_live.components import BadgeComponent
+                <pre><code class="language-python">from djust.components import BadgeComponent
 
 # In your mount() method:
 self.badge_primary = BadgeComponent(
@@ -254,7 +254,7 @@ def dismiss_tag(self):
 
             <div class="mt-3">
                 <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from django_rust_live.components import DropdownComponent
+                <pre><code class="language-python">from djust.components import DropdownComponent
 
 # In your mount() method:
 self.dropdown_actions = DropdownComponent(
@@ -307,7 +307,7 @@ def delete_item(self):
 
             <div class="mt-3">
                 <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from django_rust_live.components import CardComponent
+                <pre><code class="language-python">from djust.components import CardComponent
 
 # In your mount() method:
 self.card_basic = CardComponent(
@@ -350,7 +350,7 @@ self.card_custom = CardComponent(
 
             <div class="mt-3">
                 <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from django_rust_live.components import ModalComponent
+                <pre><code class="language-python">from djust.components import ModalComponent
 
 # In your mount() method:
 self.modal_example = ModalComponent(
@@ -412,7 +412,7 @@ def update_modal_content(self):
 
             <div class="mt-3">
                 <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from django_rust_live.components import ProgressComponent
+                <pre><code class="language-python">from djust.components import ProgressComponent
 
 # In your mount() method:
 self.progress_simple = ProgressComponent(
@@ -472,7 +472,7 @@ def reset_progress(self):
 
             <div class="mt-3">
                 <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from django_rust_live.components import SpinnerComponent
+                <pre><code class="language-python">from djust.components import SpinnerComponent
 
 # In your mount() method:
 self.spinner_border = SpinnerComponent(
@@ -517,7 +517,7 @@ def load_data(self):
 
             <div class="mt-3">
                 <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from django_rust_live.components import TabsComponent
+                <pre><code class="language-python">from djust.components import TabsComponent
 
 # In your mount() method:
 self.tabs_example = TabsComponent(
@@ -569,7 +569,7 @@ def switch_to_profile(self):
 
             <div class="mt-3">
                 <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from django_rust_live.components import TableComponent
+                <pre><code class="language-python">from djust.components import TableComponent
 
 # In your mount() method:
 self.table_users = TableComponent(
@@ -619,7 +619,7 @@ self.table_users = TableComponent(
 
             <div class="mt-3">
                 <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from django_rust_live.components import PaginationComponent
+                <pre><code class="language-python">from djust.components import PaginationComponent
 
 # In your mount() method:
 self.pagination_basic = PaginationComponent(
@@ -702,8 +702,8 @@ def mount(self, request):
                 <div class="demo-label">1. Basic Counter - Complete Example</div>
                 <p class="text-muted mb-2"><small>Shows LiveView initialization, components, event handlers, and template integration</small></p>
                 <pre><code class="language-python"># views.py
-from django_rust_live import LiveView
-from django_rust_live.components import ButtonComponent, AlertComponent
+from djust import LiveView
+from djust.components import ButtonComponent, AlertComponent
 
 class CounterView(LiveView):
     template_name = "counter.html"
@@ -784,7 +784,7 @@ class CounterView(LiveView):
                 <p class="text-muted mb-2"><small>Shows Django form integration with live field validation and error display</small></p>
                 <pre><code class="language-python"># views.py
 from django import forms
-from django_rust_live import LiveView, FormMixin
+from djust import LiveView, FormMixin
 
 class ContactForm(forms.Form):
     """Standard Django form - works with LiveView automatically"""
@@ -906,7 +906,7 @@ class ContactFormView(FormMixin, LiveView):
                 <div class="demo-label">3. Interactive Todo List - Event Parameters & Lists</div>
                 <p class="text-muted mb-2"><small>Shows handling events with parameters, working with lists, and dynamic rendering</small></p>
                 <pre><code class="language-python"># views.py
-from django_rust_live import LiveView
+from djust import LiveView
 
 class TodoListView(LiveView):
     template_name = "todos.html"
@@ -914,7 +914,7 @@ class TodoListView(LiveView):
     def mount(self, request):
         """Initialize the todo list"""
         self.todos = [
-            {"id": 1, "text": "Learn Django Rust Live", "done": False},
+            {"id": 1, "text": "Learn djust", "done": False},
             {"id": 2, "text": "Build an app", "done": False},
         ]
         self.next_id = 3  # Track next ID for new todos
@@ -1019,7 +1019,7 @@ class TodoListView(LiveView):
                 <div class="demo-label">4. Custom Reusable Components</div>
                 <p class="text-muted mb-2"><small>Create your own components with their own class, template, and logic</small></p>
                 <pre><code class="language-python"># components/user_card.py
-from django_rust_live.components.base import LiveComponent
+from djust.components.base import LiveComponent
 
 class UserCardComponent(LiveComponent):
     """Reusable user profile card component"""

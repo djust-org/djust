@@ -5,7 +5,7 @@ This module demonstrates how to register and use React components
 within Django Rust Live templates.
 """
 
-from django_rust_live import register_react_component
+from djust import register_react_component
 
 
 @register_react_component("Button", module_path="./components/Button.jsx")

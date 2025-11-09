@@ -1,4 +1,4 @@
-# Django Rust Live - Demo Project
+# djust - Demo Project
 
 This demo project showcases three reactive LiveView examples.
 
@@ -13,7 +13,7 @@ This demo project showcases three reactive LiveView examples.
 #### Option 1: Using uv (Recommended)
 
 ```bash
-# From the project root (django_rust/)
+# From the project root (djust/)
 cd examples/demo_project
 
 # Install uv if you haven't
@@ -44,7 +44,7 @@ python manage.py runserver
 #### Option 2: Using pip
 
 ```bash
-# From the project root (django_rust/)
+# From the project root (djust/)
 cd examples/demo_project
 
 # Create virtual environment

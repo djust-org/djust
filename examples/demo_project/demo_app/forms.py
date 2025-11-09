@@ -3,7 +3,7 @@ Demo forms for showcasing Django Rust Live forms integration
 """
 
 from django import forms
-from django_rust_live import LiveViewForm
+from djust import LiveViewForm
 
 
 class RegistrationForm(LiveViewForm):

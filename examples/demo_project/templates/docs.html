@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Documentation - Django Rust Live{% endblock %}
+{% block title %}Documentation - djust{% endblock %}
 
 {% block nav_docs_active %}active{% endblock %}
 
@@ -92,7 +92,7 @@
             <div class="docs-nav">
                 <nav class="nav flex-column">
                     <a class="nav-link active" href="#introduction">Introduction</a>
-                    <a class="nav-link" href="#why-django-rust-live">Why Django Rust Live?</a>
+                    <a class="nav-link" href="#why-djust">Why djust?</a>
                     <a class="nav-link" href="#installation">Installation</a>
                     <a class="nav-link" href="#quick-start">Quick Start</a>
                     <a class="nav-link" href="#core-concepts">Core Concepts</a>
@@ -116,7 +116,7 @@
             <!-- Introduction -->
             <section id="introduction" class="docs-section">
                 <h2>Introduction</h2>
-                <p class="lead">Django Rust Live is a powerful framework that brings Phoenix LiveView-style real-time interactivity to Django, powered by Rust's blazing-fast VDOM diffing.</p>
+                <p class="lead">djust is a powerful framework that brings Phoenix LiveView-style real-time interactivity to Django, powered by Rust's blazing-fast VDOM diffing.</p>
 
                 <div class="feature-grid">
                     <div class="feature-card">
@@ -146,14 +146,14 @@
                 </div>
 
                 <div class="alert alert-docs">
-                    <strong>Why Django Rust Live?</strong><br>
+                    <strong>Why djust?</strong><br>
                     Build interactive, real-time web applications with the simplicity of server-side rendering and the responsiveness of modern SPAs. Perfect for dashboards, admin interfaces, forms, and real-time data displays.
                 </div>
             </section>
 
-            <!-- Why Django Rust Live -->
-            <section id="why-django-rust-live" class="docs-section">
-                <h2>Why Django Rust Live?</h2>
+            <!-- Why djust -->
+            <section id="why-djust" class="docs-section">
+                <h2>Why djust?</h2>
 
                 <h3>The Django Developer's Dilemma</h3>
                 <p>When building modern reactive UIs, Django developers traditionally face two difficult choices:</p>
@@ -195,7 +195,7 @@
 
                 <div class="card border-success mb-4">
                     <div class="card-header bg-success text-white">
-                        <strong>The Solution: Django Rust Live</strong>
+                        <strong>The Solution: djust</strong>
                     </div>
                     <div class="card-body">
                         <ul class="text-success">
@@ -216,7 +216,7 @@
                         <tr>
                             <th>Operation</th>
                             <th>Django</th>
-                            <th>Django Rust Live</th>
+                            <th>djust</th>
                             <th>Speedup</th>
                         </tr>
                     </thead>
@@ -287,7 +287,7 @@
 
                 <div class="row">
                     <div class="col-md-6">
-                        <h5 class="text-success">Django Rust Live (Pure Python)</h5>
+                        <h5 class="text-success">djust (Pure Python)</h5>
                         <pre><code class="language-python">class TodoListView(LiveView):
     template_name = 'todos.html'
 
@@ -331,8 +331,8 @@ function TodoList() {
                 </div>
 
                 <h3>No Build Step Required</h3>
-                <pre><code class="language-bash"># Django Rust Live - Simple!
-pip install django-rust-live
+                <pre><code class="language-bash"># djust - Simple!
+pip install djust
 # Add to INSTALLED_APPS
 # Write code, refresh browser - done! ✅
 
@@ -433,13 +433,13 @@ class LiveProductFilters(LiveView):
                 <h2>Installation</h2>
 
                 <h3>1. Install the Package</h3>
-                <pre><code class="language-bash">pip install django-rust-live</code></pre>
+                <pre><code class="language-bash">pip install djust</code></pre>
 
                 <h3>2. Add to INSTALLED_APPS</h3>
                 <pre><code class="language-python"># settings.py
 INSTALLED_APPS = [
     # ... other apps
-    'django_rust_live',
+    'djust',
 ]</code></pre>
 
                 <h3>3. Configure WebSocket Routing</h3>
@@ -448,7 +448,7 @@ import os
 from django.core.asgi import get_asgi_application
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
-from django_rust_live.routing import websocket_urlpatterns
+from djust.routing import websocket_urlpatterns
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.settings')
 
@@ -495,8 +495,8 @@ uvicorn myproject.asgi:application --host 0.0.0.0 --port 8000</code></pre>
 
                 <h3>1. Create a LiveView</h3>
                 <pre><code class="language-python"># views.py
-from django_rust_live import LiveView
-from django_rust_live.components import ButtonComponent, AlertComponent
+from djust import LiveView
+from djust.components import ButtonComponent, AlertComponent
 
 class CounterView(LiveView):
     template_name = "counter.html"
@@ -552,7 +552,7 @@ urlpatterns = [
                 <h2>Core Concepts</h2>
 
                 <h3>Architecture Overview</h3>
-                <p>Django Rust Live uses a server-centric architecture:</p>
+                <p>djust uses a server-centric architecture:</p>
 
                 <pre><code class="language-text">Browser                          Server
 --------                         --------
@@ -649,7 +649,7 @@ def delete_item(self, item_id):
                 <h2>Built-in Components</h2>
 
                 <h3>Button Component</h3>
-                <pre><code class="language-python">from django_rust_live.components import ButtonComponent
+                <pre><code class="language-python">from djust.components import ButtonComponent
 
 self.my_button = ButtonComponent(
     label="Click Me",
@@ -661,7 +661,7 @@ self.my_button = ButtonComponent(
 )</code></pre>
 
                 <h3>Alert Component</h3>
-                <pre><code class="language-python">from django_rust_live.components import AlertComponent
+                <pre><code class="language-python">from djust.components import AlertComponent
 
 self.alert = AlertComponent(
     message="Operation successful!",
@@ -671,7 +671,7 @@ self.alert = AlertComponent(
 )</code></pre>
 
                 <h3>Card Component</h3>
-                <pre><code class="language-python">from django_rust_live.components import CardComponent
+                <pre><code class="language-python">from djust.components import CardComponent
 
 self.card = CardComponent(
     title="User Profile",
@@ -682,7 +682,7 @@ self.card = CardComponent(
 )</code></pre>
 
                 <h3>Table Component</h3>
-                <pre><code class="language-python">from django_rust_live.components import TableComponent
+                <pre><code class="language-python">from djust.components import TableComponent
 
 self.table = TableComponent(
     columns=[
@@ -697,7 +697,7 @@ self.table = TableComponent(
 )</code></pre>
 
                 <h3>Modal Component</h3>
-                <pre><code class="language-python">from django_rust_live.components import ModalComponent
+                <pre><code class="language-python">from djust.components import ModalComponent
 
 self.modal = ModalComponent(
     title="Confirm Delete",
@@ -825,7 +825,7 @@ def delete_item(self, item_id, confirm=None):
             <!-- Form Integration -->
             <section id="forms" class="docs-section">
                 <h2>Django Forms Integration</h2>
-                <p>Django Rust Live seamlessly integrates with Django's form system for validation and processing.</p>
+                <p>djust seamlessly integrates with Django's form system for validation and processing.</p>
 
                 <h3>Basic Form Integration</h3>
                 <pre><code class="language-python"># forms.py
@@ -837,7 +837,7 @@ class ContactForm(forms.Form):
     message = forms.CharField(widget=forms.Textarea)
 
 # views.py
-from django_rust_live import LiveView
+from djust import LiveView
 from .forms import ContactForm
 
 class ContactFormView(LiveView):
@@ -867,7 +867,7 @@ class ContactFormView(LiveView):
                 <h3>Auto-Rendering Forms</h3>
                 <p>Use the <code>auto_form</code> template tag for automatic form rendering:</p>
                 <pre><code class="language-html">&lt;!-- templates/contact.html --&gt;
-{&#37; load django_rust_live &#37;}
+{&#37; load djust &#37;}
 
 &lt;div data-liveview-root&gt;
     &lt;form @submit="handle_submit"&gt;
@@ -997,8 +997,8 @@ def mount(self, request):
 {&#37; endfor &#37;}</code></pre>
 
                 <h3>Template Tags</h3>
-                <p>Django Rust Live provides custom template tags:</p>
-                <pre><code class="language-html">{&#37; load django_rust_live &#37;}
+                <p>djust provides custom template tags:</p>
+                <pre><code class="language-html">{&#37; load djust &#37;}
 
 &lt;!-- Auto-render Django forms --&gt;
 {&#37; auto_form form framework="bootstrap5" &#37;}
@@ -1101,7 +1101,7 @@ def load_data(self):
                 <h3>Component Class</h3>
                 <p>Create reusable components by inheriting from <code>LiveComponent</code>:</p>
                 <pre><code class="language-python"># components.py
-from django_rust_live.components import LiveComponent
+from djust.components import LiveComponent
 
 class UserCardComponent(LiveComponent):
     """Reusable user profile card"""
@@ -1195,7 +1195,7 @@ class ProfileView(LiveView):
                 <h2>Styling</h2>
 
                 <h3>CSS Framework Support</h3>
-                <p>Django Rust Live works with any CSS framework:</p>
+                <p>djust works with any CSS framework:</p>
 
                 <h4>Bootstrap 5</h4>
                 <pre><code class="language-html">&lt;!-- base.html --&gt;
@@ -1540,7 +1540,7 @@ uvicorn myproject.asgi:application --host 0.0.0.0 --port 8000 --workers 4</code>
 
                 <div class="alert alert-docs">
                     <strong>Need Help?</strong><br>
-                    Check out the <a href="/kitchen-sink/">Component Kitchen Sink</a> for live examples, or visit the <a href="https://github.com/johnrtipton/django_rust">GitHub repository</a> for more documentation.
+                    Check out the <a href="/kitchen-sink/">Component Kitchen Sink</a> for live examples, or visit the <a href="https://github.com/johnrtipton/djust">GitHub repository</a> for more documentation.
                 </div>
             </section>
         </div>

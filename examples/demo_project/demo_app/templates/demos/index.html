@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 
-{% block title %}Live Demos - Django Rust Live{% endblock %}
+{% block title %}Live Demos - djust{% endblock %}
 
 {% block nav_demos_active %}active{% endblock %}
 
@@ -19,7 +19,7 @@
     <div class="container">
         <h1 class="display-4">Interactive Live Demos</h1>
         <p class="lead">
-            Explore real-time, reactive examples showcasing Django Rust Live's capabilities.
+            Explore real-time, reactive examples showcasing djust's capabilities.
             All demos feature instant updates without page reloads.
         </p>
     </div>
@@ -99,7 +99,7 @@
                 </h3>
                 <p>
                     Demonstrates React-style component patterns and reactive rendering
-                    with Django Rust Live's VDOM engine.
+                    with djust's VDOM engine.
                 </p>
                 <ul class="list-unstyled">
                     <li>✓ Component composition</li>
@@ -141,7 +141,7 @@
                 </h3>
                 <p>
                     Stress test the VDOM rendering engine with rapid updates.
-                    See how Django Rust Live handles high-frequency changes.
+                    See how djust handles high-frequency changes.
                 </p>
                 <ul class="list-unstyled">
                     <li>✓ Rapid updates</li>
@@ -216,7 +216,7 @@
                 </div>
                 <div class="card-body">
                     <h5>Creating a LiveView</h5>
-                    <pre class="bg-light p-3 rounded"><code>from django_rust_live import LiveView
+                    <pre class="bg-light p-3 rounded"><code>from djust import LiveView
 
 class CounterView(LiveView):
     count = 0

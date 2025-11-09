@@ -2,8 +2,8 @@
 Demo LiveView examples
 """
 
-from django_rust_live import LiveView, FormMixin
-from django_rust_live._rust import fast_json_dumps
+from djust import LiveView, FormMixin
+from djust._rust import fast_json_dumps
 from django.views.generic import TemplateView
 from django.http import JsonResponse
 from .forms import RegistrationForm, ContactForm, ProfileForm, SearchForm

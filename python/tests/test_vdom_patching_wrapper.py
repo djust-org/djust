@@ -5,7 +5,7 @@ This test verifies that VDOM patches are generated correctly when using
 the wrapper template pattern (Rust content + Django layout).
 """
 import pytest
-from django_rust_live import LiveView
+from djust import LiveView
 from django.test import RequestFactory
 from django.contrib.sessions.middleware import SessionMiddleware
 

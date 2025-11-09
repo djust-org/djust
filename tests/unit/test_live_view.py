@@ -3,7 +3,7 @@ Unit tests for LiveView core functionality.
 """
 
 import pytest
-from django_rust_live.live_view import LiveView, cleanup_expired_sessions, get_session_stats
+from djust.live_view import LiveView, cleanup_expired_sessions, get_session_stats
 
 
 class TestLiveViewBasics:

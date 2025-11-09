@@ -148,7 +148,7 @@ This ensures:
 **Date Fixed:** November 8, 2025
 
 **Changes Made:**
-1. Modified `python/django_rust_live/live_view.py:293-298` to use `render_with_diff()` in GET handler
+1. Modified `python/djust/live_view.py:293-298` to use `render_with_diff()` in GET handler
 2. Created comprehensive test suite in `python/tests/test_vdom_patching_wrapper.py`
 
 **Test Results:**

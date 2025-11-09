@@ -56,5 +56,5 @@ def cleanup_session_cache():
     yield
 
     # Clean up the global cache
-    from django_rust_live.live_view import _rust_view_cache
+    from djust.live_view import _rust_view_cache
     _rust_view_cache.clear()

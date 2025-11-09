@@ -1,18 +1,18 @@
 [workspace]
 members = [
-    "crates/django_rust_core",
-    "crates/django_rust_templates",
-    "crates/django_rust_vdom",
-    "crates/django_rust_live",
+    "crates/djust_core",
+    "crates/djust_templates",
+    "crates/djust_vdom",
+    "crates/djust_live",
 ]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["Django Rust Contributors"]
+authors = ["djust contributors"]
 license = "MIT"
-repository = "https://github.com/django-rust/django-rust"
+repository = "https://github.com/johnrtipton/djust"
 
 [workspace.dependencies]
 pyo3 = { version = "0.22", features = ["extension-module"] }

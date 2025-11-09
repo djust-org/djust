@@ -3,7 +3,7 @@ Forms demo views - showcasing Django forms integration with LiveView
 """
 
 from django.views.generic import TemplateView
-from django_rust_live import LiveView, FormMixin
+from djust import LiveView, FormMixin
 from ..forms import RegistrationForm, ContactForm, ProfileForm, SimpleContactForm
 
 

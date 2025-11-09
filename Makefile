@@ -214,18 +214,18 @@ deploy: docker-build k8s-deploy ## Build Docker image and deploy to Kubernetes
 .PHONY: k8s-status
 k8s-status: ## Check Kubernetes deployment status
 	@echo "$(BLUE)Kubernetes Deployment Status$(NC)"
-	@kubectl get pods,svc,ingress -n django-rust
+	@kubectl get pods,svc,ingress -n djust
 	@echo ""
 	@echo "$(BLUE)Certificate Status$(NC)"
-	@kubectl get certificate -n django-rust
+	@kubectl get certificate -n djust
 
 .PHONY: k8s-logs
 k8s-logs: ## View Kubernetes pod logs
-	@kubectl logs -f deployment/django-rust-live -n django-rust
+	@kubectl logs -f deployment/djust-live -n djust
 
 .PHONY: k8s-restart
 k8s-restart: ## Restart Kubernetes deployment
-	@kubectl rollout restart deployment/django-rust-live -n django-rust
+	@kubectl rollout restart deployment/djust-live -n djust
 
 ##@ Utilities
 

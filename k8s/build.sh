@@ -4,7 +4,7 @@ set -e
 # Django Rust Live Build Script
 # This script builds and pushes the Docker image to GitHub Container Registry
 
-IMAGE_NAME="ghcr.io/johnrtipton/django-rust-live"
+IMAGE_NAME="ghcr.io/johnrtipton/djust-live"
 TAG="${1:-latest}"
 FULL_IMAGE="${IMAGE_NAME}:${TAG}"
 

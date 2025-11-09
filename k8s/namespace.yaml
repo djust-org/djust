@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: django-rust
+  name: djust
   labels:
-    name: django-rust
+    name: djust
     environment: production

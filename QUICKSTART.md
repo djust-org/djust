@@ -1,4 +1,4 @@
-# Django Rust Live - Quick Start Guide
+# djust - Quick Start Guide
 
 Get up and running in 5 minutes!
 
@@ -8,8 +8,8 @@ Get up and running in 5 minutes!
 
 ```bash
 # Clone the repository
-git clone https://github.com/django-rust/django-rust-live.git
-cd django-rust-live
+git clone https://github.com/johnrtipton/djust.git
+cd djust
 
 # Install Rust (if needed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -63,7 +63,7 @@ Try the three demos:
 Create a new file `myapp/views.py`:
 
 ```python
-from django_rust_live import LiveView
+from djust import LiveView
 
 class HelloView(LiveView):
     template_string = """
@@ -127,7 +127,7 @@ def increment(self):
 Pre-built and custom components with automatic ID management:
 
 ```python
-from django_rust_live.components import AlertComponent
+from djust.components import AlertComponent
 
 class MyView(LiveView):
     def mount(self, request):
@@ -148,7 +148,7 @@ class MyView(LiveView):
 Create custom components:
 
 ```python
-from django_rust_live import Component
+from djust import Component
 
 class Button(Component):
     template = '<button @click="clicked">{{ label }}</button>'
@@ -161,7 +161,7 @@ class Button(Component):
 
 Rust powers the core rendering engine:
 
-| Operation | Django | Django Rust Live | Speedup |
+| Operation | Django | djust | Speedup |
 |-----------|---------|------------------|---------|
 | Template (100 items) | 2.5ms | 0.15ms | **16x faster** |
 | Large list (10k items) | 450ms | 12ms | **37x faster** |
@@ -176,16 +176,16 @@ python benchmark.py
 ## 📚 Next Steps
 
 - [Full Documentation](README.md)
-- [API Reference](https://docs.django-rust.org)
+- [API Reference](https://djust.org/docs)
 - [Example Projects](examples/)
 - [Contributing Guide](CONTRIBUTING.md)
 
 ## 💬 Need Help?
 
-- 🐛 [Issue Tracker](https://github.com/django-rust/django-rust-live/issues)
-- 💬 [Discord](https://discord.gg/django-rust)
-- 📧 [Email](mailto:help@django-rust.org)
+- 🐛 [Issue Tracker](https://github.com/johnrtipton/djust/issues)
+- 💬 [Discord](https://discord.gg/djust)
+- 📧 [Email](mailto:support@djust.org)
 
 ---
 
-Made with ❤️ and ⚡ by the Django Rust community
+Made with ❤️ and ⚡ by the djust community

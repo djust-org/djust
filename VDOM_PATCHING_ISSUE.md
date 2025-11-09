@@ -140,7 +140,7 @@ if child_vnode.is_text() {
 We updated the client-side JavaScript to match Rust's filtering logic:
 
 ```javascript
-// python/django_rust_live/live_view.py lines 442-450
+// python/djust/live_view.py lines 442-450
 const children = Array.from(node.childNodes).filter(child => {
     // Keep element nodes
     if (child.nodeType === Node.ELEMENT_NODE) return true;
@@ -156,7 +156,7 @@ const children = Array.from(node.childNodes).filter(child => {
 
 ## Test Suite Created
 
-### Parser Tests (`crates/django_rust_vdom/src/parser.rs`)
+### Parser Tests (`crates/djust_vdom/src/parser.rs`)
 - `test_parse_simple_html` - Basic HTML parsing
 - `test_parse_with_attributes` - Attribute extraction
 - `test_parse_nested` - Nested element structure
@@ -165,13 +165,13 @@ const children = Array.from(node.childNodes).filter(child => {
 - ✅ `test_parse_nested_comments` - **NEW: Comments at all nesting levels**
 - ✅ `test_parse_comments_with_text` - **NEW: Text preserved when comments filtered**
 
-### Diff Tests (`crates/django_rust_vdom/src/diff.rs`)
+### Diff Tests (`crates/djust_vdom/src/diff.rs`)
 - `test_diff_with_whitespace_text_nodes` - Simulates interspersed whitespace
 - `test_form_validation_error_removal` - Form field with conditional error div
 - `test_multiple_conditional_divs_removal` - Multiple fields with errors
 - `test_path_traversal_with_whitespace` - Correct path accounting
 
-### Integration Tests (`crates/django_rust_vdom/tests/integration_test.rs`)
+### Integration Tests (`crates/djust_vdom/tests/integration_test.rs`)
 - `test_form_validation_errors_with_real_html` - Full form with html5ever parsing
 - `test_conditional_div_with_whitespace` - Django {% if %} style conditionals
 - `test_deeply_nested_form_structure` - 6+ levels of nesting
@@ -227,21 +227,21 @@ Located in `/scratch/`:
 ## Files Modified
 
 ### Python
-- `python/django_rust_live/live_view.py` - JavaScript filtering logic updated
+- `python/djust/live_view.py` - JavaScript filtering logic updated
 
 ### Rust
-- `crates/django_rust_vdom/src/parser.rs` - Added comment node filtering + 5 new tests
-- `crates/django_rust_vdom/src/diff.rs` - Added 5 new unit tests
-- `crates/django_rust_vdom/tests/integration_test.rs` - Created 6 integration tests
-- `crates/django_rust_vdom/TESTING.md` - Documentation
+- `crates/djust_vdom/src/parser.rs` - Added comment node filtering + 5 new tests
+- `crates/djust_vdom/src/diff.rs` - Added 5 new unit tests
+- `crates/djust_vdom/tests/integration_test.rs` - Created 6 integration tests
+- `crates/djust_vdom/TESTING.md` - Documentation
 
 ### Django Settings (Temporary)
 - `examples/demo_project/demo_project/settings.py` - CSRF disabled for testing
 
 ## References
 
-- Rust parser: `crates/django_rust_vdom/src/parser.rs` lines 75-92
-- JavaScript traversal: `python/django_rust_live/live_view.py` lines 420-450
+- Rust parser: `crates/djust_vdom/src/parser.rs` lines 75-92
+- JavaScript traversal: `python/djust/live_view.py` lines 420-450
 - Server logs location: stderr during test runs
 
 ---
@@ -301,7 +301,7 @@ Ensured Rust template includes the same `<div data-liveview-root>` wrapper that 
 ```
 
 ### 2. Updated GET Handler
-Modified `python/django_rust_live/live_view.py:290` to inject content without double-wrapping:
+Modified `python/djust/live_view.py:290` to inject content without double-wrapping:
 
 **Before:**
 ```python
@@ -325,7 +325,7 @@ After the fix:
 
 ## Files Modified
 - `examples/demo_project/templates/kitchen_sink_content.html` - Added `<div data-liveview-root>` wrapper
-- `python/django_rust_live/live_view.py:290` - Updated GET handler to not double-wrap
+- `python/djust/live_view.py:290` - Updated GET handler to not double-wrap
 
 ## Testing
 To verify patches are working:

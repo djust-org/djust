@@ -5,8 +5,8 @@ Showcases all available Django Rust Live components with interactive examples.
 """
 
 from django.http import HttpRequest
-from django_rust_live import LiveView
-from django_rust_live.components import (
+from djust import LiveView
+from djust.components import (
     # UI Components
     AlertComponent,
     BadgeComponent,

@@ -438,7 +438,7 @@ wheels = [
 ]
 
 [[package]]
-name = "django-rust-live"
+name = "djust"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

@@ -18,7 +18,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'demo_project.settings')
 import django
 django.setup()
 
-from django_rust_live._rust import fast_json_dumps
+from djust._rust import fast_json_dumps
 
 
 def generate_products(count):

@@ -3,10 +3,10 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "django-rust-live"
+name = "djust"
 version = "0.1.0"
 description = "Blazing fast reactive server-side rendering for Django, powered by Rust"
-authors = [{name = "Django Rust Contributors"}]
+authors = [{name = "djust contributors"}]
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
@@ -52,17 +52,17 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/django-rust/django-rust"
-Documentation = "https://django-rust.readthedocs.io"
-Repository = "https://github.com/django-rust/django-rust"
-Issues = "https://github.com/django-rust/django-rust/issues"
+Homepage = "https://djust.org"
+Documentation = "https://djust.org/docs"
+Repository = "https://github.com/johnrtipton/djust"
+Issues = "https://github.com/johnrtipton/djust/issues"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
-module-name = "django_rust_live._rust"
+module-name = "djust._rust"
 python-source = "python"
 bindings = "pyo3"
-manifest-path = "crates/django_rust_live/Cargo.toml"
+manifest-path = "crates/djust_live/Cargo.toml"
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "tests.settings"

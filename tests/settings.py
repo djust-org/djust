@@ -2,7 +2,7 @@
 Minimal Django settings for running tests.
 """
 
-SECRET_KEY = 'test-secret-key-for-django-rust-live-tests'
+SECRET_KEY = 'test-secret-key-for-djust-tests'
 
 DEBUG = True
 
@@ -10,7 +10,7 @@ INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'channels',
-    'django_rust_live',
+    'djust',
 ]
 
 DATABASES = {

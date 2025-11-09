@@ -77,7 +77,7 @@ def benchmark_template_rendering():
 
     # Django Rust Live template
     try:
-        from django_rust_live import render_template
+        from djust import render_template
 
         template_str = """
             <div>
@@ -103,7 +103,7 @@ def benchmark_template_rendering():
         print(f"\n🚀 Speedup: {speedup:.1f}x faster")
 
     except ImportError:
-        print("\n⚠️  django_rust_live not installed. Run 'maturin develop' first.")
+        print("\n⚠️  djust not installed. Run 'maturin develop' first.")
         django_results = benchmark(render_django)
         print_results("Django Template", django_results)
 
@@ -115,7 +115,7 @@ def benchmark_vdom_diffing():
     print("=" * 60)
 
     try:
-        from django_rust_live import diff_html
+        from djust import diff_html
 
         old_html = """
             <div class="container">
@@ -150,7 +150,7 @@ def benchmark_vdom_diffing():
             print("\n✨ Sub-millisecond P99 latency achieved!")
 
     except ImportError:
-        print("\n⚠️  django_rust_live not installed. Run 'maturin develop' first.")
+        print("\n⚠️  djust not installed. Run 'maturin develop' first.")
 
 
 def benchmark_large_list():
@@ -176,7 +176,7 @@ def benchmark_large_list():
         return django_template.render(context)
 
     try:
-        from django_rust_live import render_template
+        from djust import render_template
 
         template_str = """
             <ul>
@@ -199,7 +199,7 @@ def benchmark_large_list():
         print(f"\n🚀 Speedup: {speedup:.1f}x faster")
 
     except ImportError:
-        print("\n⚠️  django_rust_live not installed. Run 'maturin develop' first.")
+        print("\n⚠️  djust not installed. Run 'maturin develop' first.")
         django_results = benchmark(render_django, iterations=100)
         print_results("Django Template", django_results)
 

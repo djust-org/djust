@@ -1,8 +1,8 @@
-# 🚀 Django Rust Live
+# 🚀 djust
 
 **Blazing fast reactive server-side rendering for Django, powered by Rust**
 
-Django Rust Live brings Phoenix LiveView-style reactive components to Django, with performance that feels native. Write server-side Python code with automatic, instant client updates—no JavaScript bundling, no build step, no complexity.
+djust brings Phoenix LiveView-style reactive components to Django, with performance that feels native. Write server-side Python code with automatic, instant client updates—no JavaScript bundling, no build step, no complexity.
 
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
@@ -21,7 +21,7 @@ Django Rust Live brings Phoenix LiveView-style reactive components to Django, wi
 ## 🎯 Quick Example
 
 ```python
-from django_rust_live import LiveView
+from djust import LiveView
 
 class CounterView(LiveView):
     template_string = """
@@ -48,8 +48,8 @@ That's it! No JavaScript needed. State changes automatically trigger minimal DOM
 
 Benchmarked on M1 MacBook Pro (2021):
 
-| Operation | Django | Django Rust Live | Speedup |
-|-----------|---------|------------------|---------|
+| Operation | Django | djust | Speedup |
+|-----------|---------|-------|---------|
 | Template Rendering (100 items) | 2.5 ms | 0.15 ms | **16.7x** |
 | Large List (10k items) | 450 ms | 12 ms | **37.5x** |
 | Virtual DOM Diff | N/A | 0.08 ms | **Sub-ms** |
@@ -72,7 +72,7 @@ python benchmark.py
 ### Install from PyPI (when published)
 
 ```bash
-pip install django-rust-live
+pip install djust
 ```
 
 ### Build from Source
@@ -81,8 +81,8 @@ pip install django-rust-live
 
 ```bash
 # Clone the repository
-git clone https://github.com/django-rust/django-rust-live.git
-cd django-rust-live
+git clone https://github.com/johnrtipton/djust.git
+cd djust
 
 # Install Rust (if needed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -109,8 +109,8 @@ make help
 
 ```bash
 # Clone the repository
-git clone https://github.com/django-rust/django-rust-live.git
-cd django-rust-live
+git clone https://github.com/johnrtipton/djust.git
+cd djust
 
 # Install Rust (if needed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -131,8 +131,8 @@ maturin develop --release
 
 ```bash
 # Clone the repository
-git clone https://github.com/django-rust/django-rust-live.git
-cd django-rust-live
+git clone https://github.com/johnrtipton/djust.git
+cd djust
 
 # Install Rust (if needed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -149,7 +149,7 @@ maturin develop --release
 
 # Or build wheel
 maturin build --release
-pip install target/wheels/django_rust_live-*.whl
+pip install target/wheels/djust-*.whl
 ```
 
 ## 📖 Documentation
@@ -162,7 +162,7 @@ pip install target/wheels/django_rust_live-*.whl
 INSTALLED_APPS = [
     # ...
     'channels',  # Required for WebSocket support
-    'django_rust_live',
+    'djust',
     # ...
 ]
 ```
@@ -174,7 +174,7 @@ import os
 from django.core.asgi import get_asgi_application
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
-from django_rust_live.websocket import LiveViewConsumer
+from djust.websocket import LiveViewConsumer
 from django.urls import path
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.settings')
@@ -206,7 +206,7 @@ CHANNEL_LAYERS = {
 #### Class-Based LiveView
 
 ```python
-from django_rust_live import LiveView
+from djust import LiveView
 
 class TodoListView(LiveView):
     template_name = 'todos.html'  # Or use template_string
@@ -226,7 +226,7 @@ class TodoListView(LiveView):
 #### Function-Based LiveView
 
 ```python
-from django_rust_live import live_view
+from djust import live_view
 
 @live_view(template_name='counter.html')
 def counter_view(request):
@@ -241,7 +241,7 @@ def counter_view(request):
 
 ### Template Syntax
 
-Django Rust Live supports Django template syntax with event binding:
+djust supports Django template syntax with event binding:
 
 ```html
 <!-- Variables -->
@@ -277,12 +277,12 @@ Django Rust Live supports Django template syntax with event binding:
 
 ### Reusable Components
 
-Django Rust Live provides a powerful component system with automatic state management and stable component IDs.
+djust provides a powerful component system with automatic state management and stable component IDs.
 
 #### Basic Component Example
 
 ```python
-from django_rust_live.components import AlertComponent
+from djust.components import AlertComponent
 
 class MyView(LiveView):
     def mount(self, request):
@@ -339,7 +339,7 @@ When the dismiss button is clicked, the client sends `component_id="alert_warnin
 #### Creating Custom Components
 
 ```python
-from django_rust_live import Component, register_component
+from djust import Component, register_component
 
 @register_component('my-button')
 class Button(Component):
@@ -358,7 +358,7 @@ class Button(Component):
 ### Decorators
 
 ```python
-from django_rust_live import LiveView, event_handler, reactive
+from djust import LiveView, event_handler, reactive
 
 class MyView(LiveView):
     @event_handler
@@ -425,14 +425,14 @@ Visit http://localhost:8000
 ### Project Structure
 
 ```
-django_rust/
+djust/
 ├── crates/
-│   ├── django_rust_core/      # Core types & utilities
-│   ├── django_rust_templates/ # Template engine
-│   ├── django_rust_vdom/      # Virtual DOM & diffing
-│   └── django_rust_live/      # Main PyO3 bindings
+│   ├── djust_core/      # Core types & utilities
+│   ├── djust_templates/ # Template engine
+│   ├── djust_vdom/      # Virtual DOM & diffing
+│   └── djust_live/      # Main PyO3 bindings
 ├── python/
-│   └── django_rust_live/      # Python package
+│   └── djust/      # Python package
 │       ├── live_view.py       # LiveView base class
 │       ├── component.py       # Component system
 │       ├── websocket.py       # WebSocket consumer
@@ -492,7 +492,7 @@ Areas we'd love help with:
 - WebSocket authentication via Django sessions
 - Rate limiting support
 
-Report security issues to: security@django-rust.org
+Report security issues to: security@djust.org
 
 ## 📄 License
 
@@ -507,11 +507,11 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## 💬 Support
 
-- 📖 [Documentation](https://docs.django-rust.org)
-- 💬 [Discord Community](https://discord.gg/django-rust)
-- 🐛 [Issue Tracker](https://github.com/django-rust/django-rust-live/issues)
-- 📧 [Mailing List](https://groups.google.com/g/django-rust)
+- 📖 [Documentation](https://djust.org/docs)
+- 💬 [Discord Community](https://discord.gg/djust)
+- 🐛 [Issue Tracker](https://github.com/johnrtipton/djust/issues)
+- 📧 Email: support@djust.org
 
 ---
 
-Made with ❤️ by the Django Rust community
+Made with ❤️ by the djust community

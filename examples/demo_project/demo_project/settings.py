@@ -14,7 +14,7 @@ ALLOWED_HOSTS = ['*']
 
 # CSRF trusted origins for production
 CSRF_TRUSTED_ORIGINS = [
-    'https://django-rust.k8.trylinux.org',
+    'https://djust.k8.trylinux.org',
     'http://localhost:8002',
     'http://127.0.0.1:8002',
 ]
@@ -37,7 +37,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'channels',
-    'django_rust_live',
+    'djust',
     'demo_app',
 ]
 
@@ -114,3 +114,9 @@ CHANNEL_LAYERS = {
         'BACKEND': 'channels.layers.InMemoryChannelLayer'
     }
 }
+
+# LiveView WebSocket Security
+# List of module prefixes allowed for WebSocket view mounting
+LIVEVIEW_ALLOWED_MODULES = [
+    'demo_app.views',  # Allow all views in demo_app.views module
+]

@@ -130,7 +130,7 @@ pub fn render_with_diff(merged_template: &str, state: &State) -> (String, Option
 
 ## Implementation Plan
 
-### 1. Parser Enhancements (`crates/django_rust_vdom/src/parser.rs`)
+### 1. Parser Enhancements (`crates/djust_vdom/src/parser.rs`)
 
 ```rust
 #[derive(Debug, Clone)]
@@ -209,7 +209,7 @@ pub fn merge_blocks(
 ### 4. Python API Update
 
 ```python
-# python/django_rust_live/live_view.py
+# python/djust/live_view.py
 
 class LiveView(View):
     template_name = None      # Path to template (can use {% extends %})
