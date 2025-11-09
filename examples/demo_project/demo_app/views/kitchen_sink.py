@@ -32,9 +32,13 @@ class KitchenSinkView(LiveView):
     - UI Components (Button, Badge, Dropdown, Alert, Card, Modal, Progress, Spinner)
     - Layout Components (Tabs)
     - Data Components (Table, Pagination)
+
+    Uses template inheritance for layout:
+    - kitchen_sink.html extends base.html
+    - All rendering handled by Rust VDOM with template inheritance
     """
 
-    template_name = "kitchen_sink.html"
+    template_name = "kitchen_sink.html"  # Uses {% extends "base.html" %}
 
     def mount(self, request: HttpRequest):
         """Initialize all components with example configurations"""
