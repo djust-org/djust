@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: django-rust-live
+  namespace: django-rust
+spec:
+  selector:
+    app: django-rust-live
+  ports:
+  - port: 8000
+    targetPort: 8000
+    name: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: django-rust-live
+  namespace: django-rust
+spec:
+  replicas: 1  # Single pod to avoid VDOM cache sync issues
+  selector:
+    matchLabels:
+      app: django-rust-live
+  template:
+    metadata:
+      labels:
+        app: django-rust-live
+    spec:
+      imagePullSecrets:
+      - name: ghcr-secret
+      containers:
+      - name: django-rust-live
+        image: ghcr.io/johnrtipton/django-rust-live:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: django-rust-secret
+              key: secret-key
+        - name: DEBUG
+          value: "False"
+        - name: ALLOWED_HOSTS
+          value: "django_rust.k8.trylinux.org"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
