@@ -1,15 +1,15 @@
 #!/bin/bash
 set -e
 
-# Django Rust Live Build Script
+# djust Build Script
 # This script builds and pushes the Docker image to GitHub Container Registry
 
-IMAGE_NAME="ghcr.io/johnrtipton/djust-live"
+IMAGE_NAME="ghcr.io/johnrtipton/djust"
 TAG="${1:-latest}"
 FULL_IMAGE="${IMAGE_NAME}:${TAG}"
 
 echo "======================================"
-echo "Django Rust Live Docker Build"
+echo "djust Docker Build"
 echo "======================================"
 echo "Image: $FULL_IMAGE"
 echo "Platform: linux/amd64 (for Kubernetes cluster)"

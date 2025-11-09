@@ -1,4 +1,4 @@
-# Multi-stage build for Django Rust Live
+# Multi-stage build for djust
 # Stage 1: Build Rust components
 FROM rust:1.75-slim-bookworm AS rust-builder
 

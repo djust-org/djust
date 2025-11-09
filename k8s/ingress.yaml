@@ -15,9 +15,31 @@ spec:
   ingressClassName: nginx
   tls:
   - hosts:
+    - djust.org
+    - www.djust.org
     - djust.k8.trylinux.org
     secretName: djust-tls
   rules:
+  - host: djust.org
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: djust
+            port:
+              number: 8000
+  - host: www.djust.org
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: djust
+            port:
+              number: 8000
   - host: djust.k8.trylinux.org
     http:
       paths:

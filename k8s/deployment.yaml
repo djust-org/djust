@@ -44,7 +44,7 @@ spec:
         - name: DEBUG
           value: "False"
         - name: ALLOWED_HOSTS
-          value: "djust.k8.trylinux.org"
+          value: "djust.org,www.djust.org,djust.k8.trylinux.org"
         - name: PYTHONUNBUFFERED
           value: "1"
         resources:

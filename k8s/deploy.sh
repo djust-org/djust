@@ -1,15 +1,15 @@
 #!/bin/bash
 set -e
 
-# Django Rust Live Deployment Script
-# This script deploys Django Rust Live to Kubernetes
+# djust Deployment Script
+# This script deploys djust to Kubernetes
 
 NAMESPACE="djust"
-IMAGE_NAME="ghcr.io/johnrtipton/djust-live:latest"
+IMAGE_NAME="ghcr.io/johnrtipton/djust:latest"
 DOMAIN="djust.k8.trylinux.org"
 
 echo "======================================"
-echo "Django Rust Live Deployment"
+echo "djust Deployment"
 echo "======================================"
 echo "Namespace: $NAMESPACE"
 echo "Image: $IMAGE_NAME"
@@ -75,7 +75,7 @@ echo ""
 
 # Force restart to pull new image
 echo "6. Restarting deployment to pull new image..."
-kubectl rollout restart deployment/djust-live -n $NAMESPACE
+kubectl rollout restart deployment/djust -n $NAMESPACE
 echo "✓ Rollout restart initiated"
 echo ""
 
@@ -87,7 +87,7 @@ echo ""
 
 # Wait for deployment
 echo "8. Waiting for deployment to be ready..."
-kubectl rollout status deployment/djust-live -n $NAMESPACE
+kubectl rollout status deployment/djust -n $NAMESPACE
 echo "✓ Deployment is ready"
 echo ""
 
@@ -125,5 +125,5 @@ echo "Check certificate status with:"
 echo "kubectl get certificate -n $NAMESPACE"
 echo ""
 echo "View logs with:"
-echo "kubectl logs -f deployment/djust-live -n $NAMESPACE"
+echo "kubectl logs -f deployment/djust -n $NAMESPACE"
 echo ""
