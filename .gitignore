@@ -55,3 +55,11 @@ Thumbs.db
 server.log
 scratch/
 test-*.js
+
+# Work in progress / private files
+CLAUDE.md
+ISSUE_PRIORITIES.md
+PYTHONIC_FORMS_IMPLEMENTATION.md
+QUICK_START_GUIDE.md
+STRATEGIC_VISION.md
+django_rust.png
