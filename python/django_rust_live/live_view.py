@@ -144,8 +144,9 @@ class LiveView(View):
                     if template_config['BACKEND'] == 'django.template.backends.django.DjangoTemplates':
                         if template_config.get('APP_DIRS', False):
                             from django.apps import apps
+                            from pathlib import Path
                             for app_config in apps.get_app_configs():
-                                templates_dir = app_config.path / 'templates'
+                                templates_dir = Path(app_config.path) / 'templates'
                                 if templates_dir.exists():
                                     template_dirs.append(str(templates_dir))
 
