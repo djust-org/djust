@@ -6,17 +6,65 @@ import json
 import asyncio
 import hashlib
 import sys
+from datetime import datetime, date, time
+from decimal import Decimal
+from uuid import UUID
 from typing import Any, Dict, Optional, Callable
 from django.http import HttpResponse, JsonResponse
 from django.views import View
 from django.template.loader import render_to_string
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils.decorators import method_decorator
+from django.db import models
 
 try:
     from ._rust import RustLiveView
 except ImportError:
     RustLiveView = None
+
+
+class DjangoJSONEncoder(json.JSONEncoder):
+    """
+    Custom JSON encoder that handles common Django and Python types.
+
+    Automatically converts:
+    - datetime/date/time → ISO format strings
+    - UUID → string
+    - Decimal → float
+    - Django models → dict with id and __str__
+    - QuerySets → list
+    """
+    def default(self, obj):
+        # Handle datetime types
+        if isinstance(obj, (datetime, date, time)):
+            return obj.isoformat()
+
+        # Handle UUID
+        if isinstance(obj, UUID):
+            return str(obj)
+
+        # Handle Decimal
+        if isinstance(obj, Decimal):
+            return float(obj)
+
+        # Handle Django model instances
+        if isinstance(obj, models.Model):
+            # Return a simple representation with id and string representation
+            result = {
+                'id': str(obj.pk) if obj.pk else None,
+                '__str__': str(obj),
+                '__model__': obj.__class__.__name__,
+            }
+            # Optionally include a few safe fields
+            # (avoiding relations which could cause circular references)
+            return result
+
+        # Handle QuerySets
+        if hasattr(obj, 'model') and hasattr(obj, '__iter__'):
+            # This is likely a QuerySet
+            return list(obj)
+
+        return super().default(obj)
 
 # Global cache for RustLiveView instances
 # Structure: {cache_key: (rust_view, timestamp)}
@@ -215,8 +263,11 @@ class LiveView(View):
 
         Returns:
             Dictionary of context variables
+
+        Notes:
+            - Automatically serializes datetime, UUID, Decimal, and Django models
+            - Use DjangoJSONEncoder for custom type handling
         """
-        import json
         from .components.base import LiveComponent
 
         context = {}
@@ -233,7 +284,8 @@ class LiveView(View):
                             context[key] = value
                         else:
                             try:
-                                json.dumps(value)
+                                # Use custom Django encoder for better type support
+                                json.dumps(value, cls=DjangoJSONEncoder)
                                 context[key] = value
                             except (TypeError, ValueError):
                                 # Skip non-serializable objects (like request, etc)

@@ -6,6 +6,7 @@ import json
 import msgpack
 from typing import Dict, Any, Optional
 from channels.generic.websocket import AsyncWebsocketConsumer
+from .live_view import DjangoJSONEncoder
 
 
 class LiveViewConsumer(AsyncWebsocketConsumer):
@@ -330,8 +331,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             })
 
     async def send_json(self, data: Dict[str, Any]):
-        """Send JSON message to client"""
-        await self.send(text_data=json.dumps(data))
+        """Send JSON message to client with Django type support"""
+        await self.send(text_data=json.dumps(data, cls=DjangoJSONEncoder))
 
 
 class LiveViewRouter:
