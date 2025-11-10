@@ -1,553 +1,124 @@
-/* djust Homepage - GitHub/Linear Modern Style */
+/* djust Homepage - Homepage-specific styles
+ * Theme system (colors, typography, base styles) is provided by theme.css
+ * This file contains homepage-specific component styling
+ */
 
 /* ============================================
-   Custom Properties
+   Homepage-Specific Overrides
    ============================================ */
-:root {
-    --color-bg: #ffffff;
-    --color-bg-secondary: #fafbfc;
-    --color-border: #e1e4e8;
-    --color-border-muted: #f6f8fa;
-    --color-text: #24292e;
-    --color-text-secondary: #586069;
-    --color-text-tertiary: #6a737d;
-    --color-accent: #0969da;
-    --color-accent-emphasis: #0550ae;
-    --color-success: #1a7f37;
-    --color-gradient-start: #667eea;
-    --color-gradient-end: #764ba2;
-}
 
-/* ============================================
-   Base Styles
-   ============================================ */
-body {
-    background: var(--color-bg) !important;
-    color: var(--color-text);
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-}
-
-/* Override Bootstrap container for full-width sections */
+/* Bootstrap container override */
 .section-modern .container {
     max-width: 1200px;
 }
 
-/* Ensure navbar is visible */
-.navbar-custom {
-    background: rgba(255, 255, 255, 0.98) !important;
-    border-bottom: 1px solid var(--color-border);
-    z-index: 1000;
-}
-
+/* Navbar togglers for mobile */
 .navbar-toggler {
     border-color: var(--color-border);
 }
 
 .navbar-toggler-icon {
-    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba(36, 41, 46, 0.75)' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba(255, 255, 255, 0.75)' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
 }
 
 /* ============================================
-   Hero Section - Minimal & Modern
+   Hero Section - Homepage Specific
    ============================================ */
 .hero-section {
     position: relative;
-    padding: 6rem 0 5rem;
-    background: linear-gradient(to bottom, #fafbfc 0%, #ffffff 100%);
-    border-bottom: 1px solid var(--color-border);
-}
-
-.hero-title {
-    font-size: 3.5rem;
-    font-weight: 700;
-    line-height: 1.1;
-    letter-spacing: -0.03em;
-    color: var(--color-text);
-    margin-bottom: 1.5rem;
-}
-
-.hero-gradient-text {
-    background: linear-gradient(135deg, var(--color-gradient-start) 0%, var(--color-gradient-end) 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-}
-
-.hero-subtitle {
-    font-size: 1.25rem;
-    line-height: 1.6;
-    color: var(--color-text-secondary);
-    max-width: 42rem;
-    margin-bottom: 2.5rem;
-}
-
-.btn-primary-modern {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 1.5rem;
-    font-size: 1rem;
-    font-weight: 600;
-    color: white;
-    background: var(--color-accent);
-    border: none;
-    border-radius: 0.5rem;
-    text-decoration: none;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
-}
-
-.btn-primary-modern:hover {
-    background: var(--color-accent-emphasis);
-    transform: translateY(-1px);
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-    color: white;
-}
-
-.btn-secondary-modern {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 1.5rem;
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--color-text);
-    background: white;
-    border: 1px solid var(--color-border);
-    border-radius: 0.5rem;
-    text-decoration: none;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.btn-secondary-modern:hover {
-    background: var(--color-bg-secondary);
-    border-color: var(--color-text-secondary);
-    transform: translateY(-1px);
-    color: var(--color-text);
 }
 
 /* ============================================
-   Sections
+   Sections - Homepage Specific
    ============================================ */
 .section-modern {
-    padding: 5rem 0;
-    border-bottom: 1px solid var(--color-border-muted);
-}
-
-.section-title-modern {
-    font-size: 2.5rem;
-    font-weight: 700;
-    line-height: 1.2;
-    letter-spacing: -0.02em;
-    color: var(--color-text);
-    margin-bottom: 1rem;
-    text-align: center;
-}
-
-.section-subtitle-modern {
-    font-size: 1.125rem;
-    line-height: 1.6;
-    color: var(--color-text-secondary);
-    text-align: center;
-    max-width: 48rem;
-    margin: 0 auto 3rem;
+    border-bottom: 1px solid var(--color-border);
 }
 
 /* ============================================
-   Feature Cards - Clean & Minimal
+   Demo Cards with Live Content
    ============================================ */
-.feature-card-modern {
-    padding: 2rem;
-    background: white;
+.demo-card-live {
     border: 1px solid var(--color-border);
-    border-radius: 0.75rem;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.feature-card-modern:hover {
-    border-color: var(--color-text-tertiary);
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.03);
-    transform: translateY(-2px);
-}
-
-.feature-icon-modern {
-    font-size: 2rem;
-    margin-bottom: 1rem;
-    display: inline-block;
-}
-
-.feature-title-modern {
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: var(--color-text);
-    margin-bottom: 0.75rem;
-}
-
-.feature-description-modern {
-    font-size: 0.9375rem;
-    line-height: 1.6;
-    color: var(--color-text-secondary);
-}
-
-/* ============================================
-   Code Blocks - GitHub Style
-   ============================================ */
-.code-block-modern {
-    position: relative;
-    border-radius: 0.5rem;
     overflow: hidden;
-    border: 1px solid var(--color-border);
 }
 
+.demo-card-live:hover {
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.demo-card-live iframe {
+    background: var(--color-bg);
+}
+
+/* ============================================
+   Code Blocks
+   ============================================ */
 .code-header-modern {
-    background: var(--color-bg-secondary);
-    border-bottom: 1px solid var(--color-border);
-    padding: 0.75rem 1rem;
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--color-text-secondary);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-}
-
-.code-badge-modern {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.25rem 0.625rem;
-    border-radius: 1rem;
-    font-size: 0.75rem;
-    font-weight: 600;
-    background: var(--color-border-muted);
-    color: var(--color-text-secondary);
+    background: rgba(255, 255, 255, 0.02);
 }
 
 /* ============================================
-   Comparison Table - Clean Design
+   Comparison Table
    ============================================ */
-.comparison-table-modern {
-    width: 100%;
-    border: 1px solid var(--color-border);
-    border-radius: 0.5rem;
-    overflow: hidden;
-}
-
 .comparison-table-modern thead {
-    background: var(--color-bg-secondary);
-    border-bottom: 1px solid var(--color-border);
+    background: rgba(255, 255, 255, 0.02);
 }
 
-.comparison-table-modern th {
-    padding: 1rem;
-    font-size: 0.875rem;
-    font-weight: 600;
-    text-align: left;
-    color: var(--color-text-secondary);
-}
-
-.comparison-table-modern td {
-    padding: 1rem;
-    border-top: 1px solid var(--color-border-muted);
-    font-size: 0.9375rem;
-}
-
-.comparison-table-modern .highlight-col {
-    background: #f6f8fa;
+.comparison-table-modern tbody tr:last-child td {
+    border-bottom: none;
 }
 
 /* ============================================
-   Stats/Metrics - Minimal Style
+   Metrics - Gradient styling
    ============================================ */
-.metric-card-modern {
-    text-align: center;
-    padding: 2rem 1rem;
-}
-
 .metric-value-modern {
-    font-size: 3rem;
-    font-weight: 700;
-    line-height: 1;
-    background: linear-gradient(135deg, var(--color-gradient-start) 0%, var(--color-gradient-end) 100%);
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
-    margin-bottom: 0.5rem;
-}
-
-.metric-label-modern {
-    font-size: 0.9375rem;
-    color: var(--color-text-secondary);
-    font-weight: 500;
 }
 
 /* ============================================
-   Demo Cards
+   Path Cards
    ============================================ */
-.demo-card-modern {
-    background: white;
-    border: 1px solid var(--color-border);
-    border-radius: 0.75rem;
-    overflow: hidden;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.demo-card-modern:hover {
-    border-color: var(--color-text-tertiary);
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.03);
-}
-
-.demo-card-header {
-    padding: 1.5rem;
-    border-bottom: 1px solid var(--color-border-muted);
-}
-
-.demo-card-title {
-    font-size: 1.125rem;
-    font-weight: 600;
-    color: var(--color-text);
-    margin: 0;
-}
-
-.demo-card-body-modern {
-    padding: 1.5rem;
+.path-card-recommended {
+    border-color: var(--color-accent);
 }
 
 /* ============================================
-   Architecture Diagram
-   ============================================ */
-.arch-layer-modern {
-    padding: 1.5rem;
-    border: 1px solid var(--color-border);
-    border-radius: 0.5rem;
-    margin-bottom: 1rem;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.arch-layer-modern:hover {
-    border-color: var(--color-text-tertiary);
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-}
-
-.arch-layer-modern h4 {
-    font-size: 1.125rem;
-    font-weight: 600;
-    color: var(--color-text);
-    margin-bottom: 0.5rem;
-}
-
-.arch-layer-modern p {
-    font-size: 0.9375rem;
-    color: var(--color-text-secondary);
-    margin: 0;
-}
-
-/* ============================================
-   Hosting CTA Section
+   Hosting Section - Gradient Background
    ============================================ */
 .hosting-section-modern {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
-    padding: 5rem 0;
-    position: relative;
-}
-
-.hosting-badge-modern {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.375rem 0.875rem;
-    background: rgba(255, 255, 255, 0.2);
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    border-radius: 1.5rem;
-    font-size: 0.875rem;
-    font-weight: 600;
-    margin-bottom: 1.5rem;
 }
 
 .hosting-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: 1.5rem;
-    margin-top: 2rem;
-}
-
-.hosting-feature-modern {
-    padding: 1.5rem;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 0.5rem;
-    backdrop-filter: blur(10px);
+    margin: var(--spacing-2xl) 0;
 }
 
 .hosting-feature-modern h4 {
-    font-size: 1rem;
-    font-weight: 600;
-    margin-bottom: 0.5rem;
-}
-
-/* ============================================
-   Use Cases Grid
-   ============================================ */
-.usecase-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 1.5rem;
-}
-
-.usecase-card-modern {
-    padding: 2rem;
-    background: white;
-    border: 1px solid var(--color-border);
-    border-radius: 0.75rem;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.usecase-card-modern:hover {
-    border-color: var(--color-text-tertiary);
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.03);
-    transform: translateY(-2px);
-}
-
-/* ============================================
-   Getting Started Cards
-   ============================================ */
-.path-card-modern {
-    position: relative;
-    padding: 2.5rem 2rem;
-    background: white;
-    border: 2px solid var(--color-border);
-    border-radius: 0.75rem;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.path-card-modern:hover {
-    border-color: var(--color-accent);
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.03);
-}
-
-.path-card-recommended {
-    border-color: var(--color-accent);
-    background: linear-gradient(to bottom, #f6f8fa 0%, #ffffff 100%);
-}
-
-.recommended-badge-modern {
-    position: absolute;
-    top: -12px;
-    right: 1.5rem;
-    padding: 0.375rem 0.875rem;
-    background: var(--color-accent);
     color: white;
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    border-radius: 1rem;
 }
 
-.path-title-modern {
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: var(--color-text);
-    margin-bottom: 1rem;
-}
-
-.path-steps-modern {
-    list-style: none;
-    padding: 0;
-    margin: 1.5rem 0;
-}
-
-.path-steps-modern li {
-    padding: 0.5rem 0;
-    padding-left: 1.5rem;
-    position: relative;
-    font-size: 0.9375rem;
-    color: var(--color-text-secondary);
-}
-
-.path-steps-modern li::before {
-    content: "→";
-    position: absolute;
-    left: 0;
-    color: var(--color-accent);
-    font-weight: 600;
+.hosting-feature-modern p {
+    color: rgba(255, 255, 255, 0.9);
 }
 
 /* ============================================
-   Animations - Subtle & Smooth
+   Table Highlight
    ============================================ */
-.fade-in-modern {
-    opacity: 0;
-    transform: translateY(20px);
-    transition: opacity 0.5s ease, transform 0.5s ease;
-}
-
-.fade-in-modern.visible {
-    opacity: 1;
-    transform: translateY(0);
+.comparison-table-modern .highlight-col {
+    background: var(--color-accent-muted);
 }
 
 /* ============================================
-   Utilities
-   ============================================ */
-.check-icon-modern {
-    color: var(--color-success);
-}
-
-.x-icon-modern {
-    color: #cf222e;
-}
-
-/* ============================================
-   Responsive Design
+   Responsive
    ============================================ */
 @media (max-width: 768px) {
-    .hero-title {
-        font-size: 2.5rem;
-    }
-
-    .section-title-modern {
-        font-size: 2rem;
-    }
-
-    .metric-value-modern {
-        font-size: 2.5rem;
-    }
-
     .usecase-grid,
     .hosting-grid {
         grid-template-columns: 1fr;
-    }
-}
-
-/* ============================================
-   Dark Mode Support (Optional)
-   ============================================ */
-@media (prefers-color-scheme: dark) {
-    :root {
-        --color-bg: #0d1117;
-        --color-bg-secondary: #161b22;
-        --color-border: #30363d;
-        --color-border-muted: #21262d;
-        --color-text: #c9d1d9;
-        --color-text-secondary: #8b949e;
-        --color-text-tertiary: #6e7681;
-    }
-
-    .feature-card-modern,
-    .demo-card-modern,
-    .usecase-card-modern,
-    .path-card-modern,
-    .code-block-modern {
-        background: var(--color-bg-secondary);
-    }
-
-    .btn-secondary-modern {
-        background: var(--color-bg-secondary);
-        color: var(--color-text);
-    }
-
-    .btn-secondary-modern:hover {
-        background: var(--color-border-muted);
     }
 }

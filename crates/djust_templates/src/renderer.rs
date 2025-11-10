@@ -18,12 +18,12 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
     match node {
         Node::Text(text) => Ok(text.clone()),
 
-        Node::Variable(var_name, filter_names) => {
+        Node::Variable(var_name, filter_specs) => {
             let mut value = context.get(var_name).cloned().unwrap_or(Value::Null);
 
             // Apply filters
-            for filter_name in filter_names {
-                value = filters::apply_filter(filter_name, &value)?;
+            for (filter_name, arg) in filter_specs {
+                value = filters::apply_filter(filter_name, &value, arg.as_deref())?;
             }
 
             Ok(value.to_string())

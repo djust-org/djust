@@ -8,51 +8,35 @@
     <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 
-    <!-- Homepage specific CSS -->
+    <!-- Shared Theme System -->
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/utilities.css">
+
+    <!-- Homepage specific CSS (overrides) -->
     <link rel="stylesheet" href="/static/css/homepage.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+
+    <!-- Tailwind for utility classes -->
     <script src="https://cdn.tailwindcss.com"></script>
 
-    <!-- Common navbar styles -->
-    <style>
-        .navbar-custom {
-            background: #ffffff !important;
-            border-bottom: 1px solid #e1e4e8 !important;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
-            min-height: 60px !important;
-        }
-        .nav-link {
-            color: #24292e !important;
-            font-weight: 500;
-            transition: color 0.2s;
-            font-size: 15px;
-        }
-        .nav-link:hover, .nav-link.active {
-            color: #0969da !important;
-        }
-        .navbar-nav {
-            display: flex !important;
-            flex-direction: row !important;
-            gap: 0.5rem;
-        }
-        .navbar-collapse {
-            display: flex !important;
-            justify-content: flex-end;
-            flex-grow: 1;
-        }
-        .navbar-brand img {
-            max-height: 16px;
-        }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-            padding-top: 60px;
-            background-color: #ffffff;
-        }
-    </style>
+    <!-- Syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+
 </head>
 <body>
+    <div data-liveview-root>
     <!-- Navbar Component - Reactive with badge! -->
     {{ navbar.render }}
+
+    <!-- Theme Toggle -->
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme" style="position: fixed; top: 12px; right: 20px; z-index: 1100;">
+        <svg class="theme-icon-dark" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+        <svg class="theme-icon-light" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="display: none;">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+    </button>
 
     <!-- Main Content -->
 <!-- ============================================
@@ -88,7 +72,657 @@
 </section>
 
 <!-- ============================================
-     Reactive Navbar Badge Demo
+     2. Why This Matters - Developer Experience
+     ============================================ -->
+<section class="section-modern">
+    <div class="container mx-auto px-4">
+        <div class="max-w-4xl mx-auto">
+            <h2 class="section-title-modern fade-in-modern">The Elegance of Server-Side Reactivity</h2>
+            <p class="section-subtitle-modern fade-in-modern">
+                Build real-time, interactive UIs with pure Python. No JavaScript frameworks. No build step. No complexity.
+            </p>
+
+            <!-- The Promise -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
+                <div class="text-center fade-in-modern">
+                    <div class="text-5xl mb-4">✨</div>
+                    <h3 class="text-xl font-bold mb-2" style="color: var(--color-text);">Pure Python</h3>
+                    <p class="text-sm" style="color: var(--color-text-muted);">
+                        Write everything in Python. Your handlers, your logic, your views. The server does the heavy lifting.
+                    </p>
+                </div>
+                <div class="text-center fade-in-modern">
+                    <div class="text-5xl mb-4">⚡</div>
+                    <h3 class="text-xl font-bold mb-2" style="color: var(--color-text);">Instant Updates</h3>
+                    <p class="text-sm" style="color: var(--color-text-muted);">
+                        Rust-powered VDOM sends tiny patches over WebSocket. 30ms round trips feel instant to users.
+                    </p>
+                </div>
+                <div class="text-center fade-in-modern">
+                    <div class="text-5xl mb-4">🎯</div>
+                    <h3 class="text-xl font-bold mb-2" style="color: var(--color-text);">Zero Complexity</h3>
+                    <p class="text-sm" style="color: var(--color-text-muted);">
+                        No npm. No webpack. No build step. Just import, write Python, and deploy. It's that simple.
+                    </p>
+                </div>
+            </div>
+
+            <!-- The Magic Moment -->
+            <div class="bg-gradient-to-br p-8 rounded-2xl mb-12 fade-in-modern" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                <h3 class="text-2xl font-bold mb-4 text-center" style="color: var(--color-text);">
+                    The Complete Implementation
+                </h3>
+                <p class="text-center mb-6" style="color: var(--color-text-muted);">
+                    This is everything you need for a working, real-time interactive counter:
+                </p>
+
+                <div class="code-block-modern mb-4">
+                    <div class="code-header-modern">
+                        <span>1. Your LiveView (views.py)</span>
+                        <span class="code-badge-modern">Complete view</span>
+                    </div>
+                    <pre class="bg-white p-4" style="background: rgba(0, 0, 0, 0.2) !important;"><code class="language-python">from djust import LiveView
+
+class CounterView(LiveView):
+    template_string = """
+    &lt;div&gt;
+        &lt;h1&gt;Count: &#123;&#123; count &#125;&#125;&lt;/h1&gt;  &lt;!-- self.count is auto-available --&gt;
+        &lt;button @click="increment"&gt;+1&lt;/button&gt;
+    &lt;/div&gt;
+    """
+
+    def mount(self, request):
+        self.count = 0  # This becomes &#123;&#123; count &#125;&#125; in template
+
+    def increment(self):
+        self.count += 1  # Update triggers re-render</code></pre>
+                </div>
+
+                <div class="code-block-modern mb-6">
+                    <div class="code-header-modern">
+                        <span>2. Wire it up (urls.py)</span>
+                        <span class="code-badge-modern">One line</span>
+                    </div>
+                    <pre class="bg-white p-4" style="background: rgba(0, 0, 0, 0.2) !important;"><code class="language-python">from django.urls import path
+from .views import CounterView
+
+urlpatterns = [
+    path('counter/', CounterView.as_view(), name='counter'),
+]</code></pre>
+                </div>
+
+                <div class="text-center mb-4">
+                    <div class="inline-flex items-center gap-2 px-5 py-2 rounded-full" style="background: rgba(16, 185, 129, 0.1); border: 1px solid var(--color-success);">
+                        <span style="color: var(--color-success); font-weight: 600;">✅ That's it! Visit /counter/ and it just works.</span>
+                    </div>
+                </div>
+
+                <div class="text-center mb-8">
+                    <p class="text-sm" style="color: var(--color-text-subtle);">
+                        (One-time setup: <code>pip install djust</code> and add <code>'djust'</code> to INSTALLED_APPS. <a href="/docs/" style="color: var(--color-accent);">See quickstart →</a>)
+                    </p>
+                </div>
+
+                <div class="text-center mb-6">
+                    <div class="inline-flex items-center gap-3 px-6 py-3 rounded-full" style="background: var(--color-accent-muted); border: 1px solid var(--color-accent);">
+                        <span style="color: var(--color-accent); font-weight: 600; font-size: 0.875rem;">Behind the scenes, djust automatically handles ↓</span>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="p-4 rounded-lg" style="background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.2);">
+                        <div class="flex items-start gap-3">
+                            <div class="text-2xl">🔄</div>
+                            <div>
+                                <h4 class="font-bold mb-1" style="color: var(--color-accent);">WebSocket Connection</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">Persistent, bidirectional, efficient</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="p-4 rounded-lg" style="background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.2);">
+                        <div class="flex items-start gap-3">
+                            <div class="text-2xl">🦀</div>
+                            <div>
+                                <h4 class="font-bold mb-1" style="color: var(--color-success);">Rust VDOM Diffing</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">Sub-millisecond, minimal patches</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="p-4 rounded-lg" style="background: rgba(139, 92, 246, 0.05); border: 1px solid rgba(139, 92, 246, 0.2);">
+                        <div class="flex items-start gap-3">
+                            <div class="text-2xl">📦</div>
+                            <div>
+                                <h4 class="font-bold mb-1" style="color: #a78bfa;">Tiny Payloads</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">~0.7KB patches vs full page reload</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="p-4 rounded-lg" style="background: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.2);">
+                        <div class="flex items-start gap-3">
+                            <div class="text-2xl">⚡</div>
+                            <div>
+                                <h4 class="font-bold mb-1" style="color: var(--color-warning);">DOM Updates</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">Surgical precision, no full re-render</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- The Developer Promise -->
+            <div class="text-center fade-in-modern">
+                <h3 class="text-2xl font-bold mb-4" style="color: var(--color-text);">
+                    The Developer Experience You've Been Waiting For
+                </h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto text-left">
+                    <div class="flex items-start gap-3">
+                        <div class="text-2xl">✅</div>
+                        <div>
+                            <h4 class="font-semibold mb-1" style="color: var(--color-text);">No Context Switching</h4>
+                            <p class="text-sm" style="color: var(--color-text-muted);">Stay in Python. Access your ORM, auth, middleware—everything Django offers.</p>
+                        </div>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <div class="text-2xl">✅</div>
+                        <div>
+                            <h4 class="font-semibold mb-1" style="color: var(--color-text);">No Build Tooling</h4>
+                            <p class="text-sm" style="color: var(--color-text-muted);">No webpack config. No babel. No package.json. Write code, refresh browser.</p>
+                        </div>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <div class="text-2xl">✅</div>
+                        <div>
+                            <h4 class="font-semibold mb-1" style="color: var(--color-text);">Real Type Safety</h4>
+                            <p class="text-sm" style="color: var(--color-text-muted);">Python type hints + Rust guarantees. Catch errors before they reach users.</p>
+                        </div>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <div class="text-2xl">✅</div>
+                        <div>
+                            <h4 class="font-semibold mb-1" style="color: var(--color-text);">Simple Debugging</h4>
+                            <p class="text-sm" style="color: var(--color-text-muted);">Python stack traces. Print debugging. No source maps or minified JS.</p>
+                        </div>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <div class="text-2xl">✅</div>
+                        <div>
+                            <h4 class="font-semibold mb-1" style="color: var(--color-text);">Security by Default</h4>
+                            <p class="text-sm" style="color: var(--color-text-muted);">Business logic stays server-side. No API endpoints to secure. CSRF protection built-in.</p>
+                        </div>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <div class="text-2xl">✅</div>
+                        <div>
+                            <h4 class="font-semibold mb-1" style="color: var(--color-text);">SEO Friendly</h4>
+                            <p class="text-sm" style="color: var(--color-text-muted);">Server-rendered HTML on first load. Search engines see real content.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     2b. Reusable Components - Build Once, Use Everywhere
+     ============================================ -->
+<section class="section-modern bg-gray-50">
+    <div class="container mx-auto px-4">
+        <div class="max-w-5xl mx-auto">
+            <h2 class="section-title-modern fade-in-modern">Reusable Components Built-In</h2>
+            <p class="section-subtitle-modern fade-in-modern">
+                Use our pre-built UI components, or create your own. They're just Python classes.
+            </p>
+
+            <!-- Pre-built Components -->
+            <div class="mb-12 fade-in-modern">
+                <h3 class="text-xl font-bold mb-4 text-center" style="color: var(--color-text);">
+                    🎁 Pre-Built Components Ready to Use
+                </h3>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div class="p-4 rounded-lg text-center" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                        <div class="text-3xl mb-2">🧭</div>
+                        <div class="font-semibold text-sm" style="color: var(--color-text);">Navbar</div>
+                    </div>
+                    <div class="p-4 rounded-lg text-center" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                        <div class="text-3xl mb-2">🔘</div>
+                        <div class="font-semibold text-sm" style="color: var(--color-text);">Buttons</div>
+                    </div>
+                    <div class="p-4 rounded-lg text-center" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                        <div class="text-3xl mb-2">🃏</div>
+                        <div class="font-semibold text-sm" style="color: var(--color-text);">Cards</div>
+                    </div>
+                    <div class="p-4 rounded-lg text-center" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                        <div class="text-3xl mb-2">🔔</div>
+                        <div class="font-semibold text-sm" style="color: var(--color-text);">Badges</div>
+                    </div>
+                    <div class="p-4 rounded-lg text-center" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                        <div class="text-3xl mb-2">📊</div>
+                        <div class="font-semibold text-sm" style="color: var(--color-text);">Tables</div>
+                    </div>
+                    <div class="p-4 rounded-lg text-center" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                        <div class="text-3xl mb-2">📝</div>
+                        <div class="font-semibold text-sm" style="color: var(--color-text);">Forms</div>
+                    </div>
+                    <div class="p-4 rounded-lg text-center" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                        <div class="text-3xl mb-2">🎨</div>
+                        <div class="font-semibold text-sm" style="color: var(--color-text);">Modals</div>
+                    </div>
+                    <div class="p-4 rounded-lg text-center" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                        <div class="text-3xl mb-2">➕</div>
+                        <div class="font-semibold text-sm" style="color: var(--color-text);">More...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Custom Component Example -->
+            <div class="p-8 rounded-2xl fade-in-modern" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                <h3 class="text-2xl font-bold mb-4 text-center" style="color: var(--color-text);">
+                    Building Your Own Component
+                </h3>
+                <p class="text-center mb-6" style="color: var(--color-text-muted);">
+                    Let's build a notification system. Watch how <strong>one state update</strong> refreshes <strong>multiple components</strong>:
+                </p>
+
+                <!-- Step 1: Create the components -->
+                <div class="mb-6">
+                    <div class="code-block-modern mb-4">
+                        <div class="code-header-modern">
+                            <span>Step 1: Create reusable components (components.py)</span>
+                        </div>
+                        <pre class="bg-white p-4" style="background: rgba(0, 0, 0, 0.2) !important;"><code class="language-python">from djust import LiveComponent
+
+class NotificationBadge(LiveComponent):
+    """Shows count in a badge"""
+    template_string = """
+    &lt;span class="badge bg-danger"&gt;&#123;&#123; count &#125;&#125;&lt;/span&gt;
+    """
+
+    def mount(self, count=0):
+        self.count = count
+
+class NotificationList(LiveComponent):
+    """Shows list of notifications"""
+    template_string = """
+    &lt;ul class="list-group"&gt;
+    &#123;% for notif in notifications %&#125;
+        &lt;li class="list-group-item"&gt;&#123;&#123; notif &#125;&#125;&lt;/li&gt;
+    &#123;% endfor %&#125;
+    &lt;/ul&gt;
+    """
+
+    def mount(self, notifications=None):
+        self.notifications = notifications or []</code></pre>
+                    </div>
+                </div>
+
+                <!-- Step 2: Use them in LiveView -->
+                <div class="mb-6">
+                    <div class="code-block-modern">
+                        <div class="code-header-modern">
+                            <span>Step 2: Use both components in your LiveView (views.py)</span>
+                        </div>
+                        <pre class="bg-white p-4" style="background: rgba(0, 0, 0, 0.2) !important;"><code class="language-python">from djust import LiveView
+from .components import NotificationBadge, NotificationList
+
+class DashboardView(LiveView):
+    template_string = """
+    &lt;div&gt;
+        &lt;h1&gt;Dashboard &#123;&#123; badge.render &#125;&#125;&lt;/h1&gt;
+
+        &lt;button @click="add_notification"&gt;Add Notification&lt;/button&gt;
+
+        &#123;&#123; notification_list.render &#125;&#125;
+    &lt;/div&gt;
+    """
+
+    def mount(self, request):
+        self.notifications = []
+
+    def add_notification(self):
+        self.notifications.append(f"Notification #{len(self.notifications) + 1}")
+
+    def get_context_data(self, **kwargs):
+        return {
+            'badge': NotificationBadge(count=len(self.notifications)),
+            'notification_list': NotificationList(notifications=self.notifications),
+        }</code></pre>
+                    </div>
+                </div>
+
+                <!-- The Power -->
+                <div class="text-center p-6 rounded-lg" style="background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.2);">
+                    <div class="text-4xl mb-3">✨</div>
+                    <h4 class="font-bold mb-2" style="color: var(--color-accent);">The Magic</h4>
+                    <p class="text-sm mb-4" style="color: var(--color-text-muted);">
+                        When you click "Add Notification":
+                    </p>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-left text-sm" style="color: var(--color-text-muted);">
+                        <div>
+                            <strong style="color: var(--color-text);">1.</strong> <code>add_notification()</code> updates <code>self.notifications</code>
+                        </div>
+                        <div>
+                            <strong style="color: var(--color-text);">2.</strong> Both components get fresh data via <code>get_context_data()</code>
+                        </div>
+                        <div>
+                            <strong style="color: var(--color-text);">3.</strong> Badge AND list update together—automatically!
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-6 text-center">
+                    <p class="text-sm font-semibold" style="color: var(--color-accent);">
+                        One state change → Multiple components update → Zero manual DOM manipulation
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     3. The Real Comparison - Database-Driven App
+     ============================================ -->
+<section class="section-modern bg-gray-50">
+    <div class="container mx-auto px-4">
+        <h2 class="section-title-modern fade-in-modern">The Real Comparison</h2>
+        <p class="section-subtitle-modern fade-in-modern">
+            A real-world task: Display and filter products from your database with live search
+        </p>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 max-w-6xl mx-auto">
+            <!-- djust Version -->
+            <div class="fade-in-modern">
+                <div class="code-block-modern mb-3">
+                    <div class="code-header-modern">
+                        <span>djust: views.py</span>
+                        <span class="code-badge-modern">✨ 1 file, 20 lines</span>
+                    </div>
+                    <pre class="bg-white p-4" style="background: rgba(0, 0, 0, 0.2) !important;"><code class="language-python">from djust import LiveView
+from .models import Product
+
+class ProductListView(LiveView):
+    template_name = "products.html"
+
+    def mount(self, request):
+        self.search = ""
+        self.products = Product.objects.all()
+
+    def on_search(self, value):
+        self.search = value
+        if value:
+            self.products = Product.objects.filter(
+                name__icontains=value
+            )
+        else:
+            self.products = Product.objects.all()
+
+# That's it! Direct database access.</code></pre>
+                </div>
+                <div class="code-block-modern mb-3">
+                    <div class="code-header-modern">
+                        <span>products.html</span>
+                        <span class="code-badge-modern">Template</span>
+                    </div>
+                    <pre class="bg-white p-4" style="background: rgba(0, 0, 0, 0.2) !important;"><code class="language-html">&lt;input @input="on_search"
+       placeholder="Search..."&gt;
+
+&#123;% for product in products %&#125;
+  &lt;div&gt;&#123;&#123; product.name &#125;&#125; - $&#123;&#123; product.price &#125;&#125;&lt;/div&gt;
+&#123;% endfor %&#125;</code></pre>
+                </div>
+                <div class="p-4 rounded-lg" style="background: rgba(16, 185, 129, 0.05); border: 1px solid var(--color-success);">
+                    <p class="text-sm font-semibold mb-2" style="color: var(--color-success);">✅ Total: 2 files, ~30 lines</p>
+                    <ul class="text-xs space-y-1" style="color: var(--color-text-muted);">
+                        <li>✓ Direct database access (Django ORM)</li>
+                        <li>✓ No API layer needed</li>
+                        <li>✓ Built-in auth & permissions</li>
+                        <li>✓ Server-side filtering (secure)</li>
+                        <li>✓ Zero client-side state management</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- React Version -->
+            <div class="fade-in-modern">
+                <div class="code-block-modern mb-2">
+                    <div class="code-header-modern">
+                        <span>Backend: serializers.py</span>
+                        <span class="code-badge-modern" style="background: rgba(239, 68, 68, 0.1); color: #ef4444;">File 1/7</span>
+                    </div>
+                    <pre class="bg-white p-4" style="background: rgba(0, 0, 0, 0.2) !important;"><code class="language-python">from rest_framework import serializers
+
+class ProductSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Product
+        fields = ['id', 'name', 'price']</code></pre>
+                </div>
+                <div class="code-block-modern mb-2">
+                    <div class="code-header-modern">
+                        <span>Backend: views.py (API)</span>
+                        <span class="code-badge-modern" style="background: rgba(239, 68, 68, 0.1); color: #ef4444;">File 2/7</span>
+                    </div>
+                    <pre class="bg-white p-4" style="background: rgba(0, 0, 0, 0.2) !important;"><code class="language-python">from rest_framework import viewsets
+
+class ProductViewSet(viewsets.ModelViewSet):
+    queryset = Product.objects.all()
+    serializer_class = ProductSerializer
+
+    def get_queryset(self):
+        search = self.request.query_params.get('search')
+        if search:
+            return Product.objects.filter(
+                name__icontains=search
+            )
+        return Product.objects.all()</code></pre>
+                </div>
+                <div class="code-block-modern mb-2">
+                    <div class="code-header-modern">
+                        <span>Frontend: ProductList.jsx</span>
+                        <span class="code-badge-modern" style="background: rgba(239, 68, 68, 0.1); color: #ef4444;">File 3/7</span>
+                    </div>
+                    <pre class="bg-white p-4" style="background: rgba(0, 0, 0, 0.2) !important;"><code class="language-javascript">import { useState, useEffect } from 'react';
+
+export default function ProductList() {
+  const [products, setProducts] = useState([]);
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`/api/products/?search=${search}`)
+      .then(res => res.json())
+      .then(data => {
+        setProducts(data);
+        setLoading(false);
+      });
+  }, [search]);
+
+  return (
+    &lt;div&gt;
+      &lt;input onChange={e => setSearch(e.target.value)} /&gt;
+      {loading ? 'Loading...' :
+        products.map(p => &lt;div&gt;{p.name} - ${p.price}&lt;/div&gt;)
+      }
+    &lt;/div&gt;
+  );
+}</code></pre>
+                </div>
+                <div class="text-xs mb-2" style="color: var(--color-text-muted);">
+                    + urls.py (API routes), package.json, CORS setup, settings.py changes...
+                </div>
+                <div class="p-4 rounded-lg" style="background: rgba(239, 68, 68, 0.05); border: 1px solid var(--color-error);">
+                    <p class="text-sm font-semibold mb-2" style="color: var(--color-error);">❌ Total: 7+ files, 150+ lines</p>
+                    <ul class="text-xs space-y-1" style="color: var(--color-text-muted);">
+                        <li>✗ Django REST Framework setup</li>
+                        <li>✗ Serializers for every model</li>
+                        <li>✗ API endpoints + routing</li>
+                        <li>✗ CORS configuration</li>
+                        <li>✗ Client-side data fetching</li>
+                        <li>✗ Loading states, error handling</li>
+                        <li>✗ Auth tokens, permissions on both sides</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="text-center mt-8 fade-in-modern">
+            <div class="inline-block p-6 rounded-xl" style="background: var(--color-accent-muted); border: 1px solid var(--color-accent);">
+                <p class="text-xl font-bold mb-2" style="color: var(--color-accent);">
+                    70% fewer files. 80% less code. No API layer at all.
+                </p>
+                <p class="text-sm mb-3" style="color: var(--color-text-muted);">
+                    With djust, your views have direct database access. No API needed.
+                </p>
+                <div class="text-xs p-3 rounded" style="background: rgba(59, 130, 246, 0.1); color: var(--color-text-muted);">
+                    <strong style="color: var(--color-accent);">The Real Win:</strong> Your business logic stays on the server where it belongs.
+                    Access control, database queries, and complex operations happen server-side with full Django power.
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     4. Live Demos - Now Show It In Action
+     ============================================ -->
+<section class="section-modern">
+    <div class="container mx-auto px-4">
+        <h2 class="section-title-modern fade-in-modern">See It In Action</h2>
+        <p class="section-subtitle-modern fade-in-modern">
+            These demos are built with djust and running live. Interact with them—watch the real-time updates!
+        </p>
+
+        <div class="text-center mb-12 fade-in-modern">
+            <div class="inline-flex items-center gap-2 px-5 py-3 rounded-full" style="background: var(--color-accent-muted); border: 1px solid var(--color-accent);">
+                <span class="text-2xl">👉</span>
+                <span style="color: var(--color-accent); font-weight: 600; font-size: 1rem;">Click, type, and interact below ↓</span>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-7xl mx-auto">
+            <!-- Counter Demo -->
+            <div class="demo-card-live fade-in-modern">
+                <div class="p-6 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.03);">
+                    <div class="flex items-center gap-3 mb-3">
+                        <div class="text-4xl">⚡</div>
+                        <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Real-Time Counter</h3>
+                    </div>
+                    <p class="text-sm m-0" style="color: var(--color-text-muted);">
+                        Click to increment. Updates instantly via WebSocket with zero page reload.
+                    </p>
+                </div>
+                <div class="p-8" style="background: var(--color-bg); min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.5rem;">
+                    <div style="font-size: 3rem; font-weight: 800; color: var(--color-accent);" id="counter-display">
+                        {{ demo_counter }}
+                    </div>
+                    <button @click="increment_counter" style="background: var(--color-accent); color: white; border: none; padding: 0.75rem 2rem; border-radius: var(--radius-md); font-size: 1rem; font-weight: 600; cursor: pointer; transition: all var(--transition-fast);" onmouseover="this.style.background='#2563eb'; this.style.transform='translateY(-2px)'" onmouseout="this.style.background='var(--color-accent)'; this.style.transform='translateY(0)'">
+                        Click to Increment
+                    </button>
+                    <div class="text-xs" style="color: var(--color-text-subtle);">
+                        Updates happen server-side with instant UI refresh
+                    </div>
+                </div>
+            </div>
+
+            <!-- Search Demo -->
+            <div class="demo-card-live fade-in-modern">
+                <div class="p-6 border-b" style="border-color: var(--color-border); background: rgba(16, 185, 129, 0.03);">
+                    <div class="flex items-center gap-3 mb-3">
+                        <div class="text-4xl">🔍</div>
+                        <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Live Search</h3>
+                    </div>
+                    <p class="text-sm m-0" style="color: var(--color-text-muted);">
+                        Type to filter. Server-side search with instant UI updates as you type.
+                    </p>
+                </div>
+                <div class="p-6" style="background: var(--color-bg); min-height: 200px;">
+                    <input
+                        type="text"
+                        @input="on_search_demo"
+                        placeholder="Search programming languages..."
+                        style="width: 100%; padding: 0.75rem 1rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg-elevated); color: var(--color-text); font-size: 0.875rem; margin-bottom: 1rem;"
+                        value="{{ search_query }}"
+                    />
+                    <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                        {% if filtered_languages %}
+                            {% for lang in filtered_languages %}
+                            <div style="padding: 0.75rem; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: var(--radius-sm); color: var(--color-text); font-size: 0.875rem;">
+                                {{ lang }}
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <div style="padding: 2rem; text-align: center; color: var(--color-text-muted); font-size: 0.875rem;">
+                                No matches found. Try "Python" or "Java"
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Todo Demo -->
+            <div class="demo-card-live fade-in-modern">
+                <div class="p-6 border-b" style="border-color: var(--color-border); background: rgba(139, 92, 246, 0.03);">
+                    <div class="flex items-center gap-3 mb-3">
+                        <div class="text-4xl">✅</div>
+                        <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Interactive Todo</h3>
+                    </div>
+                    <p class="text-sm m-0" style="color: var(--color-text-muted);">
+                        Add and toggle tasks. Full CRUD with real-time state sync.
+                    </p>
+                </div>
+                <div class="p-6" style="background: var(--color-bg); min-height: 200px;">
+                    <form @submit="add_todo" style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                        <input
+                            type="text"
+                            name="todo_text"
+                            placeholder="Add a task..."
+                            style="flex: 1; padding: 0.75rem 1rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg-elevated); color: var(--color-text); font-size: 0.875rem;"
+                        />
+                        <button type="submit" style="background: var(--color-accent); color: white; border: none; padding: 0.75rem 1.25rem; border-radius: var(--radius-md); font-size: 0.875rem; font-weight: 600; cursor: pointer; white-space: nowrap;">
+                            Add
+                        </button>
+                    </form>
+                    <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                        {% if demo_todos %}
+                            {% for todo in demo_todos %}
+                            <div style="display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: var(--radius-sm);">
+                                <input type="checkbox" {% if todo.done %}checked{% endif %} @change="toggle_todo" data-index="{{ forloop.counter0 }}" style="cursor: pointer;">
+                                <span style="flex: 1; color: var(--color-text); font-size: 0.875rem; {% if todo.done %}text-decoration: line-through; opacity: 0.6;{% endif %}">
+                                    {{ todo.text }}
+                                </span>
+                                <button @click="delete_todo" data-index="{{ forloop.counter0 }}" style="background: transparent; border: 1px solid var(--color-border); color: var(--color-error); padding: 0.375rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.75rem; cursor: pointer; transition: all var(--transition-fast);" onmouseover="this.style.background='var(--color-error)'; this.style.color='white'; this.style.borderColor='var(--color-error)';" onmouseout="this.style.background='transparent'; this.style.color='var(--color-error)'; this.style.borderColor='var(--color-border)';">
+                                    Delete
+                                </button>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <div style="padding: 2rem; text-align: center; color: var(--color-text-muted); font-size: 0.875rem;">
+                                No tasks yet. Add one above!
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- More Demos CTA -->
+        <div class="text-center mt-12 fade-in-modern">
+            <p class="text-sm mb-4" style="color: var(--color-text-muted);">
+                Want to see more complex examples?
+            </p>
+            <a href="/demos/" class="btn-secondary-modern">
+                View All Demos
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="display: inline-block; margin-left: 4px;">
+                    <path d="M6 3L11 8L6 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </a>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     5. Reactive Navbar Badge Demo
      ============================================ -->
 <section class="section-modern bg-gradient-to-br from-blue-50 to-indigo-50 py-8">
     <div class="container mx-auto px-4">
@@ -132,51 +766,7 @@
 </section>
 
 <!-- ============================================
-     2. Live Demo Section
-     ============================================ -->
-<section class="section-modern">
-    <div class="container mx-auto px-4">
-        <h2 class="section-title-modern fade-in-modern">See It In Action</h2>
-        <p class="section-subtitle-modern fade-in-modern">
-            These demos are built with djust and running live. Try them out - no page reload needed.
-        </p>
-
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
-            <!-- Counter Demo -->
-            <div class="demo-card-modern fade-in-modern">
-                <div class="demo-card-header">
-                    <h3 class="demo-card-title">⚡ Real-Time Counter</h3>
-                </div>
-                <div class="demo-card-body-modern">
-                    <iframe src="/home-demos/counter/" class="w-full h-64 border-0 rounded"></iframe>
-                </div>
-            </div>
-
-            <!-- Search Demo -->
-            <div class="demo-card-modern fade-in-modern">
-                <div class="demo-card-header">
-                    <h3 class="demo-card-title">🔍 Live Search</h3>
-                </div>
-                <div class="demo-card-body-modern">
-                    <iframe src="/home-demos/search/" class="w-full h-96 border-0 rounded"></iframe>
-                </div>
-            </div>
-
-            <!-- Todo Demo -->
-            <div class="demo-card-modern fade-in-modern">
-                <div class="demo-card-header">
-                    <h3 class="demo-card-title">✅ Interactive Todo</h3>
-                </div>
-                <div class="demo-card-body-modern">
-                    <iframe src="/home-demos/todo/" class="w-full" style="height: 450px;" class="border-0 rounded"></iframe>
-                </div>
-            </div>
-        </div>
-    </div>
-</section>
-
-<!-- ============================================
-     3. Four Pillars Feature Section
+     6. Four Pillars Feature Section
      ============================================ -->
 <section class="section-modern bg-gray-50">
     <div class="container mx-auto px-4">
@@ -222,63 +812,7 @@
 </section>
 
 <!-- ============================================
-     4. Code Comparison Section
-     ============================================ -->
-<section class="section-modern">
-    <div class="container mx-auto px-4">
-        <h2 class="section-title-modern fade-in-modern">Write Less, Do More</h2>
-        <p class="section-subtitle-modern fade-in-modern">
-            Compare the same interactive counter in djust vs React
-        </p>
-
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 max-w-6xl mx-auto">
-            <!-- djust Version -->
-            <div class="code-block-modern fade-in-modern">
-                <div class="code-header-modern">
-                    <span>djust (Python)</span>
-                    <span class="code-badge-modern">10 lines</span>
-                </div>
-                <pre class="bg-white p-4"><code class="language-python">class CounterView(LiveView):
-    template_string = """
-    &lt;button @click="increment"&gt;
-        Count: {{ count }}
-    &lt;/button&gt;
-    """
-
-    def mount(self, request):
-        self.count = 0
-
-    def increment(self):
-        self.count += 1  # Auto-updates!</code></pre>
-            </div>
-
-            <!-- React Version -->
-            <div class="code-block-modern fade-in-modern">
-                <div class="code-header-modern">
-                    <span>React (JavaScript)</span>
-                    <span class="code-badge-modern">25+ lines</span>
-                </div>
-                <pre class="bg-white p-4"><code class="language-javascript">import { useState } from 'react';
-
-function Counter() {
-  const [count, setCount] = useState(0);
-
-  return (
-    &lt;button onClick={() => setCount(count + 1)}&gt;
-      Count: {count}
-    &lt;/button&gt;
-  );
-}
-
-// Plus: npm install, webpack,
-// babel, build process...</code></pre>
-            </div>
-        </div>
-    </div>
-</section>
-
-<!-- ============================================
-     5. Performance Metrics
+     7. Performance Metrics
      ============================================ -->
 <section class="section-modern bg-gray-50">
     <div class="container mx-auto px-4">
@@ -312,7 +846,7 @@ function Counter() {
 </section>
 
 <!-- ============================================
-     6. Comparison Matrix
+     8. Comparison Matrix
      ============================================ -->
 <section class="section-modern">
     <div class="container mx-auto px-4">
@@ -382,7 +916,278 @@ function Counter() {
 </section>
 
 <!-- ============================================
-     7. Hosting Section
+     9. Deep Dive: How It Works
+     ============================================ -->
+<section class="section-modern bg-gradient-to-br from-slate-50 to-blue-50">
+    <div class="container mx-auto px-4">
+        <div class="max-w-5xl mx-auto">
+            <div class="text-center mb-12">
+                <h2 class="section-title-modern fade-in-modern">How djust Achieves 30ms Updates</h2>
+                <p class="section-subtitle-modern fade-in-modern">
+                    A technical deep-dive into the architecture that makes sub-50ms round trips possible
+                </p>
+            </div>
+
+            <!-- Architecture Diagram -->
+            <div class="bg-white rounded-2xl p-8 shadow-lg mb-12 fade-in-modern">
+                <h3 class="text-2xl font-bold text-gray-900 mb-6 text-center">The 30ms Journey</h3>
+
+                <div class="grid gap-4 max-w-2xl mx-auto">
+                    <div class="flex items-center gap-4">
+                        <div class="flex-shrink-0 w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center font-bold text-blue-600">1</div>
+                        <div class="flex-1">
+                            <div class="font-semibold text-gray-900">User Clicks Button</div>
+                            <div class="text-sm text-gray-600">Client JavaScript captures @click event</div>
+                            <div class="text-xs text-blue-600 font-mono mt-1">~0ms</div>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-4">
+                        <div class="flex-shrink-0 w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center font-bold text-blue-600">2</div>
+                        <div class="flex-1">
+                            <div class="font-semibold text-gray-900">Network to Server</div>
+                            <div class="text-sm text-gray-600">WebSocket or HTTP POST with event name</div>
+                            <div class="text-xs text-blue-600 font-mono mt-1">~2-5ms (local), ~20-50ms (remote)</div>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-4">
+                        <div class="flex-shrink-0 w-16 h-16 bg-green-100 rounded-full flex items-center justify-center font-bold text-green-600">3</div>
+                        <div class="flex-1">
+                            <div class="font-semibold text-gray-900">Python Handler Executes</div>
+                            <div class="text-sm text-gray-600">Your server-side logic runs (database, business logic)</div>
+                            <div class="text-xs text-green-600 font-mono mt-1">&lt;1ms (in-memory), ~5-20ms (with DB)</div>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-4">
+                        <div class="flex-shrink-0 w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center font-bold text-purple-600">4</div>
+                        <div class="flex-1">
+                            <div class="font-semibold text-gray-900">Rust Template Rendering</div>
+                            <div class="text-sm text-gray-600">Server generates new HTML with updated state</div>
+                            <div class="text-xs text-purple-600 font-mono mt-1">&lt;1ms (16.7x faster than Django)</div>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-4">
+                        <div class="flex-shrink-0 w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center font-bold text-purple-600">5</div>
+                        <div class="flex-1">
+                            <div class="font-semibold text-gray-900">VDOM Diffing in Rust</div>
+                            <div class="text-sm text-gray-600">Calculates minimal patches (only what changed)</div>
+                            <div class="text-xs text-purple-600 font-mono mt-1">~0.08ms (sub-millisecond)</div>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-4">
+                        <div class="flex-shrink-0 w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center font-bold text-blue-600">6</div>
+                        <div class="flex-1">
+                            <div class="font-semibold text-gray-900">Patch Sent to Client</div>
+                            <div class="text-sm text-gray-600">Tiny JSON payload (~0.7KB vs 133KB full page)</div>
+                            <div class="text-xs text-blue-600 font-mono mt-1">~2-5ms (local), ~20-50ms (remote)</div>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-4">
+                        <div class="flex-shrink-0 w-16 h-16 bg-green-100 rounded-full flex items-center justify-center font-bold text-green-600">7</div>
+                        <div class="flex-1">
+                            <div class="font-semibold text-gray-900">DOM Updated</div>
+                            <div class="text-sm text-gray-600">Client applies surgical DOM changes</div>
+                            <div class="text-xs text-green-600 font-mono mt-1">&lt;1ms</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-8 p-4 rounded-lg border" style="background: var(--color-accent-muted); border-color: var(--color-border);">
+                    <div class="text-center">
+                        <div class="text-3xl font-bold mb-2" style="color: var(--color-text);">Total: ~28-33ms</div>
+                        <div class="text-sm" style="color: var(--color-text-muted);">For local requests. Add network latency for remote servers.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Performance Breakdown -->
+            <div class="grid md:grid-cols-2 gap-6 mb-12">
+                <div class="bg-white rounded-xl p-6 shadow-lg fade-in-modern">
+                    <h3 class="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+                        <span class="text-2xl">🚀</span>
+                        Why So Fast?
+                    </h3>
+                    <ul class="space-y-3 text-gray-700">
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-600 font-bold mt-1">✓</span>
+                            <div>
+                                <strong>Rust-Powered Core:</strong> Template rendering and VDOM diffing run at native speed
+                            </div>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-600 font-bold mt-1">✓</span>
+                            <div>
+                                <strong>Minimal Payloads:</strong> Only 0.7KB patches vs 133KB full HTML reloads
+                            </div>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-600 font-bold mt-1">✓</span>
+                            <div>
+                                <strong>Persistent WebSocket:</strong> No HTTP overhead on every interaction
+                            </div>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-600 font-bold mt-1">✓</span>
+                            <div>
+                                <strong>Zero Hydration:</strong> No JavaScript framework initialization delay
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="bg-white rounded-xl p-6 shadow-lg fade-in-modern">
+                    <h3 class="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+                        <span class="text-2xl">📊</span>
+                        Real Numbers
+                    </h3>
+                    <div class="space-y-3">
+                        <div class="flex justify-between items-center pb-2 border-b border-gray-200">
+                            <span class="text-gray-700">Template Render (100 items)</span>
+                            <span class="font-mono font-bold text-green-600">0.15ms</span>
+                        </div>
+                        <div class="flex justify-between items-center pb-2 border-b border-gray-200">
+                            <span class="text-gray-700">VDOM Diff</span>
+                            <span class="font-mono font-bold text-green-600">0.08ms</span>
+                        </div>
+                        <div class="flex justify-between items-center pb-2 border-b border-gray-200">
+                            <span class="text-gray-700">Large List (10k items)</span>
+                            <span class="font-mono font-bold text-green-600">12ms</span>
+                        </div>
+                        <div class="flex justify-between items-center pb-2 border-b border-gray-200">
+                            <span class="text-gray-700">Patch Size (typical)</span>
+                            <span class="font-mono font-bold text-green-600">0.7KB</span>
+                        </div>
+                        <div class="flex justify-between items-center pb-2 border-b border-gray-200">
+                            <span class="text-gray-700">Client JS Bundle</span>
+                            <span class="font-mono font-bold text-green-600">~5KB</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-700">Full Round Trip</span>
+                            <span class="font-mono font-bold text-green-600">28-33ms</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scalability -->
+            <div class="bg-white rounded-xl p-8 shadow-lg mb-12 fade-in-modern">
+                <h3 class="text-2xl font-bold text-gray-900 mb-6 text-center">Built to Scale</h3>
+
+                <div class="grid md:grid-cols-3 gap-8">
+                    <div class="text-center">
+                        <div class="text-4xl mb-2">📄</div>
+                        <div class="font-bold text-gray-900 text-xl mb-2">Page Size</div>
+                        <div class="text-gray-600 text-sm mb-4">Handles large, complex pages efficiently</div>
+                        <ul class="text-left text-sm text-gray-700 space-y-1">
+                            <li>✓ 100-500KB: Optimal</li>
+                            <li>✓ 1-2MB: Good performance</li>
+                            <li>✓ 10k+ items: Use pagination</li>
+                        </ul>
+                    </div>
+
+                    <div class="text-center">
+                        <div class="text-4xl mb-2">👥</div>
+                        <div class="font-bold text-gray-900 text-xl mb-2">Concurrent Users</div>
+                        <div class="text-gray-600 text-sm mb-4">Low memory footprint per session</div>
+                        <ul class="text-left text-sm text-gray-700 space-y-1">
+                            <li>✓ ~300KB RAM per session</li>
+                            <li>✓ 1000 users = ~300MB</li>
+                            <li>✓ Scales horizontally</li>
+                        </ul>
+                    </div>
+
+                    <div class="text-center">
+                        <div class="text-4xl mb-2">⚡</div>
+                        <div class="font-bold text-gray-900 text-xl mb-2">Update Speed</div>
+                        <div class="text-gray-600 text-sm mb-4">Imperceptible latency to users</div>
+                        <ul class="text-left text-sm text-gray-700 space-y-1">
+                            <li>✓ &lt;50ms feels instant</li>
+                            <li>✓ 33 updates/sec possible</li>
+                            <li>✓ Sub-1KB patches</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- When to Use -->
+            <div class="grid md:grid-cols-2 gap-6 fade-in-modern">
+                <div class="rounded-xl p-6 border" style="background: var(--color-bg-elevated); border-color: var(--color-border);">
+                    <h3 class="text-xl font-bold mb-4 flex items-center gap-2" style="color: var(--color-text);">
+                        <span class="text-2xl">✅</span>
+                        Perfect For
+                    </h3>
+                    <ul class="space-y-2" style="color: var(--color-text);">
+                        <li class="flex items-start gap-2">
+                            <span class="mt-1" style="color: var(--color-success);">•</span>
+                            <span><strong>Admin dashboards</strong> with real-time data</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="mt-1" style="color: var(--color-success);">•</span>
+                            <span><strong>Collaborative tools</strong> with live updates</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="mt-1" style="color: var(--color-success);">•</span>
+                            <span><strong>Interactive forms</strong> with validation</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="mt-1" style="color: var(--color-success);">•</span>
+                            <span><strong>Data tables</strong> with filtering/sorting</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="mt-1" style="color: var(--color-success);">•</span>
+                            <span><strong>Chat applications</strong> and notifications</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="mt-1" style="color: var(--color-success);">•</span>
+                            <span><strong>Multi-step wizards</strong> and flows</span>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="rounded-xl p-6 border" style="background: var(--color-bg-elevated); border-color: var(--color-border);">
+                    <h3 class="text-xl font-bold mb-4 flex items-center gap-2" style="color: var(--color-text);">
+                        <span class="text-2xl">💡</span>
+                        Key Benefits
+                    </h3>
+                    <ul class="space-y-2" style="color: var(--color-text);">
+                        <li class="flex items-start gap-2">
+                            <span class="mt-1" style="color: var(--color-accent);">•</span>
+                            <span><strong>No build step:</strong> Write code and refresh</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="mt-1" style="color: var(--color-accent);">•</span>
+                            <span><strong>Server-side security:</strong> Business logic stays private</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="mt-1" style="color: var(--color-accent);">•</span>
+                            <span><strong>Database access:</strong> Direct ORM queries in handlers</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="mt-1" style="color: var(--color-accent);">•</span>
+                            <span><strong>Type safety:</strong> Python types + Rust guarantees</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="mt-1" style="color: var(--color-accent);">•</span>
+                            <span><strong>SEO friendly:</strong> Server-rendered HTML</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="mt-1" style="color: var(--color-accent);">•</span>
+                            <span><strong>Easy debugging:</strong> Python stack traces</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================
+     10. Hosting Section
      ============================================ -->
 <section class="hosting-section-modern">
     <div class="container mx-auto px-4 text-center">
@@ -434,7 +1239,7 @@ function Counter() {
 </section>
 
 <!-- ============================================
-     8. Use Cases
+     11. Use Cases
      ============================================ -->
 <section class="section-modern">
     <div class="container mx-auto px-4">
@@ -496,7 +1301,7 @@ function Counter() {
 </section>
 
 <!-- ============================================
-     9. Architecture
+     12. Architecture
      ============================================ -->
 <section class="section-modern bg-gray-50">
     <div class="container mx-auto px-4">
@@ -531,7 +1336,7 @@ function Counter() {
 </section>
 
 <!-- ============================================
-     10. Getting Started
+     13. Getting Started
      ============================================ -->
 <section class="section-modern" id="getting-started">
     <div class="container mx-auto px-4">
@@ -594,7 +1399,7 @@ function Counter() {
 </section>
 
 <!-- ============================================
-     11. Trust / Social Proof
+     14. Trust / Social Proof
      ============================================ -->
 <section class="section-modern bg-gray-50">
     <div class="container mx-auto px-4">
@@ -641,7 +1446,7 @@ function Counter() {
 </section>
 
 <!-- ============================================
-     12. Final CTA
+     15. Final CTA
      ============================================ -->
 <section class="section-modern border-b-0">
     <div class="container mx-auto px-4 text-center">
@@ -669,8 +1474,13 @@ function Counter() {
 </section>
 
 <!-- Scripts -->
+    </div> <!-- Close data-liveview-root -->
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script src="/static/js/homepage.js"></script>
+
+<!-- Theme Switcher -->
+<script src="/static/js/theme-switcher.js"></script>
 </body>
 </html>

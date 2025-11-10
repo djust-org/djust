@@ -8,6 +8,7 @@ from django.views.generic import TemplateView
 from django.http import JsonResponse
 from .forms import RegistrationForm, ContactForm, ProfileForm, SearchForm
 from .views.base import BaseTemplateView
+from .views.navbar_example import BaseViewWithNavbar
 from djust.components.layout import NavbarComponent, NavItem
 
 
@@ -15,13 +16,23 @@ class IndexView(LiveView):
     """
     Landing page with links to demos.
 
-    A LiveView to demonstrate reactive navbar badges on the main page!
+    A LiveView to demonstrate reactive navbar badges AND inline demos on the main page!
     """
     template_name = 'index.html'
 
     def mount(self, request, **kwargs):
-        """Initialize with notification counter"""
+        """Initialize with notification counter and demo state"""
         self.notification_count = 0
+
+        # Inline demo state
+        self.demo_counter = 0
+        self.search_query = ""
+        self.all_languages = [
+            "Python", "JavaScript", "TypeScript", "Java", "Go",
+            "Rust", "Ruby", "PHP", "C++", "C#", "Swift", "Kotlin"
+        ]
+        self.filtered_languages = self.all_languages
+        self.demo_todos = []
 
     def increment_notifications(self):
         """Event handler to increment notifications"""
@@ -31,8 +42,48 @@ class IndexView(LiveView):
         """Event handler to reset notifications"""
         self.notification_count = 0
 
+    # Inline demo event handlers
+    def increment_counter(self):
+        """Counter demo: increment the counter"""
+        self.demo_counter += 1
+
+    def on_search_demo(self, value):
+        """Search demo: filter languages"""
+        self.search_query = value
+        if value:
+            self.filtered_languages = [
+                lang for lang in self.all_languages
+                if value.lower() in lang.lower()
+            ]
+        else:
+            self.filtered_languages = self.all_languages
+
+    def add_todo(self, todo_text=""):
+        """Todo demo: add a new todo from user input"""
+        if todo_text.strip():
+            self.demo_todos.append({
+                'text': todo_text.strip(),
+                'done': False
+            })
+
+    def toggle_todo(self, index=0, **kwargs):
+        """Todo demo: toggle todo completion"""
+        if index == '' or index is None:
+            index = 0
+        index = int(index)
+        if 0 <= index < len(self.demo_todos):
+            self.demo_todos[index]['done'] = not self.demo_todos[index]['done']
+
+    def delete_todo(self, index=0, **kwargs):
+        """Todo demo: delete a todo"""
+        if index == '' or index is None:
+            index = 0
+        index = int(index)
+        if 0 <= index < len(self.demo_todos):
+            self.demo_todos.pop(index)
+
     def get_context_data(self, **kwargs):
-        """Add navbar with notification badge"""
+        """Add navbar with notification badge and demo data"""
         context = super().get_context_data(**kwargs)
 
         # Create navbar with notification badge on Demos
@@ -54,6 +105,12 @@ class IndexView(LiveView):
 
         # Pass notification count to template
         context['notification_count'] = self.notification_count
+
+        # Pass inline demo data
+        context['demo_counter'] = self.demo_counter
+        context['search_query'] = self.search_query
+        context['filtered_languages'] = self.filtered_languages
+        context['demo_todos'] = self.demo_todos
 
         return context
 
@@ -141,7 +198,7 @@ class NavbarBadgeDemo(LiveView):
         return context
 
 
-class CounterView(LiveView):
+class CounterView(BaseViewWithNavbar):
     """
     Simple counter demo - showcases reactive state updates
     """

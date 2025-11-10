@@ -1067,19 +1067,56 @@ class LiveView(View):
                                 params.value = e.target.value;
                             }
 
+                            // Extract all data-* attributes
+                            Array.from(e.target.attributes).forEach(attr => {
+                                if (attr.name.startsWith('data-') && !attr.name.startsWith('data-liveview')) {
+                                    // Convert data-foo-bar to foo_bar
+                                    const key = attr.name.substring(5).replace(/-/g, '_');
+                                    params[key] = attr.value;
+                                }
+                            });
+
                             // Auto-extract field name from element attributes
                             const fieldName = getFieldName(e.target);
                             if (fieldName) {
                                 params.field_name = fieldName;
-                                console.log('[LiveView] Sending field_name:', params.field_name, 'value:', params.value);
-                            }
-
-                            // Include data-id if present (use generic 'id' param name)
-                            if (e.target.dataset.id) {
-                                params.id = e.target.dataset.id;
                             }
 
                             await handleEvent(changeHandler, params);
+                        });
+                    }
+
+                    // Handle @input events (real-time typing)
+                    const inputHandler = element.getAttribute('@input');
+                    if (inputHandler && !element.dataset.liveviewInputBound) {
+                        element.dataset.liveviewInputBound = 'true';
+                        element.addEventListener('input', async (e) => {
+                            const params = {};
+
+                            // For checkboxes, send the checked state
+                            if (e.target.type === 'checkbox') {
+                                params.value = e.target.checked;
+                            } else {
+                                // For other inputs, send the value
+                                params.value = e.target.value;
+                            }
+
+                            // Extract all data-* attributes
+                            Array.from(e.target.attributes).forEach(attr => {
+                                if (attr.name.startsWith('data-') && !attr.name.startsWith('data-liveview')) {
+                                    // Convert data-foo-bar to foo_bar
+                                    const key = attr.name.substring(5).replace(/-/g, '_');
+                                    params[key] = attr.value;
+                                }
+                            });
+
+                            // Auto-extract field name from element attributes
+                            const fieldName = getFieldName(e.target);
+                            if (fieldName) {
+                                params.field_name = fieldName;
+                            }
+
+                            await handleEvent(inputHandler, params);
                         });
                     }
                 });

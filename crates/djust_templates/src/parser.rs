@@ -6,7 +6,7 @@ use djust_core::{DjangoRustError, Result};
 #[derive(Debug, Clone)]
 pub enum Node {
     Text(String),
-    Variable(String, Vec<String>), // variable name, filters
+    Variable(String, Vec<(String, Option<String>)>), // variable name, (filter, arg)
     If {
         condition: String,
         true_nodes: Vec<Node>,
@@ -50,10 +50,21 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
         Token::Text(text) => Ok(Some(Node::Text(text.clone()))),
 
         Token::Variable(var) => {
-            // Parse variable and filters: {{ var|filter1|filter2 }}
+            // Parse variable and filters: {{ var|filter1:arg1|filter2 }}
             let parts: Vec<String> = var.split('|').map(|s| s.trim().to_string()).collect();
             let var_name = parts[0].clone();
-            let filters = parts[1..].to_vec();
+
+            // Parse each filter and its optional argument
+            let filters: Vec<(String, Option<String>)> = parts[1..].iter().map(|filter_spec| {
+                if let Some(colon_pos) = filter_spec.find(':') {
+                    let filter_name = filter_spec[..colon_pos].trim().to_string();
+                    let arg = filter_spec[colon_pos + 1..].trim().to_string();
+                    (filter_name, Some(arg))
+                } else {
+                    (filter_spec.clone(), None)
+                }
+            }).collect();
+
             Ok(Some(Node::Variable(var_name, filters)))
         }
 
