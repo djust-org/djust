@@ -343,7 +343,12 @@ class LiveView(View):
                 else:
                     rendered_context[key] = value
 
-            self._rust_view.update_state(rendered_context)
+            # Serialize and deserialize to ensure all types are JSON-compatible
+            # This converts UUIDs, datetimes, etc. to their JSON representations
+            json_str = json.dumps(rendered_context, cls=DjangoJSONEncoder)
+            json_compatible_context = json.loads(json_str)
+
+            self._rust_view.update_state(json_compatible_context)
 
     def render(self, request=None) -> str:
         """Render the view to HTML"""
