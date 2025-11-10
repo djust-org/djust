@@ -20,7 +20,9 @@ class NavItem:
         active: bool = False,
         icon: Optional[str] = None,
         external: bool = False,
-        target: Optional[str] = None
+        target: Optional[str] = None,
+        badge: Optional[int] = None,
+        badge_variant: str = 'primary'
     ):
         self.label = label
         self.href = href
@@ -28,6 +30,8 @@ class NavItem:
         self.icon = icon
         self.external = external
         self.target = target or ('_blank' if external else None)
+        self.badge = badge
+        self.badge_variant = badge_variant
 
 
 class NavbarComponent(LiveComponent):
@@ -134,6 +138,11 @@ class NavbarComponent(LiveComponent):
             target_attr = f' target="{item.target}"' if item.target else ''
             icon_html = f'{item.icon} ' if item.icon else ''
 
+            # Badge HTML
+            badge_html = ''
+            if item.badge is not None and item.badge > 0:
+                badge_html = f' <span class="badge bg-{item.badge_variant} rounded-pill">{item.badge}</span>'
+
             # External link styling
             link_style = ''
             if item.external:
@@ -141,7 +150,7 @@ class NavbarComponent(LiveComponent):
 
             nav_items_html += f'''
                 <li class="nav-item">
-                    <a class="nav-link {active_class}" href="{item.href}"{target_attr}{link_style}>{icon_html}{item.label}</a>
+                    <a class="nav-link {active_class}" href="{item.href}"{target_attr}{link_style}>{icon_html}{item.label}{badge_html}</a>
                 </li>
             '''
 

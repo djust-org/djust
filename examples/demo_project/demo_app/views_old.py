@@ -8,11 +8,54 @@ from django.views.generic import TemplateView
 from django.http import JsonResponse
 from .forms import RegistrationForm, ContactForm, ProfileForm, SearchForm
 from .views.base import BaseTemplateView
+from djust.components.layout import NavbarComponent, NavItem
 
 
-class IndexView(BaseTemplateView):
-    """Landing page with links to demos"""
+class IndexView(LiveView):
+    """
+    Landing page with links to demos.
+
+    Now a LiveView to demonstrate reactive navbar badges!
+    """
     template_name = 'index.html'
+
+    def mount(self, request, **kwargs):
+        """Initialize with notification counter"""
+        self.notification_count = 0
+
+    def increment_notifications(self):
+        """Event handler to increment notifications"""
+        self.notification_count += 1
+
+    def reset_notifications(self):
+        """Event handler to reset notifications"""
+        self.notification_count = 0
+
+    def get_context_data(self, **kwargs):
+        """Add navbar with notification badge"""
+        context = super().get_context_data(**kwargs)
+
+        # Create navbar with notification badge on Demos
+        context['navbar'] = NavbarComponent(
+            brand_name="",
+            brand_logo="/static/images/djust.png",
+            brand_href="/",
+            items=[
+                NavItem("Home", "/", active=True),
+                NavItem("Demos", "/demos/", badge=self.notification_count, badge_variant="danger"),
+                NavItem("Components", "/kitchen-sink/"),
+                NavItem("Forms", "/forms/"),
+                NavItem("Docs", "/docs/"),
+                NavItem("Hosting ↗", "https://djustlive.com", external=True),
+            ],
+            fixed_top=True,
+            logo_height=16,
+        )
+
+        # Pass notification count to template
+        context['notification_count'] = self.notification_count
+
+        return context
 
 
 class CounterView(LiveView):
