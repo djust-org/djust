@@ -29,6 +29,9 @@ CSRF_USE_SESSIONS = False  # Keep CSRF token in cookie, not session
 SESSION_COOKIE_SECURE = False  # Set to True only when DEBUG=False
 SESSION_COOKIE_SAMESITE = 'Lax'
 
+# Allow iframes from same origin (for embedded demos on homepage)
+X_FRAME_OPTIONS = 'SAMEORIGIN'
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
