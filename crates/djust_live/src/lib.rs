@@ -296,6 +296,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Add Rust components
     m.add_class::<djust_components::python::PyButton>()?;
+    m.add_class::<djust_components::python::PyInput>()?;
+    m.add_class::<djust_components::python::PyText>()?;
 
     Ok(())
 }
