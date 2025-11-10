@@ -88,16 +88,16 @@ impl ButtonSize {
 
 /// Button component
 pub struct Button {
-    id: String,
-    label: String,
-    variant: ButtonVariant,
-    size: ButtonSize,
-    outline: bool,
-    disabled: bool,
-    full_width: bool,
-    icon: Option<String>,
-    button_type: String,
-    on_click: Option<String>,
+    pub(crate) id: String,
+    pub label: String,
+    pub variant: ButtonVariant,
+    pub size: ButtonSize,
+    pub outline: bool,
+    pub disabled: bool,
+    pub full_width: bool,
+    pub icon: Option<String>,
+    pub button_type: String,
+    pub on_click: Option<String>,
 }
 
 impl Button {
@@ -148,24 +148,24 @@ impl Button {
 
     // Render methods for different frameworks
     fn render_bootstrap(&self) -> String {
-        let mut classes = vec!["btn"];
+        let mut classes = vec!["btn".to_string()];
 
+        // Add variant with proper prefix
         let variant_prefix = if self.outline { "btn-outline-" } else { "btn-" };
-        classes.push(self.variant.as_bootstrap_class());
+        classes.push(format!("{}{}", variant_prefix, self.variant.as_bootstrap_class()));
 
+        // Add size class if not medium
         let size_class = self.size.as_bootstrap_class();
         if !size_class.is_empty() {
-            classes.push(size_class);
+            classes.push(size_class.to_string());
         }
 
         if self.full_width {
-            classes.push("w-100");
+            classes.push("w-100".to_string());
         }
 
-        let class_str = format!("{}{}", variant_prefix, classes.join(" "));
-
         let mut button = element("button")
-            .classes(class_str.split_whitespace().map(|s| s.to_string()))
+            .classes(classes)
             .attr("type", &self.button_type)
             .attr("id", &self.id);
 

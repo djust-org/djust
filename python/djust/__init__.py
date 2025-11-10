@@ -22,6 +22,13 @@ except ImportError as e:
     diff_html = None
     RustLiveView = None
 
+# Import Rust components (optional, requires separate build)
+try:
+    from . import rust_components
+except ImportError:
+    # Rust components not yet built - this is optional
+    rust_components = None
+
 __version__ = "0.1.0"
 
 __all__ = [

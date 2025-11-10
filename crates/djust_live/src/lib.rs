@@ -293,5 +293,9 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
+
+    // Add Rust components
+    m.add_class::<djust_components::python::PyButton>()?;
+
     Ok(())
 }

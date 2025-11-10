@@ -21,3 +21,4 @@ once_cell.workspace = true
 djust_core = { path = "../djust_core" }
 djust_templates = { path = "../djust_templates" }
 djust_vdom = { path = "../djust_vdom" }
+djust_components = { path = "../djust_components", features = ["python"] }
