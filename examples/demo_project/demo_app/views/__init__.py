@@ -35,6 +35,7 @@ from .kitchen_sink import KitchenSinkView
 
 # Import docs view
 from .docs import DocsView
+from .components_guide import ComponentsGuideView
 
 # Import demos index view
 from .demos import DemosIndexView
@@ -68,6 +69,7 @@ __all__ = [
     'AutoFormComparisonView',
     'KitchenSinkView',
     'DocsView',
+    'ComponentsGuideView',
     'HomeCounterDemo',
     'HomeSearchDemo',
     'HomeLiveDataDemo',

@@ -29,6 +29,7 @@ urlpatterns = [
 
     # Documentation
     path('docs/', views.DocsView.as_view(), name='docs'),
+    path('docs/components/', views.ComponentsGuideView.as_view(), name='components-guide'),
 
     # Django Forms Integration
     path('forms/', views.FormsIndexView.as_view(), name='forms-index'),

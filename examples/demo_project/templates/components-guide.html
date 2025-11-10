@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Component Architecture - djust</title>
+
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        .navbar-custom {
+            background: #ffffff !important;
+            border-bottom: 1px solid #e1e4e8 !important;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
+            min-height: 60px !important;
+        }
+        .nav-link {
+            color: #24292e !important;
+            font-weight: 500;
+            transition: color 0.2s;
+            font-size: 15px;
+        }
+        .nav-link:hover, .nav-link.active {
+            color: #0969da !important;
+        }
+        .navbar-nav {
+            display: flex !important;
+            flex-direction: row !important;
+            gap: 0.5rem;
+        }
+        .navbar-collapse {
+            display: flex !important;
+            justify-content: flex-end;
+            flex-grow: 1;
+        }
+        .navbar-brand img {
+            max-height: 16px;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+            padding-top: 60px;
+            background-color: #f6f8fa;
+        }
+        .code-block {
+            background: #f6f8fa;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            padding: 16px;
+            overflow-x: auto;
+        }
+        .code-block pre {
+            margin: 0;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+            font-size: 0.85em;
+        }
+        .diagram {
+            background: white;
+            border: 2px solid #d0d7de;
+            border-radius: 8px;
+            padding: 24px;
+            margin: 24px 0;
+        }
+        .component-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 6px;
+            font-weight: 600;
+            display: inline-block;
+            margin: 8px;
+        }
+        .state-box {
+            background: #0969da;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            display: inline-block;
+        }
+        .event-box {
+            background: #1a7f37;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            display: inline-block;
+        }
+        .arrow {
+            color: #6e7781;
+            font-size: 1.5em;
+            margin: 0 12px;
+        }
+        .section-card {
+            background: white;
+            border-radius: 12px;
+            padding: 32px;
+            margin: 24px 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border: 1px solid #d0d7de;
+        }
+        h1 {
+            color: #24292e;
+            font-weight: 700;
+            margin-bottom: 16px;
+        }
+        h2 {
+            color: #24292e;
+            font-weight: 600;
+            margin-top: 40px;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #d0d7de;
+        }
+        h3 {
+            color: #24292e;
+            font-weight: 600;
+            margin-top: 24px;
+            margin-bottom: 12px;
+        }
+        .info-box {
+            background: #ddf4ff;
+            border: 1px solid #54aeff;
+            border-left: 4px solid #0969da;
+            border-radius: 6px;
+            padding: 16px;
+            margin: 16px 0;
+        }
+        .warning-box {
+            background: #fff8c5;
+            border: 1px solid #d4a72c;
+            border-left: 4px solid #9a6700;
+            border-radius: 6px;
+            padding: 16px;
+            margin: 16px 0;
+        }
+        .success-box {
+            background: #dafbe1;
+            border: 1px solid #4ac26b;
+            border-left: 4px solid #1a7f37;
+            border-radius: 6px;
+            padding: 16px;
+            margin: 16px 0;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navbar -->
+    {{ navbar.render }}
+
+    <!-- Main Content -->
+    <div class="container my-5">
+        <div class="row">
+            <div class="col-lg-10 mx-auto">
+
+                <h1>🧩 Component Architecture in djust</h1>
+                <p class="lead text-muted">
+                    Understanding how components communicate and share state in djust
+                </p>
+
+                <!-- Introduction -->
+                <div class="section-card">
+                    <h2>Overview</h2>
+                    <p>
+                        djust uses a <strong>parent-driven architecture</strong> where LiveViews orchestrate
+                        components and manage state flow. This is similar to React's one-way data flow, but
+                        happens entirely server-side.
+                    </p>
+
+                    <div class="diagram text-center">
+                        <div class="component-box">LiveView (Parent)</div>
+                        <div class="arrow">↓</div>
+                        <div>
+                            <div class="component-box">NavbarComponent</div>
+                            <div class="component-box">ButtonComponent</div>
+                            <div class="component-box">CardComponent</div>
+                        </div>
+                    </div>
+
+                    <div class="info-box">
+                        <strong>💡 Key Concept:</strong> The LiveView is the "source of truth" for state.
+                        Components receive state as props and render accordingly. When state changes,
+                        the entire view re-renders, and components automatically update.
+                    </div>
+                </div>
+
+                <!-- How State Flows -->
+                <div class="section-card">
+                    <h2>How State Flows</h2>
+
+                    <h3>1. LiveView Owns State</h3>
+                    <div class="code-block">
+<pre>class IndexView(LiveView):
+    def mount(self, request, **kwargs):
+        # State lives in the LiveView
+        self.notification_count = 0
+
+    def increment_notifications(self):
+        # State is modified here
+        self.notification_count += 1</pre>
+                    </div>
+
+                    <h3>2. State Passed to Components</h3>
+                    <div class="code-block">
+<pre>def get_context_data(self, **kwargs):
+    context = super().get_context_data(**kwargs)
+
+    # Pass state to navbar component
+    context['navbar'] = NavbarComponent(
+        items=[
+            NavItem("Demos", "/demos/",
+                    badge=self.notification_count,  # ← State flows here
+                    badge_variant="danger"),
+        ]
+    )
+
+    return context</pre>
+                    </div>
+
+                    <h3>3. Components Render with Props</h3>
+                    <div class="code-block">
+<pre>class NavbarComponent(LiveComponent):
+    def mount(self, **kwargs):
+        # Components receive data via kwargs
+        self.items = kwargs.get('items', [])
+
+    def render(self):
+        # Render uses the data
+        for item in self.items:
+            if item.badge and item.badge > 0:
+                badge_html = f'&lt;span class="badge"&gt;{item.badge}&lt;/span&gt;'</pre>
+                    </div>
+
+                    <div class="diagram text-center">
+                        <div class="state-box">notification_count = 3</div>
+                        <div class="arrow">↓</div>
+                        <div class="component-box">NavbarComponent</div>
+                        <div class="arrow">↓</div>
+                        <div class="state-box">Badge shows "3"</div>
+                    </div>
+                </div>
+
+                <!-- Complete Example -->
+                <div class="section-card">
+                    <h2>Complete Example: Navbar Badge</h2>
+
+                    <p>Let's trace exactly what happens when you click "Add Notification" on the homepage:</p>
+
+                    <h3>Step 1: User Clicks Button</h3>
+                    <div class="code-block">
+<pre>&lt;button @click="increment_notifications"&gt;
+    Add Notification
+&lt;/button&gt;</pre>
+                    </div>
+
+                    <h3>Step 2: Event Sent to Server</h3>
+                    <div class="code-block">
+<pre># Client sends WebSocket message:
+{
+    "event": "increment_notifications",
+    "params": {}
+}</pre>
+                    </div>
+
+                    <h3>Step 3: LiveView Handler Executes</h3>
+                    <div class="code-block">
+<pre>def increment_notifications(self):
+    # State changes on the server
+    self.notification_count += 1
+    # No explicit render call needed!</pre>
+                    </div>
+
+                    <h3>Step 4: LiveView Re-renders</h3>
+                    <div class="code-block">
+<pre>def get_context_data(self, **kwargs):
+    # This is called automatically after the event
+    context['navbar'] = NavbarComponent(
+        items=[
+            NavItem("Demos", "/demos/",
+                    badge=self.notification_count,  # New value!
+                    badge_variant="danger"),
+        ]
+    )</pre>
+                    </div>
+
+                    <h3>Step 5: Component Renders with New Data</h3>
+                    <div class="code-block">
+<pre># NavbarComponent.render() is called
+# It sees badge=1 (or 2, 3, etc.)
+# Generates HTML with badge</pre>
+                    </div>
+
+                    <h3>Step 6: VDOM Creates Minimal Patch</h3>
+                    <div class="code-block">
+<pre># Rust VDOM compares old HTML vs new HTML
+# Creates minimal patch:
+{
+    "type": "add_element",
+    "path": ["nav", "ul", "li[1]", "a"],
+    "html": "&lt;span class='badge'&gt;1&lt;/span&gt;"
+}</pre>
+                    </div>
+
+                    <h3>Step 7: Client Updates DOM</h3>
+                    <div class="code-block">
+<pre>// JavaScript applies the patch
+// Only the badge element is added/updated
+// Rest of page stays exactly the same</pre>
+                    </div>
+
+                    <div class="success-box">
+                        <strong>✅ Result:</strong> Badge appears/updates in navbar with zero page reload!
+                    </div>
+                </div>
+
+                <!-- Multiple Components -->
+                <div class="section-card">
+                    <h2>Multiple Components Sharing State</h2>
+
+                    <p>Components can share state because they're all rendered by the same LiveView:</p>
+
+                    <div class="code-block">
+<pre>class DashboardView(LiveView):
+    def mount(self, request, **kwargs):
+        self.user_count = 42
+        self.message_count = 15
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+
+        # Multiple components, same state
+        context['navbar'] = NavbarComponent(
+            items=[
+                NavItem("Messages", "/messages/",
+                        badge=self.message_count),
+            ]
+        )
+
+        context['stats_card'] = StatsCardComponent(
+            title="Total Users",
+            value=self.user_count  # Same LiveView state
+        )
+
+        context['counter_display'] = CounterComponent(
+            count=self.message_count  # Shared with navbar badge!
+        )
+
+        return context</pre>
+                    </div>
+
+                    <div class="diagram text-center">
+                        <div class="component-box">DashboardView</div>
+                        <div style="margin: 16px 0;">
+                            <div class="state-box">user_count = 42</div>
+                            <div class="state-box">message_count = 15</div>
+                        </div>
+                        <div class="arrow">↓</div>
+                        <div>
+                            <div class="component-box">Navbar (shows 15)</div>
+                            <div class="component-box">StatsCard (shows 42)</div>
+                            <div class="component-box">Counter (shows 15)</div>
+                        </div>
+                    </div>
+
+                    <div class="info-box">
+                        <strong>💡 Key Insight:</strong> When <code>message_count</code> changes,
+                        <strong>both</strong> the navbar badge and counter component update automatically
+                        because they both use the same state from the LiveView!
+                    </div>
+                </div>
+
+                <!-- Component Communication -->
+                <div class="section-card">
+                    <h2>Component Communication Patterns</h2>
+
+                    <h3>Pattern 1: Props Down (Current Approach)</h3>
+                    <div class="code-block">
+<pre># Parent passes data to child
+context['button'] = ButtonComponent(
+    label="Click Me",
+    variant="primary",
+    disabled=self.is_loading  # Parent state
+)</pre>
+                    </div>
+
+                    <h3>Pattern 2: Events Up</h3>
+                    <div class="code-block">
+<pre># Template
+&lt;button @click="handle_button_click"&gt;Click Me&lt;/button&gt;
+
+# LiveView
+def handle_button_click(self):
+    self.is_loading = True
+    # Do something...
+    self.is_loading = False</pre>
+                    </div>
+
+                    <h3>Pattern 3: Shared State via LiveView</h3>
+                    <div class="code-block">
+<pre>class MyView(LiveView):
+    def mount(self, request):
+        # Shared state
+        self.selected_item = None
+
+    def select_item(self, item_id):
+        # Update state
+        self.selected_item = item_id
+        # Both sidebar and detail view will update!
+
+    def get_context_data(self):
+        return {
+            'sidebar': SidebarComponent(
+                selected=self.selected_item
+            ),
+            'detail': DetailComponent(
+                item_id=self.selected_item
+            )
+        }</pre>
+                    </div>
+                </div>
+
+                <!-- Nested Components -->
+                <div class="section-card">
+                    <h2>Nested Components</h2>
+
+                    <p>Components can contain other components:</p>
+
+                    <div class="code-block">
+<pre>class CardComponent(LiveComponent):
+    def get_context_data(self):
+        return {
+            'title': self.title,
+            'button': ButtonComponent(
+                label="Action",
+                variant="primary"
+            )
+        }
+
+    def render(self):
+        # In template or inline:
+        return f'''
+        &lt;div class="card"&gt;
+            &lt;h3&gt;{self.title}&lt;/h3&gt;
+            {self.button.render()}  ← Nested component
+        &lt;/div&gt;
+        '''</pre>
+                    </div>
+
+                    <div class="diagram text-center">
+                        <div class="component-box">LiveView</div>
+                        <div class="arrow">↓</div>
+                        <div class="component-box">CardComponent</div>
+                        <div class="arrow">↓</div>
+                        <div class="component-box">ButtonComponent</div>
+                    </div>
+                </div>
+
+                <!-- Best Practices -->
+                <div class="section-card">
+                    <h2>Best Practices</h2>
+
+                    <h3>✅ Do This</h3>
+                    <ul>
+                        <li>Keep state in the LiveView (parent)</li>
+                        <li>Pass state to components via props</li>
+                        <li>Use event handlers in LiveView to modify state</li>
+                        <li>Let components be stateless renderers when possible</li>
+                        <li>Re-render the entire view when state changes</li>
+                    </ul>
+
+                    <h3>❌ Avoid This</h3>
+                    <ul>
+                        <li>Don't store state in components (they're ephemeral)</li>
+                        <li>Don't try to have components communicate directly</li>
+                        <li>Don't mutate component props</li>
+                        <li>Don't rely on component instance persistence</li>
+                    </ul>
+
+                    <div class="warning-box">
+                        <strong>⚠️ Important:</strong> Components are re-created on every render!
+                        They don't persist between renders. State must live in the LiveView.
+                    </div>
+                </div>
+
+                <!-- Comparison -->
+                <div class="section-card">
+                    <h2>Comparison with Other Frameworks</h2>
+
+                    <table class="table table-bordered">
+                        <thead>
+                            <tr>
+                                <th>Framework</th>
+                                <th>State Location</th>
+                                <th>Update Trigger</th>
+                                <th>Where Rendered</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>djust</strong></td>
+                                <td>LiveView (server)</td>
+                                <td>Event handler</td>
+                                <td>Server</td>
+                            </tr>
+                            <tr>
+                                <td>React</td>
+                                <td>Component state/props</td>
+                                <td>setState() / hooks</td>
+                                <td>Client</td>
+                            </tr>
+                            <tr>
+                                <td>Phoenix LiveView</td>
+                                <td>LiveView (server)</td>
+                                <td>Event handler</td>
+                                <td>Server</td>
+                            </tr>
+                            <tr>
+                                <td>Vue</td>
+                                <td>Component data/props</td>
+                                <td>Reactive setters</td>
+                                <td>Client</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <div class="info-box">
+                        <strong>💡 Insight:</strong> djust follows the Phoenix LiveView pattern -
+                        state on server, minimal client JavaScript, WebSocket for updates.
+                        But with shadcn-style component flexibility!
+                    </div>
+                </div>
+
+                <!-- Live Example -->
+                <div class="section-card">
+                    <h2>Live Example</h2>
+
+                    <p>This page itself demonstrates component communication:</p>
+
+                    <div class="text-center my-4">
+                        <button @click="increment_demo_count"
+                                class="btn btn-primary btn-lg me-2">
+                            🔔 Increment Counter
+                        </button>
+                        <button @click="reset_demo_count"
+                                class="btn btn-secondary btn-lg">
+                            🔄 Reset
+                        </button>
+                    </div>
+
+                    <div class="text-center my-4">
+                        <div class="alert alert-info d-inline-block">
+                            <h4 class="mb-0">Demo Count: <strong>{{ demo_count }}</strong></h4>
+                        </div>
+                    </div>
+
+                    <p class="text-center text-muted">
+                        👆 This counter updates the "Docs" badge in the navbar above!<br>
+                        Look at the top of the page when you click the button.
+                    </p>
+
+                    <div class="success-box">
+                        <strong>How it works:</strong>
+                        <ol class="mb-0">
+                            <li>Button click triggers <code>increment_demo_count()</code></li>
+                            <li>LiveView updates <code>self.demo_count</code></li>
+                            <li>View re-renders with new count</li>
+                            <li>NavbarComponent receives new badge value</li>
+                            <li>Both counter <em>and</em> navbar badge update!</li>
+                        </ol>
+                    </div>
+                </div>
+
+                <!-- Conclusion -->
+                <div class="section-card">
+                    <h2>Summary</h2>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h3>🎯 Core Principles</h3>
+                            <ul>
+                                <li>LiveView owns state</li>
+                                <li>Components receive props</li>
+                                <li>Events flow up to LiveView</li>
+                                <li>Data flows down to components</li>
+                                <li>Re-render on state change</li>
+                            </ul>
+                        </div>
+                        <div class="col-md-6">
+                            <h3>⚡ Benefits</h3>
+                            <ul>
+                                <li>Simple mental model</li>
+                                <li>No prop drilling</li>
+                                <li>Automatic updates</li>
+                                <li>Server-side simplicity</li>
+                                <li>Client-side performance</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="info-box mt-4">
+                        <strong>🚀 Next Steps:</strong>
+                        <ul class="mb-0">
+                            <li>Read <a href="/docs/">Full Documentation</a></li>
+                            <li>Explore <a href="/demos/">Live Demos</a></li>
+                            <li>Try <a href="/kitchen-sink/">Component Library</a></li>
+                            <li>Check out <a href="https://github.com/yourusername/djust">GitHub Repo</a></li>
+                        </ul>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
