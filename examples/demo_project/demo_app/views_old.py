@@ -11,13 +11,55 @@ from .views.base import BaseTemplateView
 from djust.components.layout import NavbarComponent, NavItem
 
 
-class IndexView(LiveView):
-    """
-    Landing page with links to demos.
-
-    Now a LiveView to demonstrate reactive navbar badges!
-    """
+class IndexView(BaseTemplateView):
+    """Landing page with links to demos"""
     template_name = 'index.html'
+
+
+class NavbarBadgeDemo(LiveView):
+    """
+    Standalone demo showing reactive navbar badges.
+
+    This is embedded in the homepage to demonstrate how navbar badges
+    update in real-time when state changes.
+    """
+    template_string = """
+    <div class="p-4 bg-white rounded-lg border border-gray-200">
+        <!-- Navbar with badge -->
+        {{ navbar.render }}
+
+        <!-- Demo controls -->
+        <div class="mt-6 text-center">
+            <h3 class="text-xl font-bold text-gray-900 mb-4">
+                Reactive Navbar Badge Demo
+            </h3>
+            <p class="text-gray-600 mb-4">
+                Click buttons to see the navbar badge update in real-time!
+            </p>
+
+            <div class="flex gap-3 justify-center items-center mb-4">
+                <button @click="increment_notifications"
+                        class="px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition">
+                    🔔 Add Notification
+                </button>
+                <button @click="reset_notifications"
+                        class="px-6 py-3 bg-gray-600 text-white rounded-lg font-semibold hover:bg-gray-700 transition">
+                    🔄 Reset
+                </button>
+            </div>
+
+            <div class="inline-block bg-blue-50 px-6 py-3 rounded-lg">
+                <p class="text-sm text-gray-600 mb-1">Current Notifications</p>
+                <p class="text-4xl font-bold text-blue-600">{{ notification_count }}</p>
+            </div>
+
+            <div class="mt-4 text-sm text-gray-500">
+                <p>👆 Look at the "Demos" link in the navbar above</p>
+                <p>The badge updates instantly via WebSocket!</p>
+            </div>
+        </div>
+    </div>
+    """
 
     def mount(self, request, **kwargs):
         """Initialize with notification counter"""
@@ -41,18 +83,17 @@ class IndexView(LiveView):
             brand_logo="/static/images/djust.png",
             brand_href="/",
             items=[
-                NavItem("Home", "/", active=True),
+                NavItem("Home", "/", active=False),
                 NavItem("Demos", "/demos/", badge=self.notification_count, badge_variant="danger"),
                 NavItem("Components", "/kitchen-sink/"),
                 NavItem("Forms", "/forms/"),
                 NavItem("Docs", "/docs/"),
                 NavItem("Hosting ↗", "https://djustlive.com", external=True),
             ],
-            fixed_top=True,
+            fixed_top=False,  # Not fixed in the iframe
             logo_height=16,
         )
 
-        # Pass notification count to template
         context['notification_count'] = self.notification_count
 
         return context

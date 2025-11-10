@@ -13,6 +13,7 @@ urlpatterns = [
     path('home-demos/search/', views.HomeSearchDemo.as_view(), name='home-search'),
     path('home-demos/data/', views.HomeLiveDataDemo.as_view(), name='home-data'),
     path('home-demos/todo/', views.HomeTodoDemo.as_view(), name='home-todo'),
+    path('home-demos/navbar-badge/', views.NavbarBadgeDemo.as_view(), name='home-navbar-badge'),
 
     # Live Demos
     path('demos/', views.DemosIndexView.as_view(), name='demos-index'),

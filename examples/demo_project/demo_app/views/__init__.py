@@ -8,6 +8,7 @@ This package organizes views into logical modules for better maintainability.
 # Import all views from the old views file for backwards compatibility
 from ..views_old import (
     IndexView,
+    NavbarBadgeDemo,
     CounterView,
     TodoView,
     ChatView,
@@ -48,6 +49,7 @@ from .homepage import (
 
 __all__ = [
     'IndexView',
+    'NavbarBadgeDemo',
     'CounterView',
     'TodoView',
     'ChatView',

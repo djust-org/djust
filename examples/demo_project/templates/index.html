@@ -48,40 +48,27 @@
      ============================================ -->
 <section class="section-modern bg-gradient-to-br from-blue-50 to-indigo-50 py-8">
     <div class="container mx-auto px-4">
-        <div class="max-w-2xl mx-auto text-center">
-            <div class="inline-flex items-center gap-2 px-4 py-2 bg-white rounded-full shadow-sm border border-gray-200 mb-4">
-                <span class="text-2xl">🎯</span>
-                <span class="font-semibold text-gray-700">Try This!</span>
-            </div>
-            <h3 class="text-2xl font-bold text-gray-900 mb-3">
-                Reactive Components in Action
-            </h3>
-            <p class="text-gray-600 mb-6">
-                Click the button below to add notifications. Watch the navbar badge update in real-time
-                with <strong>zero page reload</strong> - pure djust reactivity!
-            </p>
-
-            <div class="flex gap-3 justify-center items-center mb-4">
-                <button @click="increment_notifications"
-                        class="btn-primary-modern px-6 py-3 text-lg font-semibold">
-                    <span class="text-xl mr-2">🔔</span>
-                    Add Notification
-                </button>
-                <button @click="reset_notifications"
-                        class="btn-secondary-modern px-6 py-3 text-lg font-semibold">
-                    <span class="text-xl mr-2">🔄</span>
-                    Reset
-                </button>
+        <div class="max-w-4xl mx-auto">
+            <div class="text-center mb-6">
+                <div class="inline-flex items-center gap-2 px-4 py-2 bg-white rounded-full shadow-sm border border-gray-200 mb-4">
+                    <span class="text-2xl">🎯</span>
+                    <span class="font-semibold text-gray-700">Try This!</span>
+                </div>
+                <h3 class="text-2xl font-bold text-gray-900 mb-3">
+                    Reactive Navbar Badges
+                </h3>
+                <p class="text-gray-600 mb-2">
+                    Click the buttons below to add notifications. Watch the navbar badge update in real-time
+                    with <strong>zero page reload</strong> - pure djust reactivity!
+                </p>
+                <p class="text-sm text-gray-500">
+                    💡 This entire demo is a LiveView running in an iframe, showcasing component reactivity
+                </p>
             </div>
 
-            <div class="inline-block bg-white px-6 py-3 rounded-lg shadow-sm border border-gray-200">
-                <p class="text-sm text-gray-500 mb-1">Current Notifications</p>
-                <p class="text-4xl font-bold text-indigo-600">{{ notification_count }}</p>
-            </div>
-
-            <div class="mt-6 text-sm text-gray-500">
-                <p>💡 <strong>Tip:</strong> Look at the "Demos" link in the navbar above ↑</p>
-                <p>The badge updates instantly via WebSocket - no JavaScript framework needed!</p>
+            <!-- Embedded LiveView demo -->
+            <div class="bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden">
+                <iframe src="/home-demos/navbar-badge/" class="w-full border-0" style="height: 500px;"></iframe>
             </div>
         </div>
     </div>
