@@ -1,16 +1,60 @@
-{% extends 'base.html' %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>djust - Blazing Fast Reactive Django</title>
 
-{% block title %}djust - Blazing Fast Reactive Django{% endblock %}
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 
-{% block nav_home_active %}active{% endblock %}
+    <!-- Homepage specific CSS -->
+    <link rel="stylesheet" href="/static/css/homepage.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <script src="https://cdn.tailwindcss.com"></script>
 
-{% block extra_css %}
-<link rel="stylesheet" href="/static/css/homepage.css">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
-<script src="https://cdn.tailwindcss.com"></script>
-{% endblock %}
+    <!-- Common navbar styles -->
+    <style>
+        .navbar-custom {
+            background: #ffffff !important;
+            border-bottom: 1px solid #e1e4e8 !important;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
+            min-height: 60px !important;
+        }
+        .nav-link {
+            color: #24292e !important;
+            font-weight: 500;
+            transition: color 0.2s;
+            font-size: 15px;
+        }
+        .nav-link:hover, .nav-link.active {
+            color: #0969da !important;
+        }
+        .navbar-nav {
+            display: flex !important;
+            flex-direction: row !important;
+            gap: 0.5rem;
+        }
+        .navbar-collapse {
+            display: flex !important;
+            justify-content: flex-end;
+            flex-grow: 1;
+        }
+        .navbar-brand img {
+            max-height: 16px;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+            padding-top: 60px;
+            background-color: #ffffff;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navbar Component - Reactive with badge! -->
+    {{ navbar.render }}
 
-{% block content %}
+    <!-- Main Content -->
 <!-- ============================================
      1. Hero Section - Clean & Minimal
      ============================================ -->
@@ -48,27 +92,40 @@
      ============================================ -->
 <section class="section-modern bg-gradient-to-br from-blue-50 to-indigo-50 py-8">
     <div class="container mx-auto px-4">
-        <div class="max-w-4xl mx-auto">
-            <div class="text-center mb-6">
-                <div class="inline-flex items-center gap-2 px-4 py-2 bg-white rounded-full shadow-sm border border-gray-200 mb-4">
-                    <span class="text-2xl">🎯</span>
-                    <span class="font-semibold text-gray-700">Try This!</span>
-                </div>
-                <h3 class="text-2xl font-bold text-gray-900 mb-3">
-                    Reactive Navbar Badges
-                </h3>
-                <p class="text-gray-600 mb-2">
-                    Click the buttons below to add notifications. Watch the navbar badge update in real-time
-                    with <strong>zero page reload</strong> - pure djust reactivity!
-                </p>
-                <p class="text-sm text-gray-500">
-                    💡 This entire demo is a LiveView running in an iframe, showcasing component reactivity
-                </p>
+        <div class="max-w-2xl mx-auto text-center">
+            <div class="inline-flex items-center gap-2 px-4 py-2 bg-white rounded-full shadow-sm border border-gray-200 mb-4">
+                <span class="text-2xl">🎯</span>
+                <span class="font-semibold text-gray-700">Try This!</span>
+            </div>
+            <h3 class="text-2xl font-bold text-gray-900 mb-3">
+                Reactive Navbar Badges
+            </h3>
+            <p class="text-gray-600 mb-6">
+                Click the button below to add notifications. Watch the <strong>"Demos"</strong> link in the navbar above
+                - the badge updates in real-time with <strong>zero page reload</strong>!
+            </p>
+
+            <div class="flex gap-3 justify-center items-center mb-4">
+                <button @click="increment_notifications"
+                        class="btn-primary-modern px-6 py-3 text-lg font-semibold">
+                    <span class="text-xl mr-2">🔔</span>
+                    Add Notification
+                </button>
+                <button @click="reset_notifications"
+                        class="btn-secondary-modern px-6 py-3 text-lg font-semibold">
+                    <span class="text-xl mr-2">🔄</span>
+                    Reset
+                </button>
             </div>
 
-            <!-- Embedded LiveView demo -->
-            <div class="bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden">
-                <iframe src="/home-demos/navbar-badge/" class="w-full border-0" style="height: 500px;"></iframe>
+            <div class="inline-block bg-white px-6 py-3 rounded-lg shadow-sm border border-gray-200">
+                <p class="text-sm text-gray-500 mb-1">Current Notifications</p>
+                <p class="text-4xl font-bold text-indigo-600">{{ notification_count }}</p>
+            </div>
+
+            <div class="mt-6 text-sm text-gray-500">
+                <p>💡 <strong>Tip:</strong> Look at the "Demos" link in the navbar at the top ↑</p>
+                <p>The badge appears/updates instantly via WebSocket - no page reload!</p>
             </div>
         </div>
     </div>
@@ -610,9 +667,10 @@ function Counter() {
         </div>
     </div>
 </section>
-{% endblock %}
 
-{% block extra_scripts %}
+<!-- Scripts -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script src="/static/js/homepage.js"></script>
-{% endblock %}
+</body>
+</html>
