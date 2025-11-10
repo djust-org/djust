@@ -92,7 +92,8 @@ class DjangoJSONEncoder(json.JSONEncoder):
                             # Only include simple return types
                             if isinstance(value, (str, int, float, bool, type(None))):
                                 result[attr_name] = value
-                        except (TypeError, ValueError, AttributeError):
+                        except Exception:
+                            # Silently skip methods that fail (like get_next_by_*, DoesNotExist, etc.)
                             pass
 
             return result
