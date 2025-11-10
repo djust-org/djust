@@ -19,6 +19,7 @@ once_cell.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
 djust_core = { path = "../djust_core" }
+djust_components = { path = "../djust_components" }
 
 [dev-dependencies]
 criterion = "0.5"

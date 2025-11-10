@@ -28,6 +28,10 @@ pub enum Node {
         props: Vec<(String, String)>,
         children: Vec<Node>,
     },
+    RustComponent {
+        name: String,
+        props: Vec<(String, String)>,
+    },
 }
 
 pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
@@ -141,19 +145,28 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
         }
 
         Token::JsxComponent { name, props, children, .. } => {
-            // Convert token children to Node children
-            let mut child_nodes = Vec::new();
-            for child in children {
-                if let Token::Text(text) = child {
-                    child_nodes.push(Node::Text(text.clone()));
+            // Check if this is a Rust component (starts with "Rust")
+            if name.starts_with("Rust") {
+                // Rust components are rendered server-side, no children support
+                Ok(Some(Node::RustComponent {
+                    name: name.clone(),
+                    props: props.clone(),
+                }))
+            } else {
+                // Convert token children to Node children for React components
+                let mut child_nodes = Vec::new();
+                for child in children {
+                    if let Token::Text(text) = child {
+                        child_nodes.push(Node::Text(text.clone()));
+                    }
                 }
-            }
 
-            Ok(Some(Node::ReactComponent {
-                name: name.clone(),
-                props: props.clone(),
-                children: child_nodes,
-            }))
+                Ok(Some(Node::ReactComponent {
+                    name: name.clone(),
+                    props: props.clone(),
+                    children: child_nodes,
+                }))
+            }
         }
 
         Token::Comment => Ok(Some(Node::Comment)),

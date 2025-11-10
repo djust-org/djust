@@ -2,7 +2,8 @@
 
 use crate::filters;
 use crate::parser::Node;
-use djust_core::{Context, Result, Value};
+use djust_components::Component;
+use djust_core::{Context, DjangoRustError, Result, Value};
 
 pub fn render_nodes(nodes: &[Node], context: &Context) -> Result<String> {
     let mut output = String::new();
@@ -118,8 +119,133 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
             Ok(output)
         }
 
+        Node::RustComponent { name, props } => {
+            // Render Rust component server-side
+            render_rust_component(name, props, context)
+        }
+
         Node::Comment => Ok(String::new()),
     }
+}
+
+/// Render a Rust component by instantiating it and calling its render method
+fn render_rust_component(
+    name: &str,
+    props: &[(String, String)],
+    context: &Context,
+) -> Result<String> {
+    // Get framework from context or default to Bootstrap5
+    let framework = context.get("_framework")
+        .and_then(|v| {
+            if let Value::String(s) = v {
+                Some(s.as_str())
+            } else {
+                None
+            }
+        })
+        .unwrap_or("bootstrap5");
+
+    let fw = djust_components::Framework::from_str(framework);
+
+    // Match component name and instantiate
+    match name {
+        "RustButton" => {
+            // Extract required props
+            let id = get_prop("id", props, context)?;
+            let label = get_prop("label", props, context)?;
+
+            // Create button with basic props
+            let mut button = djust_components::ui::Button::new(id, label);
+
+            // Apply optional props
+            if let Ok(variant_str) = get_prop("variant", props, context) {
+                let variant = match variant_str.as_str() {
+                    "secondary" => djust_components::ui::button::ButtonVariant::Secondary,
+                    "success" => djust_components::ui::button::ButtonVariant::Success,
+                    "danger" => djust_components::ui::button::ButtonVariant::Danger,
+                    "warning" => djust_components::ui::button::ButtonVariant::Warning,
+                    "info" => djust_components::ui::button::ButtonVariant::Info,
+                    "light" => djust_components::ui::button::ButtonVariant::Light,
+                    "dark" => djust_components::ui::button::ButtonVariant::Dark,
+                    "link" => djust_components::ui::button::ButtonVariant::Link,
+                    _ => djust_components::ui::button::ButtonVariant::Primary,
+                };
+                button.variant = variant;
+            }
+
+            if let Ok(size_str) = get_prop("size", props, context) {
+                let size = match size_str.as_str() {
+                    "sm" | "small" => djust_components::ui::button::ButtonSize::Small,
+                    "lg" | "large" => djust_components::ui::button::ButtonSize::Large,
+                    _ => djust_components::ui::button::ButtonSize::Medium,
+                };
+                button.size = size;
+            }
+
+            if let Ok(outline) = get_prop("outline", props, context) {
+                button.outline = outline == "true" || outline == "True";
+            }
+
+            if let Ok(disabled) = get_prop("disabled", props, context) {
+                button.disabled = disabled == "true" || disabled == "True";
+            }
+
+            if let Ok(full_width) = get_prop("fullWidth", props, context) {
+                button.full_width = full_width == "true" || full_width == "True";
+            }
+
+            if let Ok(icon) = get_prop("icon", props, context) {
+                button.icon = Some(icon);
+            }
+
+            if let Ok(on_click) = get_prop("onClick", props, context) {
+                button.on_click = Some(on_click);
+            }
+
+            // Render the component
+            button.render(fw).map_err(|e| {
+                DjangoRustError::TemplateError(format!("Failed to render RustButton: {}", e))
+            })
+        }
+
+        _ => {
+            Err(DjangoRustError::TemplateError(
+                format!("Unknown Rust component: {}", name)
+            ))
+        }
+    }
+}
+
+/// Get a prop value, resolving template variables if needed
+fn get_prop(
+    key: &str,
+    props: &[(String, String)],
+    context: &Context,
+) -> Result<String> {
+    for (k, v) in props {
+        if k == key {
+            // Resolve Django template variable syntax: {{ var.path }}
+            if v.starts_with("{{") && v.ends_with("}}") {
+                let var_name = v.trim_start_matches("{{")
+                    .trim_end_matches("}}")
+                    .trim();
+
+                if let Some(ctx_value) = context.get(var_name) {
+                    return Ok(ctx_value.to_string());
+                }
+            } else if let Some(ctx_value) = context.get(v) {
+                // Direct variable reference (no {{ }})
+                return Ok(ctx_value.to_string());
+            } else {
+                // Literal value
+                return Ok(v.clone());
+            }
+        }
+    }
+
+    Err(DjangoRustError::TemplateError(
+        format!("Missing required prop: {}", key)
+    ))
 }
 
 fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
