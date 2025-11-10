@@ -24,7 +24,7 @@ class BaseViewWithNavbar(LiveView):
 
         # Create navbar component
         navbar = NavbarComponent(
-            brand_name="djust",
+            brand_name=None,
             brand_logo="/static/images/djust.png",
             brand_href="/",
             items=[
@@ -36,7 +36,7 @@ class BaseViewWithNavbar(LiveView):
                 NavItem("Hosting ↗", "https://djustlive.com", external=True),
             ],
             fixed_top=True,
-            logo_height=16,
+            logo_height=28,
         )
 
         context['navbar'] = navbar

@@ -22,8 +22,13 @@
 }
 
 .navbar-brand img {
-    max-height: 16px;
+    max-height: 28px;
     opacity: 0.9;
+}
+
+/* Brighten logo in dark mode so it doesn't blend into dark background */
+[data-theme="dark"] .navbar-brand img {
+    filter: brightness(1.5) saturate(1.2);
 }
 
 .nav-link {

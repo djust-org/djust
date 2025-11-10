@@ -40,7 +40,7 @@ class ComponentsGuideView(LiveView):
 
         # Create navbar with badge on "Docs" that shows demo_count
         context['navbar'] = NavbarComponent(
-            brand_name="",
+            brand_name=None,
             brand_logo="/static/images/djust.png",
             brand_href="/",
             items=[
@@ -52,7 +52,7 @@ class ComponentsGuideView(LiveView):
                 NavItem("Hosting ↗", "https://djustlive.com", external=True),
             ],
             fixed_top=True,
-            logo_height=16,
+            logo_height=28,
         )
 
         # Pass demo count to template

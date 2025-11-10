@@ -129,7 +129,9 @@ class NavbarComponent(LiveComponent):
         # Logo HTML
         logo_html = ''
         if self.brand_logo:
-            logo_html = f'<img src="{self.brand_logo}" alt="{self.brand_name}" height="{self.logo_height}" style="width: auto; margin-right: 0.5rem;">'
+            alt_text = self.brand_name or 'Logo'
+            margin_style = ' margin-right: 0.5rem;' if self.brand_name else ''
+            logo_html = f'<img src="{self.brand_logo}" alt="{alt_text}" height="{self.logo_height}" style="width: auto;{margin_style}">'
 
         # Navigation items
         nav_items_html = ''
@@ -154,12 +156,15 @@ class NavbarComponent(LiveComponent):
                 </li>
             '''
 
+        # Brand name HTML (only if not None)
+        brand_name_html = f'<strong>{self.brand_name}</strong>' if self.brand_name else ''
+
         return f'''
         <nav class="navbar navbar-expand-lg navbar-custom {position_class} {self.custom_classes}" id="{self.component_id}">
             <div class="{container_class}">
                 <a class="navbar-brand d-flex align-items-center" href="{self.brand_href}">
                     {logo_html}
-                    <strong>{self.brand_name}</strong>
+                    {brand_name_html}
                 </a>
                 <div class="navbar-collapse" style="display: flex !important;">
                     <ul class="navbar-nav ms-auto">
@@ -178,7 +183,11 @@ class NavbarComponent(LiveComponent):
         # Logo HTML
         logo_html = ''
         if self.brand_logo:
-            logo_html = f'<img src="{self.brand_logo}" alt="{self.brand_name}" class="h-4 w-auto mr-2">'
+            alt_text = self.brand_name or 'Logo'
+            logo_html = f'<img src="{self.brand_logo}" alt="{alt_text}" class="h-4 w-auto mr-2">'
+
+        # Brand name HTML (only if not None)
+        brand_name_html = f'<span class="text-xl font-bold text-gray-900">{self.brand_name}</span>' if self.brand_name else ''
 
         # Navigation items
         nav_items_html = ''
@@ -204,7 +213,7 @@ class NavbarComponent(LiveComponent):
                 <div class="flex items-center justify-between h-16">
                     <a href="{self.brand_href}" class="flex items-center">
                         {logo_html}
-                        <span class="text-xl font-bold text-gray-900">{self.brand_name}</span>
+                        {brand_name_html}
                     </a>
                     <div class="flex items-center space-x-1">
                         {nav_items_html}
@@ -221,7 +230,11 @@ class NavbarComponent(LiveComponent):
         # Logo HTML
         logo_html = ''
         if self.brand_logo:
-            logo_html = f'<img src="{self.brand_logo}" alt="{self.brand_name}" class="navbar-logo">'
+            alt_text = self.brand_name or 'Logo'
+            logo_html = f'<img src="{self.brand_logo}" alt="{alt_text}" class="navbar-logo">'
+
+        # Brand name HTML (only if not None)
+        brand_name_html = f'<span class="navbar-brand-text">{self.brand_name}</span>' if self.brand_name else ''
 
         # Navigation items
         nav_items_html = ''
@@ -242,7 +255,7 @@ class NavbarComponent(LiveComponent):
             <div class="navbar-container">
                 <a href="{self.brand_href}" class="navbar-brand">
                     {logo_html}
-                    <span class="navbar-brand-text">{self.brand_name}</span>
+                    {brand_name_html}
                 </a>
                 <ul class="navbar-nav">
                     {nav_items_html}
