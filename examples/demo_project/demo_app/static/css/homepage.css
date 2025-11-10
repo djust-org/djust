@@ -22,10 +22,30 @@
    Base Styles
    ============================================ */
 body {
-    background: var(--color-bg);
+    background: var(--color-bg) !important;
     color: var(--color-text);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+}
+
+/* Override Bootstrap container for full-width sections */
+.section-modern .container {
+    max-width: 1200px;
+}
+
+/* Ensure navbar is visible */
+.navbar-custom {
+    background: rgba(255, 255, 255, 0.98) !important;
+    border-bottom: 1px solid var(--color-border);
+    z-index: 1000;
+}
+
+.navbar-toggler {
+    border-color: var(--color-border);
+}
+
+.navbar-toggler-icon {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba(36, 41, 46, 0.75)' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
 }
 
 /* ============================================
@@ -33,7 +53,8 @@ body {
    ============================================ */
 .hero-section {
     position: relative;
-    padding: 8rem 0 6rem;
+    padding: 6rem 0 5rem;
+    margin-top: 56px; /* Account for fixed navbar */
     background: linear-gradient(to bottom, #fafbfc 0%, #ffffff 100%);
     border-bottom: 1px solid var(--color-border);
 }
