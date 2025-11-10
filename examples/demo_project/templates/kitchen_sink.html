@@ -1,45 +1,292 @@
-{% extends "base.html" %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Component Kitchen Sink - djust</title>
 
-{% block title %}Kitchen Sink - djust Components{% endblock %}
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 
-{% block nav_components_active %}active{% endblock %}
+    <!-- Shared Theme System -->
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/utilities.css">
 
-{% block extra_styles %}
-    /* Highlight.js atom-one-dark theme */
-    pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#abb2bf;background:#282c34}.hljs-comment,.hljs-quote{color:#5c6370;font-style:italic}.hljs-doctag,.hljs-formula,.hljs-keyword{color:#c678dd}.hljs-deletion,.hljs-name,.hljs-section,.hljs-selector-tag,.hljs-subst{color:#e06c75}.hljs-literal{color:#56b6c2}.hljs-addition,.hljs-attribute,.hljs-meta .hljs-string,.hljs-regexp,.hljs-string{color:#98c379}.hljs-attr,.hljs-number,.hljs-selector-attr,.hljs-selector-class,.hljs-selector-pseudo,.hljs-template-variable,.hljs-type,.hljs-variable{color:#d19a66}.hljs-bullet,.hljs-link,.hljs-meta,.hljs-selector-id,.hljs-symbol,.hljs-title{color:#61aeee}.hljs-built_in,.hljs-class .hljs-title,.hljs-title.class_{color:#e6c07b}.hljs-emphasis{font-style:italic}.hljs-strong{font-weight:700}.hljs-link{text-decoration:underline}
+    <!-- Tailwind for utility classes -->
+    <script src="https://cdn.tailwindcss.com"></script>
 
+    <!-- Syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
 
-    .hero-section {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 2rem 0;
-            margin-bottom: 3rem;
+    <style>
+        /* Bootstrap Component Dark Mode Overrides */
+
+        /* Force immediate browser repaint for modal - fixes cursor-dependent visibility bug */
+        @keyframes forceRepaint {
+            0% { transform: translate3d(0, 0, 0) scale(1); opacity: 1; }
+            100% { transform: translate3d(0, 0, 0) scale(1); opacity: 1; }
         }
-        .component-section {
-            background: white;
-            border-radius: 12px;
-            padding: 2rem;
-            margin-bottom: 2rem;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+
+        /* Modal - Force complete visibility when shown + GPU acceleration */
+        .modal {
+            z-index: 10000 !important;
         }
-        .component-section h3 {
-            color: #2c3e50;
-            font-weight: 600;
-            margin-bottom: 1.5rem;
-            padding-bottom: 0.75rem;
-            border-bottom: 3px solid #667eea;
-            display: inline-block;
+
+        /* Remove fade transitions completely - they interfere with rendering */
+        .modal.fade {
+            transition: none !important;
         }
+
+        .modal.show {
+            animation: forceRepaint 0.01s linear forwards !important;
+        }
+
+        /* Aggressive visibility forcing + hardware acceleration */
+        .modal.show,
+        .modal.show.fade,
+        body .modal.show,
+        html body .modal.show {
+            display: block !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            overflow: hidden auto !important;
+            outline: 0 !important;
+            /* Force GPU acceleration and new compositing layer */
+            transform: translate3d(0, 0, 0) !important;
+            will-change: transform, opacity !important;
+            backface-visibility: visible !important;
+            perspective: 1000px !important;
+            /* Force compositor to create a layer immediately */
+            filter: brightness(1) !important;
+            isolation: isolate !important;
+        }
+
+        .modal-backdrop {
+            z-index: 9999 !important;
+            background-color: rgba(0, 0, 0, 0.5) !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            pointer-events: none !important; /* Don't block clicks */
+        }
+
+        .modal-backdrop.show {
+            opacity: 0.5 !important;
+            visibility: visible !important;
+        }
+
+        .modal-dialog {
+            position: relative !important;
+            margin: 1.75rem auto !important;
+            pointer-events: auto !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            z-index: 10001 !important; /* Higher than modal container */
+            transform: none !important;
+        }
+
+        .modal-content {
+            background-color: var(--color-bg-elevated) !important;
+            border-color: var(--color-border) !important;
+            color: var(--color-text) !important;
+            pointer-events: auto !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+        }
+
+        .modal-header {
+            background-color: var(--color-bg) !important;
+            border-bottom-color: var(--color-border) !important;
+        }
+        .modal-title {
+            color: var(--color-text) !important;
+        }
+        .modal-body {
+            color: var(--color-text) !important;
+        }
+        .modal-footer {
+            background-color: var(--color-bg) !important;
+            border-top-color: var(--color-border) !important;
+        }
+        .btn-close {
+            filter: invert(1) grayscale(100%) brightness(200%);
+        }
+
+        /* Dropdown */
+        .dropdown-menu {
+            background-color: var(--color-bg-elevated) !important;
+            border-color: var(--color-border) !important;
+        }
+        .dropdown-item {
+            color: var(--color-text) !important;
+        }
+        .dropdown-item:hover,
+        .dropdown-item:focus {
+            background-color: var(--color-bg) !important;
+            color: var(--color-text) !important;
+        }
+        .dropdown-divider {
+            border-top-color: var(--color-border) !important;
+        }
+
+        /* Cards */
+        .card {
+            background-color: var(--color-bg-elevated) !important;
+            border-color: var(--color-border) !important;
+            color: var(--color-text) !important;
+        }
+        .card-header {
+            background-color: var(--color-bg) !important;
+            border-bottom-color: var(--color-border) !important;
+            color: var(--color-text) !important;
+        }
+        .card-footer {
+            background-color: var(--color-bg) !important;
+            border-top-color: var(--color-border) !important;
+            color: var(--color-text-muted) !important;
+        }
+        .card-body {
+            color: var(--color-text) !important;
+        }
+        .card-title {
+            color: var(--color-text) !important;
+        }
+        .card-text {
+            color: var(--color-text) !important;
+        }
+
+        /* Alerts */
+        .alert {
+            border-color: var(--color-border) !important;
+        }
+        .alert-success {
+            background-color: rgba(16, 185, 129, 0.1) !important;
+            color: var(--color-success) !important;
+            border-color: rgba(16, 185, 129, 0.3) !important;
+        }
+        .alert-info {
+            background-color: rgba(59, 130, 246, 0.1) !important;
+            color: var(--color-accent) !important;
+            border-color: rgba(59, 130, 246, 0.3) !important;
+        }
+        .alert-warning {
+            background-color: rgba(245, 158, 11, 0.1) !important;
+            color: var(--color-warning) !important;
+            border-color: rgba(245, 158, 11, 0.3) !important;
+        }
+        .alert-danger {
+            background-color: rgba(239, 68, 68, 0.1) !important;
+            color: var(--color-error) !important;
+            border-color: rgba(239, 68, 68, 0.3) !important;
+        }
+
+        /* Progress Bars */
+        .progress {
+            background-color: var(--color-bg) !important;
+            border: 1px solid var(--color-border);
+        }
+
+        /* Tabs */
+        .nav-tabs {
+            border-bottom-color: var(--color-border) !important;
+        }
+        .nav-tabs .nav-link {
+            color: var(--color-text-muted) !important;
+            border-color: transparent !important;
+        }
+        .nav-tabs .nav-link:hover {
+            color: var(--color-text) !important;
+            border-color: var(--color-border) var(--color-border) transparent !important;
+        }
+        .nav-tabs .nav-link.active {
+            color: var(--color-text) !important;
+            background-color: var(--color-bg-elevated) !important;
+            border-color: var(--color-border) var(--color-border) transparent !important;
+        }
+        .tab-content {
+            background-color: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-top: none;
+            padding: 1rem;
+            color: var(--color-text);
+        }
+
+        /* Tables */
+        .table {
+            color: var(--color-text) !important;
+            border-color: var(--color-border) !important;
+        }
+        .table thead th {
+            background-color: var(--color-bg) !important;
+            color: var(--color-text) !important;
+            border-color: var(--color-border) !important;
+        }
+        .table tbody td {
+            border-color: var(--color-border) !important;
+            color: var(--color-text) !important;
+        }
+        .table-striped tbody tr:nth-of-type(odd) {
+            background-color: rgba(255, 255, 255, 0.02) !important;
+        }
+        .table-hover tbody tr:hover {
+            background-color: var(--color-bg) !important;
+        }
+
+        /* Pagination */
+        .pagination .page-link {
+            background-color: var(--color-bg) !important;
+            border-color: var(--color-border) !important;
+            color: var(--color-text) !important;
+        }
+        .pagination .page-link:hover {
+            background-color: var(--color-bg-elevated) !important;
+            border-color: var(--color-border-hover) !important;
+            color: var(--color-text) !important;
+        }
+        .pagination .page-item.active .page-link {
+            background-color: var(--color-accent) !important;
+            border-color: var(--color-accent) !important;
+            color: white !important;
+        }
+        .pagination .page-item.disabled .page-link {
+            background-color: var(--color-bg) !important;
+            border-color: var(--color-border) !important;
+            color: var(--color-text-muted) !important;
+        }
+
+        /* Badges */
+        .badge {
+            border: 1px solid transparent;
+        }
+
+        /* Spinners - ensure they're visible in dark mode */
+        .spinner-border,
+        .spinner-grow {
+            opacity: 1;
+        }
+
+        /* Component Demo Containers */
         .component-demo {
-            background: #f8f9fa;
-            border-radius: 8px;
+            background: var(--color-bg);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-md);
             padding: 1.5rem;
             margin-bottom: 1.5rem;
         }
         .demo-label {
             font-size: 0.875rem;
             font-weight: 600;
-            color: #6c757d;
+            color: var(--color-text-muted);
             margin-bottom: 0.75rem;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -53,1127 +300,508 @@
             display: flex;
             gap: 0.5rem;
             flex-wrap: wrap;
+            align-items: center;
         }
         .btn-interactive {
             margin: 0.5rem 0.5rem 0.5rem 0;
         }
-        /* Inline code (not in pre blocks) */
         :not(pre) > code {
-            background: #f4f4f4;
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
             padding: 0.2rem 0.4rem;
             border-radius: 4px;
             font-size: 0.875rem;
-            color: #e83e8c;
+            color: var(--color-accent);
         }
-
-        /* Pre blocks styling */
         pre {
-            border-radius: 8px;
+            border-radius: var(--radius-md);
             margin: 0;
         }
         .section-divider {
-            margin: 3rem 0;
-            border-top: 2px solid #e9ecef;
+            margin: 2rem 0;
+            border-top: 2px solid var(--color-border);
         }
     </style>
-{% endblock %}
+</head>
+<body>
+    <div data-liveview-root>
+    <!-- Navbar Component -->
+    {{ navbar.render }}
 
-{% block content %}
-<div data-liveview-root>
+    <!-- Theme Toggle -->
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+        <svg class="theme-icon-dark" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+        <svg class="theme-icon-light" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="display: none;">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+    </button>
+
     <!-- Hero Section -->
-    <div class="hero-section">
-        <div class="container">
-            <h1 class="display-4">Component Kitchen Sink</h1>
-            <p class="lead mb-0">
-                Explore all djust components with live, interactive examples.
-                All components support Bootstrap 5, Tailwind CSS, and plain HTML rendering.
-            </p>
-        </div>
-    </div>
-
-    <!-- Main Content -->
-    <div class="container pb-5">
-        <!-- Alerts Section -->
-        <div class="component-section">
-            <h3>Alerts & Notifications</h3>
-            <div class="component-demo">
-                <div class="demo-label">Alert Components</div>
-                <div class="mb-3">{{ alert_success.render }}</div>
-                <div class="mb-3">{{ alert_info.render }}</div>
-                <div>{{ alert_warning.render }}</div>
-            </div>
-
-            <div class="mt-3">
-                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from djust.components import AlertComponent
-
-# In your mount() method:
-self.alert_success = AlertComponent(
-    message="Operation completed successfully!",
-    type="success",               # info, success, warning, danger, error
-    dismissible=True
-)
-
-self.alert_info = AlertComponent(
-    message="Here's some helpful information.",
-    type="info",
-    icon=True
-)
-
-self.alert_warning = AlertComponent(
-    message="Warning: Please review your changes.",
-    type="warning",
-    dismissible=True
-)
-
-# Event handler for dismissing alerts (automatically routes to correct component):
-def dismiss(self, component_id: str = None):
-    """Dismiss event automatically routes to the component by attribute name"""
-    if component_id and hasattr(self, component_id):
-        component = getattr(self, component_id)
-        if hasattr(component, 'dismiss'):
-            component.dismiss()
-
-# Update message dynamically:
-def show_alert(self):
-    self.alert_success.set_message("Updated message!")
-    self.alert_success.show()</code></pre>
-
-                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
-                <pre><code class="language-html">&#123;&#123; alert_success.render &#125;&#125;
-&#123;&#123; alert_info.render &#125;&#125;
-&#123;&#123; alert_warning.render &#125;&#125;</code></pre>
-            </div>
-        </div>
-
-        <!-- Buttons Section -->
-        <div class="component-section">
-            <h3>Buttons</h3>
-            <div class="component-demo">
-                <div class="demo-label">Button Variants & Sizes</div>
-                <div>
-                    {{ button_primary.render }}
-                    {{ button_secondary.render }}
-                    {{ button_success.render }}
-                    {{ button_danger.render }}
+    <section class="hero-section" style="padding: 4rem 0 2rem;">
+        <div class="container mx-auto px-4">
+            <div class="max-w-4xl mx-auto text-center">
+                <div class="flex items-center justify-center gap-3 mb-4">
+                    <div class="text-5xl">🎨</div>
+                    <h1 class="hero-title" style="font-size: 2.5rem; margin-bottom: 0;">Component Kitchen Sink</h1>
                 </div>
-                <div class="mt-3">
-                    <p class="text-muted mb-2">
-                        <small>Button click count: <strong>{{ button_click_count }}</strong></small>
-                    </p>
-                </div>
-            </div>
-
-            <div class="mt-3">
-                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from djust.components import ButtonComponent
-
-# In your mount() method:
-self.button_primary = ButtonComponent(
-    label="Primary Button",
-    variant="primary",      # primary, secondary, success, danger, warning, info
-    size="md",             # sm, md, lg
-    on_click="handle_button_click"  # Method name to call
-)
-
-self.button_with_icon = ButtonComponent(
-    label="Success",
-    variant="success",
-    icon="✓",             # Add icon (emoji or HTML)
-    outline=True          # Outline style button
-)
-
-# Event handler:
-def handle_button_click(self):
-    self.button_click_count += 1
-    # State changes automatically trigger re-render</code></pre>
-
-                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
-                <pre><code class="language-html">&#123;&#123; button_primary.render &#125;&#125;
-&#123;&#123; button_with_icon.render &#125;&#125;</code></pre>
-            </div>
-        </div>
-
-        <!-- Badges Section -->
-        <div class="component-section">
-            <h3>Badges & Labels</h3>
-            <div class="component-demo">
-                <div class="demo-label">Badge Variants</div>
-                <div class="badge-container">
-                    {{ badge_primary.render }}
-                    {{ badge_success.render }}
-                    {{ badge_warning.render }}
-                    {{ badge_dismissible.render }}
-                </div>
-            </div>
-
-            <div class="mt-3">
-                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from djust.components import BadgeComponent
-
-# In your mount() method:
-self.badge_primary = BadgeComponent(
-    text="Primary",
-    variant="primary"      # primary, secondary, success, danger, warning, info
-)
-
-self.badge_success = BadgeComponent(
-    text="Active",
-    variant="success",
-    pill=True             # Rounded pill style
-)
-
-self.badge_dismissible = BadgeComponent(
-    text="Python",
-    variant="info",
-    dismissible=True,     # Add close button
-    on_dismiss="dismiss_tag"  # Method to call when dismissed
-)
-
-# Event handler:
-def dismiss_tag(self):
-    self.badge_dismissible.dismiss()</code></pre>
-
-                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
-                <pre><code class="language-html">&#123;&#123; badge_primary.render &#125;&#125;
-&#123;&#123; badge_success.render &#125;&#125;
-&#123;&#123; badge_dismissible.render &#125;&#125;</code></pre>
-            </div>
-        </div>
-
-        <!-- Dropdowns Section -->
-        <div class="component-section">
-            <h3>Dropdowns</h3>
-            <div class="component-demo">
-                <div class="demo-label">Dropdown Menus</div>
-                <div>
-                    {{ dropdown_actions.render }}
-                    <span class="ms-2">{{ dropdown_split.render }}</span>
-                </div>
-            </div>
-
-            <div class="mt-3">
-                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from djust.components import DropdownComponent
-
-# In your mount() method:
-self.dropdown_actions = DropdownComponent(
-    label="Actions",
-    variant="primary",
-    items=[
-        {'text': 'Edit', 'action': 'edit_item', 'icon': '✏️'},
-        {'text': 'Delete', 'action': 'delete_item', 'icon': '🗑️', 'variant': 'danger'},
-        {'divider': True},  # Add separator line
-        {'text': 'Archive', 'action': 'archive_item'},
-    ]
-)
-
-self.dropdown_split = DropdownComponent(
-    label="Split Dropdown",
-    variant="success",
-    split=True,          # Split button style
-    items=[
-        {'text': 'Action 1', 'action': 'action1'},
-        {'text': 'Action 2', 'action': 'action2'},
-    ]
-)
-
-# Event handlers for dropdown items:
-def edit_item(self):
-    # Handle edit action
-    pass
-
-def delete_item(self):
-    # Handle delete action
-    pass</code></pre>
-
-                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
-                <pre><code class="language-html">&#123;&#123; dropdown_actions.render &#125;&#125;
-&#123;&#123; dropdown_split.render &#125;&#125;</code></pre>
-            </div>
-        </div>
-
-        <!-- Cards Section -->
-        <div class="component-section">
-            <h3>Cards</h3>
-            <div class="component-grid">
-                <div>
-                    {{ card_basic.render }}
-                </div>
-                <div>
-                    {{ card_with_footer.render }}
-                </div>
-            </div>
-
-            <div class="mt-3">
-                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from djust.components import CardComponent
-
-# In your mount() method:
-self.card_basic = CardComponent(
-    title="Basic Card",
-    body="This is a simple card component with a title and body text.",
-    variant="default"     # default, primary, success, info, warning, danger
-)
-
-self.card_with_footer = CardComponent(
-    title="Featured Card",
-    body="This card has a footer with additional information.",
-    footer="Last updated 3 mins ago",
-    variant="primary"
-)
-
-# Cards can also include custom HTML in body/footer
-self.card_custom = CardComponent(
-    title="Custom Card",
-    body="&lt;p&gt;You can include &lt;strong&gt;HTML&lt;/strong&gt; content.&lt;/p&gt;",
-    footer="&lt;button class='btn btn-sm btn-primary'&gt;Action&lt;/button&gt;"
-)</code></pre>
-
-                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
-                <pre><code class="language-html">&#123;&#123; card_basic.render &#125;&#125;
-&#123;&#123; card_with_footer.render &#125;&#125;</code></pre>
-            </div>
-        </div>
-
-        <!-- Modal Section -->
-        <div class="component-section">
-            <h3>Modal Dialogs</h3>
-            <div class="component-demo">
-                <div class="demo-label">Modal Example</div>
-                <button class="btn btn-primary" @click="show_modal">Open Modal</button>
-                <p class="text-muted mt-2 mb-0">
-                    <small>Modal opened: <strong>{{ modal_open_count }}</strong> time(s)</small>
+                <p class="hero-subtitle">
+                    Explore all djust components with live, interactive examples. All components support Bootstrap 5, Tailwind CSS, and plain HTML rendering.
                 </p>
             </div>
-            {{ modal_example.render }}
-
-            <div class="mt-3">
-                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from djust.components import ModalComponent
-
-# In your mount() method:
-self.modal_example = ModalComponent(
-    title="Example Modal",
-    body="This is a modal dialog with customizable content.",
-    show=False,          # Initially hidden
-    size="lg"            # sm, md, lg, xl
-)
-
-self.modal_open_count = 0
-
-# Event handlers:
-def show_modal(self):
-    """Show the modal and update its content"""
-    self.modal_open_count += 1
-    self.modal_example.set_body(f"This modal has been opened {self.modal_open_count} time(s).")
-    self.modal_example.show()
-
-def close_modal(self):
-    """Close the modal"""
-    self.modal_example.hide()
-
-# Update modal content dynamically:
-def update_modal_content(self):
-    self.modal_example.set_title("New Title")
-    self.modal_example.set_body("&lt;p&gt;Updated content with &lt;strong&gt;HTML&lt;/strong&gt;&lt;/p&gt;")</code></pre>
-
-                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
-                <pre><code class="language-html">&lt;!-- Trigger button --&gt;
-&lt;button class="btn btn-primary" @click="show_modal"&gt;Open Modal&lt;/button&gt;
-
-&lt;!-- Modal component --&gt;
-&#123;&#123; modal_example.render &#125;&#125;</code></pre>
-            </div>
         </div>
+    </section>
 
-        <!-- Progress Bars Section -->
-        <div class="component-section">
-            <h3>Progress Indicators</h3>
-            <div class="component-demo">
-                <div class="demo-label">Progress Bars</div>
-                <div class="mb-3">
-                    <p class="text-muted mb-2"><small>Simple Progress</small></p>
-                    {{ progress_simple.render }}
-                </div>
-                <div class="mb-3">
-                    <p class="text-muted mb-2"><small>Striped & Animated</small></p>
-                    {{ progress_striped.render }}
-                </div>
-                <div class="mb-3">
-                    <p class="text-muted mb-2"><small>Custom Label</small></p>
-                    {{ progress_custom.render }}
-                </div>
-                <div class="mt-3">
-                    <button class="btn btn-sm btn-primary" @click="increment_progress">Increment (+10%)</button>
-                    <button class="btn btn-sm btn-secondary ms-2" @click="reset_progress">Reset</button>
-                </div>
-            </div>
+    <!-- Component Sections -->
+    <section class="section-modern" style="padding: 2rem 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 1400px;">
 
-            <div class="mt-3">
-                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from djust.components import ProgressComponent
-
-# In your mount() method:
-self.progress_simple = ProgressComponent(
-    value=45,            # 0-100
-    variant="primary",   # primary, success, info, warning, danger
-    show_label=True      # Show percentage label
-)
-
-self.progress_striped = ProgressComponent(
-    value=65,
-    variant="success",
-    striped=True,        # Add striped pattern
-    animated=True,       # Animate the stripes
-    show_label=True
-)
-
-self.progress_custom = ProgressComponent(
-    value=30,
-    variant="warning",
-    custom_label="Processing...",  # Custom text instead of percentage
-    striped=True
-)
-
-self.current_progress = 45
-
-# Event handlers:
-def increment_progress(self):
-    """Increment progress bar value"""
-    if self.current_progress < 100:
-        self.current_progress += 10
-        self.progress_simple.set_value(self.current_progress)
-        self.progress_striped.set_value(min(self.current_progress + 20, 100))
-
-def reset_progress(self):
-    """Reset progress bars to 0"""
-    self.current_progress = 0
-    self.progress_simple.reset()
-    self.progress_striped.reset()</code></pre>
-
-                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
-                <pre><code class="language-html">&#123;&#123; progress_simple.render &#125;&#125;
-&#123;&#123; progress_striped.render &#125;&#125;
-&#123;&#123; progress_custom.render &#125;&#125;</code></pre>
-            </div>
-        </div>
-
-        <!-- Spinners Section -->
-        <div class="component-section">
-            <h3>Loading Spinners</h3>
-            <div class="component-demo">
-                <div class="demo-label">Spinner Variants</div>
-                <div class="d-flex gap-4 align-items-center">
-                    {{ spinner_border.render }}
-                    {{ spinner_grow.render }}
-                </div>
-            </div>
-
-            <div class="mt-3">
-                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from djust.components import SpinnerComponent
-
-# In your mount() method:
-self.spinner_border = SpinnerComponent(
-    variant="primary",    # primary, success, info, warning, danger, secondary
-    size="md",           # sm, md, lg
-    type="border",       # border (default) or grow
-    label="Loading..."   # Screen reader text
-)
-
-self.spinner_grow = SpinnerComponent(
-    variant="success",
-    size="sm",
-    type="grow"          # Growing spinner animation
-)
-
-# Use spinners to show loading states:
-def load_data(self):
-    self.is_loading = True
-    # ... fetch data ...
-    self.is_loading = False</code></pre>
-
-                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
-                <pre><code class="language-html">&lt;!-- Show spinner while loading --&gt;
-{&#37; if is_loading &#37;}
-    &#123;&#123; spinner_border.render &#125;&#125;
-{&#37; else &#37;}
-    &lt;!-- Your content here --&gt;
-{&#37; endif &#37;}
-
-&lt;!-- Or inline with buttons --&gt;
-&#123;&#123; spinner_grow.render &#125;&#125;</code></pre>
-            </div>
-        </div>
-
-        <!-- Tabs Section -->
-        <div class="component-section">
-            <h3>Tabs & Navigation</h3>
-            <div class="component-demo">
-                <div class="demo-label">Tabbed Interface</div>
-                {{ tabs_example.render }}
-            </div>
-
-            <div class="mt-3">
-                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from djust.components import TabsComponent
-
-# In your mount() method:
-self.tabs_example = TabsComponent(
-    tabs=[
-        {
-            'id': 'home',
-            'label': 'Home',
-            'content': '&lt;p&gt;Welcome to the Home tab!&lt;/p&gt;'
-        },
-        {
-            'id': 'profile',
-            'label': 'Profile',
-            'content': '&lt;p&gt;User profile information goes here.&lt;/p&gt;'
-        },
-        {
-            'id': 'messages',
-            'label': 'Messages',
-            'content': '&lt;p&gt;Your messages appear here.&lt;/p&gt;',
-            'badge': '5'         # Add notification badge
-        },
-        {
-            'id': 'settings',
-            'label': 'Settings',
-            'content': '&lt;p&gt;Configure your settings.&lt;/p&gt;',
-            'disabled': True     # Disable tab
-        },
-    ],
-    active='home',              # Initially active tab
-    variant='tabs'              # 'tabs' or 'pills'
-)
-
-# Change active tab programmatically:
-def switch_to_profile(self):
-    self.tabs_example.set_active('profile')</code></pre>
-
-                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
-                <pre><code class="language-html">&#123;&#123; tabs_example.render &#125;&#125;</code></pre>
-            </div>
-        </div>
-
-        <!-- Data Table Section -->
-        <div class="component-section">
-            <h3>Data Tables</h3>
-            <div class="component-demo">
-                <div class="demo-label">Sortable Data Table</div>
-                <p class="text-muted mb-3"><small>Click column headers to sort</small></p>
-                {{ table_users.render }}
-            </div>
-
-            <div class="mt-3">
-                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from djust.components import TableComponent
-
-# In your mount() method:
-self.table_users = TableComponent(
-    columns=[
-        {'key': 'id', 'label': 'ID', 'sortable': True},
-        {'key': 'name', 'label': 'Name', 'sortable': True},
-        {'key': 'email', 'label': 'Email', 'sortable': True},
-        {'key': 'role', 'label': 'Role', 'badge': True},      # Render as badge
-        {'key': 'status', 'label': 'Status', 'badge': True},
-    ],
-    rows=[
-        {'id': 1, 'name': 'Alice Johnson', 'email': 'alice@example.com',
-         'role': 'Admin', 'status': 'active'},
-        {'id': 2, 'name': 'Bob Smith', 'email': 'bob@example.com',
-         'role': 'User', 'status': 'active'},
-        {'id': 3, 'name': 'Charlie Brown', 'email': 'charlie@example.com',
-         'role': 'User', 'status': 'inactive'},
-    ],
-    striped=True,        # Alternating row colors
-    hoverable=True,      # Highlight row on hover
-    bordered=True        # Add borders
-)
-
-# Can also use Django QuerySet:
-# rows = User.objects.all().values('id', 'name', 'email', 'role', 'status')
-# self.table_users = TableComponent(columns=columns, rows=rows)</code></pre>
-
-                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
-                <pre><code class="language-html">&#123;&#123; table_users.render &#125;&#125;</code></pre>
-            </div>
-        </div>
-
-        <!-- Pagination Section -->
-        <div class="component-section">
-            <h3>Pagination</h3>
-            <div class="component-demo">
-                <div class="demo-label">Basic Pagination</div>
-                <div class="mb-4">
-                    {{ pagination_basic.render }}
-                </div>
-
-                <div class="demo-label">Large Pagination with Info</div>
-                <div>
-                    {{ pagination_large.render }}
-                </div>
-            </div>
-
-            <div class="mt-3">
-                <p class="text-muted mb-2"><small><strong>Python Code:</strong></small></p>
-                <pre><code class="language-python">from djust.components import PaginationComponent
-
-# In your mount() method:
-self.pagination_basic = PaginationComponent(
-    current_page=3,
-    total_pages=10,
-    show_page_info=True,     # Show "Page 3 of 10"
-    alignment='center'       # left, center, right
-)
-
-self.pagination_large = PaginationComponent(
-    current_page=1,
-    total_items=250,         # Total number of items
-    items_per_page=25,       # Items shown per page
-    size='lg',              # sm, md, lg
-    on_page_change='handle_page_change'  # Event handler
-)
-
-# Event handler:
-def handle_page_change(self, page: int):
-    """Called when user clicks a page number"""
-    self.current_page = page
-    # Fetch new data for this page
-    self.load_data(page)
-
-# Using with Django Paginator:
-from django.core.paginator import Paginator
-
-def mount(self, request):
-    items = MyModel.objects.all()
-    paginator = Paginator(items, 25)
-    page_number = request.GET.get('page', 1)
-    page_obj = paginator.get_page(page_number)
-
-    self.pagination = PaginationComponent(
-        current_page=page_obj.number,
-        total_pages=paginator.num_pages,
-        on_page_change='change_page'
-    )</code></pre>
-
-                <p class="text-muted mb-2 mt-3"><small><strong>Template:</strong></small></p>
-                <pre><code class="language-html">&#123;&#123; pagination_basic.render &#125;&#125;
-&#123;&#123; pagination_large.render &#125;&#125;</code></pre>
-            </div>
-        </div>
-
-        <!-- Component Composition Example -->
-        <div class="component-section">
-            <h3>Component Composition</h3>
-            <div class="component-demo">
-                <div class="demo-label">Combining Multiple Components</div>
-                <div class="card">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <h5 class="mb-0">User Dashboard</h5>
-                        <div>
-                            {{ badge_success.render }}
+            <!-- UI COMPONENTS -->
+            <div class="row g-4 mb-4">
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(139, 92, 246, 0.03);">
+                            <h2 class="text-2xl font-bold m-0" style="color: var(--color-text);">UI Components</h2>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Core interactive components for building modern user interfaces
+                            </p>
                         </div>
-                    </div>
-                    <div class="card-body">
-                        <p>This demonstrates how components can be composed together in complex UIs.</p>
-                        {{ progress_simple.render }}
-                        <div class="mt-3">
-                            {{ button_primary.render }}
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+
+                            <!-- Alerts -->
+                            <h3 class="text-lg font-bold mb-3" style="color: var(--color-text);">Alerts & Notifications</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Alert Components</div>
+                                {{ alert_success.render }}
+                                {{ alert_info.render }}
+                                {{ alert_warning.render }}
+                            </div>
+
+                            <!-- Buttons -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Buttons</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Button Variants</div>
+                                <div class="flex flex-wrap gap-2">
+                                    {{ button_primary.render }}
+                                    {{ button_secondary.render }}
+                                    {{ button_success.render }}
+                                    {{ button_danger.render }}
+                                </div>
+                            </div>
+
+                            <!-- Badges -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Badges</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Badge Styles</div>
+                                <div class="badge-container">
+                                    {{ badge_primary.render }}
+                                    {{ badge_success.render }}
+                                    {{ badge_warning.render }}
+                                    {{ badge_dismissible.render }}
+                                </div>
+                            </div>
+
+                            <!-- Dropdowns -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Dropdowns</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Dropdown Menus</div>
+                                <div class="flex flex-wrap gap-2">
+                                    {{ dropdown_actions.render }}
+                                    {{ dropdown_split.render }}
+                                </div>
+                            </div>
+
+                            <!-- Cards -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Cards</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Card Components</div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {{ card_basic.render }}
+                                    {{ card_with_footer.render }}
+                                </div>
+                            </div>
+
+                            <!-- Modal -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Modals</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Modal Dialogs</div>
+                                <button @click="show_modal" class="btn-primary-modern">
+                                    <span>Show Modal</span>
+                                </button>
+                                {{ modal_example.render }}
+                            </div>
+
+                            <!-- Progress Bars -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Progress Bars</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Progress Indicators</div>
+                                <div class="space-y-3">
+                                    {{ progress_simple.render }}
+                                    {{ progress_striped.render }}
+                                    {{ progress_custom.render }}
+                                </div>
+                                <div class="flex gap-2 mt-3">
+                                    <button @click="increment_progress" class="btn-primary-modern">
+                                        <span>Increment</span>
+                                    </button>
+                                    <button @click="reset_progress" class="btn-secondary-modern">
+                                        <span>Reset</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Spinners -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Spinners</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Loading Spinners</div>
+                                <div class="flex gap-4 items-center">
+                                    {{ spinner_border.render }}
+                                    {{ spinner_grow.render }}
+                                </div>
+                            </div>
+
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- Code Example Section -->
-        <div class="component-section">
-            <h3>Usage Examples</h3>
-            <div class="alert alert-info mb-4">
-                <strong>Note:</strong> Each page/route has <strong>one LiveView class</strong> that manages the entire page's state and interactivity.
-                Within that LiveView, you can use <strong>multiple components</strong>, manage <strong>multiple state variables</strong>,
-                and handle <strong>many different events</strong>. Think: One LiveView per page, many components per LiveView.
+            <!-- LAYOUT COMPONENTS -->
+            <div class="row g-4 mb-4">
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(16, 185, 129, 0.03);">
+                            <h2 class="text-2xl font-bold m-0" style="color: var(--color-text);">Layout Components</h2>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Components for organizing and structuring your application layout
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+
+                            <!-- Tabs -->
+                            <h3 class="text-lg font-bold mb-3" style="color: var(--color-text);">Tabs</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Tab Navigation</div>
+                                {{ tabs_example.render }}
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
             </div>
 
-            <!-- Basic Component Example -->
-            <div class="component-demo">
-                <div class="demo-label">1. Basic Counter - Complete Example</div>
-                <p class="text-muted mb-2"><small>Shows LiveView initialization, components, event handlers, and template integration</small></p>
-                <pre><code class="language-python"># views.py
-from djust import LiveView
-from djust.components import ButtonComponent, AlertComponent
+            <!-- DATA COMPONENTS -->
+            <div class="row g-4 mb-4">
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.03);">
+                            <h2 class="text-2xl font-bold m-0" style="color: var(--color-text);">Data Components</h2>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Components for displaying and manipulating data tables and lists
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+
+                            <!-- Tables -->
+                            <h3 class="text-lg font-bold mb-3" style="color: var(--color-text);">Tables</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Data Tables (Sortable, Striped, Hoverable)</div>
+                                {{ table_users.render }}
+                            </div>
+
+                            <!-- Pagination -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Pagination</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Page Navigation</div>
+                                {{ pagination_basic.render }}
+                                <div class="mt-3"></div>
+                                {{ pagination_large.render }}
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- USAGE EXAMPLES -->
+            <div class="row g-4 mb-4">
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(245, 158, 11, 0.03);">
+                            <h2 class="text-2xl font-bold m-0" style="color: var(--color-text);">Usage Examples</h2>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Complete code examples showing how to use djust components
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+
+                            <!-- Basic Counter Example -->
+                            <div class="mb-4">
+                                <div class="code-header-modern">
+                                    <span>Basic Counter Example</span>
+                                    <span class="code-badge-modern">Python</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from djust import LiveView
 
 class CounterView(LiveView):
     template_name = "counter.html"
 
-    def mount(self, request):
-        """Called when the view first loads - initialize state here"""
-        # State variables - these are automatically synced with the template
-        self.counter = 0
-        self.message = ""
-
-        # Create interactive components
-        # on_click="increment" calls the increment() method below
-        self.increment_btn = ButtonComponent(
-            label="Increment Counter",
-            variant="primary",
-            on_click="increment"
-        )
-
-        self.reset_btn = ButtonComponent(
-            label="Reset",
-            variant="secondary",
-            on_click="reset"
-        )
-
-        # Alert component to show messages
-        self.alert = AlertComponent(
-            message=self.message,
-            variant="success",
-            dismissible=True
-        )
+    def mount(self, request, **kwargs):
+        self.count = 0
 
     def increment(self):
-        """Called when increment button is clicked - updates sent via WebSocket"""
-        self.counter += 1
-        self.message = f"Counter incremented to {self.counter}"
-        # State changes automatically trigger a re-render
+        self.count += 1
 
-    def reset(self):
-        """Reset counter to zero"""
-        self.counter = 0
-        self.message = "Counter reset"</code></pre>
+    def decrement(self):
+        self.count -= 1</code></pre>
+                                </div>
+                            </div>
 
-                <div class="mt-3">
-                    <p class="text-muted mb-2"><small><strong>Template:</strong> Shows how to use the view state and components</small></p>
-                    <pre><code class="language-html">&lt;!-- counter.html --&gt;
-{&#37; extends "base.html" &#37;}
-
-{&#37; block content &#37;}
-&lt;!-- All interactive content must be inside data-liveview-root --&gt;
-&lt;div data-liveview-root&gt;
-    &lt;div class="card"&gt;
-        &lt;div class="card-body"&gt;
-            &lt;!-- Access state variables directly from the view --&gt;
-            &lt;h2&gt;Current Count: &#123;&#123; counter &#125;&#125;&lt;/h2&gt;
-
-            &lt;!-- Render components created in mount() --&gt;
-            &lt;div class="mt-3"&gt;
-                &#123;&#123; increment_btn.render &#125;&#125;
-                &#123;&#123; reset_btn.render &#125;&#125;
-            &lt;/div&gt;
-
-            &lt;!-- Conditionally show alert when there's a message --&gt;
-            {&#37; if message &#37;}
-                &lt;div class="mt-3"&gt;
-                    &#123;&#123; alert.render &#125;&#125;
-                &lt;/div&gt;
-            {&#37; endif &#37;}
-        &lt;/div&gt;
-    &lt;/div&gt;
+                            <!-- Template Example -->
+                            <div class="mb-4">
+                                <div class="code-header-modern">
+                                    <span>Template with Event Handlers</span>
+                                    <span class="code-badge-modern">HTML</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-html">&lt;div data-liveview-root&gt;
+  &lt;h1&gt;Count: &#123;&#123; count &#125;&#125;&lt;/h1&gt;
+  &lt;button @click="increment"&gt;+&lt;/button&gt;
+  &lt;button @click="decrement"&gt;-&lt;/button&gt;
 &lt;/div&gt;
-{&#37; endblock &#37;}</code></pre>
-                </div>
-            </div>
 
-            <!-- Form Integration Example -->
-            <div class="component-demo mt-3">
-                <div class="demo-label">2. Real-time Form Validation</div>
-                <p class="text-muted mb-2"><small>Shows Django form integration with live field validation and error display</small></p>
-                <pre><code class="language-python"># views.py
-from django import forms
-from djust import LiveView, FormMixin
+&lt;script src="/static/djust/client.js"&gt;&lt;/script&gt;</code></pre>
+                                </div>
+                            </div>
 
-class ContactForm(forms.Form):
-    """Standard Django form - works with LiveView automatically"""
-    name = forms.CharField(
-        max_length=100,
-        required=True,
-        help_text="Your full name"
-    )
-    email = forms.EmailField(
-        required=True,
-        help_text="We'll never share your email"
-    )
-    message = forms.CharField(
-        widget=forms.Textarea,
-        min_length=10,
-        help_text="At least 10 characters"
-    )
+                            <!-- Form Validation -->
+                            <div class="mb-4">
+                                <div class="code-header-modern">
+                                    <span>Real-time Form Validation</span>
+                                    <span class="code-badge-modern">Python</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from djust import LiveView
 
-class ContactFormView(FormMixin, LiveView):
-    """FormMixin adds automatic form handling and validation"""
-    form_class = ContactForm
-    template_name = "contact.html"
+class FormView(LiveView):
+    template_name = "form.html"
 
-    def mount(self, request):
-        """Initialize form state"""
-        self.success_message = ""
-        self.error_message = ""
+    def mount(self, request, **kwargs):
+        self.email = ""
+        self.error = ""
 
-    def validate_field(self, field_name, value):
-        """Called when a field loses focus (@change event)
-        Returns errors in real-time before form submission"""
-        # Validate single field and return errors
-        pass
+    def validate_email(self, value=""):
+        self.email = value
+        if "@" not in value:
+            self.error = "Invalid email"
+        else:
+            self.error = ""</code></pre>
+                                </div>
+                            </div>
 
-    def form_valid(self, form):
-        """Called when form is submitted and all validation passes"""
-        # Access cleaned data
-        name = form.cleaned_data['name']
-        email = form.cleaned_data['email']
-        message = form.cleaned_data['message']
-
-        # Process the data (send email, save to DB, etc.)
-        # send_email(email, message)
-
-        self.success_message = f"Thanks {name}! We'll be in touch."
-        form = ContactForm()  # Reset form
-
-    def form_invalid(self, form):
-        """Called when validation fails
-        Errors are automatically shown in the template"""
-        self.error_message = "Please fix the errors below"</code></pre>
-
-                <div class="mt-3">
-                    <p class="text-muted mb-2"><small><strong>Template:</strong> Form with live validation and error display</small></p>
-                    <pre><code class="language-html">&lt;!-- contact.html --&gt;
-{&#37; extends "base.html" &#37;}
-
-{&#37; block content &#37;}
-&lt;div data-liveview-root&gt;
-    &lt;!-- Success/Error Messages --&gt;
-    {&#37; if success_message &#37;}
-        &lt;div class="alert alert-success"&gt;&#123;&#123; success_message &#125;&#125;&lt;/div&gt;
-    {&#37; endif &#37;}
-
-    {&#37; if error_message &#37;}
-        &lt;div class="alert alert-danger"&gt;&#123;&#123; error_message &#125;&#125;&lt;/div&gt;
-    {&#37; endif &#37;}
-
-    &lt;!-- @submit calls form_valid() or form_invalid() based on validation --&gt;
-    &lt;form @submit="submit_form"&gt;
-        &lt;!-- Name Field --&gt;
-        &lt;div class="mb-3"&gt;
-            &lt;label&gt;Name&lt;/label&gt;
-            &lt;input
-                type="text"
-                name="name"
-                class="form-control {&#37; if field_errors.name &#37;}is-invalid{&#37; endif &#37;}"
-                value="&#123;&#123; form_data.name &#125;&#125;"
-                @change="validate_field"
-                data-field="name"
-            /&gt;
-            &lt;!-- Errors shown in real-time as user types --&gt;
-            {&#37; if field_errors.name &#37;}
-                &lt;div class="invalid-feedback d-block"&gt;
-                    {&#37; for error in field_errors.name &#37;}
-                        &#123;&#123; error &#125;&#125;
-                    {&#37; endfor &#37;}
-                &lt;/div&gt;
-            {&#37; endif &#37;}
-        &lt;/div&gt;
-
-        &lt;!-- Email Field (similar structure) --&gt;
-        &lt;div class="mb-3"&gt;
-            &lt;label&gt;Email&lt;/label&gt;
-            &lt;input
-                type="email"
-                name="email"
-                class="form-control {&#37; if field_errors.email &#37;}is-invalid{&#37; endif &#37;}"
-                value="&#123;&#123; form_data.email &#125;&#125;"
-                @change="validate_field"
-                data-field="email"
-            /&gt;
-            {&#37; if field_errors.email &#37;}
-                &lt;div class="invalid-feedback d-block"&gt;
-                    {&#37; for error in field_errors.email &#37;}&#123;&#123; error &#125;&#125;{&#37; endfor &#37;}
-                &lt;/div&gt;
-            {&#37; endif &#37;}
-        &lt;/div&gt;
-
-        &lt;button type="submit" class="btn btn-primary"&gt;Send Message&lt;/button&gt;
-    &lt;/form&gt;
-&lt;/div&gt;
-{&#37; endblock &#37;}</code></pre>
-                </div>
-            </div>
-
-            <!-- Event Handling Example -->
-            <div class="component-demo mt-3">
-                <div class="demo-label">3. Interactive Todo List - Event Parameters & Lists</div>
-                <p class="text-muted mb-2"><small>Shows handling events with parameters, working with lists, and dynamic rendering</small></p>
-                <pre><code class="language-python"># views.py
-from djust import LiveView
-
-class TodoListView(LiveView):
-    template_name = "todos.html"
-
-    def mount(self, request):
-        """Initialize the todo list"""
-        self.todos = [
-            {"id": 1, "text": "Learn djust", "done": False},
-            {"id": 2, "text": "Build an app", "done": False},
-        ]
-        self.next_id = 3  # Track next ID for new todos
-        self.new_todo_text = ""  # Bind to input field
-
-    def add_todo(self):
-        """Add new todo from form submission
-        Form data is automatically available in self.form_data"""
-        text = self.new_todo_text.strip()
-        if text:
-            self.todos.append({
-                "id": self.next_id,
-                "text": text,
-                "done": False
-            })
-            self.next_id += 1
-            self.new_todo_text = ""  # Clear input
-
-    def toggle_todo(self, todo_id):
-        """Toggle completion status - receives ID from data-todo-id"""
-        for todo in self.todos:
-            if todo["id"] == int(todo_id):
-                todo["done"] = not todo["done"]
-                break
-
-    def delete_todo(self, todo_id):
-        """Delete todo by ID"""
-        self.todos = [t for t in self.todos if t["id"] != int(todo_id)]
-
-    def get_context_data(self, **kwargs):
-        """Add computed values to template context"""
-        context = super().get_context_data(**kwargs)
-        context["total_count"] = len(self.todos)
-        context["done_count"] = sum(1 for t in self.todos if t["done"])
-        context["pending_count"] = context["total_count"] - context["done_count"]
-        return context</code></pre>
-
-                <div class="mt-3">
-                    <p class="text-muted mb-2"><small><strong>Template:</strong> Dynamic list with event parameters</small></p>
-                    <pre><code class="language-html">&lt;!-- todos.html --&gt;
-{&#37; extends "base.html" &#37;}
-
-{&#37; block content &#37;}
-&lt;div data-liveview-root&gt;
-    &lt;h2&gt;My Todos&lt;/h2&gt;
-
-    &lt;!-- Stats from get_context_data() --&gt;
-    &lt;p&gt;&#123;&#123; done_count &#125;&#125; done, &#123;&#123; pending_count &#125;&#125; pending (&#123;&#123; total_count &#125;&#125; total)&lt;/p&gt;
-
-    &lt;!-- Add new todo form --&gt;
-    &lt;form @submit="add_todo" class="mb-4"&gt;
-        &lt;div class="input-group"&gt;
-            &lt;input
-                type="text"
-                name="new_todo_text"
-                class="form-control"
-                placeholder="Add a new task..."
-                value="&#123;&#123; new_todo_text &#125;&#125;"
-            /&gt;
-            &lt;button type="submit" class="btn btn-primary"&gt;Add&lt;/button&gt;
-        &lt;/div&gt;
-    &lt;/form&gt;
-
-    &lt;!-- Todo list - loops through self.todos --&gt;
-    &lt;ul class="list-group"&gt;
-        {&#37; for todo in todos &#37;}
-        &lt;li class="list-group-item d-flex align-items-center"&gt;
-            &lt;!-- Checkbox to toggle - passes todo.id via data attribute --&gt;
-            &lt;input
-                type="checkbox"
-                class="form-check-input me-2"
-                {&#37; if todo.done &#37;}checked{&#37; endif &#37;}
-                @change="toggle_todo"
-                data-todo-id="&#123;&#123; todo.id &#125;&#125;"
-            /&gt;
-
-            &lt;!-- Todo text with strikethrough if done --&gt;
-            &lt;span class="{&#37; if todo.done &#37;}text-decoration-line-through{&#37; endif &#37;}"&gt;
-                &#123;&#123; todo.text &#125;&#125;
-            &lt;/span&gt;
-
-            &lt;!-- Delete button - also passes todo.id --&gt;
-            &lt;button
-                class="btn btn-sm btn-danger ms-auto"
-                @click="delete_todo"
-                data-todo-id="&#123;&#123; todo.id &#125;&#125;"
-            &gt;
-                Delete
-            &lt;/button&gt;
-        &lt;/li&gt;
-        {&#37; empty &#37;}
-        &lt;li class="list-group-item text-muted"&gt;No todos yet. Add one above!&lt;/li&gt;
-        {&#37; endfor &#37;}
-    &lt;/ul&gt;
-&lt;/div&gt;
-{&#37; endblock &#37;}</code></pre>
-                </div>
-            </div>
-
-            <!-- Custom Component Example -->
-            <div class="component-demo mt-3">
-                <div class="demo-label">4. Custom Reusable Components</div>
-                <p class="text-muted mb-2"><small>Create your own components with their own class, template, and logic</small></p>
-                <pre><code class="language-python"># components/user_card.py
-from djust.components.base import LiveComponent
-
-class UserCardComponent(LiveComponent):
-    """Reusable user profile card component"""
-    template_name = 'components/user_card.html'
-
-    def mount(self, user, show_email=True):
-        """Initialize component with user data"""
-        self.user = user
-        self.show_email = show_email
-        self.is_expanded = False
-
-    def get_context(self):
-        """Return data for template rendering"""
-        return {
-            'user': self.user,
-            'show_email': self.show_email,
-            'is_expanded': self.is_expanded,
-        }
-
-    def toggle_expand(self):
-        """Event handler - can be called from template"""
-        self.is_expanded = not self.is_expanded
-        self.trigger_update()  # Notify parent to re-render
-
-
-# Use the component in a LiveView
-from .components.user_card import UserCardComponent
-
-class TeamView(LiveView):
-    template_name = "team.html"
-
-    def mount(self, request):
-        # Create multiple instances of your custom component
-        self.user_cards = [
-            UserCardComponent(user=user, show_email=True)
-            for user in User.objects.all()[:5]
-        ]</code></pre>
-
-                <div class="mt-3">
-                    <p class="text-muted mb-2"><small><strong>Component Template:</strong> components/user_card.html</small></p>
-                    <pre><code class="language-html">&lt;!-- components/user_card.html --&gt;
-&lt;div class="card mb-3" id="&#123;&#123; component_id &#125;&#125;"&gt;
-    &lt;div class="card-body"&gt;
-        &lt;div class="d-flex align-items-center"&gt;
-            &lt;img src="&#123;&#123; user.avatar_url &#125;&#125;" class="rounded-circle me-3" width="50"&gt;
-            &lt;div class="flex-grow-1"&gt;
-                &lt;h5 class="mb-0"&gt;&#123;&#123; user.get_full_name &#125;&#125;&lt;/h5&gt;
-                {&#37; if show_email &#37;}
-                    &lt;small class="text-muted"&gt;&#123;&#123; user.email &#125;&#125;&lt;/small&gt;
-                {&#37; endif &#37;}
-            &lt;/div&gt;
-            &lt;button class="btn btn-sm btn-outline-primary" @click="toggle_expand"&gt;
-                {&#37; if is_expanded &#37;}Less{&#37; else &#37;}More{&#37; endif &#37;}
-            &lt;/button&gt;
-        &lt;/div&gt;
-
-        &lt;!-- Expanded content --&gt;
-        {&#37; if is_expanded &#37;}
-            &lt;div class="mt-3 pt-3 border-top"&gt;
-                &lt;p&gt;&lt;strong&gt;Role:&lt;/strong&gt; &#123;&#123; user.role &#125;&#125;&lt;/p&gt;
-                &lt;p&gt;&lt;strong&gt;Joined:&lt;/strong&gt; &#123;&#123; user.date_joined|date:"M d, Y" &#125;&#125;&lt;/p&gt;
-            &lt;/div&gt;
-        {&#37; endif &#37;}
-    &lt;/div&gt;
-&lt;/div&gt;</code></pre>
-                </div>
-
-                <div class="mt-3">
-                    <p class="text-muted mb-2"><small><strong>Using in Parent Template:</strong> team.html</small></p>
-                    <pre><code class="language-html">&lt;!-- team.html --&gt;
-{&#37; extends "base.html" &#37;}
-
-{&#37; block content &#37;}
-&lt;div data-liveview-root&gt;
-    &lt;h2&gt;Team Members&lt;/h2&gt;
-
-    &lt;!-- Render each user card component --&gt;
-    {&#37; for card in user_cards &#37;}
-        &#123;&#123; card.render &#125;&#125;
-    {&#37; endfor &#37;}
-&lt;/div&gt;
-{&#37; endblock &#37;}</code></pre>
-                </div>
-            </div>
-
-            <!-- URL Configuration Example -->
-            <div class="component-demo mt-3">
-                <div class="demo-label">5. URL Configuration & Setup</div>
-                <p class="text-muted mb-2"><small>Wire up LiveViews like regular Django class-based views</small></p>
-                <pre><code class="language-python"># urls.py
-from django.urls import path
-from .views import CounterView, ContactFormView, TodoListView
+                            <!-- URL Configuration -->
+                            <div>
+                                <div class="code-header-modern">
+                                    <span>URL Configuration</span>
+                                    <span class="code-badge-modern">Python</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from django.urls import path
+from .views import CounterView
 
 urlpatterns = [
-    # LiveViews work like any Django CBV
     path('counter/', CounterView.as_view(), name='counter'),
-    path('contact/', ContactFormView.as_view(), name='contact'),
-    path('todos/', TodoListView.as_view(), name='todos'),
 ]</code></pre>
-            </div>
-        </div>
+                                </div>
+                            </div>
 
-        <!-- Features List -->
-        <div class="component-section">
-            <h3>Framework Features</h3>
-            <div class="row">
-                <div class="col-md-6 mb-3">
-                    <h5>Reactive State Management</h5>
-                    <p class="text-muted">Components automatically sync with server state using Rust-powered VDOM diffing.</p>
-                </div>
-                <div class="col-md-6 mb-3">
-                    <h5>Multi-Framework Support</h5>
-                    <p class="text-muted">Render components with Bootstrap 5, Tailwind CSS, or plain HTML.</p>
-                </div>
-                <div class="col-md-6 mb-3">
-                    <h5>Zero JavaScript Required</h5>
-                    <p class="text-muted">All interactivity handled server-side with WebSocket updates.</p>
-                </div>
-                <div class="col-md-6 mb-3">
-                    <h5>Type-Safe Components</h5>
-                    <p class="text-muted">Python type hints ensure correct component usage.</p>
+                        </div>
+                    </div>
                 </div>
             </div>
+
+            <!-- Features Section -->
+            <div class="row g-4 mt-4">
+                <div class="col-12">
+                    <div class="feature-card-modern p-4">
+                        <h3 class="text-lg font-bold mb-3" style="color: var(--color-text);">Component Features</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <div class="text-2xl mb-2">🎨</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">Style-Independent</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    Works with Bootstrap 5, Tailwind CSS, or plain HTML/CSS
+                                </p>
+                            </div>
+                            <div>
+                                <div class="text-2xl mb-2">⚡</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">Server-Rendered</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    All components rendered server-side using Rust for maximum performance
+                                </p>
+                            </div>
+                            <div>
+                                <div class="text-2xl mb-2">🔄</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">Real-time Updates</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    Instant reactivity via WebSocket with minimal DOM updates
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Back Button -->
+            <div class="text-center mt-4">
+                <a href="/" class="btn-secondary-modern">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                    </svg>
+                    <span>Back to Home</span>
+                </a>
+            </div>
+
         </div>
+    </section>
     </div>
-</div>
-{% endblock %}
 
-{% block extra_scripts %}
-    <!-- Highlight.js JavaScript for syntax highlighting -->
+    <!-- LiveView Client -->
+    <script src="/static/djust/client.js"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script>
-        // Initial highlighting
+        // Highlight code blocks
         hljs.highlightAll();
 
-        // Re-highlight after LiveView updates
-        const observer = new MutationObserver((mutations) => {
-            mutations.forEach((mutation) => {
-                if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-                    // Re-highlight all code blocks
-                    document.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
-                        hljs.highlightElement(block);
-                    });
-                }
+        // Re-highlight after LiveView updates (for dynamic content)
+        if (window.MutationObserver) {
+            const observer = new MutationObserver(() => {
+                document.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
+                    hljs.highlightElement(block);
+                });
             });
-        });
+            observer.observe(document.body, { childList: true, subtree: true });
+        }
 
-        // Observe the LiveView root for changes
-        const liveviewRoot = document.querySelector('[data-liveview-root]');
-        if (liveviewRoot) {
-            observer.observe(liveviewRoot, {
+        // Fix modal visibility issue - ensure modals are always visible when shown
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Kitchen Sink: Setting up modal visibility fixes');
+
+            // Flag to prevent infinite loops in MutationObserver
+            let isForcing = false;
+
+            // Force immediate display of any modal with 'show' class
+            function forceModalVisible(modal) {
+                // Prevent re-entry
+                if (isForcing) return;
+
+                console.log('Forcing modal visible:', modal);
+                isForcing = true;
+
+                // Use requestAnimationFrame to ensure browser paints in next frame
+                requestAnimationFrame(function() {
+                    // Remove fade class to eliminate animation interference
+                    modal.classList.remove('fade');
+
+                    // Set all visibility properties + GPU acceleration
+                    modal.style.display = 'block';
+                    modal.style.visibility = 'visible';
+                    modal.style.opacity = '1';
+                    modal.style.zIndex = '10000';
+                    modal.style.pointerEvents = 'auto';
+                    modal.style.transform = 'translate3d(0, 0, 0)';
+                    modal.style.willChange = 'transform, opacity';
+                    modal.style.backfaceVisibility = 'visible';
+
+                    // Force reflow
+                    void modal.offsetHeight;
+
+                    // Double RAF to ensure compositor has processed
+                    requestAnimationFrame(function() {
+                        modal.style.opacity = '1';
+                        void modal.offsetHeight;
+
+                        // Also ensure backdrop is visible
+                        const backdrop = document.querySelector('.modal-backdrop');
+                        if (backdrop) {
+                            console.log('Forcing backdrop visible');
+                            backdrop.classList.remove('fade');
+                            backdrop.style.display = 'block';
+                            backdrop.style.visibility = 'visible';
+                            backdrop.style.opacity = '0.5';
+                            backdrop.style.transform = 'translate3d(0, 0, 0)';
+                            void backdrop.offsetHeight;
+                        }
+
+                        // Reset flag after a short delay
+                        setTimeout(function() {
+                            isForcing = false;
+                        }, 50);
+                    });
+                });
+            }
+
+            // Watch for modal show events
+            const modals = document.querySelectorAll('.modal');
+            console.log('Found', modals.length, 'modals');
+
+            modals.forEach(function(modal) {
+                modal.addEventListener('show.bs.modal', function(e) {
+                    console.log('show.bs.modal event fired', e);
+                    forceModalVisible(this);
+                });
+
+                modal.addEventListener('shown.bs.modal', function(e) {
+                    console.log('shown.bs.modal event fired', e);
+                    forceModalVisible(this);
+                });
+            });
+
+            // Watch for DOM mutations - LiveView updates (only for new nodes)
+            const bodyObserver = new MutationObserver(function(mutations) {
+                mutations.forEach(function(mutation) {
+                    // Only check newly added nodes, not attribute changes
+                    mutation.addedNodes.forEach(function(node) {
+                        if (node.classList && node.classList.contains('modal')) {
+                            console.log('MutationObserver detected new modal node');
+                            if (node.classList.contains('show')) {
+                                forceModalVisible(node);
+                            }
+                        }
+                    });
+                });
+            });
+            bodyObserver.observe(document.body, {
                 childList: true,
                 subtree: true
+                // Removed: attributes and attributeFilter to prevent loop
             });
-        }
+
+            // Poll every 200ms to check for modals with 'show' class
+            setInterval(function() {
+                if (isForcing) return; // Skip if already forcing
+
+                const modals = document.querySelectorAll('.modal.show');
+                if (modals.length > 0) {
+                    modals.forEach(function(modal) {
+                        // Only force if not already visible
+                        const isVisible = modal.style.display === 'block' &&
+                                        modal.style.visibility === 'visible' &&
+                                        modal.style.opacity === '1';
+                        if (!isVisible) {
+                            console.log('Poll detected invisible modal with show class');
+                            forceModalVisible(modal);
+                        }
+                    });
+                }
+            }, 200);
+        });
     </script>
-{% endblock %}
+
+    <!-- Theme Switcher -->
+    <script src="/static/js/theme-switcher.js"></script>
+</body>
+</html>

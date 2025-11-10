@@ -5,7 +5,7 @@ Showcases all available Django Rust Live components with interactive examples.
 """
 
 from django.http import HttpRequest
-from djust import LiveView
+from demo_app.views.navbar_example import BaseViewWithNavbar
 from djust.components import (
     # UI Components
     AlertComponent,
@@ -24,7 +24,7 @@ from djust.components import (
 )
 
 
-class KitchenSinkView(LiveView):
+class KitchenSinkView(BaseViewWithNavbar):
     """
     Comprehensive component showcase with interactive playground.
 
@@ -33,12 +33,13 @@ class KitchenSinkView(LiveView):
     - Layout Components (Tabs)
     - Data Components (Table, Pagination)
 
-    Uses template inheritance for layout:
-    - kitchen_sink.html extends base.html
-    - All rendering handled by Rust VDOM with template inheritance
+    Uses modern template with shared theme system:
+    - kitchen_sink.html with theme.css, components.css, utilities.css
+    - Dark/light mode support
+    - NavbarComponent for navigation
     """
 
-    template_name = "kitchen_sink.html"  # Uses {% extends "base.html" %}
+    template_name = "kitchen_sink.html"
 
     def mount(self, request: HttpRequest):
         """Initialize all components with example configurations"""
