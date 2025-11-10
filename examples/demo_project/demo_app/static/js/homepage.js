@@ -30,7 +30,7 @@
 
     // Observe all fade-in elements
     function initScrollAnimations() {
-        const fadeElements = document.querySelectorAll('.fade-in');
+        const fadeElements = document.querySelectorAll('.fade-in-modern');
         fadeElements.forEach(el => fadeInObserver.observe(el));
     }
 
@@ -63,23 +63,6 @@
         return num.toString();
     }
 
-    // ============================================
-    // Floating Particles in Hero
-    // ============================================
-    function createParticles() {
-        const heroParticles = document.querySelector('.hero-particles');
-        if (!heroParticles) return;
-
-        const particleCount = 50;
-        for (let i = 0; i < particleCount; i++) {
-            const particle = document.createElement('div');
-            particle.className = 'particle';
-            particle.style.left = Math.random() * 100 + '%';
-            particle.style.animationDelay = Math.random() * 20 + 's';
-            particle.style.animationDuration = (15 + Math.random() * 10) + 's';
-            heroParticles.appendChild(particle);
-        }
-    }
 
     // ============================================
     // Smooth Scroll for Anchor Links
@@ -151,9 +134,9 @@
     // Comparison Table Highlight
     // ============================================
     function highlightDjustColumn() {
-        const djustCells = document.querySelectorAll('.comparison-table .djust-col');
+        const djustCells = document.querySelectorAll('.comparison-table-modern .highlight-col');
         djustCells.forEach(cell => {
-            cell.style.background = 'rgba(102, 126, 234, 0.05)';
+            // Already styled in CSS
         });
     }
 
@@ -195,61 +178,7 @@
         });
     }
 
-    // ============================================
-    // Parallax Effect for Hero (subtle)
-    // ============================================
-    function initParallax() {
-        const hero = document.querySelector('.hero-section');
-        if (!hero) return;
 
-        window.addEventListener('scroll', () => {
-            const scrolled = window.scrollY;
-            const heroContent = hero.querySelector('.hero-content');
-            if (heroContent && scrolled < window.innerHeight) {
-                heroContent.style.transform = `translateY(${scrolled * 0.3}px)`;
-                heroContent.style.opacity = 1 - (scrolled / window.innerHeight);
-            }
-        });
-    }
-
-    // ============================================
-    // Easter Egg: Konami Code
-    // ============================================
-    function initKonamiCode() {
-        const konamiCode = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a'];
-        let konamiIndex = 0;
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key === konamiCode[konamiIndex]) {
-                konamiIndex++;
-                if (konamiIndex === konamiCode.length) {
-                    triggerEasterEgg();
-                    konamiIndex = 0;
-                }
-            } else {
-                konamiIndex = 0;
-            }
-        });
-    }
-
-    function triggerEasterEgg() {
-        // Fun easter egg: make the page super fast
-        document.body.style.animation = 'spin 2s ease-in-out';
-
-        const style = document.createElement('style');
-        style.textContent = `
-            @keyframes spin {
-                0% { transform: rotate(0deg); }
-                100% { transform: rotate(360deg); }
-            }
-        `;
-        document.head.appendChild(style);
-
-        setTimeout(() => {
-            document.body.style.animation = '';
-            alert('🚀 You found the secret! djust is even faster now! (Just kidding, it was already blazing fast)');
-        }, 2000);
-    }
 
     // ============================================
     // Copy to Clipboard for Code Examples
@@ -331,27 +260,22 @@
         // Core functionality
         initScrollAnimations();
         initSmoothScroll();
-        createParticles();
         createScrollProgress();
 
         // Enhancements
         enhanceCodeBlocks();
         initCopyButtons();
         initLazyLoad();
-        initParallax();
 
         // LiveView
         initLiveViewDemos();
-
-        // Easter eggs
-        initKonamiCode();
 
         // Additional animations when available
         if (document.querySelector('.benchmark-bar')) {
             animateBenchmarkBars();
         }
 
-        if (document.querySelector('.comparison-table')) {
+        if (document.querySelector('.comparison-table-modern')) {
             highlightDjustColumn();
         }
     }
