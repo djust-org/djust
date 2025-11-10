@@ -7,9 +7,10 @@ from djust._rust import fast_json_dumps
 from django.views.generic import TemplateView
 from django.http import JsonResponse
 from .forms import RegistrationForm, ContactForm, ProfileForm, SearchForm
+from .views.base import BaseTemplateView
 
 
-class IndexView(TemplateView):
+class IndexView(BaseTemplateView):
     """Landing page with links to demos"""
     template_name = 'index.html'
 

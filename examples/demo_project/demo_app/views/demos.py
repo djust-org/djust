@@ -2,14 +2,14 @@
 Live Demos - interactive examples showcasing Django Rust Live features
 """
 
-from django.views.generic import TemplateView
+from .base import BaseTemplateView
 
 
-class DemosIndexView(TemplateView):
+class DemosIndexView(BaseTemplateView):
     """
     Live demos index page showing all available interactive examples.
 
-    Note: This is a regular Django TemplateView (not LiveView) because it's
-    a static page using Django template inheritance.
+    Note: This inherits from BaseTemplateView (not LiveView) because it's
+    a static page, but it gets the navbar component automatically.
     """
     template_name = 'demos/index.html'

@@ -82,38 +82,43 @@
     {% block extra_css %}{% endblock %}
 </head>
 <body>
-    <!-- Navigation -->
-    <nav class="navbar navbar-expand-lg navbar-custom fixed-top">
-        <div class="container{% block nav_container_class %}{% endblock %}">
-            <a class="navbar-brand d-flex align-items-center" href="/">
-                <img src="/static/images/djust.png" alt="djust" height="16" style="width: auto; margin-right: 0.5rem;">
-            </a>
-            <div class="navbar-collapse" id="navbarNav" style="display: flex !important;">
-                <ul class="navbar-nav ms-auto">
-                    <li class="nav-item">
-                        <a class="nav-link {% block nav_home_active %}{% endblock %}" href="/">Home</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% block nav_demos_active %}{% endblock %}" href="/demos/">Demos</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% block nav_components_active %}{% endblock %}" href="/kitchen-sink/">Components</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% block nav_forms_active %}{% endblock %}" href="/forms/">Forms</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% block nav_docs_active %}{% endblock %}" href="/docs/">Docs</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="https://djustlive.com" target="_blank" style="color: #667eea !important; font-weight: 600;">
-                            Hosting ↗
-                        </a>
-                    </li>
-                </ul>
+    <!-- Navigation - Using NavbarComponent -->
+    {% if navbar %}
+        {{ navbar.render }}
+    {% else %}
+        <!-- Fallback for views that don't provide navbar -->
+        <nav class="navbar navbar-expand-lg navbar-custom fixed-top">
+            <div class="container{% block nav_container_class %}{% endblock %}">
+                <a class="navbar-brand d-flex align-items-center" href="/">
+                    <img src="/static/images/djust.png" alt="djust" height="16" style="width: auto; margin-right: 0.5rem;">
+                </a>
+                <div class="navbar-collapse" id="navbarNav" style="display: flex !important;">
+                    <ul class="navbar-nav ms-auto">
+                        <li class="nav-item">
+                            <a class="nav-link {% block nav_home_active %}{% endblock %}" href="/">Home</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link {% block nav_demos_active %}{% endblock %}" href="/demos/">Demos</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link {% block nav_components_active %}{% endblock %}" href="/kitchen-sink/">Components</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link {% block nav_forms_active %}{% endblock %}" href="/forms/">Forms</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link {% block nav_docs_active %}{% endblock %}" href="/docs/">Docs</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="https://djustlive.com" target="_blank" style="color: #667eea !important; font-weight: 600;">
+                                Hosting ↗
+                            </a>
+                        </li>
+                    </ul>
+                </div>
             </div>
-        </div>
-    </nav>
+        </nav>
+    {% endif %}
 
     <!-- Main Content -->
     {% block content %}{% endblock %}

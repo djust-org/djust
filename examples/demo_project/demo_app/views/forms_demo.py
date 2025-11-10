@@ -2,18 +2,17 @@
 Forms demo views - showcasing Django forms integration with LiveView
 """
 
-from django.views.generic import TemplateView
 from djust import LiveView, FormMixin
 from ..forms import RegistrationForm, ContactForm, ProfileForm, SimpleContactForm
+from .base import BaseTemplateView
 
 
-class FormsIndexView(TemplateView):
+class FormsIndexView(BaseTemplateView):
     """
     Forms demo index page showing all available form examples.
 
-    Note: This is a regular Django TemplateView (not LiveView) because it's
-    a static page using Django template inheritance. LiveView is used for
-    the individual form pages which have reactive behavior.
+    Note: This inherits from BaseTemplateView (not LiveView) because it's
+    a static page, but it gets the navbar component automatically.
     """
     template_name = 'forms/index.html'
 

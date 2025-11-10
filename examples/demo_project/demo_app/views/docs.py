@@ -1,8 +1,8 @@
 """Documentation view for Django Rust Live"""
 
-from django.views.generic import TemplateView
+from .base import BaseTemplateView
 
 
-class DocsView(TemplateView):
+class DocsView(BaseTemplateView):
     """Static documentation page"""
     template_name = "docs.html"
