@@ -217,7 +217,7 @@ class CounterView(BaseViewWithNavbar):
         self.count = 0
 
 
-class TodoView(LiveView):
+class TodoView(BaseViewWithNavbar):
     """
     Todo list demo - showcases list manipulation and forms
     """
@@ -260,7 +260,7 @@ class TodoView(LiveView):
         return sum(1 for t in self.todos if t['done'])
 
 
-class ChatView(LiveView):
+class ChatView(BaseViewWithNavbar):
     """
     Chat demo - showcases real-time communication
     """
@@ -280,7 +280,7 @@ class ChatView(LiveView):
             })
 
 
-class ReactDemoView(LiveView):
+class ReactDemoView(BaseViewWithNavbar):
     """
     React integration demo - showcases React components within LiveView templates
 
@@ -318,7 +318,7 @@ class ReactDemoView(LiveView):
         self.todos = [t for t in self.todos if t['text'] != text]
 
 
-class PerformanceTestView(LiveView):
+class PerformanceTestView(BaseViewWithNavbar):
     """
     Performance test demo - stress testing with many interactive elements
 
@@ -483,20 +483,22 @@ class PerformanceTestView(LiveView):
             self._items = [item for item in self._items if item['id'] != item_id]
 
 
-class ProductDataTableView(LiveView):
+class ProductDataTableView(BaseViewWithNavbar):
     """
     React DataTable demo - showcases hybrid LiveView + React components
-    
+
     This view demonstrates how to integrate React components into LiveView:
-    - Server manages the data state  
+    - Server manages the data state
     - React handles rich UI (sorting, filtering, pagination)
     - Custom POST handler returns JSON instead of patches
     """
-    
+
+    template_name = "demos/datatable.html"
+
     # Disable normal LiveView patching for this view
     use_dom_patching = False
-    
-    def get_template(self):
+
+    def get_template_OLD(self):
         return """
         <!DOCTYPE html>
         <html>
@@ -1064,8 +1066,11 @@ class ProductDataTableView(LiveView):
         for product in random.sample(self.products, min(5, len(self.products))):
             product['is_active'] = not product['is_active']
 
-    def get_context_data(self):
+    def get_context_data(self, **kwargs):
         """Provide data to template"""
+        # Get base context (includes navbar)
+        context = super().get_context_data(**kwargs)
+
         # Use Rust-powered JSON serialization
         # Benefits: Releases GIL (better for concurrent workloads), more memory efficient
         # Trade-off: Slightly slower than Python json.dumps for small datasets due to PyO3 overhead
@@ -1074,14 +1079,16 @@ class ProductDataTableView(LiveView):
         active_products = sum(1 for p in self.products if p['is_active'])
         low_stock = sum(1 for p in self.products if p['stock'] < 10)
 
-        return {
+        context.update({
             'products': self.products,
             'products_json': fast_json_dumps(self.products),  # Rust-powered serialization
             'total_products': len(self.products),
             'active_products': active_products,
             'total_value': f"{total_value:,.2f}",
             'low_stock_count': low_stock,
-        }
+        })
+
+        return context
 
     def _generate_sample_products(self, count, start_id=1):
         """Generate sample product data"""
