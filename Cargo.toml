@@ -4,6 +4,7 @@ members = [
     "crates/djust_templates",
     "crates/djust_vdom",
     "crates/djust_live",
+    "crates/djust_components",
 ]
 resolver = "2"
 
