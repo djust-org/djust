@@ -1,6 +1,7 @@
 //! Django-compatible template filters
 
 use djust_core::{DjangoRustError, Result, Value};
+use chrono::{DateTime, Utc};
 
 pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Result<Value> {
     match filter_name {
@@ -68,6 +69,14 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
             // slice filter supports Python slice syntax: ":5", "2:", "2:5"
             let slice_str = arg.unwrap_or(":");
             Ok(apply_slice(value, slice_str)?)
+        }
+        "timesince" => {
+            // timesince filter: converts ISO datetime to "X minutes/hours/days ago" format
+            let datetime_str = value.to_string();
+            match format_timesince(&datetime_str) {
+                Ok(formatted) => Ok(Value::String(formatted)),
+                Err(_) => Ok(value.clone()), // If parsing fails, return original value
+            }
         }
         _ => Err(DjangoRustError::TemplateError(
             format!("Unknown filter: {}", filter_name)
@@ -164,6 +173,42 @@ fn parse_slice_indices(parts: &[&str], len: isize) -> (isize, isize) {
     };
 
     (start, end)
+}
+
+fn format_timesince(datetime_str: &str) -> Result<String> {
+    // Parse ISO datetime string
+    let dt = DateTime::parse_from_rfc3339(datetime_str)
+        .map_err(|e| DjangoRustError::TemplateError(format!("Invalid datetime format: {}", e)))?;
+
+    let now = Utc::now();
+    let duration = now.signed_duration_since(dt.with_timezone(&Utc));
+
+    let seconds = duration.num_seconds();
+
+    // Format like Django's timesince
+    let formatted = if seconds < 60 {
+        format!("{} second{}", seconds, if seconds != 1 { "s" } else { "" })
+    } else if seconds < 3600 {
+        let minutes = seconds / 60;
+        format!("{} minute{}", minutes, if minutes != 1 { "s" } else { "" })
+    } else if seconds < 86400 {
+        let hours = seconds / 3600;
+        format!("{} hour{}", hours, if hours != 1 { "s" } else { "" })
+    } else if seconds < 604800 {
+        let days = seconds / 86400;
+        format!("{} day{}", days, if days != 1 { "s" } else { "" })
+    } else if seconds < 2629746 {
+        let weeks = seconds / 604800;
+        format!("{} week{}", weeks, if weeks != 1 { "s" } else { "" })
+    } else if seconds < 31556952 {
+        let months = seconds / 2629746;
+        format!("{} month{}", months, if months != 1 { "s" } else { "" })
+    } else {
+        let years = seconds / 31556952;
+        format!("{} year{}", years, if years != 1 { "s" } else { "" })
+    };
+
+    Ok(formatted)
 }
 
 pub mod tags {

@@ -49,14 +49,52 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
         # Handle Django model instances
         if isinstance(obj, models.Model):
-            # Return a simple representation with id and string representation
             result = {
                 'id': str(obj.pk) if obj.pk else None,
                 '__str__': str(obj),
                 '__model__': obj.__class__.__name__,
             }
-            # Optionally include a few safe fields
-            # (avoiding relations which could cause circular references)
+
+            # Serialize all model fields (excluding relations to avoid circular refs)
+            for field in obj._meta.get_fields():
+                # Skip reverse relations and many-to-many
+                if field.is_relation and (field.one_to_many or field.many_to_many):
+                    continue
+
+                try:
+                    field_name = field.name
+                    value = getattr(obj, field_name, None)
+
+                    # Skip None values and relations (ForeignKey, etc.)
+                    if value is None:
+                        result[field_name] = None
+                    elif isinstance(value, models.Model):
+                        # For ForeignKey, just include id and __str__
+                        result[field_name] = {
+                            'id': str(value.pk) if value.pk else None,
+                            '__str__': str(value),
+                        }
+                    else:
+                        result[field_name] = value
+                except (AttributeError, ValueError):
+                    pass
+
+            # Include custom methods that don't start with _ and are callable
+            # This allows model methods like get_status_display(), get_full_name(), etc.
+            for attr_name in dir(obj):
+                if not attr_name.startswith('_') and attr_name not in result:
+                    attr = getattr(obj, attr_name, None)
+                    # Include callable methods with no required parameters
+                    if callable(attr) and attr_name.startswith('get_'):
+                        try:
+                            # Try calling with no args
+                            value = attr()
+                            # Only include simple return types
+                            if isinstance(value, (str, int, float, bool, type(None))):
+                                result[attr_name] = value
+                        except (TypeError, ValueError, AttributeError):
+                            pass
+
             return result
 
         # Handle QuerySets

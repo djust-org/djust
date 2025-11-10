@@ -17,6 +17,7 @@ smallvec.workspace = true
 regex.workspace = true
 once_cell.workspace = true
 thiserror.workspace = true
+chrono.workspace = true
 djust_core = { path = "../djust_core" }
 
 [dev-dependencies]

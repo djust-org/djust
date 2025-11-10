@@ -29,6 +29,7 @@ thiserror = "1.0"
 quick-xml = "0.36"
 html5ever = "0.27"
 markup5ever_rcdom = "0.3"
+chrono = "0.4"  # DateTime handling for timesince filter
 
 [profile.release]
 lto = true
