@@ -54,7 +54,6 @@ body {
 .hero-section {
     position: relative;
     padding: 6rem 0 5rem;
-    margin-top: 60px; /* Account for fixed navbar */
     background: linear-gradient(to bottom, #fafbfc 0%, #ffffff 100%);
     border-bottom: 1px solid var(--color-border);
 }
