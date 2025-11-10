@@ -491,7 +491,11 @@ class LiveView(View):
                 # e.g., self.alert_success gets component_id="alert_success"
                 component.component_id = key
                 component_state[key] = self._extract_component_state(component)
-        request.session[f'{view_key}_components'] = component_state
+
+        # Serialize component state to ensure session-compatible types
+        component_state_json = json.dumps(component_state, cls=DjangoJSONEncoder)
+        component_state_serializable = json.loads(component_state_json)
+        request.session[f'{view_key}_components'] = component_state_serializable
         request.session.modified = True  # Force session save
 
         session_key = request.session.session_key
@@ -598,7 +602,10 @@ class LiveView(View):
             # Save updated state back to session (exclude components)
             updated_context = self.get_context_data()
             state = {k: v for k, v in updated_context.items() if not isinstance(v, LiveComponent)}
-            request.session[view_key] = state
+            # Serialize to ensure session-compatible types (UUIDs, datetimes, etc.)
+            state_json = json.dumps(state, cls=DjangoJSONEncoder)
+            state_serializable = json.loads(state_json)
+            request.session[view_key] = state_serializable
 
             # Save updated component state with stable IDs based on attribute names
             # Maintain automatic component ID assignment after event processing
@@ -609,7 +616,11 @@ class LiveView(View):
                     # Ensures IDs remain stable across WebSocket events
                     component.component_id = key
                     component_state[key] = self._extract_component_state(component)
-            request.session[f'{view_key}_components'] = component_state
+            # Serialize component state to ensure session-compatible types
+            component_state_json = json.dumps(component_state, cls=DjangoJSONEncoder)
+            component_state_serializable = json.loads(component_state_json)
+            request.session[f'{view_key}_components'] = component_state_serializable
+            request.session.modified = True  # Force session save
 
             # Render with diff to get patches
             html, patches_json, version = self.render_with_diff(request)
