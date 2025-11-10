@@ -474,7 +474,11 @@ class LiveView(View):
         from .components.base import LiveComponent
         context = self.get_context_data()
         state = {k: v for k, v in context.items() if not isinstance(v, LiveComponent)}
-        request.session[view_key] = state
+
+        # Serialize and deserialize to ensure session-compatible types (UUIDs, datetimes, etc.)
+        state_json = json.dumps(state, cls=DjangoJSONEncoder)
+        state_serializable = json.loads(state_json)
+        request.session[view_key] = state_serializable
 
         # Store component state separately and assign stable IDs based on attribute names
         # This is the magic that enables automatic component identification:
