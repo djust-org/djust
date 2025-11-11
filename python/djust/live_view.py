@@ -1077,6 +1077,18 @@ class LiveView(View):
 
     def _inject_client_script(self, html: str) -> str:
         """Inject the LiveView client JavaScript into the HTML"""
+        from .config import config
+
+        # Get WebSocket setting from config
+        use_websocket = config.get('use_websocket', True)
+
+        config_script = f"""
+        <script>
+            // djust configuration
+            window.DJUST_USE_WEBSOCKET = {str(use_websocket).lower()};
+        </script>
+        """
+
         script = """
         <script>
             // djust - WebSocket + HTTP Fallback Client
@@ -1996,10 +2008,19 @@ class LiveView(View):
             document.addEventListener('DOMContentLoaded', function() {
                 console.log('[LiveView] Initialized with Rust-powered rendering');
 
-                // Initialize WebSocket connection
-                liveViewWS = new LiveViewWebSocket();
-                liveViewWS.connect();
-                liveViewWS.startHeartbeat();
+                // Check if WebSocket is enabled (can be disabled via config)
+                const useWebSocket = window.DJUST_USE_WEBSOCKET !== false;
+
+                if (useWebSocket) {
+                    // Initialize WebSocket connection
+                    console.log('[LiveView] Using WebSocket mode');
+                    liveViewWS = new LiveViewWebSocket();
+                    liveViewWS.connect();
+                    liveViewWS.startHeartbeat();
+                } else {
+                    // HTTP-only mode (no WebSocket)
+                    console.log('[LiveView] Using HTTP-only mode (WebSocket disabled)');
+                }
 
                 initReactCounters();  // Initialize client-side React components
                 initTodoItems();      // Initialize todo item checkboxes
@@ -2008,10 +2029,13 @@ class LiveView(View):
         </script>
         """
 
+        # Inject both config and main script
+        full_script = config_script + script
+
         if '</body>' in html:
-            html = html.replace('</body>', f'{script}</body>')
+            html = html.replace('</body>', f'{full_script}</body>')
         else:
-            html += script
+            html += full_script
 
         return html
 

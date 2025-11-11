@@ -30,6 +30,9 @@ class LiveViewConfig:
 
     # Default configuration
     _defaults = {
+        # LiveView transport mode
+        'use_websocket': True,  # Set to False to use HTTP polling instead of WebSocket
+
         # CSS Framework
         'css_framework': 'bootstrap5',  # Options: 'bootstrap5', 'tailwind', None
 
