@@ -56,6 +56,11 @@ server.log
 scratch/
 test-*.js
 
+# JavaScript/Node.js
+node_modules/
+coverage/
+.vitest/
+
 # Work in progress / private files
 CLAUDE.md
 ISSUE_PRIORITIES.md
