@@ -55,8 +55,7 @@ impl RustAvatar {
         };
 
         let mut html = format!(
-            r#"<div class="position-relative d-inline-block" style="{}">"#,
-            size_style
+            r#"<div class="position-relative d-inline-block" style="{size_style}">"#
         );
 
         // Image or initials
@@ -71,10 +70,9 @@ impl RustAvatar {
         } else if let Some(ref initials) = self.initials {
             html.push_str(&format!(
                 r#"
-    <div class="w-100 h-100 bg-primary text-white d-flex align-items-center justify-content-center {}">
-        <span class="fw-bold">{}</span>
-    </div>"#,
-                shape_class, initials
+    <div class="w-100 h-100 bg-primary text-white d-flex align-items-center justify-content-center {shape_class}">
+        <span class="fw-bold">{initials}</span>
+    </div>"#
             ));
         }
 
@@ -90,8 +88,7 @@ impl RustAvatar {
 
             html.push_str(&format!(
                 r#"
-    <span class="position-absolute bottom-0 end-0 p-1 {} border border-white rounded-circle"></span>"#,
-                status_class
+    <span class="position-absolute bottom-0 end-0 p-1 {status_class} border border-white rounded-circle"></span>"#
             ));
         }
 

@@ -272,8 +272,7 @@ impl Component for Row {
         _params: HashMap<String, Value>,
     ) -> Result<(), ComponentError> {
         Err(ComponentError::EventError(format!(
-            "Row component does not handle events: {}",
-            event
+            "Row component does not handle events: {event}"
         )))
     }
 

@@ -51,7 +51,7 @@ impl Column {
     /// Create a column with specific size (1-12)
     pub fn sized(size: u8) -> Self {
         assert!(
-            size >= 1 && size <= 12,
+            (1..=12).contains(&size),
             "Column size must be between 1 and 12"
         );
         Self {
@@ -70,7 +70,7 @@ impl Column {
     /// Set small breakpoint size
     pub fn sm(mut self, size: u8) -> Self {
         assert!(
-            size >= 1 && size <= 12,
+            (1..=12).contains(&size),
             "Column size must be between 1 and 12"
         );
         self.sm = Some(ColSize::Size(size));
@@ -80,7 +80,7 @@ impl Column {
     /// Set medium breakpoint size
     pub fn md(mut self, size: u8) -> Self {
         assert!(
-            size >= 1 && size <= 12,
+            (1..=12).contains(&size),
             "Column size must be between 1 and 12"
         );
         self.md = Some(ColSize::Size(size));
@@ -90,7 +90,7 @@ impl Column {
     /// Set large breakpoint size
     pub fn lg(mut self, size: u8) -> Self {
         assert!(
-            size >= 1 && size <= 12,
+            (1..=12).contains(&size),
             "Column size must be between 1 and 12"
         );
         self.lg = Some(ColSize::Size(size));
@@ -100,7 +100,7 @@ impl Column {
     /// Set extra large breakpoint size
     pub fn xl(mut self, size: u8) -> Self {
         assert!(
-            size >= 1 && size <= 12,
+            (1..=12).contains(&size),
             "Column size must be between 1 and 12"
         );
         self.xl = Some(ColSize::Size(size));
@@ -110,7 +110,7 @@ impl Column {
     /// Set offset
     pub fn offset(mut self, offset: u8) -> Self {
         assert!(
-            offset >= 1 && offset <= 11,
+            (1..=11).contains(&offset),
             "Column offset must be between 1 and 11"
         );
         self.offset = Some(offset);
@@ -148,31 +148,31 @@ impl Column {
         // Base column class
         match self.size {
             ColSize::Auto => classes.push("col-auto".to_string()),
-            ColSize::Size(n) => classes.push(format!("col-{}", n)),
+            ColSize::Size(n) => classes.push(format!("col-{n}")),
         }
 
         // Responsive sizes
         if let Some(ColSize::Size(n)) = self.sm {
-            classes.push(format!("col-sm-{}", n));
+            classes.push(format!("col-sm-{n}"));
         }
         if let Some(ColSize::Size(n)) = self.md {
-            classes.push(format!("col-md-{}", n));
+            classes.push(format!("col-md-{n}"));
         }
         if let Some(ColSize::Size(n)) = self.lg {
-            classes.push(format!("col-lg-{}", n));
+            classes.push(format!("col-lg-{n}"));
         }
         if let Some(ColSize::Size(n)) = self.xl {
-            classes.push(format!("col-xl-{}", n));
+            classes.push(format!("col-xl-{n}"));
         }
 
         // Offset
         if let Some(offset) = self.offset {
-            classes.push(format!("offset-{}", offset));
+            classes.push(format!("offset-{offset}"));
         }
 
         // Order
         if let Some(order) = self.order {
-            classes.push(format!("order-{}", order));
+            classes.push(format!("order-{order}"));
         }
 
         let mut elem = element("div").classes(classes);
@@ -193,28 +193,28 @@ impl Column {
             ColSize::Auto => classes.push("flex-auto".to_string()),
             ColSize::Size(n) => {
                 // Tailwind uses fractional widths
-                let width = format!("w-{}/12", n);
+                let width = format!("w-{n}/12");
                 classes.push(width);
             }
         }
 
         // Responsive sizes using Tailwind breakpoints
         if let Some(ColSize::Size(n)) = self.sm {
-            classes.push(format!("sm:w-{}/12", n));
+            classes.push(format!("sm:w-{n}/12"));
         }
         if let Some(ColSize::Size(n)) = self.md {
-            classes.push(format!("md:w-{}/12", n));
+            classes.push(format!("md:w-{n}/12"));
         }
         if let Some(ColSize::Size(n)) = self.lg {
-            classes.push(format!("lg:w-{}/12", n));
+            classes.push(format!("lg:w-{n}/12"));
         }
         if let Some(ColSize::Size(n)) = self.xl {
-            classes.push(format!("xl:w-{}/12", n));
+            classes.push(format!("xl:w-{n}/12"));
         }
 
         // Order
         if let Some(order) = self.order {
-            classes.push(format!("order-{}", order));
+            classes.push(format!("order-{order}"));
         }
 
         let mut elem = element("div").classes(classes);
@@ -232,7 +232,7 @@ impl Column {
 
         match self.size {
             ColSize::Auto => classes.push("col-auto".to_string()),
-            ColSize::Size(n) => classes.push(format!("col-{}", n)),
+            ColSize::Size(n) => classes.push(format!("col-{n}")),
         }
 
         let mut elem = element("div").classes(classes);
@@ -275,8 +275,7 @@ impl Component for Column {
         _params: HashMap<String, Value>,
     ) -> Result<(), ComponentError> {
         Err(ComponentError::EventError(format!(
-            "Column component does not handle events: {}",
-            event
+            "Column component does not handle events: {event}"
         )))
     }
 

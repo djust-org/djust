@@ -43,7 +43,7 @@ fn test_form_validation_errors_with_real_html() {
     // 1. Remove "is-invalid" class from inputs
     // 2. Remove validation error divs
     assert!(
-        patches.len() > 0,
+        !patches.is_empty(),
         "Should generate patches when validation errors are removed"
     );
 

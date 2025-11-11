@@ -184,13 +184,13 @@ impl Dropdown {
         let menu_html = element("ul")
             .class("dropdown-menu")
             .attr("aria-labelledby", &self.id)
-            .child(&menu_items.join("\n"))
+            .child(menu_items.join("\n"))
             .build();
 
         // Wrap in dropdown div
         element("div")
             .class("dropdown")
-            .child(&format!("{}\n{}", button_html, menu_html))
+            .child(format!("{button_html}\n{menu_html}"))
             .build()
     }
 
@@ -263,9 +263,8 @@ impl Dropdown {
         };
 
         let button_html = button
-            .child(&format!(
-                r#"{}<svg class="w-4 h-4 ml-2" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>"#,
-                label
+            .child(format!(
+                r#"{label}<svg class="w-4 h-4 ml-2" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>"#
             ))
             .build();
 
@@ -306,13 +305,13 @@ impl Dropdown {
                 "z-10",
                 "hidden",
             ])
-            .child(&menu_items.join("\n"))
+            .child(menu_items.join("\n"))
             .build();
 
         // Wrap in relative div
         element("div")
             .class("relative")
-            .child(&format!("{}\n{}", button_html, menu_html))
+            .child(format!("{button_html}\n{menu_html}"))
             .build()
     }
 
@@ -381,12 +380,12 @@ impl Dropdown {
 
         let menu_html = element("ul")
             .class("dropdown-menu")
-            .child(&menu_items.join("\n"))
+            .child(menu_items.join("\n"))
             .build();
 
         element("div")
             .class("dropdown")
-            .child(&format!("{}\n{}", button_html, menu_html))
+            .child(format!("{button_html}\n{menu_html}"))
             .build()
     }
 }
@@ -431,8 +430,7 @@ impl Component for Dropdown {
                 }
             }
             _ => Err(ComponentError::EventError(format!(
-                "Unknown event: {}",
-                event
+                "Unknown event: {event}"
             ))),
         }
     }

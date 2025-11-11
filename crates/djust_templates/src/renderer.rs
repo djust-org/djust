@@ -86,7 +86,7 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
         } => {
             // Render React component as data attributes for client-side hydration
             let mut output = String::new();
-            output.push_str(&format!("<div data-react-component=\"{}\"", name));
+            output.push_str(&format!("<div data-react-component=\"{name}\""));
 
             // Add props as data attributes
             if !props.is_empty() {
@@ -216,7 +216,7 @@ fn render_rust_component(
 
             // Render the component
             button.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustButton: {}", e))
+                DjangoRustError::TemplateError(format!("Failed to render RustButton: {e}"))
             })
         }
 
@@ -289,7 +289,7 @@ fn render_rust_component(
 
             // Render the component
             input.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustInput: {}", e))
+                DjangoRustError::TemplateError(format!("Failed to render RustInput: {e}"))
             })
         }
 
@@ -353,7 +353,7 @@ fn render_rust_component(
 
             // Render the component
             text.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustText: {}", e))
+                DjangoRustError::TemplateError(format!("Failed to render RustText: {e}"))
             })
         }
 
@@ -402,7 +402,7 @@ fn render_rust_component(
 
             // Render the component
             card.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustCard: {}", e))
+                DjangoRustError::TemplateError(format!("Failed to render RustCard: {e}"))
             })
         }
 
@@ -443,7 +443,7 @@ fn render_rust_component(
 
             // Render the component
             alert.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustAlert: {}", e))
+                DjangoRustError::TemplateError(format!("Failed to render RustAlert: {e}"))
             })
         }
 
@@ -485,7 +485,7 @@ fn render_rust_component(
 
             // Render the component
             modal.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustModal: {}", e))
+                DjangoRustError::TemplateError(format!("Failed to render RustModal: {e}"))
             })
         }
 
@@ -556,7 +556,7 @@ fn render_rust_component(
 
             // Render the component
             dropdown.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustDropdown: {}", e))
+                DjangoRustError::TemplateError(format!("Failed to render RustDropdown: {e}"))
             })
         }
 
@@ -613,13 +613,12 @@ fn render_rust_component(
 
             // Render the component
             tabs.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustTabs: {}", e))
+                DjangoRustError::TemplateError(format!("Failed to render RustTabs: {e}"))
             })
         }
 
         _ => Err(DjangoRustError::TemplateError(format!(
-            "Unknown Rust component: {}",
-            name
+            "Unknown Rust component: {name}"
         ))),
     }
 }
@@ -646,8 +645,7 @@ fn get_prop(key: &str, props: &[(String, String)], context: &Context) -> Result<
     }
 
     Err(DjangoRustError::TemplateError(format!(
-        "Missing required prop: {}",
-        key
+        "Missing required prop: {key}"
     )))
 }
 

@@ -101,7 +101,7 @@ impl Modal {
             .classes(modal_classes)
             .attr("id", &self.id)
             .attr("tabindex", "-1")
-            .attr("aria-labelledby", &format!("{}Label", self.id))
+            .attr("aria-labelledby", format!("{}Label", self.id))
             .attr("aria-hidden", "true");
 
         let dialog = element("div").classes(dialog_classes);
@@ -126,13 +126,13 @@ impl Modal {
 
         // Footer
         if let Some(ref footer) = self.footer {
-            let footer_html = format!(r#"<div class="modal-footer">{}</div>"#, footer);
+            let footer_html = format!(r#"<div class="modal-footer">{footer}</div>"#);
             content_parts.push(footer_html);
         }
 
         let content = element("div")
             .class("modal-content")
-            .child(&content_parts.join("\n"))
+            .child(content_parts.join("\n"))
             .build();
 
         let dialog_html = dialog.child(&content).build();
@@ -151,7 +151,7 @@ impl Modal {
             ])
             .attr(
                 "onclick",
-                &format!(
+                format!(
                     "document.getElementById('{}').classList.add('hidden')",
                     self.id
                 ),
@@ -197,7 +197,7 @@ impl Modal {
             content_parts.push(
                 element("div")
                     .classes(vec!["px-6", "py-4", "border-b", "border-gray-200", "flex", "justify-between", "items-center"])
-                    .child(&format!(
+                    .child(format!(
                         r#"<h3 class="text-xl font-semibold text-gray-900">{}</h3>
                         <button type="button" class="text-gray-400 hover:text-gray-600" onclick="document.getElementById('{}').classList.add('hidden')">
                             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -228,10 +228,10 @@ impl Modal {
             );
         }
 
-        let dialog_html = dialog.child(&content_parts.join("\n")).build();
+        let dialog_html = dialog.child(content_parts.join("\n")).build();
         let container_html = container.child(&dialog_html).build();
 
-        format!("{}\n{}", backdrop, container_html)
+        format!("{backdrop}\n{container_html}")
     }
 
     fn render_plain(&self) -> String {
@@ -253,9 +253,8 @@ impl Modal {
             content_parts.push(
                 element("div")
                     .class("modal-header")
-                    .child(&format!(
-                        r#"<h3>{}</h3><button type="button" class="close" aria-label="Close"><span>&times;</span></button>"#,
-                        title
+                    .child(format!(
+                        r#"<h3>{title}</h3><button type="button" class="close" aria-label="Close"><span>&times;</span></button>"#
                     ))
                     .build()
             );
@@ -269,7 +268,7 @@ impl Modal {
             content_parts.push(element("div").class("modal-footer").child(footer).build());
         }
 
-        modal.child(&content_parts.join("\n")).build()
+        modal.child(content_parts.join("\n")).build()
     }
 }
 
@@ -300,8 +299,7 @@ impl Component for Modal {
         _params: HashMap<String, Value>,
     ) -> Result<(), ComponentError> {
         Err(ComponentError::EventError(format!(
-            "Modal component does not handle events: {}",
-            event
+            "Modal component does not handle events: {event}"
         )))
     }
 

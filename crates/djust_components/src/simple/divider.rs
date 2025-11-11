@@ -58,7 +58,7 @@ impl RustDivider {
             )
         } else {
             // Simple horizontal rule
-            format!(r#"<hr class="{}{}">"#, margin_class, style_class)
+            format!(r#"<hr class="{margin_class}{style_class}">"#)
         }
     }
 

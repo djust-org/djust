@@ -27,7 +27,7 @@ impl RustAlert {
             classes.push_str(" alert-dismissible fade show");
         }
 
-        let mut html = format!(r#"<div class="{}" role="alert">"#, classes);
+        let mut html = format!(r#"<div class="{classes}" role="alert">"#);
         html.push_str("\n    ");
         html.push_str(&html_escape(&self.text));
 

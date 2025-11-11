@@ -50,7 +50,7 @@ impl Template {
         // Look for {% extends "..." %} or {% extends '...' %}
         let extends_pattern = r#"\{%\s*extends\s+["']([^"']+)["']\s*%\}"#;
         let re = regex::Regex::new(extends_pattern)
-            .map_err(|e| DjangoRustError::TemplateError(format!("Regex error: {}", e)))?;
+            .map_err(|e| DjangoRustError::TemplateError(format!("Regex error: {e}")))?;
 
         if let Some(captures) = re.captures(content) {
             let template_path = captures
@@ -74,7 +74,7 @@ impl Template {
         // This regex handles nested content but not nested blocks (which Django doesn't support either)
         let block_pattern = r#"\{%\s*block\s+(\w+)\s*%\}([\s\S]*?)\{%\s*endblock\s*%\}"#;
         let re = regex::Regex::new(block_pattern)
-            .map_err(|e| DjangoRustError::TemplateError(format!("Regex error: {}", e)))?;
+            .map_err(|e| DjangoRustError::TemplateError(format!("Regex error: {e}")))?;
 
         for captures in re.captures_iter(content) {
             let block_name = captures
@@ -157,8 +157,7 @@ impl TemplateLoader {
             if full_path.exists() {
                 let content = fs::read_to_string(&full_path).map_err(|e| {
                     DjangoRustError::TemplateError(format!(
-                        "Failed to read template {}: {}",
-                        path, e
+                        "Failed to read template {path}: {e}"
                     ))
                 })?;
 
@@ -172,8 +171,7 @@ impl TemplateLoader {
         }
 
         Err(DjangoRustError::TemplateError(format!(
-            "Template not found: {}",
-            path
+            "Template not found: {path}"
         )))
     }
 

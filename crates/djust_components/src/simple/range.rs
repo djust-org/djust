@@ -150,7 +150,7 @@ fn html_escape(s: &str) -> String {
 #[inline]
 fn format_number(n: f64) -> String {
     if n.fract() == 0.0 {
-        format!("{:.0}", n)
+        format!("{n:.0}")
     } else {
         n.to_string()
     }

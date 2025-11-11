@@ -21,14 +21,14 @@ impl HtmlBuilder {
 
     /// Start a tag
     pub fn start_tag(mut self, tag: &str) -> Self {
-        write!(self.output, "<{}", tag).unwrap();
+        write!(self.output, "<{tag}").unwrap();
         self
     }
 
     /// Add an attribute
     pub fn attr(mut self, key: &str, value: &str) -> Self {
         let escaped = html_escape(value);
-        write!(self.output, " {}=\"{}\"", key, escaped).unwrap();
+        write!(self.output, " {key}=\"{escaped}\"").unwrap();
         self
     }
 
@@ -44,7 +44,7 @@ impl HtmlBuilder {
     /// Add a class
     pub fn class(mut self, class: &str) -> Self {
         if !class.is_empty() {
-            write!(self.output, " class=\"{}\"", class).unwrap();
+            write!(self.output, " class=\"{class}\"").unwrap();
         }
         self
     }
@@ -66,7 +66,7 @@ impl HtmlBuilder {
     /// Add an ID
     pub fn id(mut self, id: &str) -> Self {
         if !id.is_empty() {
-            write!(self.output, " id=\"{}\"", id).unwrap();
+            write!(self.output, " id=\"{id}\"").unwrap();
         }
         self
     }
@@ -105,13 +105,13 @@ impl HtmlBuilder {
 
     /// Close a tag
     pub fn end_tag(mut self, tag: &str) -> Self {
-        write!(self.output, "</{}>", tag).unwrap();
+        write!(self.output, "</{tag}>").unwrap();
         self
     }
 
     /// Add a self-closing tag
     pub fn self_closing_tag(mut self, tag: &str) -> Self {
-        write!(self.output, "<{} />", tag).unwrap();
+        write!(self.output, "<{tag} />").unwrap();
         self
     }
 

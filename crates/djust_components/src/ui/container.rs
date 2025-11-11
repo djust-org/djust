@@ -172,8 +172,7 @@ impl Component for Container {
         _params: HashMap<String, Value>,
     ) -> Result<(), ComponentError> {
         Err(ComponentError::EventError(format!(
-            "Container component does not handle events: {}",
-            event
+            "Container component does not handle events: {event}"
         )))
     }
 

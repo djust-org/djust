@@ -270,8 +270,7 @@ impl Component for Alert {
         _params: HashMap<String, Value>,
     ) -> Result<(), ComponentError> {
         Err(ComponentError::EventError(format!(
-            "Alert component does not handle events: {}",
-            event
+            "Alert component does not handle events: {event}"
         )))
     }
 

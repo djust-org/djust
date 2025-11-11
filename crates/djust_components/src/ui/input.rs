@@ -429,8 +429,7 @@ impl Component for Input {
                 Ok(())
             }
             _ => Err(ComponentError::EventError(format!(
-                "Unknown event: {}",
-                event
+                "Unknown event: {event}"
             ))),
         }
     }

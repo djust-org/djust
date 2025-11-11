@@ -59,7 +59,7 @@ impl RustIcon {
 
         // Add color class
         if let Some(ref color) = self.color {
-            classes.push_str(&format!(" text-{}", color));
+            classes.push_str(&format!(" text-{color}"));
         }
 
         // Build accessibility attributes
@@ -69,7 +69,7 @@ impl RustIcon {
             String::new()
         };
 
-        format!(r#"<i class="{}"{}></i>"#, classes, aria_attrs)
+        format!(r#"<i class="{classes}"{aria_attrs}></i>"#)
     }
 
     pub fn __str__(&self) -> String {

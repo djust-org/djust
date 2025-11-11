@@ -11,7 +11,7 @@ pub fn parse_html(html: &str) -> Result<VNode> {
     let dom = parse_document(RcDom::default(), Default::default())
         .from_utf8()
         .read_from(&mut html.as_bytes())
-        .map_err(|e| DjangoRustError::VdomError(format!("Failed to parse HTML: {}", e)))?;
+        .map_err(|e| DjangoRustError::VdomError(format!("Failed to parse HTML: {e}")))?;
 
     // Find the body or first child
     let root = find_root(&dom.document);
@@ -45,10 +45,7 @@ fn find_root(handle: &Handle) -> Handle {
 
     // Fallback: return first element found
     for child in handle.children.borrow().iter() {
-        match child.data {
-            NodeData::Element { .. } => return child.clone(),
-            _ => {}
-        }
+        if let NodeData::Element { .. } = child.data { return child.clone() }
     }
     handle.clone()
 }

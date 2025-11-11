@@ -122,14 +122,14 @@ impl Tabs {
             let item_html = element("li")
                 .class("nav-item")
                 .child(
-                    &element("a")
+                    element("a")
                         .classes(link_classes)
-                        .attr("id", &format!("{}-tab", tab.id))
+                        .attr("id", format!("{}-tab", tab.id))
                         .attr("data-bs-toggle", "tab")
-                        .attr("data-bs-target", &format!("#{}-pane", tab.id))
+                        .attr("data-bs-target", format!("#{}-pane", tab.id))
                         .attr("type", "button")
                         .attr("role", "tab")
-                        .attr("aria-controls", &format!("{}-pane", tab.id))
+                        .attr("aria-controls", format!("{}-pane", tab.id))
                         .attr("aria-selected", if is_active { "true" } else { "false" })
                         .child(&tab.label)
                         .build(),
@@ -140,9 +140,9 @@ impl Tabs {
 
         let nav_html = element("ul")
             .classes(nav_classes)
-            .attr("id", &format!("{}-nav", self.id))
+            .attr("id", format!("{}-nav", self.id))
             .attr("role", "tablist")
-            .child(&nav_items.join("\n"))
+            .child(nav_items.join("\n"))
             .build();
 
         // Tab content
@@ -157,9 +157,9 @@ impl Tabs {
 
             let pane_html = element("div")
                 .classes(pane_classes)
-                .attr("id", &format!("{}-pane", tab.id))
+                .attr("id", format!("{}-pane", tab.id))
                 .attr("role", "tabpanel")
-                .attr("aria-labelledby", &format!("{}-tab", tab.id))
+                .attr("aria-labelledby", format!("{}-tab", tab.id))
                 .child(&tab.content)
                 .build();
             content_panes.push(pane_html);
@@ -167,17 +167,17 @@ impl Tabs {
 
         let content_html = element("div")
             .class("tab-content")
-            .attr("id", &format!("{}-content", self.id))
-            .child(&content_panes.join("\n"))
+            .attr("id", format!("{}-content", self.id))
+            .child(content_panes.join("\n"))
             .build();
 
         if self.vertical {
             element("div")
                 .classes(vec!["d-flex", "align-items-start"])
-                .child(&format!("{}\n{}", nav_html, content_html))
+                .child(format!("{nav_html}\n{content_html}"))
                 .build()
         } else {
-            format!("{}\n{}", nav_html, content_html)
+            format!("{nav_html}\n{content_html}")
         }
     }
 
@@ -234,7 +234,7 @@ impl Tabs {
             let item_html = element("button")
                 .classes(button_classes)
                 .attr("type", "button")
-                .attr("id", &format!("{}-tab", tab.id))
+                .attr("id", format!("{}-tab", tab.id))
                 .attr("data-tab", &tab.id)
                 .child(&tab.label)
                 .build();
@@ -243,8 +243,8 @@ impl Tabs {
 
         let nav_html = element("div")
             .classes(nav_classes)
-            .attr("id", &format!("{}-nav", self.id))
-            .child(&nav_items.join("\n"))
+            .attr("id", format!("{}-nav", self.id))
+            .child(nav_items.join("\n"))
             .build();
 
         // Tab content
@@ -258,7 +258,7 @@ impl Tabs {
 
             let pane_html = element("div")
                 .classes(pane_classes)
-                .attr("id", &format!("{}-pane", tab.id))
+                .attr("id", format!("{}-pane", tab.id))
                 .attr("data-tab-content", &tab.id)
                 .child(&tab.content)
                 .build();
@@ -266,17 +266,17 @@ impl Tabs {
         }
 
         let content_html = element("div")
-            .attr("id", &format!("{}-content", self.id))
-            .child(&content_panes.join("\n"))
+            .attr("id", format!("{}-content", self.id))
+            .child(content_panes.join("\n"))
             .build();
 
         if self.vertical {
             element("div")
                 .class("flex")
-                .child(&format!("{}\n{}", nav_html, content_html))
+                .child(format!("{nav_html}\n{content_html}"))
                 .build()
         } else {
-            format!("{}\n{}", nav_html, content_html)
+            format!("{nav_html}\n{content_html}")
         }
     }
 
@@ -305,7 +305,7 @@ impl Tabs {
             let item_html = element("button")
                 .classes(item_classes)
                 .attr("type", "button")
-                .attr("id", &format!("{}-tab", tab.id))
+                .attr("id", format!("{}-tab", tab.id))
                 .attr("data-tab", &tab.id)
                 .child(&tab.label)
                 .build();
@@ -314,8 +314,8 @@ impl Tabs {
 
         let nav_html = element("div")
             .classes(nav_classes)
-            .attr("id", &format!("{}-nav", self.id))
-            .child(&nav_items.join("\n"))
+            .attr("id", format!("{}-nav", self.id))
+            .child(nav_items.join("\n"))
             .build();
 
         // Tab content
@@ -329,7 +329,7 @@ impl Tabs {
 
             let pane_html = element("div")
                 .classes(pane_classes)
-                .attr("id", &format!("{}-pane", tab.id))
+                .attr("id", format!("{}-pane", tab.id))
                 .child(&tab.content)
                 .build();
             content_panes.push(pane_html);
@@ -337,13 +337,13 @@ impl Tabs {
 
         let content_html = element("div")
             .class("tabs-content")
-            .attr("id", &format!("{}-content", self.id))
-            .child(&content_panes.join("\n"))
+            .attr("id", format!("{}-content", self.id))
+            .child(content_panes.join("\n"))
             .build();
 
         element("div")
             .class("tabs")
-            .child(&format!("{}\n{}", nav_html, content_html))
+            .child(format!("{nav_html}\n{content_html}"))
             .build()
     }
 }
@@ -386,8 +386,7 @@ impl Component for Tabs {
                 }
             }
             _ => Err(ComponentError::EventError(format!(
-                "Unknown event: {}",
-                event
+                "Unknown event: {event}"
             ))),
         }
     }

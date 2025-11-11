@@ -132,7 +132,7 @@ mod tests {
                 true,
             );
             let html = tooltip.render();
-            assert!(html.contains(&format!("data-bs-placement=\"{}\"", placement)));
+            assert!(html.contains(&format!("data-bs-placement=\"{placement}\"")));
         }
     }
 
@@ -143,7 +143,7 @@ mod tests {
             let tooltip =
                 RustTooltip::new("Test".to_string(), "Text".to_string(), "top", trigger, true);
             let html = tooltip.render();
-            assert!(html.contains(&format!("data-bs-trigger=\"{}\"", trigger)));
+            assert!(html.contains(&format!("data-bs-trigger=\"{trigger}\"")));
         }
     }
 

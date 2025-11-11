@@ -329,8 +329,7 @@ impl Component for Button {
                 Ok(())
             }
             _ => Err(ComponentError::EventError(format!(
-                "Unknown event: {}",
-                event
+                "Unknown event: {event}"
             ))),
         }
     }

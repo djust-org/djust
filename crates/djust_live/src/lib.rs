@@ -10,14 +10,13 @@ use djust_vdom::{diff, parse_html, VNode};
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
-use serde_json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Global template cache - parse once, reuse for all sessions
 /// Using Arc<Template> for cheap cloning across threads
-static TEMPLATE_CACHE: Lazy<DashMap<String, Arc<Template>>> = Lazy::new(|| DashMap::new());
+static TEMPLATE_CACHE: Lazy<DashMap<String, Arc<Template>>> = Lazy::new(DashMap::new);
 
 /// A LiveView component that manages state and rendering (Rust backend)
 #[pyclass(name = "RustLiveView")]
@@ -214,8 +213,7 @@ fn fast_json_dumps(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<String> {
     py.allow_threads(|| {
         serde_json::to_string(&value).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "JSON serialization error: {}",
-                e
+                "JSON serialization error: {e}"
             ))
         })
     })
@@ -276,7 +274,7 @@ fn resolve_template_inheritance(
     use djust_vdom::template::{resolve_inheritance, TemplateLoader};
 
     // Convert string paths to PathBuf
-    let dirs: Vec<PathBuf> = template_dirs.iter().map(|s| PathBuf::from(s)).collect();
+    let dirs: Vec<PathBuf> = template_dirs.iter().map(PathBuf::from).collect();
 
     // Create template loader
     let mut loader = TemplateLoader::new(dirs);

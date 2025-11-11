@@ -147,7 +147,7 @@ impl Card {
             parts.push(element("div").class("card-footer").child(footer).build());
         }
 
-        card.child(&parts.join("\n")).build()
+        card.child(parts.join("\n")).build()
     }
 
     fn render_tailwind(&self) -> String {
@@ -223,7 +223,7 @@ impl Card {
             );
         }
 
-        card.child(&parts.join("\n")).build()
+        card.child(parts.join("\n")).build()
     }
 
     fn render_plain(&self) -> String {
@@ -232,7 +232,7 @@ impl Card {
         match self.variant {
             CardVariant::Default => {}
             variant => {
-                let variant_str = format!("card-{:?}", variant).to_lowercase();
+                let variant_str = format!("card-{variant:?}").to_lowercase();
                 card_classes.push(variant_str);
             }
         }
@@ -262,7 +262,7 @@ impl Card {
             parts.push(element("div").class("card-footer").child(footer).build());
         }
 
-        card.child(&parts.join("\n")).build()
+        card.child(parts.join("\n")).build()
     }
 }
 
@@ -293,8 +293,7 @@ impl Component for Card {
         _params: HashMap<String, Value>,
     ) -> Result<(), ComponentError> {
         Err(ComponentError::EventError(format!(
-            "Card component does not handle events: {}",
-            event
+            "Card component does not handle events: {event}"
         )))
     }
 

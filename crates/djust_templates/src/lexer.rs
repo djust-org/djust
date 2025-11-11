@@ -63,7 +63,7 @@ fn parse_jsx_component(chars: &mut std::iter::Peekable<std::str::Chars>) -> Resu
             // Parse prop value
             if chars.peek() == Some(&'"') || chars.peek() == Some(&'\'') {
                 let quote = chars.next().unwrap();
-                while let Some(ch) = chars.next() {
+                for ch in chars.by_ref() {
                     if ch == quote {
                         break;
                     }
@@ -73,7 +73,7 @@ fn parse_jsx_component(chars: &mut std::iter::Peekable<std::str::Chars>) -> Resu
                 // Handle {expression} props
                 chars.next(); // consume {
                 let mut depth = 1;
-                while let Some(ch) = chars.next() {
+                for ch in chars.by_ref() {
                     if ch == '{' {
                         depth += 1;
                     } else if ch == '}' {
@@ -228,7 +228,6 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>> {
                             if ch == '%' && chars.peek() == Some(&'}') {
                                 chars.next(); // consume }
                                 let parts: Vec<String> = tag_content
-                                    .trim()
                                     .split_whitespace()
                                     .map(|s| s.to_string())
                                     .collect();

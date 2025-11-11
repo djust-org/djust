@@ -70,8 +70,7 @@ impl RustModal {
         );
 
         html.push_str(&format!(
-            r#"<div class="{}"><div class="modal-content">"#,
-            dialog_class_str
+            r#"<div class="{dialog_class_str}"><div class="modal-content">"#
         ));
 
         // Header

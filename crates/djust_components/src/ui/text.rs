@@ -348,7 +348,7 @@ impl Text {
         classes.push("text".to_string());
 
         if let Some(color) = self.color {
-            classes.push(format!("text-{:?}", color).to_lowercase());
+            classes.push(format!("text-{color:?}").to_lowercase());
         }
 
         if self.weight != FontWeight::Normal {
@@ -404,8 +404,7 @@ impl Component for Text {
         _params: HashMap<String, Value>,
     ) -> Result<(), ComponentError> {
         Err(ComponentError::EventError(format!(
-            "Text component does not handle events: {}",
-            event
+            "Text component does not handle events: {event}"
         )))
     }
 

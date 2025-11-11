@@ -75,8 +75,7 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
             }
         }
         _ => Err(DjangoRustError::TemplateError(format!(
-            "Unknown filter: {}",
-            filter_name
+            "Unknown filter: {filter_name}"
         ))),
     }
 }
@@ -178,7 +177,7 @@ fn parse_slice_indices(parts: &[&str], len: isize) -> (isize, isize) {
 fn format_timesince(datetime_str: &str) -> Result<String> {
     // Parse ISO datetime string
     let dt = DateTime::parse_from_rfc3339(datetime_str)
-        .map_err(|e| DjangoRustError::TemplateError(format!("Invalid datetime format: {}", e)))?;
+        .map_err(|e| DjangoRustError::TemplateError(format!("Invalid datetime format: {e}")))?;
 
     let now = Utc::now();
     let duration = now.signed_duration_since(dt.with_timezone(&Utc));

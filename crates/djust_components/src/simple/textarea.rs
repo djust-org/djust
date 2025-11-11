@@ -140,7 +140,7 @@ impl RustTextArea {
 
         // Validation message
         if let Some(ref message) = self.validation_message {
-            let feedback_class = match self.validation_state.as_ref().map(|s| s.as_str()) {
+            let feedback_class = match self.validation_state.as_deref() {
                 Some("valid") => "valid-feedback",
                 _ => "invalid-feedback",
             };
