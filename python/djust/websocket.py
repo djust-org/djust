@@ -24,7 +24,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         super().__init__(*args, **kwargs)
         self.view_instance: Optional[Any] = None
         self.session_id: Optional[str] = None
-        self.use_binary = True  # Use MessagePack by default
+        self.use_binary = False  # Use JSON for now (MessagePack support TODO)
 
     async def connect(self):
         """Handle WebSocket connection"""
@@ -49,8 +49,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """Handle incoming WebSocket messages"""
         import logging
         import traceback
+        import sys
 
         logger = logging.getLogger(__name__)
+
+        print(f"[WebSocket] receive called: text_data={text_data[:100] if text_data else None}, bytes_data={bytes_data is not None}", file=sys.stderr)
 
         try:
             # Decode message
@@ -60,6 +63,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 data = json.loads(text_data)
 
             msg_type = data.get('type')
+            print(f"[WebSocket] Message type: {msg_type}, data: {data}", file=sys.stderr)
 
             if msg_type == 'event':
                 await self.handle_event(data)
@@ -203,9 +207,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             })
             return
 
-        # Mount the view
+        # Mount the view (needs sync_to_async for database operations)
+        from asgiref.sync import sync_to_async
+
         try:
-            self.view_instance.mount(request, **params)
+            # Run synchronous view operations in a thread pool
+            await sync_to_async(self.view_instance.mount)(request, **params)
         except Exception as e:
             error_msg = f'Error in {view_path}.mount(): {type(e).__name__}: {str(e)}'
             logger.error(error_msg, exc_info=True)
@@ -223,9 +230,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 })
             return
 
-        # Get initial HTML
+        # Get initial HTML (needs sync_to_async for database/session operations)
         try:
-            html = self.view_instance.render_to_string()
+            # Initialize Rust view and sync state
+            await sync_to_async(self.view_instance._initialize_rust_view)(request)
+            await sync_to_async(self.view_instance._sync_state_to_rust)()
+
+            # IMPORTANT: Use render_with_diff() to establish initial VDOM baseline
+            # This ensures the first event will be able to generate patches instead of falling back to html_update
+            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+
+            # Strip comments and normalize whitespace to match Rust VDOM parser
+            html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
+
+            # Extract innerHTML of [data-liveview-root] for WebSocket client
+            # Client expects just the content to insert into existing container
+            html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
         except Exception as e:
             error_msg = f'Error rendering {view_path}: {type(e).__name__}: {str(e)}'
             logger.error(error_msg, exc_info=True)
@@ -256,11 +276,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """Handle client events"""
         import logging
         import traceback
+        import sys
 
         logger = logging.getLogger(__name__)
 
         event_name = data.get('event')
         params = data.get('params', {})
+
+        print(f"[WebSocket] handle_event called: {event_name} with params: {params}", file=sys.stderr)
 
         if not self.view_instance:
             await self.send_json({
@@ -270,19 +293,23 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
 
         # Call the event handler
+        from asgiref.sync import sync_to_async
+
         handler = getattr(self.view_instance, event_name, None)
         if handler and callable(handler):
             try:
-                # Call handler
+                # Call handler (needs sync_to_async)
                 if params:
-                    handler(**params)
+                    await sync_to_async(handler)(**params)
                 else:
-                    handler()
+                    await sync_to_async(handler)()
 
-                # Get updated HTML and patches
-                html, patches, version = self.view_instance.render_with_diff()
+                # Get updated HTML and patches (needs sync_to_async)
+                html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
 
-                # Send patches to client
+                # For views with dynamic templates (template_string as property),
+                # patches may be empty because VDOM state is lost on recreation.
+                # In that case, send full HTML update.
                 if patches:
                     if self.use_binary:
                         # Send as MessagePack
@@ -295,6 +322,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             'patches': json.loads(patches),
                             'version': version,
                         })
+                else:
+                    # No patches - send full HTML update for views with dynamic templates
+                    # Strip comments and whitespace to match Rust VDOM parser
+                    html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
+                    # Extract innerHTML to avoid nesting <div data-liveview-root> divs
+                    html_content = await sync_to_async(self.view_instance._extract_liveview_content)(html)
+                    import sys
+                    print(f"[WebSocket] No patches generated, sending full HTML update", file=sys.stderr)
+                    print(f"[WebSocket] html_content length: {len(html_content)}, starts with: {html_content[:150]}...", file=sys.stderr)
+                    await self.send_json({
+                        'type': 'html_update',
+                        'html': html_content,
+                        'version': version,
+                    })
 
             except Exception as e:
                 view_class = self.view_instance.__class__.__name__ if self.view_instance else 'Unknown'

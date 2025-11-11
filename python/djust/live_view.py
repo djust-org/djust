@@ -31,10 +31,16 @@ class DjangoJSONEncoder(json.JSONEncoder):
     - datetime/date/time → ISO format strings
     - UUID → string
     - Decimal → float
+    - Component/LiveComponent → rendered HTML string
     - Django models → dict with id and __str__
     - QuerySets → list
     """
     def default(self, obj):
+        # Handle Component and LiveComponent instances (render to HTML)
+        from .components.base import Component, LiveComponent
+        if isinstance(obj, (Component, LiveComponent)):
+            return str(obj)  # Calls __str__() which calls render()
+
         # Handle datetime types
         if isinstance(obj, (datetime, date, time)):
             return obj.isoformat()
@@ -268,21 +274,48 @@ class LiveView(View):
                     if blocks:
                         # Join all block contents
                         vdom_template = ''.join(blocks)
+                        # Extract liveview-root div (with wrapper) for VDOM tracking
+                        vdom_template = self._extract_liveview_root_with_wrapper(vdom_template)
                         print(f"[LiveView] Using child template blocks for VDOM tracking ({len(vdom_template)} chars), full template for rendering ({len(resolved)} chars)", file=sys.stderr)
                         return vdom_template
                     else:
                         # No blocks found, use the child template as-is (minus extends)
-                        print(f"[LiveView] Using child template for VDOM tracking ({len(child_content)} chars)", file=sys.stderr)
-                        return child_content
+                        # Extract liveview-root div (with wrapper) for VDOM tracking
+                        child_vdom = self._extract_liveview_root_with_wrapper(child_content)
+                        print(f"[LiveView] Using child template for VDOM tracking ({len(child_vdom)} chars)", file=sys.stderr)
+                        return child_vdom
 
                 except Exception as e:
                     # Fallback to raw template if Rust resolution fails
                     print(f"[LiveView] Template inheritance resolution failed: {e}")
                     print(f"[LiveView] Falling back to raw template source")
-                    return template_source
+                    # Store full template for render_full_template()
+                    self._full_template = template_source
+                    # Extract liveview-root div (with wrapper) for VDOM tracking
+                    extracted = self._extract_liveview_root_with_wrapper(template_source)
 
-            # No template inheritance - return raw source
-            return template_source
+                    # CRITICAL: Strip comments and whitespace from template BEFORE Rust VDOM sees it
+                    extracted = self._strip_comments_and_whitespace(extracted)
+
+                    import sys
+                    print(f"[LiveView] Extracted and stripped liveview-root: {len(extracted)} chars (from {len(template_source)} chars)", file=sys.stderr)
+                    return extracted
+
+            # No template inheritance - store full template and extract liveview-root for VDOM
+            # Store full template for render_full_template() to use in GET responses
+            self._full_template = template_source
+
+            # Extract liveview-root div (with wrapper) for VDOM tracking
+            # This ensures server VDOM and client VDOM track the same structure
+            extracted = self._extract_liveview_root_with_wrapper(template_source)
+
+            # CRITICAL: Strip comments and whitespace from template BEFORE Rust VDOM sees it
+            # This ensures Rust VDOM baseline matches client DOM structure
+            extracted = self._strip_comments_and_whitespace(extracted)
+
+            import sys
+            print(f"[LiveView] No inheritance - extracted and stripped liveview-root: {len(extracted)} chars (from {len(template_source)} chars)", file=sys.stderr)
+            return extracted
         else:
             raise ValueError("Either template_name or template_string must be set")
 
@@ -307,7 +340,7 @@ class LiveView(View):
             - Automatically serializes datetime, UUID, Decimal, and Django models
             - Use DjangoJSONEncoder for custom type handling
         """
-        from .components.base import LiveComponent
+        from .components.base import Component, LiveComponent
 
         context = {}
 
@@ -317,9 +350,10 @@ class LiveView(View):
                 try:
                     value = getattr(self, key)
                     if not callable(value):
-                        # Include LiveComponent instances (for template rendering)
+                        # Include Component instances (stateless components)
+                        # Include LiveComponent instances (stateful components)
                         # OR JSON-serializable values (for state storage)
-                        if isinstance(value, LiveComponent):
+                        if isinstance(value, (Component, LiveComponent)):
                             context[key] = value
                         else:
                             try:
@@ -337,6 +371,9 @@ class LiveView(View):
 
     def _initialize_rust_view(self, request=None):
         """Initialize the Rust LiveView backend"""
+        import sys
+        print(f"[LiveView] _initialize_rust_view() called, _rust_view={self._rust_view}", file=sys.stderr)
+
         if self._rust_view is None:
             # Try to get from cache if we have a session
             if request and hasattr(request, 'session'):
@@ -347,18 +384,32 @@ class LiveView(View):
                     session_key = request.session.session_key
 
                 self._cache_key = f'{session_key}_{view_key}'
+                print(f"[LiveView] Cache lookup: cache_key={self._cache_key}", file=sys.stderr)
+                print(f"[LiveView] Cache contents: {list(_rust_view_cache.keys())}", file=sys.stderr)
 
                 # Try to get cached RustLiveView
                 if self._cache_key in _rust_view_cache:
                     cached_view, timestamp = _rust_view_cache[self._cache_key]
                     self._rust_view = cached_view
+                    print(f"[LiveView] Cache HIT! Using cached RustLiveView", file=sys.stderr)
                     # Update timestamp on access
                     import time
                     _rust_view_cache[self._cache_key] = (cached_view, time.time())
                     return
+                else:
+                    print(f"[LiveView] Cache MISS! Will create new RustLiveView", file=sys.stderr)
 
             # Create new RustLiveView with the template
+            # The template includes <div data-liveview-root> which matches what the client patches
+            # get_template() returns child blocks (with wrapper) for inheritance,
+            # or raw template for non-inheritance
             template_source = self.get_template()
+
+            import sys
+            print(f"[LiveView] Creating NEW RustLiveView for cache_key={self._cache_key}", file=sys.stderr)
+            print(f"[LiveView] Template length: {len(template_source)} chars", file=sys.stderr)
+            print(f"[LiveView] Template preview: {template_source[:200]}...", file=sys.stderr)
+
             self._rust_view = RustLiveView(template_source)
 
             # Cache it if we have a cache key
@@ -369,16 +420,17 @@ class LiveView(View):
     def _sync_state_to_rust(self):
         """Sync Python state to Rust backend"""
         if self._rust_view:
-            from .components.base import LiveComponent
+            from .components.base import Component, LiveComponent
 
             context = self.get_context_data()
 
             # Pre-render components since Rust can't call Python methods
             rendered_context = {}
             for key, value in context.items():
-                if isinstance(value, LiveComponent):
+                if isinstance(value, (Component, LiveComponent)):
                     # Create a dict with the pre-rendered HTML so {{ component.render }} works
-                    rendered_context[key] = {'render': str(value.render())}
+                    rendered_html = str(value.render())
+                    rendered_context[key] = {'render': rendered_html}
                 else:
                     rendered_context[key] = value
 
@@ -390,13 +442,214 @@ class LiveView(View):
             self._rust_view.update_state(json_compatible_context)
 
     def render(self, request=None) -> str:
-        """Render the view to HTML"""
+        """
+        Render the view to HTML.
+
+        Returns the rendered HTML from the template. For WebSocket updates,
+        caller should use _extract_liveview_content() to get innerHTML only.
+
+        Args:
+            request: The request object
+
+        Returns:
+            Rendered HTML
+        """
         self._initialize_rust_view(request)
         self._sync_state_to_rust()
         html = self._rust_view.render()
         # Post-process to hydrate React components
         html = self._hydrate_react_components(html)
         return html
+
+    def _strip_comments_and_whitespace(self, html: str) -> str:
+        """
+        Strip HTML comments and normalize whitespace to match Rust VDOM parser behavior.
+
+        The Rust VDOM parser (parser.rs) filters out comments and whitespace-only text nodes.
+        We need the client DOM to match the server VDOM structure, so we strip comments
+        from rendered HTML before sending to client.
+        """
+        import re
+        # Remove HTML comments
+        html = re.sub(r'<!--.*?-->', '', html, flags=re.DOTALL)
+        # Normalize whitespace (collapse multiple whitespace to single space)
+        html = re.sub(r'\s+', ' ', html)
+        # Remove whitespace between tags
+        html = re.sub(r'>\s+<', '><', html)
+        return html
+
+    def _extract_liveview_content(self, html: str) -> str:
+        """
+        Extract the inner content of [data-liveview-root] from full HTML.
+
+        This ensures the HTML sent over WebSocket matches what the client expects:
+        just the content to insert into the existing [data-liveview-root] container.
+        """
+        import re
+
+        # Find the opening tag for [data-liveview-root]
+        opening_match = re.search(
+            r'<div\s+data-liveview-root[^>]*>',
+            html,
+            re.IGNORECASE
+        )
+
+        if not opening_match:
+            # No [data-liveview-root] found - return full HTML
+            return html
+
+        start_pos = opening_match.end()
+
+        # Count nested divs to find the matching closing tag
+        depth = 1
+        pos = start_pos
+
+        while depth > 0 and pos < len(html):
+            # Look for next <div or </div
+            open_match = re.search(r'<div\b', html[pos:], re.IGNORECASE)
+            close_match = re.search(r'</div>', html[pos:], re.IGNORECASE)
+
+            if close_match is None:
+                break
+
+            close_pos = pos + close_match.start()
+            open_pos = pos + open_match.start() if open_match else float('inf')
+
+            if open_pos < close_pos:
+                # Found opening div first
+                depth += 1
+                pos = open_pos + 4  # Skip past '<div'
+            else:
+                # Found closing div first
+                depth -= 1
+                if depth == 0:
+                    # This is the matching closing tag - return inner content only
+                    return html[start_pos:close_pos]
+                pos = close_pos + 6  # Skip past '</div>'
+
+        # If we get here, couldn't find matching closing tag - return full HTML
+        return html
+
+    def _extract_liveview_root_with_wrapper(self, template: str) -> str:
+        """
+        Extract the <div data-liveview-root>...</div> section from a template (WITH the wrapper div).
+
+        This is used to ensure server VDOM and client VDOM track the same structure:
+        - Client's getNodeByPath([]) returns the div[data-liveview-root] element
+        - Server VDOM must also track div[data-liveview-root] as the root
+        - This ensures paths match between server patches and client DOM
+
+        Args:
+            template: Template string (may include DOCTYPE, html, head, body, etc.)
+
+        Returns:
+            Template with just the <div data-liveview-root>...</div> section (WITH wrapper)
+        """
+        import re
+
+        # Find the opening tag for [data-liveview-root]
+        opening_match = re.search(
+            r'<div\s+data-liveview-root[^>]*>',
+            template,
+            re.IGNORECASE
+        )
+
+        if not opening_match:
+            # No [data-liveview-root] found - return template as-is
+            return template
+
+        start_pos = opening_match.start()  # Start of <div tag, not end
+        inner_start_pos = opening_match.end()  # End of opening tag
+
+        # Count nested divs to find the matching closing tag
+        depth = 1
+        pos = inner_start_pos
+
+        while depth > 0 and pos < len(template):
+            # Look for next <div or </div
+            open_match = re.search(r'<div\b', template[pos:], re.IGNORECASE)
+            close_match = re.search(r'</div>', template[pos:], re.IGNORECASE)
+
+            if close_match is None:
+                break
+
+            close_pos = pos + close_match.start()
+            open_pos = pos + open_match.start() if open_match else float('inf')
+
+            if open_pos < close_pos:
+                # Found opening div first
+                depth += 1
+                pos = open_pos + 4  # Skip past '<div'
+            else:
+                # Found closing div first
+                depth -= 1
+                if depth == 0:
+                    # This is the matching closing tag - return WITH wrapper
+                    end_pos = pos + close_match.end()  # Include </div>
+                    return template[start_pos:end_pos]
+                pos = close_pos + 6  # Skip past '</div>'
+
+        # If we get here, couldn't find matching closing tag - return template as-is
+        return template
+
+    def _extract_liveview_template_content(self, template: str) -> str:
+        """
+        Extract the innerHTML of [data-liveview-root] from a TEMPLATE (not rendered HTML).
+
+        This is used to establish VDOM baseline with only the innerHTML portion of the template,
+        ensuring patches are calculated for the correct structure.
+
+        Args:
+            template: Template string with variables (e.g., "{{ count }}")
+
+        Returns:
+            Template innerHTML without the wrapper div
+        """
+        import re
+
+        # Find the opening tag for [data-liveview-root]
+        opening_match = re.search(
+            r'<div\s+data-liveview-root[^>]*>',
+            template,
+            re.IGNORECASE
+        )
+
+        if not opening_match:
+            # No [data-liveview-root] found - return template as-is
+            return template
+
+        start_pos = opening_match.end()
+
+        # Count nested divs to find the matching closing tag
+        depth = 1
+        pos = start_pos
+
+        while depth > 0 and pos < len(template):
+            # Look for next <div or </div (but not in Django template tags)
+            # This is a simplified parser - doesn't handle all edge cases
+            open_match = re.search(r'<div\b', template[pos:], re.IGNORECASE)
+            close_match = re.search(r'</div>', template[pos:], re.IGNORECASE)
+
+            if close_match is None:
+                break
+
+            close_pos = pos + close_match.start()
+            open_pos = pos + open_match.start() if open_match else float('inf')
+
+            if open_pos < close_pos:
+                # Found opening div first
+                depth += 1
+                pos = open_pos + 4  # Skip past '<div'
+            else:
+                # Found closing div first
+                depth -= 1
+                if depth == 0:
+                    # This is the matching closing tag - return inner content only
+                    return template[start_pos:close_pos]
+                pos = close_pos + 6  # Skip past '</div>'
+
+        # If we get here, couldn't find matching closing tag - return template as-is
+        return template
 
     def render_full_template(self, request=None) -> str:
         """
@@ -412,11 +665,11 @@ class LiveView(View):
             temp_rust = RustLiveView(self._full_template)
 
             # Sync state to this temporary view
-            from .components.base import LiveComponent
+            from .components.base import Component, LiveComponent
             context = self.get_context_data()
             rendered_context = {}
             for key, value in context.items():
-                if isinstance(value, LiveComponent):
+                if isinstance(value, (Component, LiveComponent)):
                     rendered_context[key] = {'render': str(value.render())}
                 else:
                     rendered_context[key] = value
@@ -428,18 +681,33 @@ class LiveView(View):
             # No full template - use regular render
             return self.render(request)
 
-    def render_with_diff(self, request=None) -> tuple[str, Optional[str], int]:
+    def render_with_diff(self, request=None, extract_liveview_root=False) -> tuple[str, Optional[str], int]:
         """
         Render the view and compute diff from last render.
+
+        Args:
+            extract_liveview_root: If True, extract innerHTML of [data-liveview-root]
+                                  before establishing VDOM. This ensures Rust VDOM
+                                  tracks exactly what the client's innerHTML contains.
 
         Returns:
             Tuple of (html, patches_json, version)
         """
         import sys
-        print(f"[LiveView] render_with_diff() called", file=sys.stderr)
+        print(f"[LiveView] render_with_diff() called (extract_liveview_root={extract_liveview_root})", file=sys.stderr)
         print(f"[LiveView] _rust_view before init: {self._rust_view}", file=sys.stderr)
 
+        # Initialize Rust view if not already done
         self._initialize_rust_view(request)
+
+        # If template_string is a property (dynamic), update the template
+        # while preserving VDOM state for efficient patching
+        if hasattr(self.__class__, 'template_string') and isinstance(
+            getattr(self.__class__, 'template_string'), property
+        ):
+            print(f"[LiveView] template_string is a property - updating template", file=sys.stderr)
+            new_template = self.get_template()
+            self._rust_view.update_template(new_template)
 
         print(f"[LiveView] _rust_view after init: {self._rust_view}", file=sys.stderr)
 
@@ -448,11 +716,26 @@ class LiveView(View):
         result = self._rust_view.render_with_diff()
         html, patches_json, version = result
 
+        print(f"[LiveView] Rendered HTML length: {len(html)} chars, starts with: {html[:100]}...", file=sys.stderr)
+
+        # Extract [data-liveview-root] innerHTML if requested
+        # This ensures Rust VDOM tracks exactly what the client's innerHTML contains
+        if extract_liveview_root:
+            html = self._extract_liveview_content(html)
+            print(f"[LiveView] Extracted [data-liveview-root] content ({len(html)} chars)", file=sys.stderr)
+
         print(f"[LiveView] Rust returned: version={version}, patches={'YES' if patches_json else 'NO'}", file=sys.stderr)
         if not patches_json:
             print(f"[LiveView] NO PATCHES GENERATED!", file=sys.stderr)
+        else:
+            # Show first few patches for debugging
+            import json as json_module
+            patches_list = json_module.loads(patches_json) if patches_json else []
+            print(f"[LiveView] Generated {len(patches_list)} patches:", file=sys.stderr)
+            for i, patch in enumerate(patches_list[:3]):  # Show first 3 patches
+                print(f"[LiveView]   Patch {i}: {patch}", file=sys.stderr)
 
-        return result
+        return (html, patches_json, version)
 
     def _extract_component_state(self, component) -> dict:
         """
@@ -556,13 +839,14 @@ class LiveView(View):
         self._initialize_rust_view(request)
         self._sync_state_to_rust()
 
-        # Initialize baseline VDOM for future patches (using LiveView root content only)
-        _, _, _ = self.render_with_diff(request)  # Establish VDOM baseline
-
         # IMPORTANT: Always call get_template() on GET requests to set _full_template
         # This is needed even if the Rust view is cached, because _full_template
         # is used by render_full_template() to return the complete HTML document
         self.get_template()
+
+        # Initialize baseline VDOM for future patches
+        # This establishes the initial VDOM state for diffing on subsequent renders
+        _, _, _ = self.render_with_diff(request)
 
         # Render full template for the browser (includes full HTML structure)
         html = self.render_full_template(request)
@@ -591,6 +875,13 @@ class LiveView(View):
                 with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.html', prefix='registration_form_') as f:
                     f.write(form_html)
                     print(f"[LiveView] Saved form HTML to {f.name}", file=sys.stderr)
+
+        # Inject view path into data-liveview-root for WebSocket mounting
+        view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
+        html = html.replace(
+            '<div data-liveview-root>',
+            f'<div data-liveview-root data-live-view="{view_path}">'
+        )
 
         # Inject LiveView client script
         html = self._inject_client_script(html)
@@ -863,7 +1154,10 @@ class LiveView(View):
                             console.log('[LiveView] View mounted:', data.view);
                             if (data.html) {
                                 // Replace page content with server-rendered HTML
-                                const container = document.querySelector('[data-live-view]');
+                                let container = document.querySelector('[data-live-view]');
+                                if (!container) {
+                                    container = document.querySelector('[data-liveview-root]');
+                                }
                                 if (container) {
                                     container.innerHTML = data.html;
                                     bindLiveViewEvents();
@@ -875,6 +1169,16 @@ class LiveView(View):
                             if (data.patches && data.patches.length > 0) {
                                 console.log('[LiveView] Applying', data.patches.length, 'patches');
                                 this.applyPatches(data.patches);
+                                bindLiveViewEvents();
+                            }
+                            break;
+
+                        case 'html_update':
+                            // Full HTML update for views with dynamic templates
+                            console.log('[LiveView] Applying full HTML update');
+                            let container = document.querySelector('[data-liveview-root]');
+                            if (container) {
+                                container.innerHTML = data.html;
                                 bindLiveViewEvents();
                             }
                             break;
@@ -907,12 +1211,22 @@ class LiveView(View):
                 }
 
                 autoMount() {
-                    const container = document.querySelector('[data-live-view]');
+                    // Look for container with view path
+                    let container = document.querySelector('[data-live-view]');
+                    if (!container) {
+                        // Fallback: look for data-liveview-root with data-live-view attribute
+                        container = document.querySelector('[data-liveview-root][data-live-view]');
+                    }
+
                     if (container) {
                         const viewPath = container.dataset.liveView;
                         if (viewPath) {
                             this.mount(viewPath);
+                        } else {
+                            console.warn('[LiveView] Container found but no view path specified');
                         }
+                    } else {
+                        console.warn('[LiveView] No LiveView container found for auto-mounting');
                     }
                 }
 
