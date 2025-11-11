@@ -8,7 +8,7 @@ A flex row component for grid layouts with:
 */
 
 use crate::html::element;
-use crate::{Component, ComponentBuilder, ComponentError, Framework};
+use crate::{Component, ComponentError, Framework};
 use ahash::AHashMap as HashMap;
 use djust_core::Value;
 

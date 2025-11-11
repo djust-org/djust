@@ -116,7 +116,7 @@ impl PyButton {
         // TODO: Get framework from djust config
         self.inner
             .render(Framework::Bootstrap5)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
     }
 
     /// Render with specific framework
@@ -124,7 +124,7 @@ impl PyButton {
         let fw = Framework::from_str(&framework);
         self.inner
             .render(fw)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
     }
 
     /// Builder pattern - return self for chaining
@@ -282,14 +282,14 @@ impl PyInput {
     fn render(&self) -> PyResult<String> {
         self.inner
             .render(crate::Framework::Bootstrap5)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
     }
 
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
         let fw = crate::Framework::from_str(&framework);
         self.inner
             .render(fw)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
     }
 }
 
@@ -381,14 +381,14 @@ impl PyText {
     fn render(&self) -> PyResult<String> {
         self.inner
             .render(crate::Framework::Bootstrap5)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
     }
 
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
         let fw = crate::Framework::from_str(&framework);
         self.inner
             .render(fw)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
     }
 }
 
@@ -501,18 +501,18 @@ impl PyCard {
     fn render(&self) -> PyResult<String> {
         self.inner
             .render(crate::Framework::Bootstrap5)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
     }
 
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
         let fw = crate::Framework::from_str(&framework);
         self.inner
             .render(fw)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
     }
 
     fn __repr__(&self) -> String {
-        format!("<RustCard>")
+        "<RustCard>".to_string()
     }
 }
 
@@ -586,18 +586,18 @@ impl PyAlert {
     fn render(&self) -> PyResult<String> {
         self.inner
             .render(crate::Framework::Bootstrap5)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
     }
 
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
         let fw = crate::Framework::from_str(&framework);
         self.inner
             .render(fw)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
     }
 
     fn __repr__(&self) -> String {
-        format!("<RustAlert>")
+        "<RustAlert>".to_string()
     }
 }
 
@@ -682,14 +682,14 @@ impl PyModal {
     fn render(&self) -> PyResult<String> {
         self.inner
             .render(crate::Framework::Bootstrap5)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
     }
 
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
         let fw = crate::Framework::from_str(&framework);
         self.inner
             .render(fw)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
     }
 
     fn __repr__(&self) -> String {

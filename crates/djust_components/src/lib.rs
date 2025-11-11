@@ -21,7 +21,7 @@ pub mod layout;
 pub mod simple;
 pub mod ui; // Simple stateless components (pure Rust PyO3)
 
-#[cfg(feature = "python")]
+// Python bindings module
 pub mod python;
 
 pub use html::HtmlBuilder;
