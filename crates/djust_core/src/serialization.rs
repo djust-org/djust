@@ -6,26 +6,22 @@ use serde_json;
 
 /// Serialize a value to JSON
 pub fn to_json(value: &Value) -> Result<String> {
-    serde_json::to_string(value)
-        .map_err(|e| DjangoRustError::SerializationError(e.to_string()))
+    serde_json::to_string(value).map_err(|e| DjangoRustError::SerializationError(e.to_string()))
 }
 
 /// Deserialize a value from JSON
 pub fn from_json(json: &str) -> Result<Value> {
-    serde_json::from_str(json)
-        .map_err(|e| DjangoRustError::SerializationError(e.to_string()))
+    serde_json::from_str(json).map_err(|e| DjangoRustError::SerializationError(e.to_string()))
 }
 
 /// Serialize a value to MessagePack (binary)
 pub fn to_msgpack(value: &Value) -> Result<Vec<u8>> {
-    rmp_serde::to_vec(value)
-        .map_err(|e| DjangoRustError::SerializationError(e.to_string()))
+    rmp_serde::to_vec(value).map_err(|e| DjangoRustError::SerializationError(e.to_string()))
 }
 
 /// Deserialize a value from MessagePack (binary)
 pub fn from_msgpack(bytes: &[u8]) -> Result<Value> {
-    rmp_serde::from_slice(bytes)
-        .map_err(|e| DjangoRustError::SerializationError(e.to_string()))
+    rmp_serde::from_slice(bytes).map_err(|e| DjangoRustError::SerializationError(e.to_string()))
 }
 
 #[cfg(test)]

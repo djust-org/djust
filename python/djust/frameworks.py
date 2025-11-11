@@ -21,12 +21,7 @@ class FrameworkAdapter(ABC):
 
     @abstractmethod
     def render_field(
-        self,
-        field: forms.Field,
-        field_name: str,
-        value: Any,
-        errors: List[str],
-        **kwargs
+        self, field: forms.Field, field_name: str, value: Any, errors: List[str], **kwargs
     ) -> str:
         """
         Render a form field with framework-specific styling.
@@ -76,64 +71,61 @@ class Bootstrap5Adapter(FrameworkAdapter):
     """Bootstrap 5 CSS framework adapter"""
 
     def render_field(
-        self,
-        field: forms.Field,
-        field_name: str,
-        value: Any,
-        errors: List[str],
-        **kwargs
+        self, field: forms.Field, field_name: str, value: Any, errors: List[str], **kwargs
     ) -> str:
         """Render field with Bootstrap 5 styling"""
         has_errors = len(errors) > 0
         field_type = self._get_field_type(field)
 
         # Build wrapper
-        wrapper_class = kwargs.get('wrapper_class', config.get_framework_class('field_wrapper_class'))
+        wrapper_class = kwargs.get(
+            "wrapper_class", config.get_framework_class("field_wrapper_class")
+        )
         html = f'<div class="{wrapper_class}">'
 
         # Render label
-        if kwargs.get('render_label', config.get('render_labels', True)):
-            label_class = config.get_framework_class('label_class')
-            label_text = kwargs.get('label', field.label or field_name.replace('_', ' ').title())
-            required = ' <span class="text-danger">*</span>' if field.required else ''
+        if kwargs.get("render_label", config.get("render_labels", True)):
+            label_class = config.get_framework_class("label_class")
+            label_text = kwargs.get("label", field.label or field_name.replace("_", " ").title())
+            required = ' <span class="text-danger">*</span>' if field.required else ""
             html += f'<label for="id_{field_name}" class="{label_class}">{escape(label_text)}{required}</label>'
 
         # Render field widget
-        if field_type == 'checkbox':
+        if field_type == "checkbox":
             html += self._render_checkbox(field, field_name, value, has_errors, **kwargs)
-        elif field_type == 'radio':
+        elif field_type == "radio":
             html += self._render_radio(field, field_name, value, has_errors, **kwargs)
         else:
             html += self._render_input(field, field_name, value, has_errors, field_type, **kwargs)
 
         # Render help text
-        if kwargs.get('render_help_text', config.get('render_help_text', True)) and field.help_text:
+        if kwargs.get("render_help_text", config.get("render_help_text", True)) and field.help_text:
             html += f'<div class="form-text">{escape(field.help_text)}</div>'
 
         # Render errors
-        if kwargs.get('render_errors', config.get('render_errors', True)) and has_errors:
+        if kwargs.get("render_errors", config.get("render_errors", True)) and has_errors:
             html += self.render_errors(errors)
 
-        html += '</div>'
+        html += "</div>"
         return html
 
     def render_errors(self, errors: List[str], **kwargs) -> str:
         """Render errors with Bootstrap 5 styling"""
-        error_class = config.get_framework_class('error_class_block')
+        error_class = config.get_framework_class("error_class_block")
         html = f'<div class="{error_class}">'
         for error in errors:
-            html += f'<div>{escape(error)}</div>'
-        html += '</div>'
+            html += f"<div>{escape(error)}</div>"
+        html += "</div>"
         return html
 
     def get_field_class(self, field: forms.Field, has_errors: bool = False) -> str:
         """Get Bootstrap 5 field classes"""
         if isinstance(field, forms.BooleanField):
-            return config.get_framework_class('checkbox_class')
+            return config.get_framework_class("checkbox_class")
         elif has_errors:
-            return config.get_framework_class('field_class_invalid')
+            return config.get_framework_class("field_class_invalid")
         else:
-            return config.get_framework_class('field_class')
+            return config.get_framework_class("field_class")
 
     def _get_field_type(self, field: forms.Field) -> str:
         """Determine field type for rendering"""
@@ -169,32 +161,32 @@ class Bootstrap5Adapter(FrameworkAdapter):
         value: Any,
         has_errors: bool,
         field_type: str,
-        **kwargs
+        **kwargs,
     ) -> str:
         """Render standard input field"""
         field_class = self.get_field_class(field, has_errors)
         attrs = {
-            'class': field_class,
-            'name': field_name,
-            'id': f'id_{field_name}',
+            "class": field_class,
+            "name": field_name,
+            "id": f"id_{field_name}",
         }
 
         if field.required:
-            attrs['required'] = 'required'
+            attrs["required"] = "required"
 
         # Add LiveView event handler
-        if kwargs.get('auto_validate', config.get('auto_validate_on_change', True)):
-            attrs['@change'] = 'validate_field'
+        if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
+            attrs["@change"] = "validate_field"
 
         # Render based on field type
         if field_type == "textarea":
-            return self._build_tag('textarea', attrs, str(value))
+            return self._build_tag("textarea", attrs, str(value))
         elif field_type == "select":
             return self._render_select(field, field_name, value, has_errors, attrs)
         else:
-            attrs['type'] = field_type
-            attrs['value'] = str(value) if value else ''
-            return self._build_tag('input', attrs)
+            attrs["type"] = field_type
+            attrs["value"] = str(value) if value else ""
+            return self._build_tag("input", attrs)
 
     def _render_select(
         self,
@@ -202,7 +194,7 @@ class Bootstrap5Adapter(FrameworkAdapter):
         field_name: str,
         value: Any,
         has_errors: bool,
-        attrs: Dict[str, str]
+        attrs: Dict[str, str],
     ) -> str:
         """Render select field"""
         options_html = ""
@@ -210,45 +202,42 @@ class Bootstrap5Adapter(FrameworkAdapter):
             options_html += '<option value="">---------</option>'
 
         for choice_value, choice_label in field.choices:
-            selected = 'selected' if str(value) == str(choice_value) else ''
-            options_html += f'<option value="{escape(choice_value)}" {selected}>{escape(choice_label)}</option>'
+            selected = "selected" if str(value) == str(choice_value) else ""
+            options_html += (
+                f'<option value="{escape(choice_value)}" {selected}>{escape(choice_label)}</option>'
+            )
 
-        return self._build_tag('select', attrs, options_html)
+        return self._build_tag("select", attrs, options_html)
 
     def _render_checkbox(
-        self,
-        field: forms.Field,
-        field_name: str,
-        value: Any,
-        has_errors: bool,
-        **kwargs
+        self, field: forms.Field, field_name: str, value: Any, has_errors: bool, **kwargs
     ) -> str:
         """Render checkbox field with Bootstrap styling"""
-        wrapper_class = config.get_framework_class('checkbox_wrapper_class')
+        wrapper_class = config.get_framework_class("checkbox_wrapper_class")
         field_class = self.get_field_class(field, has_errors)
-        label_class = config.get_framework_class('checkbox_label_class')
+        label_class = config.get_framework_class("checkbox_label_class")
 
         attrs = {
-            'class': field_class,
-            'type': 'checkbox',
-            'name': field_name,
-            'id': f'id_{field_name}',
+            "class": field_class,
+            "type": "checkbox",
+            "name": field_name,
+            "id": f"id_{field_name}",
         }
 
         if value:
-            attrs['checked'] = 'checked'
+            attrs["checked"] = "checked"
 
         if field.required:
-            attrs['required'] = 'required'
+            attrs["required"] = "required"
 
-        if kwargs.get('auto_validate', config.get('auto_validate_on_change', True)):
-            attrs['@change'] = 'validate_field'
+        if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
+            attrs["@change"] = "validate_field"
 
-        label_text = kwargs.get('label', field.label or field_name.replace('_', ' ').title())
+        label_text = kwargs.get("label", field.label or field_name.replace("_", " ").title())
 
         return f'''
             <div class="{wrapper_class}">
-                {self._build_tag('input', attrs)}
+                {self._build_tag("input", attrs)}
                 <label class="{label_class}" for="id_{field_name}">
                     {escape(label_text)}
                 </label>
@@ -256,43 +245,38 @@ class Bootstrap5Adapter(FrameworkAdapter):
         '''
 
     def _render_radio(
-        self,
-        field: forms.Field,
-        field_name: str,
-        value: Any,
-        has_errors: bool,
-        **kwargs
+        self, field: forms.Field, field_name: str, value: Any, has_errors: bool, **kwargs
     ) -> str:
         """Render radio buttons field with Bootstrap styling"""
         html = ""
-        field_class = 'form-check-input'
-        wrapper_class = 'form-check'
+        field_class = "form-check-input"
+        wrapper_class = "form-check"
 
-        if not hasattr(field, 'choices'):
+        if not hasattr(field, "choices"):
             return "<!-- ERROR: Radio field must have choices -->"
 
         for choice_value, choice_label in field.choices:
-            radio_id = f'id_{field_name}_{choice_value}'
+            radio_id = f"id_{field_name}_{choice_value}"
             attrs = {
-                'class': field_class,
-                'type': 'radio',
-                'name': field_name,
-                'id': radio_id,
-                'value': str(choice_value),
+                "class": field_class,
+                "type": "radio",
+                "name": field_name,
+                "id": radio_id,
+                "value": str(choice_value),
             }
 
             if str(value) == str(choice_value):
-                attrs['checked'] = 'checked'
+                attrs["checked"] = "checked"
 
             if field.required:
-                attrs['required'] = 'required'
+                attrs["required"] = "required"
 
-            if kwargs.get('auto_validate', config.get('auto_validate_on_change', True)):
-                attrs['@change'] = 'validate_field'
+            if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
+                attrs["@change"] = "validate_field"
 
             html += f'''
             <div class="{wrapper_class}">
-                {self._build_tag('input', attrs)}
+                {self._build_tag("input", attrs)}
                 <label class="form-check-label" for="{radio_id}">
                     {escape(choice_label)}
                 </label>
@@ -303,61 +287,58 @@ class Bootstrap5Adapter(FrameworkAdapter):
 
     def _build_tag(self, tag: str, attrs: Dict[str, str], content: str = None) -> str:
         """Build an HTML tag with attributes"""
-        attrs_str = ' '.join(f'{k}="{escape(str(v))}"' for k, v in attrs.items())
+        attrs_str = " ".join(f'{k}="{escape(str(v))}"' for k, v in attrs.items())
 
         if content is not None:
-            return f'<{tag} {attrs_str}>{content}</{tag}>'
+            return f"<{tag} {attrs_str}>{content}</{tag}>"
         else:
-            return f'<{tag} {attrs_str} />'
+            return f"<{tag} {attrs_str} />"
 
 
 class TailwindAdapter(FrameworkAdapter):
     """Tailwind CSS framework adapter"""
 
     def render_field(
-        self,
-        field: forms.Field,
-        field_name: str,
-        value: Any,
-        errors: List[str],
-        **kwargs
+        self, field: forms.Field, field_name: str, value: Any, errors: List[str], **kwargs
     ) -> str:
         """Render field with Tailwind CSS styling"""
         has_errors = len(errors) > 0
         field_type = self._get_field_type(field)
 
         # Build wrapper
-        wrapper_class = kwargs.get('wrapper_class', config.get_framework_class('field_wrapper_class'))
+        wrapper_class = kwargs.get(
+            "wrapper_class", config.get_framework_class("field_wrapper_class")
+        )
         html = f'<div class="{wrapper_class}">'
 
         # Render label
-        if kwargs.get('render_label', config.get('render_labels', True)):
-            label_class = config.get_framework_class('label_class')
-            label_text = kwargs.get('label', field.label or field_name.replace('_', ' ').title())
-            required = ' <span class="text-red-600">*</span>' if field.required else ''
+        if kwargs.get("render_label", config.get("render_labels", True)):
+            label_class = config.get_framework_class("label_class")
+            label_text = kwargs.get("label", field.label or field_name.replace("_", " ").title())
+            required = ' <span class="text-red-600">*</span>' if field.required else ""
             html += f'<label for="id_{field_name}" class="{label_class}">{escape(label_text)}{required}</label>'
 
         # Render field widget
-        if field_type == 'checkbox':
+        if field_type == "checkbox":
             html += self._render_checkbox(field, field_name, value, has_errors, **kwargs)
         else:
             html += self._render_input(field, field_name, value, has_errors, field_type, **kwargs)
 
         # Render help text
-        if kwargs.get('render_help_text', config.get('render_help_text', True)) and field.help_text:
+        if kwargs.get("render_help_text", config.get("render_help_text", True)) and field.help_text:
             html += f'<p class="mt-2 text-sm text-gray-500">{escape(field.help_text)}</p>'
 
         # Render errors
-        if kwargs.get('render_errors', config.get('render_errors', True)) and has_errors:
+        if kwargs.get("render_errors", config.get("render_errors", True)) and has_errors:
             html += self.render_errors(errors)
 
-        html += '</div>'
+        html += "</div>"
         return html
 
     def render_errors(self, errors: List[str], **kwargs) -> str:
         """Render errors with Tailwind CSS styling"""
-        error_class = config.get_framework_class('error_class')
-        html = ''
+        error_class = config.get_framework_class("error_class")
+        html = ""
         for error in errors:
             html += f'<p class="{error_class}">{escape(error)}</p>'
         return html
@@ -365,11 +346,11 @@ class TailwindAdapter(FrameworkAdapter):
     def get_field_class(self, field: forms.Field, has_errors: bool = False) -> str:
         """Get Tailwind CSS field classes"""
         if isinstance(field, forms.BooleanField):
-            return config.get_framework_class('checkbox_class')
+            return config.get_framework_class("checkbox_class")
         elif has_errors:
-            return config.get_framework_class('field_class_invalid')
+            return config.get_framework_class("field_class_invalid")
         else:
-            return config.get_framework_class('field_class')
+            return config.get_framework_class("field_class")
 
     def _get_field_type(self, field: forms.Field) -> str:
         """Determine field type for rendering (same as Bootstrap)"""
@@ -384,30 +365,30 @@ class TailwindAdapter(FrameworkAdapter):
         value: Any,
         has_errors: bool,
         field_type: str,
-        **kwargs
+        **kwargs,
     ) -> str:
         """Render standard input field (similar to Bootstrap but with Tailwind classes)"""
         field_class = self.get_field_class(field, has_errors)
         attrs = {
-            'class': field_class,
-            'name': field_name,
-            'id': f'id_{field_name}',
+            "class": field_class,
+            "name": field_name,
+            "id": f"id_{field_name}",
         }
 
         if field.required:
-            attrs['required'] = 'required'
+            attrs["required"] = "required"
 
-        if kwargs.get('auto_validate', config.get('auto_validate_on_change', True)):
-            attrs['@change'] = 'validate_field'
+        if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
+            attrs["@change"] = "validate_field"
 
         if field_type == "textarea":
-            return self._build_tag('textarea', attrs, str(value))
+            return self._build_tag("textarea", attrs, str(value))
         elif field_type == "select":
             return self._render_select(field, field_name, value, has_errors, attrs)
         else:
-            attrs['type'] = field_type
-            attrs['value'] = str(value) if value else ''
-            return self._build_tag('input', attrs)
+            attrs["type"] = field_type
+            attrs["value"] = str(value) if value else ""
+            return self._build_tag("input", attrs)
 
     def _render_select(
         self,
@@ -415,7 +396,7 @@ class TailwindAdapter(FrameworkAdapter):
         field_name: str,
         value: Any,
         has_errors: bool,
-        attrs: Dict[str, str]
+        attrs: Dict[str, str],
     ) -> str:
         """Render select field"""
         options_html = ""
@@ -423,45 +404,42 @@ class TailwindAdapter(FrameworkAdapter):
             options_html += '<option value="">---------</option>'
 
         for choice_value, choice_label in field.choices:
-            selected = 'selected' if str(value) == str(choice_value) else ''
-            options_html += f'<option value="{escape(choice_value)}" {selected}>{escape(choice_label)}</option>'
+            selected = "selected" if str(value) == str(choice_value) else ""
+            options_html += (
+                f'<option value="{escape(choice_value)}" {selected}>{escape(choice_label)}</option>'
+            )
 
-        return self._build_tag('select', attrs, options_html)
+        return self._build_tag("select", attrs, options_html)
 
     def _render_checkbox(
-        self,
-        field: forms.Field,
-        field_name: str,
-        value: Any,
-        has_errors: bool,
-        **kwargs
+        self, field: forms.Field, field_name: str, value: Any, has_errors: bool, **kwargs
     ) -> str:
         """Render checkbox field with Tailwind styling"""
-        wrapper_class = config.get_framework_class('checkbox_wrapper_class')
+        wrapper_class = config.get_framework_class("checkbox_wrapper_class")
         field_class = self.get_field_class(field, has_errors)
-        label_class = config.get_framework_class('checkbox_label_class')
+        label_class = config.get_framework_class("checkbox_label_class")
 
         attrs = {
-            'class': field_class,
-            'type': 'checkbox',
-            'name': field_name,
-            'id': f'id_{field_name}',
+            "class": field_class,
+            "type": "checkbox",
+            "name": field_name,
+            "id": f"id_{field_name}",
         }
 
         if value:
-            attrs['checked'] = 'checked'
+            attrs["checked"] = "checked"
 
         if field.required:
-            attrs['required'] = 'required'
+            attrs["required"] = "required"
 
-        if kwargs.get('auto_validate', config.get('auto_validate_on_change', True)):
-            attrs['@change'] = 'validate_field'
+        if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
+            attrs["@change"] = "validate_field"
 
-        label_text = kwargs.get('label', field.label or field_name.replace('_', ' ').title())
+        label_text = kwargs.get("label", field.label or field_name.replace("_", " ").title())
 
         return f'''
             <div class="{wrapper_class}">
-                {self._build_tag('input', attrs)}
+                {self._build_tag("input", attrs)}
                 <label class="{label_class}" for="id_{field_name}">
                     {escape(label_text)}
                 </label>
@@ -470,67 +448,62 @@ class TailwindAdapter(FrameworkAdapter):
 
     def _build_tag(self, tag: str, attrs: Dict[str, str], content: str = None) -> str:
         """Build an HTML tag with attributes"""
-        attrs_str = ' '.join(f'{k}="{escape(str(v))}"' for k, v in attrs.items())
+        attrs_str = " ".join(f'{k}="{escape(str(v))}"' for k, v in attrs.items())
 
         if content is not None:
-            return f'<{tag} {attrs_str}>{content}</{tag}>'
+            return f"<{tag} {attrs_str}>{content}</{tag}>"
         else:
-            return f'<{tag} {attrs_str} />'
+            return f"<{tag} {attrs_str} />"
 
 
 class PlainAdapter(FrameworkAdapter):
     """Plain HTML adapter (no CSS framework)"""
 
     def render_field(
-        self,
-        field: forms.Field,
-        field_name: str,
-        value: Any,
-        errors: List[str],
-        **kwargs
+        self, field: forms.Field, field_name: str, value: Any, errors: List[str], **kwargs
     ) -> str:
         """Render field with minimal plain HTML"""
         has_errors = len(errors) > 0
         field_type = self._get_field_type(field)
 
-        html = '<div>'
+        html = "<div>"
 
         # Render label
-        if kwargs.get('render_label', config.get('render_labels', True)):
-            label_text = kwargs.get('label', field.label or field_name.replace('_', ' ').title())
-            required = ' *' if field.required else ''
+        if kwargs.get("render_label", config.get("render_labels", True)):
+            label_text = kwargs.get("label", field.label or field_name.replace("_", " ").title())
+            required = " *" if field.required else ""
             html += f'<label for="id_{field_name}">{escape(label_text)}{required}</label>'
 
         # Render field widget
-        if field_type == 'checkbox':
+        if field_type == "checkbox":
             html += self._render_checkbox(field, field_name, value, has_errors, **kwargs)
         else:
             html += self._render_input(field, field_name, value, has_errors, field_type, **kwargs)
 
         # Render help text
-        if kwargs.get('render_help_text', config.get('render_help_text', True)) and field.help_text:
-            html += f'<small>{escape(field.help_text)}</small>'
+        if kwargs.get("render_help_text", config.get("render_help_text", True)) and field.help_text:
+            html += f"<small>{escape(field.help_text)}</small>"
 
         # Render errors
-        if kwargs.get('render_errors', config.get('render_errors', True)) and has_errors:
+        if kwargs.get("render_errors", config.get("render_errors", True)) and has_errors:
             html += self.render_errors(errors)
 
-        html += '</div>'
+        html += "</div>"
         return html
 
     def render_errors(self, errors: List[str], **kwargs) -> str:
         """Render errors with plain HTML"""
         html = '<div class="error-message">'
         for error in errors:
-            html += f'<div>{escape(error)}</div>'
-        html += '</div>'
+            html += f"<div>{escape(error)}</div>"
+        html += "</div>"
         return html
 
     def get_field_class(self, field: forms.Field, has_errors: bool = False) -> str:
         """Get plain HTML classes"""
         if has_errors:
-            return 'error'
-        return ''
+            return "error"
+        return ""
 
     def _get_field_type(self, field: forms.Field) -> str:
         """Determine field type for rendering"""
@@ -544,32 +517,32 @@ class PlainAdapter(FrameworkAdapter):
         value: Any,
         has_errors: bool,
         field_type: str,
-        **kwargs
+        **kwargs,
     ) -> str:
         """Render standard input field"""
         field_class = self.get_field_class(field, has_errors)
         attrs = {
-            'name': field_name,
-            'id': f'id_{field_name}',
+            "name": field_name,
+            "id": f"id_{field_name}",
         }
 
         if field_class:
-            attrs['class'] = field_class
+            attrs["class"] = field_class
 
         if field.required:
-            attrs['required'] = 'required'
+            attrs["required"] = "required"
 
-        if kwargs.get('auto_validate', config.get('auto_validate_on_change', True)):
-            attrs['@change'] = 'validate_field'
+        if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
+            attrs["@change"] = "validate_field"
 
         if field_type == "textarea":
-            return self._build_tag('textarea', attrs, str(value))
+            return self._build_tag("textarea", attrs, str(value))
         elif field_type == "select":
             return self._render_select(field, field_name, value, has_errors, attrs)
         else:
-            attrs['type'] = field_type
-            attrs['value'] = str(value) if value else ''
-            return self._build_tag('input', attrs)
+            attrs["type"] = field_type
+            attrs["value"] = str(value) if value else ""
+            return self._build_tag("input", attrs)
 
     def _render_select(
         self,
@@ -577,7 +550,7 @@ class PlainAdapter(FrameworkAdapter):
         field_name: str,
         value: Any,
         has_errors: bool,
-        attrs: Dict[str, str]
+        attrs: Dict[str, str],
     ) -> str:
         """Render select field"""
         options_html = ""
@@ -585,63 +558,60 @@ class PlainAdapter(FrameworkAdapter):
             options_html += '<option value="">---------</option>'
 
         for choice_value, choice_label in field.choices:
-            selected = 'selected' if str(value) == str(choice_value) else ''
-            options_html += f'<option value="{escape(choice_value)}" {selected}>{escape(choice_label)}</option>'
+            selected = "selected" if str(value) == str(choice_value) else ""
+            options_html += (
+                f'<option value="{escape(choice_value)}" {selected}>{escape(choice_label)}</option>'
+            )
 
-        return self._build_tag('select', attrs, options_html)
+        return self._build_tag("select", attrs, options_html)
 
     def _render_checkbox(
-        self,
-        field: forms.Field,
-        field_name: str,
-        value: Any,
-        has_errors: bool,
-        **kwargs
+        self, field: forms.Field, field_name: str, value: Any, has_errors: bool, **kwargs
     ) -> str:
         """Render checkbox field"""
         field_class = self.get_field_class(field, has_errors)
         attrs = {
-            'type': 'checkbox',
-            'name': field_name,
-            'id': f'id_{field_name}',
+            "type": "checkbox",
+            "name": field_name,
+            "id": f"id_{field_name}",
         }
 
         if field_class:
-            attrs['class'] = field_class
+            attrs["class"] = field_class
 
         if value:
-            attrs['checked'] = 'checked'
+            attrs["checked"] = "checked"
 
         if field.required:
-            attrs['required'] = 'required'
+            attrs["required"] = "required"
 
-        if kwargs.get('auto_validate', config.get('auto_validate_on_change', True)):
-            attrs['@change'] = 'validate_field'
+        if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
+            attrs["@change"] = "validate_field"
 
-        label_text = kwargs.get('label', field.label or field_name.replace('_', ' ').title())
+        label_text = kwargs.get("label", field.label or field_name.replace("_", " ").title())
 
-        return f'''
+        return f"""
             <div>
-                {self._build_tag('input', attrs)}
+                {self._build_tag("input", attrs)}
                 <label for="id_{field_name}">{escape(label_text)}</label>
             </div>
-        '''
+        """
 
     def _build_tag(self, tag: str, attrs: Dict[str, str], content: str = None) -> str:
         """Build an HTML tag with attributes"""
-        attrs_str = ' '.join(f'{k}="{escape(str(v))}"' for k, v in attrs.items())
+        attrs_str = " ".join(f'{k}="{escape(str(v))}"' for k, v in attrs.items())
 
         if content is not None:
-            return f'<{tag} {attrs_str}>{content}</{tag}>'
+            return f"<{tag} {attrs_str}>{content}</{tag}>"
         else:
-            return f'<{tag} {attrs_str} />'
+            return f"<{tag} {attrs_str} />"
 
 
 # Registry of available adapters
 _adapters: Dict[str, FrameworkAdapter] = {
-    'bootstrap5': Bootstrap5Adapter(),
-    'tailwind': TailwindAdapter(),
-    'plain': PlainAdapter(),
+    "bootstrap5": Bootstrap5Adapter(),
+    "tailwind": TailwindAdapter(),
+    "plain": PlainAdapter(),
 }
 
 
@@ -661,12 +631,12 @@ def get_adapter(framework: Optional[str] = None) -> FrameworkAdapter:
         html = adapter.render_field(form.fields['email'], 'email', '', [])
     """
     if framework is None:
-        framework = config.get('css_framework', 'bootstrap5')
+        framework = config.get("css_framework", "bootstrap5")
 
     if framework is None:
-        framework = 'plain'
+        framework = "plain"
 
-    return _adapters.get(framework, _adapters['plain'])
+    return _adapters.get(framework, _adapters["plain"])
 
 
 def register_adapter(name: str, adapter: FrameworkAdapter):

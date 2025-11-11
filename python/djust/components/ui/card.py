@@ -37,18 +37,18 @@ class CardComponent(LiveComponent):
 
     def mount(self, **kwargs):
         """Initialize card state"""
-        self.title = kwargs.get('title', '')
-        self.body = kwargs.get('body', '')
-        self.footer = kwargs.get('footer', '')
-        self.image = kwargs.get('image', '')
+        self.title = kwargs.get("title", "")
+        self.body = kwargs.get("body", "")
+        self.footer = kwargs.get("footer", "")
+        self.image = kwargs.get("image", "")
 
     def get_context(self) -> Dict[str, Any]:
         """Get card context"""
         return {
-            'title': self.title,
-            'body': self.body,
-            'footer': self.footer,
-            'image': self.image,
+            "title": self.title,
+            "body": self.body,
+            "footer": self.footer,
+            "image": self.image,
         }
 
     def render(self) -> str:
@@ -56,11 +56,11 @@ class CardComponent(LiveComponent):
         from django.utils.safestring import mark_safe
         from ...config import config
 
-        framework = config.get('css_framework', 'bootstrap5')
+        framework = config.get("css_framework", "bootstrap5")
 
-        if framework == 'bootstrap5':
+        if framework == "bootstrap5":
             return mark_safe(self._render_bootstrap())
-        elif framework == 'tailwind':
+        elif framework == "tailwind":
             return mark_safe(self._render_tailwind())
         else:
             return mark_safe(self._render_plain())
@@ -80,12 +80,12 @@ class CardComponent(LiveComponent):
         if self.body:
             html += f'<p class="card-text">{self.body}</p>'
 
-        html += '</div>'
+        html += "</div>"
 
         if self.footer:
             html += f'<div class="card-footer text-muted">{self.footer}</div>'
 
-        html += '</div>'
+        html += "</div>"
         return html
 
     def _render_tailwind(self) -> str:
@@ -103,12 +103,12 @@ class CardComponent(LiveComponent):
         if self.body:
             html += f'<div class="mt-2 text-sm text-gray-500">{self.body}</div>'
 
-        html += '</div>'
+        html += "</div>"
 
         if self.footer:
             html += f'<div class="bg-gray-50 px-4 py-4 text-sm text-gray-500 sm:px-6">{self.footer}</div>'
 
-        html += '</div>'
+        html += "</div>"
         return html
 
     def _render_plain(self) -> str:
@@ -119,13 +119,13 @@ class CardComponent(LiveComponent):
             html += f'<img src="{self.image}" alt="{self.title}">'
 
         if self.title:
-            html += f'<h3>{self.title}</h3>'
+            html += f"<h3>{self.title}</h3>"
 
         if self.body:
-            html += f'<div>{self.body}</div>'
+            html += f"<div>{self.body}</div>"
 
         if self.footer:
-            html += f'<footer>{self.footer}</footer>'
+            html += f"<footer>{self.footer}</footer>"
 
-        html += '</div>'
+        html += "</div>"
         return html

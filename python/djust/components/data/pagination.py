@@ -38,30 +38,30 @@ class PaginationComponent(LiveComponent):
 
     def mount(self, **kwargs):
         """Initialize pagination state"""
-        self.current_page = kwargs.get('current_page', 1)
-        self.total_pages = kwargs.get('total_pages', 1)
-        self.total_items = kwargs.get('total_items', None)
-        self.items_per_page = kwargs.get('items_per_page', 10)
-        self.max_visible_pages = kwargs.get('max_visible_pages', 5)  # Max page numbers to show
-        self.show_first_last = kwargs.get('show_first_last', True)
-        self.show_prev_next = kwargs.get('show_prev_next', True)
-        self.show_page_info = kwargs.get('show_page_info', True)  # "Showing X-Y of Z items"
-        self.size = kwargs.get('size', 'md')  # sm, md, lg
-        self.alignment = kwargs.get('alignment', 'center')  # left, center, right
-        self.on_page_change = kwargs.get('on_page_change', None)
+        self.current_page = kwargs.get("current_page", 1)
+        self.total_pages = kwargs.get("total_pages", 1)
+        self.total_items = kwargs.get("total_items", None)
+        self.items_per_page = kwargs.get("items_per_page", 10)
+        self.max_visible_pages = kwargs.get("max_visible_pages", 5)  # Max page numbers to show
+        self.show_first_last = kwargs.get("show_first_last", True)
+        self.show_prev_next = kwargs.get("show_prev_next", True)
+        self.show_page_info = kwargs.get("show_page_info", True)  # "Showing X-Y of Z items"
+        self.size = kwargs.get("size", "md")  # sm, md, lg
+        self.alignment = kwargs.get("alignment", "center")  # left, center, right
+        self.on_page_change = kwargs.get("on_page_change", None)
 
         # Calculate total_pages from total_items if not provided
-        if self.total_items and not kwargs.get('total_pages'):
+        if self.total_items and not kwargs.get("total_pages"):
             self.total_pages = (self.total_items + self.items_per_page - 1) // self.items_per_page
 
     def get_context(self) -> Dict[str, Any]:
         """Get pagination context"""
         return {
-            'current_page': self.current_page,
-            'total_pages': self.total_pages,
-            'total_items': self.total_items,
-            'items_per_page': self.items_per_page,
-            'max_visible_pages': self.max_visible_pages,
+            "current_page": self.current_page,
+            "total_pages": self.total_pages,
+            "total_items": self.total_items,
+            "items_per_page": self.items_per_page,
+            "max_visible_pages": self.max_visible_pages,
         }
 
     def go_to_page(self, page: int):
@@ -124,47 +124,45 @@ class PaginationComponent(LiveComponent):
         from django.utils.safestring import mark_safe
         from ...config import config
 
-        framework = config.get('css_framework', 'bootstrap5')
+        framework = config.get("css_framework", "bootstrap5")
 
-        if framework == 'bootstrap5':
+        if framework == "bootstrap5":
             return mark_safe(self._render_bootstrap())
-        elif framework == 'tailwind':
+        elif framework == "tailwind":
             return mark_safe(self._render_tailwind())
         else:
             return mark_safe(self._render_plain())
 
     def _render_bootstrap(self) -> str:
         """Render Bootstrap 5 pagination"""
-        size_map = {'sm': 'pagination-sm', 'md': '', 'lg': 'pagination-lg'}
-        size_class = size_map.get(self.size, '')
+        size_map = {"sm": "pagination-sm", "md": "", "lg": "pagination-lg"}
+        size_class = size_map.get(self.size, "")
 
-        align_map = {
-            'left': '',
-            'center': 'justify-content-center',
-            'right': 'justify-content-end'
-        }
-        align_class = align_map.get(self.alignment, 'justify-content-center')
+        align_map = {"left": "", "center": "justify-content-center", "right": "justify-content-end"}
+        align_class = align_map.get(self.alignment, "justify-content-center")
 
         html = f'<div id="{self.component_id}">'
 
         # Page info
         if self.show_page_info:
-            html += f'<div class="text-muted mb-2 text-{self.alignment}">{self._get_page_info()}</div>'
+            html += (
+                f'<div class="text-muted mb-2 text-{self.alignment}">{self._get_page_info()}</div>'
+            )
 
         # Pagination controls
-        pagination_class = f'pagination {size_class} {align_class}'.strip()
+        pagination_class = f"pagination {size_class} {align_class}".strip()
         html += f'<nav aria-label="Page navigation"><ul class="{pagination_class}">'
 
         # First page button
         if self.show_first_last:
-            disabled = ' disabled' if self.current_page == 1 else ''
-            click_attr = ' @click="first_page"' if self.current_page != 1 else ''
+            disabled = " disabled" if self.current_page == 1 else ""
+            click_attr = ' @click="first_page"' if self.current_page != 1 else ""
             html += f'<li class="page-item{disabled}"><a class="page-link" href="#"{click_attr}>&laquo;&laquo;</a></li>'
 
         # Previous page button
         if self.show_prev_next:
-            disabled = ' disabled' if self.current_page == 1 else ''
-            click_attr = ' @click="previous_page"' if self.current_page != 1 else ''
+            disabled = " disabled" if self.current_page == 1 else ""
+            click_attr = ' @click="previous_page"' if self.current_page != 1 else ""
             html += f'<li class="page-item{disabled}"><a class="page-link" href="#"{click_attr}>&laquo;</a></li>'
 
         # Page numbers
@@ -175,8 +173,10 @@ class PaginationComponent(LiveComponent):
             html += '<li class="page-item disabled"><a class="page-link" href="#">...</a></li>'
 
         for page in visible_pages:
-            active = ' active' if page == self.current_page else ''
-            click_attr = f' @click="go_to_page" data-page="{page}"' if page != self.current_page else ''
+            active = " active" if page == self.current_page else ""
+            click_attr = (
+                f' @click="go_to_page" data-page="{page}"' if page != self.current_page else ""
+            )
             html += f'<li class="page-item{active}"><a class="page-link" href="#"{click_attr}>{page}</a></li>'
 
         # Show ellipsis after if needed
@@ -185,40 +185,42 @@ class PaginationComponent(LiveComponent):
 
         # Next page button
         if self.show_prev_next:
-            disabled = ' disabled' if self.current_page == self.total_pages else ''
-            click_attr = ' @click="next_page"' if self.current_page != self.total_pages else ''
+            disabled = " disabled" if self.current_page == self.total_pages else ""
+            click_attr = ' @click="next_page"' if self.current_page != self.total_pages else ""
             html += f'<li class="page-item{disabled}"><a class="page-link" href="#"{click_attr}>&raquo;</a></li>'
 
         # Last page button
         if self.show_first_last:
-            disabled = ' disabled' if self.current_page == self.total_pages else ''
-            click_attr = ' @click="last_page"' if self.current_page != self.total_pages else ''
+            disabled = " disabled" if self.current_page == self.total_pages else ""
+            click_attr = ' @click="last_page"' if self.current_page != self.total_pages else ""
             html += f'<li class="page-item{disabled}"><a class="page-link" href="#"{click_attr}>&raquo;&raquo;</a></li>'
 
-        html += '</ul></nav></div>'
+        html += "</ul></nav></div>"
         return html
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS pagination"""
-        align_map = {
-            'left': 'justify-start',
-            'center': 'justify-center',
-            'right': 'justify-end'
-        }
-        align_class = align_map.get(self.alignment, 'justify-center')
+        align_map = {"left": "justify-start", "center": "justify-center", "right": "justify-end"}
+        align_class = align_map.get(self.alignment, "justify-center")
 
         size_map = {
-            'sm': 'px-2 py-1 text-sm',
-            'md': 'px-3 py-2 text-base',
-            'lg': 'px-4 py-3 text-lg',
+            "sm": "px-2 py-1 text-sm",
+            "md": "px-3 py-2 text-base",
+            "lg": "px-4 py-3 text-lg",
         }
-        size_class = size_map.get(self.size, size_map['md'])
+        size_class = size_map.get(self.size, size_map["md"])
 
         html = f'<div id="{self.component_id}">'
 
         # Page info
         if self.show_page_info:
-            info_align = 'text-left' if self.alignment == 'left' else 'text-right' if self.alignment == 'right' else 'text-center'
+            info_align = (
+                "text-left"
+                if self.alignment == "left"
+                else "text-right"
+                if self.alignment == "right"
+                else "text-center"
+            )
             html += f'<div class="text-gray-600 mb-2 {info_align}">{self._get_page_info()}</div>'
 
         # Pagination controls
@@ -227,8 +229,10 @@ class PaginationComponent(LiveComponent):
 
         # First page button
         if self.show_first_last:
-            disabled_class = 'opacity-50 cursor-not-allowed' if self.current_page == 1 else 'hover:bg-gray-100'
-            click_attr = ' @click="first_page"' if self.current_page != 1 else ''
+            disabled_class = (
+                "opacity-50 cursor-not-allowed" if self.current_page == 1 else "hover:bg-gray-100"
+            )
+            click_attr = ' @click="first_page"' if self.current_page != 1 else ""
             html += f'''<li>
                 <a href="#" class="{size_class} ml-0 leading-tight text-gray-500 bg-white border border-gray-300 rounded-l-lg {disabled_class}"{click_attr}>
                     &laquo;&laquo;
@@ -237,9 +241,11 @@ class PaginationComponent(LiveComponent):
 
         # Previous page button
         if self.show_prev_next:
-            disabled_class = 'opacity-50 cursor-not-allowed' if self.current_page == 1 else 'hover:bg-gray-100'
-            click_attr = ' @click="previous_page"' if self.current_page != 1 else ''
-            first_class = 'rounded-l-lg' if not self.show_first_last else ''
+            disabled_class = (
+                "opacity-50 cursor-not-allowed" if self.current_page == 1 else "hover:bg-gray-100"
+            )
+            click_attr = ' @click="previous_page"' if self.current_page != 1 else ""
+            first_class = "rounded-l-lg" if not self.show_first_last else ""
             html += f'''<li>
                 <a href="#" class="{size_class} leading-tight text-gray-500 bg-white border border-gray-300 {first_class} {disabled_class}"{click_attr}>
                     &laquo;
@@ -255,11 +261,15 @@ class PaginationComponent(LiveComponent):
 
         for page in visible_pages:
             if page == self.current_page:
-                active_class = 'z-10 bg-blue-50 border-blue-300 text-blue-600'
+                active_class = "z-10 bg-blue-50 border-blue-300 text-blue-600"
             else:
-                active_class = 'bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-gray-700'
+                active_class = (
+                    "bg-white border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                )
 
-            click_attr = f' @click="go_to_page" data-page="{page}"' if page != self.current_page else ''
+            click_attr = (
+                f' @click="go_to_page" data-page="{page}"' if page != self.current_page else ""
+            )
             html += f'<li><a href="#" class="{size_class} leading-tight border {active_class}"{click_attr}>{page}</a></li>'
 
         # Show ellipsis after if needed
@@ -268,9 +278,13 @@ class PaginationComponent(LiveComponent):
 
         # Next page button
         if self.show_prev_next:
-            disabled_class = 'opacity-50 cursor-not-allowed' if self.current_page == self.total_pages else 'hover:bg-gray-100'
-            click_attr = ' @click="next_page"' if self.current_page != self.total_pages else ''
-            last_class = 'rounded-r-lg' if not self.show_first_last else ''
+            disabled_class = (
+                "opacity-50 cursor-not-allowed"
+                if self.current_page == self.total_pages
+                else "hover:bg-gray-100"
+            )
+            click_attr = ' @click="next_page"' if self.current_page != self.total_pages else ""
+            last_class = "rounded-r-lg" if not self.show_first_last else ""
             html += f'''<li>
                 <a href="#" class="{size_class} leading-tight text-gray-500 bg-white border border-gray-300 {last_class} {disabled_class}"{click_attr}>
                     &raquo;
@@ -279,15 +293,19 @@ class PaginationComponent(LiveComponent):
 
         # Last page button
         if self.show_first_last:
-            disabled_class = 'opacity-50 cursor-not-allowed' if self.current_page == self.total_pages else 'hover:bg-gray-100'
-            click_attr = ' @click="last_page"' if self.current_page != self.total_pages else ''
+            disabled_class = (
+                "opacity-50 cursor-not-allowed"
+                if self.current_page == self.total_pages
+                else "hover:bg-gray-100"
+            )
+            click_attr = ' @click="last_page"' if self.current_page != self.total_pages else ""
             html += f'''<li>
                 <a href="#" class="{size_class} leading-tight text-gray-500 bg-white border border-gray-300 rounded-r-lg {disabled_class}"{click_attr}>
                     &raquo;&raquo;
                 </a>
             </li>'''
 
-        html += '</ul></nav></div>'
+        html += "</ul></nav></div>"
         return html
 
     def _render_plain(self) -> str:
@@ -303,14 +321,14 @@ class PaginationComponent(LiveComponent):
 
         # First page button
         if self.show_first_last:
-            disabled = ' disabled' if self.current_page == 1 else ''
-            click_attr = ' @click="first_page"' if self.current_page != 1 else ''
+            disabled = " disabled" if self.current_page == 1 else ""
+            click_attr = ' @click="first_page"' if self.current_page != 1 else ""
             html += f'<a href="#" class="pagination-link{disabled}"{click_attr}>&laquo;&laquo;</a>'
 
         # Previous page button
         if self.show_prev_next:
-            disabled = ' disabled' if self.current_page == 1 else ''
-            click_attr = ' @click="previous_page"' if self.current_page != 1 else ''
+            disabled = " disabled" if self.current_page == 1 else ""
+            click_attr = ' @click="previous_page"' if self.current_page != 1 else ""
             html += f'<a href="#" class="pagination-link{disabled}"{click_attr}>&laquo;</a>'
 
         # Page numbers
@@ -321,8 +339,10 @@ class PaginationComponent(LiveComponent):
             html += '<span class="pagination-ellipsis">...</span>'
 
         for page in visible_pages:
-            active = ' active' if page == self.current_page else ''
-            click_attr = f' @click="go_to_page" data-page="{page}"' if page != self.current_page else ''
+            active = " active" if page == self.current_page else ""
+            click_attr = (
+                f' @click="go_to_page" data-page="{page}"' if page != self.current_page else ""
+            )
             html += f'<a href="#" class="pagination-link{active}"{click_attr}>{page}</a>'
 
         # Show ellipsis after if needed
@@ -331,15 +351,15 @@ class PaginationComponent(LiveComponent):
 
         # Next page button
         if self.show_prev_next:
-            disabled = ' disabled' if self.current_page == self.total_pages else ''
-            click_attr = ' @click="next_page"' if self.current_page != self.total_pages else ''
+            disabled = " disabled" if self.current_page == self.total_pages else ""
+            click_attr = ' @click="next_page"' if self.current_page != self.total_pages else ""
             html += f'<a href="#" class="pagination-link{disabled}"{click_attr}>&raquo;</a>'
 
         # Last page button
         if self.show_first_last:
-            disabled = ' disabled' if self.current_page == self.total_pages else ''
-            click_attr = ' @click="last_page"' if self.current_page != self.total_pages else ''
+            disabled = " disabled" if self.current_page == self.total_pages else ""
+            click_attr = ' @click="last_page"' if self.current_page != self.total_pages else ""
             html += f'<a href="#" class="pagination-link{disabled}"{click_attr}>&raquo;&raquo;</a>'
 
-        html += '</div></div>'
+        html += "</div></div>"
         return html

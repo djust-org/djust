@@ -9,6 +9,7 @@ from ..base import Component
 
 try:
     from djust._rust import RustOffcanvas
+
     _RUST_AVAILABLE = True
 except ImportError:
     _RUST_AVAILABLE = False
@@ -58,7 +59,7 @@ class Offcanvas(Component):
 
     _rust_impl_class = RustOffcanvas if _RUST_AVAILABLE else None
 
-    template_string = '''<div class="offcanvas offcanvas-{{ placement }}{% if show %} show{% endif %}" tabindex="-1" id="{{ id }}" aria-labelledby="{{ id }}Label"{% if not backdrop %} data-bs-backdrop="false"{% endif %}>{% if title %}
+    template_string = """<div class="offcanvas offcanvas-{{ placement }}{% if show %} show{% endif %}" tabindex="-1" id="{{ id }}" aria-labelledby="{{ id }}Label"{% if not backdrop %} data-bs-backdrop="false"{% endif %}>{% if title %}
     <div class="offcanvas-header">
         <h5 class="offcanvas-title" id="{{ id }}Label">{{ title }}</h5>{% if dismissable %}
         <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>{% endif %}
@@ -67,7 +68,7 @@ class Offcanvas(Component):
         {{ body }}
     </div>
 </div>{% if show_backdrop %}
-<div class="offcanvas-backdrop fade show"></div>{% endif %}'''
+<div class="offcanvas-backdrop fade show"></div>{% endif %}"""
 
     def __init__(
         self,
@@ -81,7 +82,9 @@ class Offcanvas(Component):
     ):
         # Validate placement
         if placement not in ("start", "end", "top", "bottom"):
-            raise ValueError(f"Invalid placement: {placement}. Must be 'start', 'end', 'top', or 'bottom'")
+            raise ValueError(
+                f"Invalid placement: {placement}. Must be 'start', 'end', 'top', or 'bottom'"
+            )
 
         # Pass kwargs to parent to create Rust instance
         super().__init__(
@@ -105,14 +108,14 @@ class Offcanvas(Component):
     def get_context_data(self):
         """Return context for template rendering."""
         return {
-            'body': self.body,
-            'title': self.title,
-            'placement': self.placement,
-            'backdrop': self.backdrop,
-            'dismissable': self.dismissable,
-            'id': self.id,
-            'show': self.show,
-            'show_backdrop': self.backdrop and self.show,
+            "body": self.body,
+            "title": self.title,
+            "placement": self.placement,
+            "backdrop": self.backdrop,
+            "dismissable": self.dismissable,
+            "id": self.id,
+            "show": self.show,
+            "show_backdrop": self.backdrop and self.show,
         }
 
     def _render_custom(self) -> str:
@@ -123,7 +126,7 @@ class Offcanvas(Component):
             offcanvas_classes.append("show")
 
         # Build backdrop data attribute
-        backdrop_attr = '' if self.backdrop else ' data-bs-backdrop="false"'
+        backdrop_attr = "" if self.backdrop else ' data-bs-backdrop="false"'
 
         parts = [
             f'<div class="{" ".join(offcanvas_classes)}" tabindex="-1" id="{self.id}" aria-labelledby="{self.id}Label"{backdrop_attr}>',
@@ -132,20 +135,24 @@ class Offcanvas(Component):
         # Add header if title exists
         if self.title:
             parts.append('    <div class="offcanvas-header">')
-            parts.append(f'        <h5 class="offcanvas-title" id="{self.id}Label">{self.title}</h5>')
+            parts.append(
+                f'        <h5 class="offcanvas-title" id="{self.id}Label">{self.title}</h5>'
+            )
             if self.dismissable:
-                parts.append('        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>')
-            parts.append('    </div>')
+                parts.append(
+                    '        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>'
+                )
+            parts.append("    </div>")
 
         # Body
         parts.append('    <div class="offcanvas-body">')
-        parts.append(f'        {self.body}')
-        parts.append('    </div>')
+        parts.append(f"        {self.body}")
+        parts.append("    </div>")
 
-        parts.append('</div>')
+        parts.append("</div>")
 
         # Add backdrop if needed and shown
         if self.backdrop and self.show:
             parts.append('<div class="offcanvas-backdrop fade show"></div>')
 
-        return '\n'.join(parts)
+        return "\n".join(parts)

@@ -31,68 +31,61 @@ class LiveViewConfig:
     # Default configuration
     _defaults = {
         # LiveView transport mode
-        'use_websocket': True,  # Set to False to use HTTP polling instead of WebSocket
-
+        "use_websocket": True,  # Set to False to use HTTP polling instead of WebSocket
         # Debug settings
-        'debug_vdom': False,  # Enable detailed VDOM patching debug logs
-
+        "debug_vdom": False,  # Enable detailed VDOM patching debug logs
         # CSS Framework
-        'css_framework': 'bootstrap5',  # Options: 'bootstrap5', 'tailwind', None
-
+        "css_framework": "bootstrap5",  # Options: 'bootstrap5', 'tailwind', None
         # Bootstrap 5 classes
-        'bootstrap5': {
-            'field_class': 'form-control',
-            'field_class_invalid': 'form-control is-invalid',
-            'error_class': 'invalid-feedback',
-            'error_class_block': 'invalid-feedback d-block',
-            'label_class': 'form-label',
-            'checkbox_class': 'form-check-input',
-            'checkbox_label_class': 'form-check-label',
-            'checkbox_wrapper_class': 'form-check',
-            'field_wrapper_class': 'mb-3',
-            'button_primary_class': 'btn btn-primary',
-            'button_secondary_class': 'btn btn-secondary',
+        "bootstrap5": {
+            "field_class": "form-control",
+            "field_class_invalid": "form-control is-invalid",
+            "error_class": "invalid-feedback",
+            "error_class_block": "invalid-feedback d-block",
+            "label_class": "form-label",
+            "checkbox_class": "form-check-input",
+            "checkbox_label_class": "form-check-label",
+            "checkbox_wrapper_class": "form-check",
+            "field_wrapper_class": "mb-3",
+            "button_primary_class": "btn btn-primary",
+            "button_secondary_class": "btn btn-secondary",
         },
-
         # Tailwind CSS classes
-        'tailwind': {
-            'field_class': 'block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm',
-            'field_class_invalid': 'block w-full rounded-md border-red-300 pr-10 text-red-900 placeholder-red-300 focus:border-red-500 focus:outline-none focus:ring-red-500 sm:text-sm',
-            'error_class': 'mt-2 text-sm text-red-600',
-            'error_class_block': 'mt-2 text-sm text-red-600',
-            'label_class': 'block text-sm font-medium text-gray-700',
-            'checkbox_class': 'h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500',
-            'checkbox_label_class': 'ml-2 block text-sm text-gray-900',
-            'checkbox_wrapper_class': 'flex items-center',
-            'field_wrapper_class': 'mb-4',
-            'button_primary_class': 'inline-flex justify-center rounded-md border border-transparent bg-indigo-600 py-2 px-4 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2',
-            'button_secondary_class': 'inline-flex justify-center rounded-md border border-gray-300 bg-white py-2 px-4 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2',
+        "tailwind": {
+            "field_class": "block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm",
+            "field_class_invalid": "block w-full rounded-md border-red-300 pr-10 text-red-900 placeholder-red-300 focus:border-red-500 focus:outline-none focus:ring-red-500 sm:text-sm",
+            "error_class": "mt-2 text-sm text-red-600",
+            "error_class_block": "mt-2 text-sm text-red-600",
+            "label_class": "block text-sm font-medium text-gray-700",
+            "checkbox_class": "h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500",
+            "checkbox_label_class": "ml-2 block text-sm text-gray-900",
+            "checkbox_wrapper_class": "flex items-center",
+            "field_wrapper_class": "mb-4",
+            "button_primary_class": "inline-flex justify-center rounded-md border border-transparent bg-indigo-600 py-2 px-4 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2",
+            "button_secondary_class": "inline-flex justify-center rounded-md border border-gray-300 bg-white py-2 px-4 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2",
         },
-
         # Plain HTML (no framework)
-        'plain': {
-            'field_class': '',
-            'field_class_invalid': 'error',
-            'error_class': 'error-message',
-            'error_class_block': 'error-message',
-            'label_class': '',
-            'checkbox_class': '',
-            'checkbox_label_class': '',
-            'checkbox_wrapper_class': '',
-            'field_wrapper_class': '',
-            'button_primary_class': 'button primary',
-            'button_secondary_class': 'button secondary',
+        "plain": {
+            "field_class": "",
+            "field_class_invalid": "error",
+            "error_class": "error-message",
+            "error_class_block": "error-message",
+            "label_class": "",
+            "checkbox_class": "",
+            "checkbox_label_class": "",
+            "checkbox_wrapper_class": "",
+            "field_wrapper_class": "",
+            "button_primary_class": "button primary",
+            "button_secondary_class": "button secondary",
         },
-
         # Field rendering options
-        'render_labels': True,
-        'render_help_text': True,
-        'render_errors': True,
-        'auto_validate_on_change': True,
-
+        "render_labels": True,
+        "render_help_text": True,
+        "render_errors": True,
+        "auto_validate_on_change": True,
         # Component defaults
-        'component_wrapper_class': '',
-        'component_loading_class': 'loading',
+        "component_wrapper_class": "",
+        "component_loading_class": "loading",
     }
 
     def __init__(self):
@@ -103,7 +96,8 @@ class LiveViewConfig:
         """Load configuration from Django settings if available"""
         try:
             from django.conf import settings
-            if hasattr(settings, 'LIVEVIEW_CONFIG'):
+
+            if hasattr(settings, "LIVEVIEW_CONFIG"):
                 self._config.update(settings.LIVEVIEW_CONFIG)
         except ImportError:
             pass
@@ -124,7 +118,7 @@ class LiveViewConfig:
             config.get('bootstrap5.field_class')  # 'form-control'
         """
         # Support dot notation for nested keys
-        keys = key.split('.')
+        keys = key.split(".")
         value = self._config
 
         for k in keys:
@@ -149,7 +143,7 @@ class LiveViewConfig:
             config.set('css_framework', 'tailwind')
             config.set('bootstrap5.field_class', 'custom-control')
         """
-        keys = key.split('.')
+        keys = key.split(".")
 
         # Navigate to the nested dict
         target = self._config
@@ -174,13 +168,13 @@ class LiveViewConfig:
         Example:
             config.get_framework_class('field_class')  # 'form-control' (Bootstrap)
         """
-        framework = self.get('css_framework', 'bootstrap5')
+        framework = self.get("css_framework", "bootstrap5")
 
         # Handle None or missing framework
         if framework is None:
-            framework = 'plain'
+            framework = "plain"
 
-        return self.get(f'{framework}.{class_type}', '')
+        return self.get(f"{framework}.{class_type}", "")
 
     def reset(self):
         """Reset configuration to defaults"""

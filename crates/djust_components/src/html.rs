@@ -241,7 +241,10 @@ mod tests {
             .end_tag("div")
             .build();
 
-        assert_eq!(html, "<div class=\"container\" id=\"main\">Hello World</div>");
+        assert_eq!(
+            html,
+            "<div class=\"container\" id=\"main\">Hello World</div>"
+        );
     }
 
     #[test]
@@ -253,7 +256,10 @@ mod tests {
             .text("Click me")
             .build();
 
-        assert_eq!(html, "<button class=\"btn btn-primary\" type=\"button\">Click me</button>");
+        assert_eq!(
+            html,
+            "<button class=\"btn btn-primary\" type=\"button\">Click me</button>"
+        );
     }
 
     #[test]

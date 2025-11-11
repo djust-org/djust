@@ -13,7 +13,7 @@ Usage:
 """
 
 # Core component classes
-from .base import LiveComponent
+from .base import Component, LiveComponent
 from .registry import (
     register_component,
     get_component,
@@ -46,48 +46,45 @@ from .data import (
 
 # Auto-register built-in components
 # UI Components
-register_component('alert', AlertComponent)
-register_component('badge', BadgeComponent)
-register_component('button', ButtonComponent)
-register_component('card', CardComponent)
-register_component('dropdown', DropdownComponent)
-register_component('modal', ModalComponent)
-register_component('progress', ProgressComponent)
-register_component('spinner', SpinnerComponent)
+register_component("alert", AlertComponent)
+register_component("badge", BadgeComponent)
+register_component("button", ButtonComponent)
+register_component("card", CardComponent)
+register_component("dropdown", DropdownComponent)
+register_component("modal", ModalComponent)
+register_component("progress", ProgressComponent)
+register_component("spinner", SpinnerComponent)
 
 # Layout Components
-register_component('tabs', TabsComponent)
+register_component("tabs", TabsComponent)
 
 # Data Components
-register_component('table', TableComponent)
-register_component('pagination', PaginationComponent)
+register_component("table", TableComponent)
+register_component("pagination", PaginationComponent)
 
 __all__ = [
     # Base classes
-    'LiveComponent',
-
+    "Component",
+    "LiveComponent",
     # Registry functions
-    'register_component',
-    'get_component',
-    'list_components',
-    'unregister_component',
-
+    "register_component",
+    "get_component",
+    "list_components",
+    "unregister_component",
     # UI Components
-    'AlertComponent',
-    'BadgeComponent',
-    'ButtonComponent',
-    'CardComponent',
-    'DropdownComponent',
-    'ModalComponent',
-    'ProgressComponent',
-    'SpinnerComponent',
-
+    "AlertComponent",
+    "BadgeComponent",
+    "ButtonComponent",
+    "CardComponent",
+    "DropdownComponent",
+    "ModalComponent",
+    "ProgressComponent",
+    "SpinnerComponent",
     # Layout Components
-    'TabsComponent',
-
+    "TabsComponent",
     # Data Components
-    'TableComponent',
-    'PaginationComponent',
+    "TableComponent",
+    "PaginationComponent",
 ]
 
-__version__ = '0.1.0'
+__version__ = "0.1.0"

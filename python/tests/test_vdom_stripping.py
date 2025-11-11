@@ -11,6 +11,7 @@ from djust import LiveView
 
 class TestLiveView(LiveView):
     """Test LiveView class"""
+
     template_string = "<div>Test</div>"
 
     def mount(self, request):
@@ -95,7 +96,7 @@ class TestCommentStripping:
     def test_handles_comments_with_special_chars(self):
         """Test comments with special characters"""
         view = TestLiveView()
-        html = '<div><!-- Comment with <, >, & special chars --><span>Content</span></div>'
+        html = "<div><!-- Comment with <, >, & special chars --><span>Content</span></div>"
         result = view._strip_comments_and_whitespace(html)
 
         assert "<!--" not in result
@@ -120,7 +121,7 @@ class TestVDOMBaselineAlignment:
         assert "Component Comment" not in stripped
         # Content preserved (whitespace collapsed)
         assert "<nav>Content</nav>" in stripped
-        assert 'data-liveview-root' in stripped
+        assert "data-liveview-root" in stripped
 
     def test_template_stripping_idempotent(self):
         """Test that stripping is idempotent (multiple calls produce same result)"""

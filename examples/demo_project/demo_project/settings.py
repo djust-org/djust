@@ -125,3 +125,8 @@ CHANNEL_LAYERS = {
 LIVEVIEW_ALLOWED_MODULES = [
     'demo_app.views',  # Allow all views in demo_app.views module
 ]
+
+# LiveView Configuration
+LIVEVIEW_CONFIG = {
+    'use_websocket': False,  # Use HTTP-only mode (disable WebSocket)
+}

@@ -59,24 +59,28 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
             let var_name = parts[0].clone();
 
             // Parse each filter and its optional argument
-            let filters: Vec<(String, Option<String>)> = parts[1..].iter().map(|filter_spec| {
-                if let Some(colon_pos) = filter_spec.find(':') {
-                    let filter_name = filter_spec[..colon_pos].trim().to_string();
-                    let mut arg = filter_spec[colon_pos + 1..].trim().to_string();
+            let filters: Vec<(String, Option<String>)> = parts[1..]
+                .iter()
+                .map(|filter_spec| {
+                    if let Some(colon_pos) = filter_spec.find(':') {
+                        let filter_name = filter_spec[..colon_pos].trim().to_string();
+                        let mut arg = filter_spec[colon_pos + 1..].trim().to_string();
 
-                    // Strip surrounding quotes from the argument (single or double)
-                    if (arg.starts_with('"') && arg.ends_with('"')) ||
-                       (arg.starts_with('\'') && arg.ends_with('\'')) {
-                        if arg.len() >= 2 {
-                            arg = arg[1..arg.len()-1].to_string();
+                        // Strip surrounding quotes from the argument (single or double)
+                        if (arg.starts_with('"') && arg.ends_with('"'))
+                            || (arg.starts_with('\'') && arg.ends_with('\''))
+                        {
+                            if arg.len() >= 2 {
+                                arg = arg[1..arg.len() - 1].to_string();
+                            }
                         }
-                    }
 
-                    (filter_name, Some(arg))
-                } else {
-                    (filter_spec.clone(), None)
-                }
-            }).collect();
+                        (filter_name, Some(arg))
+                    } else {
+                        (filter_spec.clone(), None)
+                    }
+                })
+                .collect();
 
             Ok(Some(Node::Variable(var_name, filters)))
         }
@@ -97,7 +101,8 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                 "for" => {
                     if args.len() < 3 || args[1] != "in" {
                         return Err(DjangoRustError::TemplateError(
-                            "Invalid for tag syntax. Expected: {% for var in iterable %}".to_string()
+                            "Invalid for tag syntax. Expected: {% for var in iterable %}"
+                                .to_string(),
                         ));
                     }
                     let var_name = args[0].clone();
@@ -114,7 +119,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                 "block" => {
                     if args.is_empty() {
                         return Err(DjangoRustError::TemplateError(
-                            "Block tag requires a name".to_string()
+                            "Block tag requires a name".to_string(),
                         ));
                     }
                     let name = args[0].clone();
@@ -126,7 +131,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                 "include" => {
                     if args.is_empty() {
                         return Err(DjangoRustError::TemplateError(
-                            "Include tag requires a template name".to_string()
+                            "Include tag requires a template name".to_string(),
                         ));
                     }
                     Ok(Some(Node::Include(args[0].clone())))
@@ -144,7 +149,12 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
             }
         }
 
-        Token::JsxComponent { name, props, children, .. } => {
+        Token::JsxComponent {
+            name,
+            props,
+            children,
+            ..
+        } => {
             // Check if this is a Rust component (starts with "Rust")
             if name.starts_with("Rust") {
                 // Rust components are rendered server-side, no children support
@@ -203,7 +213,7 @@ fn parse_if_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, Vec<Node
     }
 
     Err(DjangoRustError::TemplateError(
-        "Unclosed if tag".to_string()
+        "Unclosed if tag".to_string(),
     ))
 }
 
@@ -225,7 +235,7 @@ fn parse_for_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)>
     }
 
     Err(DjangoRustError::TemplateError(
-        "Unclosed for tag".to_string()
+        "Unclosed for tag".to_string(),
     ))
 }
 
@@ -247,7 +257,7 @@ fn parse_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)> {
     }
 
     Err(DjangoRustError::TemplateError(
-        "Unclosed block tag".to_string()
+        "Unclosed block tag".to_string(),
     ))
 }
 

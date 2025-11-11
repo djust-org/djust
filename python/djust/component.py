@@ -36,7 +36,7 @@ class Component:
         """Get context data for rendering"""
         context = {}
         for key in dir(self):
-            if not key.startswith('_') and not callable(getattr(self, key)):
+            if not key.startswith("_") and not callable(getattr(self, key)):
                 context[key] = getattr(self, key)
         return context
 
@@ -88,7 +88,9 @@ def register_component(name: str):
         class MyButton(Component):
             template = '<button>Click me</button>'
     """
+
     def decorator(component_class: type):
         ComponentRegistry.register(name, component_class)
         return component_class
+
     return decorator

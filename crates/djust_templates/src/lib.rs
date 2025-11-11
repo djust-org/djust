@@ -19,13 +19,9 @@ pub mod tags;
 use parser::Node;
 use renderer::render_nodes;
 
-static VAR_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\{\{([^}]+)\}\}").unwrap()
-});
+static VAR_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{\{([^}]+)\}\}").unwrap());
 
-static TAG_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\{%([^%]+)%\}").unwrap()
-});
+static TAG_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{%([^%]+)%\}").unwrap());
 
 /// A compiled Django template
 #[pyclass]

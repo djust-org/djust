@@ -2,6 +2,12 @@
 Benchmarks comparing Django Rust Live with pure Django and other frameworks
 """
 
+import sys
+from pathlib import Path
+
+# Add python directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent / 'python'))
+
 import time
 import statistics
 from typing import List, Callable
@@ -77,7 +83,7 @@ def benchmark_template_rendering():
 
     # Django Rust Live template
     try:
-        from djust import render_template
+        from djust._rust import render_template
 
         template_str = """
             <div>
@@ -115,7 +121,7 @@ def benchmark_vdom_diffing():
     print("=" * 60)
 
     try:
-        from djust import diff_html
+        from djust._rust import diff_html
 
         old_html = """
             <div class="container">
@@ -176,7 +182,7 @@ def benchmark_large_list():
         return django_template.render(context)
 
     try:
-        from djust import render_template
+        from djust._rust import render_template
 
         template_str = """
             <ul>

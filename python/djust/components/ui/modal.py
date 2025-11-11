@@ -44,18 +44,18 @@ class ModalComponent(LiveComponent):
 
     def mount(self, **kwargs):
         """Initialize modal state"""
-        self.title = kwargs.get('title', '')
-        self.body = kwargs.get('body', '')
-        self.show_modal = kwargs.get('show', False)
-        self.size = kwargs.get('size', 'md')  # sm, md, lg, xl
+        self.title = kwargs.get("title", "")
+        self.body = kwargs.get("body", "")
+        self.show_modal = kwargs.get("show", False)
+        self.size = kwargs.get("size", "md")  # sm, md, lg, xl
 
     def get_context(self) -> Dict[str, Any]:
         """Get modal context"""
         return {
-            'title': self.title,
-            'body': self.body,
-            'show': self.show_modal,
-            'size': self.size,
+            "title": self.title,
+            "body": self.body,
+            "show": self.show_modal,
+            "size": self.size,
         }
 
     def show(self, title: str = None, body: str = None):
@@ -85,23 +85,23 @@ class ModalComponent(LiveComponent):
     def render(self) -> str:
         """Render modal with inline HTML"""
         if not self.show_modal:
-            return ''
+            return ""
 
         from ...config import config
 
-        framework = config.get('css_framework', 'bootstrap5')
+        framework = config.get("css_framework", "bootstrap5")
 
-        if framework == 'bootstrap5':
+        if framework == "bootstrap5":
             return mark_safe(self._render_bootstrap())
-        elif framework == 'tailwind':
+        elif framework == "tailwind":
             return mark_safe(self._render_tailwind())
         else:
             return mark_safe(self._render_plain())
 
     def _render_bootstrap(self) -> str:
         """Render Bootstrap 5 modal"""
-        size_map = {'sm': 'modal-sm', 'md': '', 'lg': 'modal-lg', 'xl': 'modal-xl'}
-        size_class = size_map.get(self.size, '')
+        size_map = {"sm": "modal-sm", "md": "", "lg": "modal-lg", "xl": "modal-xl"}
+        size_class = size_map.get(self.size, "")
 
         html = f'''
         <div class="modal fade show" id="{self.component_id}" style="display: block;" tabindex="-1">
@@ -127,12 +127,12 @@ class ModalComponent(LiveComponent):
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS modal"""
         size_map = {
-            'sm': 'max-w-sm',
-            'md': 'max-w-md',
-            'lg': 'max-w-lg',
-            'xl': 'max-w-xl',
+            "sm": "max-w-sm",
+            "md": "max-w-md",
+            "lg": "max-w-lg",
+            "xl": "max-w-xl",
         }
-        size_class = size_map.get(self.size, 'max-w-md')
+        size_class = size_map.get(self.size, "max-w-md")
 
         html = f'''
         <div class="fixed inset-0 z-10 overflow-y-auto" id="{self.component_id}">

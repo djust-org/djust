@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub mod diff;
-pub mod patch;
 pub mod parser;
+pub mod patch;
 pub mod template;
 
 /// A virtual DOM node
@@ -74,15 +74,9 @@ impl VNode {
 #[serde(tag = "type")]
 pub enum Patch {
     /// Replace a node at path
-    Replace {
-        path: Vec<usize>,
-        node: VNode,
-    },
+    Replace { path: Vec<usize>, node: VNode },
     /// Update text content
-    SetText {
-        path: Vec<usize>,
-        text: String,
-    },
+    SetText { path: Vec<usize>, text: String },
     /// Set an attribute
     SetAttr {
         path: Vec<usize>,
@@ -90,10 +84,7 @@ pub enum Patch {
         value: String,
     },
     /// Remove an attribute
-    RemoveAttr {
-        path: Vec<usize>,
-        key: String,
-    },
+    RemoveAttr { path: Vec<usize>, key: String },
     /// Insert a child at index
     InsertChild {
         path: Vec<usize>,
@@ -101,10 +92,7 @@ pub enum Patch {
         node: VNode,
     },
     /// Remove a child at index
-    RemoveChild {
-        path: Vec<usize>,
-        index: usize,
-    },
+    RemoveChild { path: Vec<usize>, index: usize },
     /// Move a child from one index to another
     MoveChild {
         path: Vec<usize>,

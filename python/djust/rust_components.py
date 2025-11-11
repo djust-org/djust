@@ -18,6 +18,7 @@ from typing import Optional, Literal
 
 try:
     from djust._rust import RustButton
+
     _rust_available = True
 except ImportError:
     _rust_available = False
@@ -26,6 +27,7 @@ except ImportError:
 
 class ComponentNotAvailableError(ImportError):
     """Raised when Rust components are not available (not compiled)."""
+
     pass
 
 
@@ -74,7 +76,9 @@ class Button:
         self,
         id: str,
         label: str,
-        variant: Literal["primary", "secondary", "success", "danger", "warning", "info", "light", "dark", "link"] = "primary",
+        variant: Literal[
+            "primary", "secondary", "success", "danger", "warning", "info", "light", "dark", "link"
+        ] = "primary",
         size: Literal["sm", "small", "md", "medium", "lg", "large"] = "medium",
         outline: bool = False,
         disabled: bool = False,

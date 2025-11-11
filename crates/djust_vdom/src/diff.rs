@@ -210,7 +210,9 @@ mod tests {
         let new = VNode::element("div").with_attr("class", "new");
         let patches = diff_nodes(&old, &new, &[]);
 
-        assert!(patches.iter().any(|p| matches!(p, Patch::SetAttr { key, value, .. } if key == "class" && value == "new")));
+        assert!(patches.iter().any(
+            |p| matches!(p, Patch::SetAttr { key, value, .. } if key == "class" && value == "new")
+        ));
     }
 
     #[test]
@@ -219,7 +221,9 @@ mod tests {
         let new = VNode::element("div").with_child(VNode::text("child"));
         let patches = diff_nodes(&old, &new, &[]);
 
-        assert!(patches.iter().any(|p| matches!(p, Patch::InsertChild { .. })));
+        assert!(patches
+            .iter()
+            .any(|p| matches!(p, Patch::InsertChild { .. })));
     }
 
     #[test]
@@ -238,35 +242,35 @@ mod tests {
         // This is the structure we see in the real bug: form has 11 children in Rust VDOM
         // (elements at even indices 0,2,4,6,8,10 and whitespace at odd indices 1,3,5,7,9)
         let old = VNode::element("form").with_children(vec![
-            VNode::element("div").with_attr("class", "mb-3"),    // index 0
-            VNode::text("\n            "),                         // index 1 (whitespace)
-            VNode::element("div").with_attr("class", "mb-3"),    // index 2
-            VNode::text("\n            "),                         // index 3 (whitespace)
-            VNode::element("div").with_attr("class", "mb-3"),    // index 4
-            VNode::text("\n            "),                         // index 5 (whitespace)
-            VNode::element("button"),                             // index 6
-            VNode::text("\n        "),                            // index 7 (whitespace)
+            VNode::element("div").with_attr("class", "mb-3"), // index 0
+            VNode::text("\n            "),                    // index 1 (whitespace)
+            VNode::element("div").with_attr("class", "mb-3"), // index 2
+            VNode::text("\n            "),                    // index 3 (whitespace)
+            VNode::element("div").with_attr("class", "mb-3"), // index 4
+            VNode::text("\n            "),                    // index 5 (whitespace)
+            VNode::element("button"),                         // index 6
+            VNode::text("\n        "),                        // index 7 (whitespace)
         ]);
 
         // After removing some validation error divs, we have fewer element children
         let new = VNode::element("form").with_children(vec![
-            VNode::element("div").with_attr("class", "mb-3"),    // index 0
-            VNode::text("\n            "),                         // index 1 (whitespace)
-            VNode::element("div").with_attr("class", "mb-3"),    // index 2
-            VNode::text("\n            "),                         // index 3 (whitespace)
-            VNode::element("button"),                             // index 4
-            VNode::text("\n        "),                            // index 5 (whitespace)
+            VNode::element("div").with_attr("class", "mb-3"), // index 0
+            VNode::text("\n            "),                    // index 1 (whitespace)
+            VNode::element("div").with_attr("class", "mb-3"), // index 2
+            VNode::text("\n            "),                    // index 3 (whitespace)
+            VNode::element("button"),                         // index 4
+            VNode::text("\n        "),                        // index 5 (whitespace)
         ]);
 
         let patches = diff_nodes(&old, &new, &[0, 0, 0, 1, 2]);
 
         // Should generate RemoveChild patches for indices 6 and 7 (removed in reverse order)
-        assert!(patches.iter().any(|p| matches!(p,
-            Patch::RemoveChild { index: 7, .. }
-        )));
-        assert!(patches.iter().any(|p| matches!(p,
-            Patch::RemoveChild { index: 6, .. }
-        )));
+        assert!(patches
+            .iter()
+            .any(|p| matches!(p, Patch::RemoveChild { index: 7, .. })));
+        assert!(patches
+            .iter()
+            .any(|p| matches!(p, Patch::RemoveChild { index: 6, .. })));
     }
 
     #[test]
@@ -311,9 +315,9 @@ mod tests {
         )));
 
         // Should remove the validation error div at index 3 (removed after whitespace at index 2)
-        assert!(patches.iter().any(|p| matches!(p,
-            Patch::RemoveChild { index: 3, .. }
-        )));
+        assert!(patches
+            .iter()
+            .any(|p| matches!(p, Patch::RemoveChild { index: 3, .. })));
     }
 
     #[test]
@@ -322,16 +326,20 @@ mod tests {
         // This creates patches targeting multiple child indices
         let form_old = VNode::element("form").with_children(vec![
             // Field 1 WITH error
-            VNode::element("div").with_attr("class", "mb-3").with_children(vec![
-                VNode::element("input"),
-                VNode::element("div").with_attr("class", "invalid-feedback"),
-            ]),
+            VNode::element("div")
+                .with_attr("class", "mb-3")
+                .with_children(vec![
+                    VNode::element("input"),
+                    VNode::element("div").with_attr("class", "invalid-feedback"),
+                ]),
             VNode::text("\n            "),
             // Field 2 WITH error
-            VNode::element("div").with_attr("class", "mb-3").with_children(vec![
-                VNode::element("input"),
-                VNode::element("div").with_attr("class", "invalid-feedback"),
-            ]),
+            VNode::element("div")
+                .with_attr("class", "mb-3")
+                .with_children(vec![
+                    VNode::element("input"),
+                    VNode::element("div").with_attr("class", "invalid-feedback"),
+                ]),
             VNode::text("\n            "),
             // Submit button
             VNode::element("button"),
@@ -339,14 +347,14 @@ mod tests {
 
         let form_new = VNode::element("form").with_children(vec![
             // Field 1 WITHOUT error
-            VNode::element("div").with_attr("class", "mb-3").with_children(vec![
-                VNode::element("input"),
-            ]),
+            VNode::element("div")
+                .with_attr("class", "mb-3")
+                .with_children(vec![VNode::element("input")]),
             VNode::text("\n            "),
             // Field 2 WITHOUT error
-            VNode::element("div").with_attr("class", "mb-3").with_children(vec![
-                VNode::element("input"),
-            ]),
+            VNode::element("div")
+                .with_attr("class", "mb-3")
+                .with_children(vec![VNode::element("input")]),
             VNode::text("\n            "),
             // Submit button
             VNode::element("button"),
@@ -356,11 +364,16 @@ mod tests {
 
         // Should generate patches to remove validation error divs from both fields
         // These patches target child indices within each field div
-        let remove_patches: Vec<_> = patches.iter()
+        let remove_patches: Vec<_> = patches
+            .iter()
             .filter(|p| matches!(p, Patch::RemoveChild { .. }))
             .collect();
 
-        assert_eq!(remove_patches.len(), 2, "Should remove 2 validation error divs");
+        assert_eq!(
+            remove_patches.len(),
+            2,
+            "Should remove 2 validation error divs"
+        );
     }
 
     #[test]
@@ -369,17 +382,17 @@ mod tests {
         // Path should account for ALL children including whitespace
         let old = VNode::element("div").with_children(vec![
             VNode::element("span").with_child(VNode::text("A")),
-            VNode::text("\n    "),  // whitespace at index 1
+            VNode::text("\n    "), // whitespace at index 1
             VNode::element("span").with_child(VNode::text("B")),
-            VNode::text("\n    "),  // whitespace at index 3
+            VNode::text("\n    "), // whitespace at index 3
             VNode::element("span").with_child(VNode::text("C")),
         ]);
 
         let new = VNode::element("div").with_children(vec![
             VNode::element("span").with_child(VNode::text("A")),
-            VNode::text("\n    "),  // whitespace at index 1
-            VNode::element("span").with_child(VNode::text("B-modified")),  // Changed
-            VNode::text("\n    "),  // whitespace at index 3
+            VNode::text("\n    "), // whitespace at index 1
+            VNode::element("span").with_child(VNode::text("B-modified")), // Changed
+            VNode::text("\n    "), // whitespace at index 3
             VNode::element("span").with_child(VNode::text("C")),
         ]);
 

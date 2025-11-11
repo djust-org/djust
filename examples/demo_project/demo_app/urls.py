@@ -23,6 +23,15 @@ urlpatterns = [
     path('demos/react/', views.ReactDemoView.as_view(), name='demos-react'),
     path('demos/performance/', views.PerformanceTestView.as_view(), name='demos-performance'),
     path('demos/datatable/', views.ProductDataTableView.as_view(), name='demos-datatable'),
+    path('demos/rust-components/', views.RustComponentsDemo.as_view(), name='demos-rust-components'),
+    path('demos/components-only/', views.ComponentsOnlyDemo.as_view(), name='demos-components-only'),
+    path('demos/no-template/', views.NoTemplateDemo.as_view(), name='demos-no-template'),
+    path('demos/unified-components/', views.ComponentsDemoView.as_view(), name='demos-unified-components'),
+    path('demos/toast/', views.toast_demo, name='demos-toast'),
+    path('demos/dropdown/', views.DropdownDemo.as_view(), name='demos-dropdown'),
+    path('demos/navbar/', views.NavBarDemoView.as_view(), name='demos-navbar'),
+    path('demos/offcanvas/', views.OffcanvasDemoView.as_view(), name='demos-offcanvas'),
+    path('demos/component-showcase/', views.ComponentShowcaseView.as_view(), name='demos-component-showcase'),
 
     # Component Library Kitchen Sink
     path('kitchen-sink/', views.KitchenSinkView.as_view(), name='kitchen-sink'),

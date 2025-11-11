@@ -2,10 +2,10 @@
 
 use crate::VNode;
 use djust_core::{DjangoRustError, Result};
-use std::collections::HashMap;
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
+use std::collections::HashMap;
 
 pub fn parse_html(html: &str) -> Result<VNode> {
     let dom = parse_document(RcDom::default(), Default::default())
@@ -67,10 +67,7 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
             // Convert attributes
             let mut attributes = HashMap::new();
             for attr in attrs.borrow().iter() {
-                attributes.insert(
-                    attr.name.local.to_string(),
-                    attr.value.to_string(),
-                );
+                attributes.insert(attr.name.local.to_string(), attr.value.to_string());
             }
             vnode.attrs = attributes;
 
@@ -79,7 +76,8 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
             for child in handle.children.borrow().iter() {
                 // Skip comment nodes - they are not part of the DOM that JavaScript sees
                 if matches!(child.data, NodeData::Comment { .. }) {
-                    eprintln!("[Parser] Filtered comment node");
+                    // Debug logging disabled - too verbose
+                    // eprintln!("[Parser] Filtered comment node");
                     continue;
                 }
 
@@ -92,8 +90,8 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                         if !text.chars().all(|c| c.is_whitespace()) {
                             children.push(child_vnode);
                         } else {
-                            // Debug: log filtered whitespace nodes
-                            eprintln!("[Parser] Filtered whitespace text node: {:?}", text);
+                            // Debug logging disabled - too verbose
+                            // eprintln!("[Parser] Filtered whitespace text node: {:?}", text);
                         }
                     }
                 } else {
@@ -104,10 +102,20 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
 
             // Debug: log final child count for form elements
             if tag == "form" {
-                eprintln!("[Parser] Form element has {} children after filtering", vnode.children.len());
+                eprintln!(
+                    "[Parser] Form element has {} children after filtering",
+                    vnode.children.len()
+                );
                 for (i, child) in vnode.children.iter().enumerate() {
                     if child.is_text() {
-                        eprintln!("  [{}] Text: {:?}", i, child.text.as_ref().map(|t| t.chars().take(20).collect::<String>()));
+                        eprintln!(
+                            "  [{}] Text: {:?}",
+                            i,
+                            child
+                                .text
+                                .as_ref()
+                                .map(|t| t.chars().take(20).collect::<String>())
+                        );
                     } else {
                         eprintln!("  [{}] Element: <{}>", i, child.tag);
                     }

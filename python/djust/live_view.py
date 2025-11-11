@@ -35,9 +35,11 @@ class DjangoJSONEncoder(json.JSONEncoder):
     - Django models → dict with id and __str__
     - QuerySets → list
     """
+
     def default(self, obj):
         # Handle Component and LiveComponent instances (render to HTML)
         from .components.base import Component, LiveComponent
+
         if isinstance(obj, (Component, LiveComponent)):
             return str(obj)  # Calls __str__() which calls render()
 
@@ -56,9 +58,9 @@ class DjangoJSONEncoder(json.JSONEncoder):
         # Handle Django model instances
         if isinstance(obj, models.Model):
             result = {
-                'id': str(obj.pk) if obj.pk else None,
-                '__str__': str(obj),
-                '__model__': obj.__class__.__name__,
+                "id": str(obj.pk) if obj.pk else None,
+                "__str__": str(obj),
+                "__model__": obj.__class__.__name__,
             }
 
             # Serialize all model fields (excluding relations to avoid circular refs)
@@ -77,8 +79,8 @@ class DjangoJSONEncoder(json.JSONEncoder):
                     elif isinstance(value, models.Model):
                         # For ForeignKey, just include id and __str__
                         result[field_name] = {
-                            'id': str(value.pk) if value.pk else None,
-                            '__str__': str(value),
+                            "id": str(value.pk) if value.pk else None,
+                            "__str__": str(value),
                         }
                     else:
                         result[field_name] = value
@@ -88,10 +90,10 @@ class DjangoJSONEncoder(json.JSONEncoder):
             # Include custom methods that don't start with _ and are callable
             # This allows model methods like get_status_display(), get_full_name(), etc.
             for attr_name in dir(obj):
-                if not attr_name.startswith('_') and attr_name not in result:
+                if not attr_name.startswith("_") and attr_name not in result:
                     attr = getattr(obj, attr_name, None)
                     # Include callable methods with no required parameters
-                    if callable(attr) and attr_name.startswith('get_'):
+                    if callable(attr) and attr_name.startswith("get_"):
                         try:
                             # Try calling with no args
                             value = attr()
@@ -105,11 +107,12 @@ class DjangoJSONEncoder(json.JSONEncoder):
             return result
 
         # Handle QuerySets
-        if hasattr(obj, 'model') and hasattr(obj, '__iter__'):
+        if hasattr(obj, "model") and hasattr(obj, "__iter__"):
             # This is likely a QuerySet
             return list(obj)
 
         return super().default(obj)
+
 
 # Global cache for RustLiveView instances
 # Structure: {cache_key: (rust_view, timestamp)}
@@ -150,7 +153,7 @@ def cleanup_expired_sessions(ttl: Optional[int] = None) -> int:
         del _rust_view_cache[key]
 
     if expired_keys:
-        logger.info(f'Cleaned up {len(expired_keys)} expired LiveView sessions')
+        logger.info(f"Cleaned up {len(expired_keys)} expired LiveView sessions")
 
     return len(expired_keys)
 
@@ -166,20 +169,20 @@ def get_session_stats() -> Dict[str, Any]:
 
     if not _rust_view_cache:
         return {
-            'total_sessions': 0,
-            'oldest_session_age': 0,
-            'newest_session_age': 0,
-            'average_age': 0,
+            "total_sessions": 0,
+            "oldest_session_age": 0,
+            "newest_session_age": 0,
+            "average_age": 0,
         }
 
     current_time = time.time()
     ages = [current_time - timestamp for _, timestamp in _rust_view_cache.values()]
 
     return {
-        'total_sessions': len(_rust_view_cache),
-        'oldest_session_age': max(ages) if ages else 0,
-        'newest_session_age': min(ages) if ages else 0,
-        'average_age': sum(ages) / len(ages) if ages else 0,
+        "total_sessions": len(_rust_view_cache),
+        "oldest_session_age": max(ages) if ages else 0,
+        "newest_session_age": min(ages) if ages else 0,
+        "average_age": sum(ages) / len(ages) if ages else 0,
     }
 
 
@@ -226,25 +229,30 @@ class LiveView(View):
             # Load the raw template source
             from django.template import loader
             from django.conf import settings
+
             template = loader.get_template(self.template_name)
             template_source = template.template.source
 
             # Check if template uses {% extends %} - if so, resolve inheritance in Rust
-            if '{% extends' in template_source or '{%extends' in template_source:
+            if "{% extends" in template_source or "{%extends" in template_source:
                 # Get template directories from Django settings
                 template_dirs = []
                 for template_config in settings.TEMPLATES:
-                    if 'DIRS' in template_config:
-                        template_dirs.extend(template_config['DIRS'])
+                    if "DIRS" in template_config:
+                        template_dirs.extend(template_config["DIRS"])
 
                 # Also add app template directories
                 for template_config in settings.TEMPLATES:
-                    if template_config['BACKEND'] == 'django.template.backends.django.DjangoTemplates':
-                        if template_config.get('APP_DIRS', False):
+                    if (
+                        template_config["BACKEND"]
+                        == "django.template.backends.django.DjangoTemplates"
+                    ):
+                        if template_config.get("APP_DIRS", False):
                             from django.apps import apps
                             from pathlib import Path
+
                             for app_config in apps.get_app_configs():
-                                templates_dir = Path(app_config.path) / 'templates'
+                                templates_dir = Path(app_config.path) / "templates"
                                 if templates_dir.exists():
                                     template_dirs.append(str(templates_dir))
 
@@ -254,6 +262,7 @@ class LiveView(View):
                 # Use Rust template inheritance resolution
                 try:
                     from djust._rust import resolve_template_inheritance
+
                     resolved = resolve_template_inheritance(self.template_name, template_dirs_str)
 
                     # Store full template for initial GET rendering
@@ -267,22 +276,32 @@ class LiveView(View):
                     import sys
 
                     # Remove {% extends %} and extract all blocks
-                    child_content = re.sub(r'{%\s*extends\s+["\'].*?["\']\s*%}', '', template_source)
+                    child_content = re.sub(
+                        r'{%\s*extends\s+["\'].*?["\']\s*%}', "", template_source
+                    )
 
                     # Extract content from all {% block %} tags and concatenate
-                    blocks = re.findall(r'{%\s*block\s+\w+\s*%}(.*?){%\s*endblock\s*%}', child_content, re.DOTALL)
+                    blocks = re.findall(
+                        r"{%\s*block\s+\w+\s*%}(.*?){%\s*endblock\s*%}", child_content, re.DOTALL
+                    )
                     if blocks:
                         # Join all block contents
-                        vdom_template = ''.join(blocks)
+                        vdom_template = "".join(blocks)
                         # Extract liveview-root div (with wrapper) for VDOM tracking
                         vdom_template = self._extract_liveview_root_with_wrapper(vdom_template)
-                        print(f"[LiveView] Using child template blocks for VDOM tracking ({len(vdom_template)} chars), full template for rendering ({len(resolved)} chars)", file=sys.stderr)
+                        print(
+                            f"[LiveView] Using child template blocks for VDOM tracking ({len(vdom_template)} chars), full template for rendering ({len(resolved)} chars)",
+                            file=sys.stderr,
+                        )
                         return vdom_template
                     else:
                         # No blocks found, use the child template as-is (minus extends)
                         # Extract liveview-root div (with wrapper) for VDOM tracking
                         child_vdom = self._extract_liveview_root_with_wrapper(child_content)
-                        print(f"[LiveView] Using child template for VDOM tracking ({len(child_vdom)} chars)", file=sys.stderr)
+                        print(
+                            f"[LiveView] Using child template for VDOM tracking ({len(child_vdom)} chars)",
+                            file=sys.stderr,
+                        )
                         return child_vdom
 
                 except Exception as e:
@@ -298,7 +317,11 @@ class LiveView(View):
                     extracted = self._strip_comments_and_whitespace(extracted)
 
                     import sys
-                    print(f"[LiveView] Extracted and stripped liveview-root: {len(extracted)} chars (from {len(template_source)} chars)", file=sys.stderr)
+
+                    print(
+                        f"[LiveView] Extracted and stripped liveview-root: {len(extracted)} chars (from {len(template_source)} chars)",
+                        file=sys.stderr,
+                    )
                     return extracted
 
             # No template inheritance - store full template and extract liveview-root for VDOM
@@ -314,7 +337,11 @@ class LiveView(View):
             extracted = self._strip_comments_and_whitespace(extracted)
 
             import sys
-            print(f"[LiveView] No inheritance - extracted and stripped liveview-root: {len(extracted)} chars (from {len(template_source)} chars)", file=sys.stderr)
+
+            print(
+                f"[LiveView] No inheritance - extracted and stripped liveview-root: {len(extracted)} chars (from {len(template_source)} chars)",
+                file=sys.stderr,
+            )
             return extracted
         else:
             raise ValueError("Either template_name or template_string must be set")
@@ -346,7 +373,7 @@ class LiveView(View):
 
         # Add all non-private attributes as context
         for key in dir(self):
-            if not key.startswith('_'):
+            if not key.startswith("_"):
                 try:
                     value = getattr(self, key)
                     if not callable(value):
@@ -372,20 +399,26 @@ class LiveView(View):
     def _initialize_rust_view(self, request=None):
         """Initialize the Rust LiveView backend"""
         import sys
-        print(f"[LiveView] _initialize_rust_view() called, _rust_view={self._rust_view}", file=sys.stderr)
+
+        print(
+            f"[LiveView] _initialize_rust_view() called, _rust_view={self._rust_view}",
+            file=sys.stderr,
+        )
 
         if self._rust_view is None:
             # Try to get from cache if we have a session
-            if request and hasattr(request, 'session'):
-                view_key = f'liveview_{request.path}'
+            if request and hasattr(request, "session"):
+                view_key = f"liveview_{request.path}"
                 session_key = request.session.session_key
                 if not session_key:
                     request.session.create()
                     session_key = request.session.session_key
 
-                self._cache_key = f'{session_key}_{view_key}'
+                self._cache_key = f"{session_key}_{view_key}"
                 print(f"[LiveView] Cache lookup: cache_key={self._cache_key}", file=sys.stderr)
-                print(f"[LiveView] Cache contents: {list(_rust_view_cache.keys())}", file=sys.stderr)
+                print(
+                    f"[LiveView] Cache contents: {list(_rust_view_cache.keys())}", file=sys.stderr
+                )
 
                 # Try to get cached RustLiveView
                 if self._cache_key in _rust_view_cache:
@@ -394,6 +427,7 @@ class LiveView(View):
                     print(f"[LiveView] Cache HIT! Using cached RustLiveView", file=sys.stderr)
                     # Update timestamp on access
                     import time
+
                     _rust_view_cache[self._cache_key] = (cached_view, time.time())
                     return
                 else:
@@ -406,7 +440,11 @@ class LiveView(View):
             template_source = self.get_template()
 
             import sys
-            print(f"[LiveView] Creating NEW RustLiveView for cache_key={self._cache_key}", file=sys.stderr)
+
+            print(
+                f"[LiveView] Creating NEW RustLiveView for cache_key={self._cache_key}",
+                file=sys.stderr,
+            )
             print(f"[LiveView] Template length: {len(template_source)} chars", file=sys.stderr)
             print(f"[LiveView] Template preview: {template_source[:200]}...", file=sys.stderr)
 
@@ -415,6 +453,7 @@ class LiveView(View):
             # Cache it if we have a cache key
             if self._cache_key:
                 import time
+
                 _rust_view_cache[self._cache_key] = (self._rust_view, time.time())
 
     def _sync_state_to_rust(self):
@@ -430,7 +469,7 @@ class LiveView(View):
                 if isinstance(value, (Component, LiveComponent)):
                     # Create a dict with the pre-rendered HTML so {{ component.render }} works
                     rendered_html = str(value.render())
-                    rendered_context[key] = {'render': rendered_html}
+                    rendered_context[key] = {"render": rendered_html}
                 else:
                     rendered_context[key] = value
 
@@ -470,12 +509,13 @@ class LiveView(View):
         from rendered HTML before sending to client.
         """
         import re
+
         # Remove HTML comments
-        html = re.sub(r'<!--.*?-->', '', html, flags=re.DOTALL)
+        html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
         # Normalize whitespace (collapse multiple whitespace to single space)
-        html = re.sub(r'\s+', ' ', html)
+        html = re.sub(r"\s+", " ", html)
         # Remove whitespace between tags
-        html = re.sub(r'>\s+<', '><', html)
+        html = re.sub(r">\s+<", "><", html)
         return html
 
     def _extract_liveview_content(self, html: str) -> str:
@@ -488,11 +528,7 @@ class LiveView(View):
         import re
 
         # Find the opening tag for [data-liveview-root]
-        opening_match = re.search(
-            r'<div\s+data-liveview-root[^>]*>',
-            html,
-            re.IGNORECASE
-        )
+        opening_match = re.search(r"<div\s+data-liveview-root[^>]*>", html, re.IGNORECASE)
 
         if not opening_match:
             # No [data-liveview-root] found - return full HTML
@@ -506,14 +542,14 @@ class LiveView(View):
 
         while depth > 0 and pos < len(html):
             # Look for next <div or </div
-            open_match = re.search(r'<div\b', html[pos:], re.IGNORECASE)
-            close_match = re.search(r'</div>', html[pos:], re.IGNORECASE)
+            open_match = re.search(r"<div\b", html[pos:], re.IGNORECASE)
+            close_match = re.search(r"</div>", html[pos:], re.IGNORECASE)
 
             if close_match is None:
                 break
 
             close_pos = pos + close_match.start()
-            open_pos = pos + open_match.start() if open_match else float('inf')
+            open_pos = pos + open_match.start() if open_match else float("inf")
 
             if open_pos < close_pos:
                 # Found opening div first
@@ -548,11 +584,7 @@ class LiveView(View):
         import re
 
         # Find the opening tag for [data-liveview-root]
-        opening_match = re.search(
-            r'<div\s+data-liveview-root[^>]*>',
-            template,
-            re.IGNORECASE
-        )
+        opening_match = re.search(r"<div\s+data-liveview-root[^>]*>", template, re.IGNORECASE)
 
         if not opening_match:
             # No [data-liveview-root] found - return template as-is
@@ -567,14 +599,14 @@ class LiveView(View):
 
         while depth > 0 and pos < len(template):
             # Look for next <div or </div
-            open_match = re.search(r'<div\b', template[pos:], re.IGNORECASE)
-            close_match = re.search(r'</div>', template[pos:], re.IGNORECASE)
+            open_match = re.search(r"<div\b", template[pos:], re.IGNORECASE)
+            close_match = re.search(r"</div>", template[pos:], re.IGNORECASE)
 
             if close_match is None:
                 break
 
             close_pos = pos + close_match.start()
-            open_pos = pos + open_match.start() if open_match else float('inf')
+            open_pos = pos + open_match.start() if open_match else float("inf")
 
             if open_pos < close_pos:
                 # Found opening div first
@@ -608,11 +640,7 @@ class LiveView(View):
         import re
 
         # Find the opening tag for [data-liveview-root]
-        opening_match = re.search(
-            r'<div\s+data-liveview-root[^>]*>',
-            template,
-            re.IGNORECASE
-        )
+        opening_match = re.search(r"<div\s+data-liveview-root[^>]*>", template, re.IGNORECASE)
 
         if not opening_match:
             # No [data-liveview-root] found - return template as-is
@@ -627,14 +655,14 @@ class LiveView(View):
         while depth > 0 and pos < len(template):
             # Look for next <div or </div (but not in Django template tags)
             # This is a simplified parser - doesn't handle all edge cases
-            open_match = re.search(r'<div\b', template[pos:], re.IGNORECASE)
-            close_match = re.search(r'</div>', template[pos:], re.IGNORECASE)
+            open_match = re.search(r"<div\b", template[pos:], re.IGNORECASE)
+            close_match = re.search(r"</div>", template[pos:], re.IGNORECASE)
 
             if close_match is None:
                 break
 
             close_pos = pos + close_match.start()
-            open_pos = pos + open_match.start() if open_match else float('inf')
+            open_pos = pos + open_match.start() if open_match else float("inf")
 
             if open_pos < close_pos:
                 # Found opening div first
@@ -659,18 +687,20 @@ class LiveView(View):
         Returns the complete HTML document (DOCTYPE, html, head, body, etc.)
         """
         # Check if we have a full template from template inheritance
-        if hasattr(self, '_full_template') and self._full_template:
+        if hasattr(self, "_full_template") and self._full_template:
             # Render the full template using Rust
             from djust._rust import RustLiveView
+
             temp_rust = RustLiveView(self._full_template)
 
             # Sync state to this temporary view
             from .components.base import Component, LiveComponent
+
             context = self.get_context_data()
             rendered_context = {}
             for key, value in context.items():
                 if isinstance(value, (Component, LiveComponent)):
-                    rendered_context[key] = {'render': str(value.render())}
+                    rendered_context[key] = {"render": str(value.render())}
                 else:
                     rendered_context[key] = value
 
@@ -681,7 +711,9 @@ class LiveView(View):
             # No full template - use regular render
             return self.render(request)
 
-    def render_with_diff(self, request=None, extract_liveview_root=False) -> tuple[str, Optional[str], int]:
+    def render_with_diff(
+        self, request=None, extract_liveview_root=False
+    ) -> tuple[str, Optional[str], int]:
         """
         Render the view and compute diff from last render.
 
@@ -694,7 +726,11 @@ class LiveView(View):
             Tuple of (html, patches_json, version)
         """
         import sys
-        print(f"[LiveView] render_with_diff() called (extract_liveview_root={extract_liveview_root})", file=sys.stderr)
+
+        print(
+            f"[LiveView] render_with_diff() called (extract_liveview_root={extract_liveview_root})",
+            file=sys.stderr,
+        )
         print(f"[LiveView] _rust_view before init: {self._rust_view}", file=sys.stderr)
 
         # Initialize Rust view if not already done
@@ -702,8 +738,8 @@ class LiveView(View):
 
         # If template_string is a property (dynamic), update the template
         # while preserving VDOM state for efficient patching
-        if hasattr(self.__class__, 'template_string') and isinstance(
-            getattr(self.__class__, 'template_string'), property
+        if hasattr(self.__class__, "template_string") and isinstance(
+            getattr(self.__class__, "template_string"), property
         ):
             print(f"[LiveView] template_string is a property - updating template", file=sys.stderr)
             new_template = self.get_template()
@@ -716,36 +752,56 @@ class LiveView(View):
         result = self._rust_view.render_with_diff()
         html, patches_json, version = result
 
-        print(f"[LiveView] Rendered HTML length: {len(html)} chars, starts with: {html[:100]}...", file=sys.stderr)
+        print(
+            f"[LiveView] Rendered HTML length: {len(html)} chars, starts with: {html[:100]}...",
+            file=sys.stderr,
+        )
 
         # Extract [data-liveview-root] innerHTML if requested
         # This ensures Rust VDOM tracks exactly what the client's innerHTML contains
         if extract_liveview_root:
             html = self._extract_liveview_content(html)
-            print(f"[LiveView] Extracted [data-liveview-root] content ({len(html)} chars)", file=sys.stderr)
+            print(
+                f"[LiveView] Extracted [data-liveview-root] content ({len(html)} chars)",
+                file=sys.stderr,
+            )
 
-        print(f"[LiveView] Rust returned: version={version}, patches={'YES' if patches_json else 'NO'}", file=sys.stderr)
+        print(
+            f"[LiveView] Rust returned: version={version}, patches={'YES' if patches_json else 'NO'}",
+            file=sys.stderr,
+        )
         if not patches_json:
             print(f"[LiveView] NO PATCHES GENERATED!", file=sys.stderr)
         else:
             # Show first few patches for debugging (if enabled)
             from djust.config import config
-            if config.get('debug_vdom', False):
+
+            if config.get("debug_vdom", False):
                 import json as json_module
+
                 patches_list = json_module.loads(patches_json) if patches_json else []
                 print(f"[LiveView] Generated {len(patches_list)} patches:", file=sys.stderr)
                 for i, patch in enumerate(patches_list[:5]):  # Show first 5 patches
-                    patch_type = patch.get('type', 'Unknown')
-                    path = patch.get('path', [])
+                    patch_type = patch.get("type", "Unknown")
+                    path = patch.get("path", [])
 
                     # Add context about what we're patching
-                    if patch_type == 'SetAttr':
-                        print(f"[LiveView]   Patch {i}: {patch_type} '{patch.get('key')}' = '{patch.get('value')}' at path {path}", file=sys.stderr)
-                    elif patch_type == 'RemoveAttr':
-                        print(f"[LiveView]   Patch {i}: {patch_type} '{patch.get('key')}' at path {path}", file=sys.stderr)
-                    elif patch_type == 'SetText':
-                        text_preview = patch.get('text', '')[:50]
-                        print(f"[LiveView]   Patch {i}: {patch_type} to '{text_preview}' at path {path}", file=sys.stderr)
+                    if patch_type == "SetAttr":
+                        print(
+                            f"[LiveView]   Patch {i}: {patch_type} '{patch.get('key')}' = '{patch.get('value')}' at path {path}",
+                            file=sys.stderr,
+                        )
+                    elif patch_type == "RemoveAttr":
+                        print(
+                            f"[LiveView]   Patch {i}: {patch_type} '{patch.get('key')}' at path {path}",
+                            file=sys.stderr,
+                        )
+                    elif patch_type == "SetText":
+                        text_preview = patch.get("text", "")[:50]
+                        print(
+                            f"[LiveView]   Patch {i}: {patch_type} to '{text_preview}' at path {path}",
+                            file=sys.stderr,
+                        )
                     else:
                         print(f"[LiveView]   Patch {i}: {patch}", file=sys.stderr)
 
@@ -762,9 +818,10 @@ class LiveView(View):
             Dictionary of component state
         """
         import json as json_module
+
         state = {}
         for key in dir(component):
-            if not key.startswith('_') and key not in ('template_name',):
+            if not key.startswith("_") and key not in ("template_name",):
                 try:
                     value = getattr(component, key)
                     if not callable(value):
@@ -788,7 +845,7 @@ class LiveView(View):
             state: Dictionary of component state
         """
         for key, value in state.items():
-            if not key.startswith('_'):
+            if not key.startswith("_"):
                 try:
                     setattr(component, key, value)
                 except (AttributeError, TypeError):
@@ -809,7 +866,7 @@ class LiveView(View):
         from .components.base import Component, LiveComponent
 
         for key, value in self.__dict__.items():
-            if isinstance(value, (Component, LiveComponent)) and not key.startswith('_'):
+            if isinstance(value, (Component, LiveComponent)) and not key.startswith("_"):
                 # Assign automatic ID based on variable name
                 value._auto_id = key
 
@@ -827,7 +884,7 @@ class LiveView(View):
         """
         from .components.base import Component, LiveComponent
 
-        view_key = f'liveview_{request.path}'
+        view_key = f"liveview_{request.path}"
         component_state = {}
 
         for key, component in context.items():
@@ -841,7 +898,7 @@ class LiveView(View):
         # Serialize component state to ensure session-compatible types
         component_state_json = json.dumps(component_state, cls=DjangoJSONEncoder)
         component_state_serializable = json.loads(component_state_json)
-        request.session[f'{view_key}_components'] = component_state_serializable
+        request.session[f"{view_key}_components"] = component_state_serializable
         request.session.modified = True
 
     @method_decorator(ensure_csrf_cookie)
@@ -858,8 +915,9 @@ class LiveView(View):
             request.session.create()
 
         # Store initial state in session (exclude components)
-        view_key = f'liveview_{request.path}'
+        view_key = f"liveview_{request.path}"
         from .components.base import LiveComponent
+
         context = self.get_context_data()
         state = {k: v for k, v in context.items() if not isinstance(v, LiveComponent)}
 
@@ -872,7 +930,7 @@ class LiveView(View):
         self._save_components_to_session(request, context)
 
         session_key = request.session.session_key
-        cache_key = f'{session_key}_{view_key}'
+        cache_key = f"{session_key}_{view_key}"
 
         # NOTE: Don't clear the cache on GET! The cache persists across requests
         # to maintain VDOM state. Only clear if we detect the user explicitly
@@ -895,7 +953,10 @@ class LiveView(View):
         # should start from a clean state to match the client's newly rendered DOM.
         if self._rust_view:
             import sys
-            print(f"[LiveView] Resetting VDOM state on GET request (HTTP-only mode)", file=sys.stderr)
+
+            print(
+                f"[LiveView] Resetting VDOM state on GET request (HTTP-only mode)", file=sys.stderr
+            )
             self._rust_view.reset()
 
         self._sync_state_to_rust()
@@ -915,33 +976,36 @@ class LiveView(View):
 
         # Wrap in Django template if wrapper_template is specified
         # (This is for the older wrapper pattern, not template inheritance)
-        if hasattr(self, 'wrapper_template') and self.wrapper_template:
+        if hasattr(self, "wrapper_template") and self.wrapper_template:
             from django.template import loader
+
             wrapper = loader.get_template(self.wrapper_template)
-            html = wrapper.render({'liveview_content': liveview_content}, request)
+            html = wrapper.render({"liveview_content": liveview_content}, request)
             # Inject LiveView content into [data-liveview-root] placeholder
             # Note: liveview_content already includes <div data-liveview-root>...</div>
-            html = html.replace('<div data-liveview-root></div>', liveview_content)
+            html = html.replace("<div data-liveview-root></div>", liveview_content)
         else:
             # No wrapper, return LiveView content directly
             html = liveview_content
 
         # Debug: Save the rendered HTML to a file for inspection
-        if 'registration' in request.path:
-            form_start = html.find('<form')
+        if "registration" in request.path:
+            form_start = html.find("<form")
             if form_start != -1:
-                form_end = html.find('</form>', form_start) + 7
+                form_end = html.find("</form>", form_start) + 7
                 form_html = html[form_start:form_end]
                 import tempfile
-                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.html', prefix='registration_form_') as f:
+
+                with tempfile.NamedTemporaryFile(
+                    mode="w", delete=False, suffix=".html", prefix="registration_form_"
+                ) as f:
                     f.write(form_html)
                     print(f"[LiveView] Saved form HTML to {f.name}", file=sys.stderr)
 
         # Inject view path into data-liveview-root for WebSocket mounting
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
         html = html.replace(
-            '<div data-liveview-root>',
-            f'<div data-liveview-root data-live-view="{view_path}">'
+            "<div data-liveview-root>", f'<div data-liveview-root data-live-view="{view_path}">'
         )
 
         # Inject LiveView client script
@@ -953,19 +1017,20 @@ class LiveView(View):
         """Handle POST requests - event handling"""
         import sys
         from .components.base import Component, LiveComponent
+
         try:
             data = json.loads(request.body)
-            event_name = data.get('event')
-            params = data.get('params', {})
+            event_name = data.get("event")
+            params = data.get("params", {})
 
             # Restore state from session
-            view_key = f'liveview_{request.path}'
+            view_key = f"liveview_{request.path}"
             saved_state = request.session.get(view_key, {})
 
             # IMPORTANT: Restore state BEFORE calling mount()
             # This ensures components are created with the correct restored state values
             for key, value in saved_state.items():
-                if not key.startswith('_') and not callable(value):
+                if not key.startswith("_") and not callable(value):
                     try:
                         setattr(self, key, value)
                     except AttributeError:
@@ -980,7 +1045,7 @@ class LiveView(View):
 
             # Restore component state (both Component and LiveComponent)
             # This preserves any component-specific state that wasn't captured by mount()
-            component_state = request.session.get(f'{view_key}_components', {})
+            component_state = request.session.get(f"{view_key}_components", {})
             for key, state in component_state.items():
                 component = getattr(self, key, None)
                 # Restore state for both Component and LiveComponent to preserve IDs
@@ -1023,16 +1088,16 @@ class LiveView(View):
                 if patch_count <= PATCH_THRESHOLD:
                     # Send only patches - client will apply them
                     # If patches fail on client, it should reload the page
-                    return JsonResponse({'patches': patches_json, 'version': version})
+                    return JsonResponse({"patches": patches_json, "version": version})
                 else:
                     # Too many patches - send full HTML instead
                     # Reset VDOM cache since we're sending full HTML
                     # This ensures next patches are calculated from the browser's normalized DOM
                     self._rust_view.reset()
-                    return JsonResponse({'html': html, 'version': version})
+                    return JsonResponse({"html": html, "version": version})
             else:
                 # No patches generated - send full HTML
-                return JsonResponse({'html': html, 'version': version})
+                return JsonResponse({"html": html, "version": version})
 
         except Exception as e:
             import traceback
@@ -1053,19 +1118,22 @@ class LiveView(View):
             # In DEBUG mode, include stack trace in response
             if settings.DEBUG:
                 error_details = {
-                    'error': error_msg,
-                    'type': type(e).__name__,
-                    'traceback': traceback.format_exc(),
-                    'event': event_name,
-                    'params': params,
+                    "error": error_msg,
+                    "type": type(e).__name__,
+                    "traceback": traceback.format_exc(),
+                    "event": event_name,
+                    "params": params,
                 }
                 return JsonResponse(error_details, status=500)
             else:
                 # In production, just send user-friendly message
-                return JsonResponse({
-                    'error': 'An error occurred processing your request. Please try again.',
-                    'debug_hint': 'Check server logs for details'
-                }, status=500)
+                return JsonResponse(
+                    {
+                        "error": "An error occurred processing your request. Please try again.",
+                        "debug_hint": "Check server logs for details",
+                    },
+                    status=500,
+                )
 
     def _hydrate_react_components(self, html: str) -> str:
         """
@@ -1096,9 +1164,9 @@ class LiveView(View):
             context = self.get_context_data()
             resolved_props = {}
             for key, value in props.items():
-                if isinstance(value, str) and '{{' in value and '}}' in value:
+                if isinstance(value, str) and "{{" in value and "}}" in value:
                     # Extract variable name from {{ var_name }}
-                    var_match = re.search(r'\{\{\s*(\w+)\s*\}\}', value)
+                    var_match = re.search(r"\{\{\s*(\w+)\s*\}\}", value)
                     if var_match:
                         var_name = var_match.group(1)
                         if var_name in context:
@@ -1117,9 +1185,9 @@ class LiveView(View):
                 # Call the server-side renderer with resolved props
                 rendered_content = renderer(resolved_props, children)
                 # Create updated props JSON for client-side hydration
-                resolved_props_json = json_module.dumps(resolved_props).replace('"', '&quot;')
+                resolved_props_json = json_module.dumps(resolved_props).replace('"', "&quot;")
                 # Wrap with data attributes for client-side hydration
-                return f'<div data-react-component="{component_name}" data-react-props=\'{resolved_props_json}\'>{rendered_content}</div>'
+                return f"<div data-react-component=\"{component_name}\" data-react-props='{resolved_props_json}'>{rendered_content}</div>"
             else:
                 # No renderer found, return placeholder
                 return match.group(0)
@@ -1134,8 +1202,8 @@ class LiveView(View):
         from .config import config
 
         # Get WebSocket setting from config
-        use_websocket = config.get('use_websocket', True)
-        debug_vdom = config.get('debug_vdom', False)
+        use_websocket = config.get("use_websocket", True)
+        debug_vdom = config.get("debug_vdom", False)
 
         config_script = f"""
         <script>
@@ -2107,16 +2175,15 @@ class LiveView(View):
         # Inject both config and main script
         full_script = config_script + script
 
-        if '</body>' in html:
-            html = html.replace('</body>', f'{full_script}</body>')
+        if "</body>" in html:
+            html = html.replace("</body>", f"{full_script}</body>")
         else:
             html += full_script
 
         return html
 
 
-def live_view(template_name: Optional[str] = None,
-              template_string: Optional[str] = None):
+def live_view(template_name: Optional[str] = None, template_string: Optional[str] = None):
     """
     Decorator to convert a function-based view into a LiveView.
 
@@ -2142,6 +2209,7 @@ def live_view(template_name: Optional[str] = None,
     Returns:
         View function
     """
+
     def decorator(func: Callable) -> Callable:
         def wrapper(request, *args, **kwargs):
             # Create a dynamic LiveView class
@@ -2165,9 +2233,9 @@ def live_view(template_name: Optional[str] = None,
                         setattr(view, key, value)
 
             # Handle the request
-            if request.method == 'GET':
+            if request.method == "GET":
                 return view.get(request, *args, **kwargs)
-            elif request.method == 'POST':
+            elif request.method == "POST":
                 return view.post(request, *args, **kwargs)
 
         return wrapper

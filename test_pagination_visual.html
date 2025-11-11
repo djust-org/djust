@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pagination Component Visual Test</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding: 2rem;
+            background-color: #f8f9fa;
+        }
+        .demo-section {
+            background: white;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .demo-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #495057;
+        }
+        .demo-description {
+            color: #6c757d;
+            margin-bottom: 1.5rem;
+            font-size: 0.9rem;
+        }
+        code {
+            background: #f8f9fa;
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4">Pagination Component - Visual Test Suite</h1>
+        <p class="lead mb-5">Comprehensive showcase of the Pagination component with various configurations.</p>
+
+        <!-- Test 1: Basic pagination -->
+        <div class="demo-section">
+            <div class="demo-title">1. Basic Pagination (page 5 of 20)</div>
+            <div class="demo-description">
+                Standard pagination in the middle of a large page range. Shows ellipsis on both sides.
+                <br><code>current_page=5, total_pages=20, max_visible_pages=5</code>
+            </div>
+            <nav aria-label="Page navigation">
+                <ul class="pagination">
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="4">Previous</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="1">1</a>
+                    </li>
+                    <li class="page-item disabled">
+                        <span class="page-link">...</span>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="3">3</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="4">4</a>
+                    </li>
+                    <li class="page-item active">
+                        <a class="page-link" href="#" data-page="5" aria-current="page">5</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="6">6</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="7">7</a>
+                    </li>
+                    <li class="page-item disabled">
+                        <span class="page-link">...</span>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="20">20</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="6">Next</a>
+                    </li>
+                </ul>
+            </nav>
+        </div>
+
+        <!-- Test 2: First page -->
+        <div class="demo-section">
+            <div class="demo-title">2. First Page (page 1 of 10)</div>
+            <div class="demo-description">
+                Pagination on the first page. Previous button is disabled.
+                <br><code>current_page=1, total_pages=10</code>
+            </div>
+            <nav aria-label="Page navigation">
+                <ul class="pagination">
+                    <li class="page-item disabled">
+                        <a class="page-link" href="#" data-page="0" aria-disabled="true">Previous</a>
+                    </li>
+                    <li class="page-item active">
+                        <a class="page-link" href="#" data-page="1" aria-current="page">1</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="2">2</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="3">3</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="4">4</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="5">5</a>
+                    </li>
+                    <li class="page-item disabled">
+                        <span class="page-link">...</span>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="10">10</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="2">Next</a>
+                    </li>
+                </ul>
+            </nav>
+        </div>
+
+        <!-- Test 3: Last page -->
+        <div class="demo-section">
+            <div class="demo-title">3. Last Page (page 10 of 10)</div>
+            <div class="demo-description">
+                Pagination on the last page. Next button is disabled.
+                <br><code>current_page=10, total_pages=10</code>
+            </div>
+            <nav aria-label="Page navigation">
+                <ul class="pagination">
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="9">Previous</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="1">1</a>
+                    </li>
+                    <li class="page-item disabled">
+                        <span class="page-link">...</span>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="6">6</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="7">7</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="8">8</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="9">9</a>
+                    </li>
+                    <li class="page-item active">
+                        <a class="page-link" href="#" data-page="10" aria-current="page">10</a>
+                    </li>
+                    <li class="page-item disabled">
+                        <a class="page-link" href="#" data-page="11" aria-disabled="true">Next</a>
+                    </li>
+                </ul>
+            </nav>
+        </div>
+
+        <!-- Test 4: Small page count -->
+        <div class="demo-section">
+            <div class="demo-title">4. Small Page Count (page 2 of 4)</div>
+            <div class="demo-description">
+                Pagination with few pages. No ellipsis needed.
+                <br><code>current_page=2, total_pages=4</code>
+            </div>
+            <nav aria-label="Page navigation">
+                <ul class="pagination">
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="1">Previous</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="1">1</a>
+                    </li>
+                    <li class="page-item active">
+                        <a class="page-link" href="#" data-page="2" aria-current="page">2</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="3">3</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="4">4</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="3">Next</a>
+                    </li>
+                </ul>
+            </nav>
+        </div>
+
+        <!-- Test 5: Size variants -->
+        <div class="demo-section">
+            <div class="demo-title">5. Size Variants</div>
+            <div class="demo-description">
+                Pagination in different sizes: small, medium (default), and large.
+            </div>
+
+            <h6 class="mt-3 mb-2">Small <code>size="sm"</code></h6>
+            <nav aria-label="Page navigation">
+                <ul class="pagination pagination-sm">
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="2">Previous</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="1">1</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="2">2</a>
+                    </li>
+                    <li class="page-item active">
+                        <a class="page-link" href="#" data-page="3" aria-current="page">3</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="4">4</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="5">5</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="4">Next</a>
+                    </li>
+                </ul>
+            </nav>
+
+            <h6 class="mt-4 mb-2">Medium (default) <code>size="md"</code></h6>
+            <nav aria-label="Page navigation">
+                <ul class="pagination">
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="2">Previous</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="1">1</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="2">2</a>
+                    </li>
+                    <li class="page-item active">
+                        <a class="page-link" href="#" data-page="3" aria-current="page">3</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="4">4</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="5">5</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="4">Next</a>
+                    </li>
+                </ul>
+            </nav>
+
+            <h6 class="mt-4 mb-2">Large <code>size="lg"</code></h6>
+            <nav aria-label="Page navigation">
+                <ul class="pagination pagination-lg">
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="2">Previous</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="1">1</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="2">2</a>
+                    </li>
+                    <li class="page-item active">
+                        <a class="page-link" href="#" data-page="3" aria-current="page">3</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="4">4</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="5">5</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="4">Next</a>
+                    </li>
+                </ul>
+            </nav>
+        </div>
+
+        <!-- Test 6: Single page -->
+        <div class="demo-section">
+            <div class="demo-title">6. Single Page (page 1 of 1)</div>
+            <div class="demo-description">
+                Edge case: only one page. Both Previous and Next buttons are disabled.
+                <br><code>current_page=1, total_pages=1</code>
+            </div>
+            <nav aria-label="Page navigation">
+                <ul class="pagination">
+                    <li class="page-item disabled">
+                        <a class="page-link" href="#" data-page="0" aria-disabled="true">Previous</a>
+                    </li>
+                    <li class="page-item active">
+                        <a class="page-link" href="#" data-page="1" aria-current="page">1</a>
+                    </li>
+                    <li class="page-item disabled">
+                        <a class="page-link" href="#" data-page="2" aria-disabled="true">Next</a>
+                    </li>
+                </ul>
+            </nav>
+        </div>
+
+        <!-- Test 7: Large page count -->
+        <div class="demo-section">
+            <div class="demo-title">7. Large Page Count (page 50 of 100)</div>
+            <div class="demo-description">
+                Pagination in the middle of a very large page range. Ellipsis on both sides.
+                <br><code>current_page=50, total_pages=100, max_visible_pages=5</code>
+            </div>
+            <nav aria-label="Page navigation">
+                <ul class="pagination">
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="49">Previous</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="1">1</a>
+                    </li>
+                    <li class="page-item disabled">
+                        <span class="page-link">...</span>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="48">48</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="49">49</a>
+                    </li>
+                    <li class="page-item active">
+                        <a class="page-link" href="#" data-page="50" aria-current="page">50</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="51">51</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="52">52</a>
+                    </li>
+                    <li class="page-item disabled">
+                        <span class="page-link">...</span>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="100">100</a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="#" data-page="51">Next</a>
+                    </li>
+                </ul>
+            </nav>
+        </div>
+
+        <!-- Usage Example -->
+        <div class="demo-section">
+            <div class="demo-title">Usage Example</div>
+            <div class="demo-description">
+                How to use the Pagination component in your Django views:
+            </div>
+            <pre class="bg-light p-3 rounded"><code>from djust.components.ui import Pagination
+
+# In your view
+pagination = Pagination(
+    current_page=5,
+    total_pages=20,
+    size="md",
+    show_first_last=True,
+    max_visible_pages=5
+)
+
+# In your template
+{{ pagination.render }}
+# or simply
+{{ pagination }}</code></pre>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

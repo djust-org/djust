@@ -15,15 +15,20 @@ use djust_core::Value;
 use once_cell::sync::Lazy;
 use std::sync::RwLock;
 
-pub mod html;
-pub mod ui;
-pub mod layout;
 pub mod complex;
+pub mod html;
+pub mod layout;
+pub mod simple;
+pub mod ui; // Simple stateless components (pure Rust PyO3)
 
 #[cfg(feature = "python")]
 pub mod python;
 
 pub use html::HtmlBuilder;
+pub use simple::{
+    RustAlert, RustAvatar, RustBadge, RustButton, RustCard, RustDivider, RustIcon, RustModal,
+    RustProgress, RustRange, RustSpinner, RustSwitch, RustTextArea, RustToast, RustTooltip,
+};
 
 /// CSS framework for rendering components
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,7 +63,11 @@ pub trait Component: Send + Sync {
     fn set_state(&mut self, state: HashMap<String, Value>);
 
     /// Handle an event (click, input, change, etc.)
-    fn handle_event(&mut self, event: &str, params: HashMap<String, Value>) -> Result<(), ComponentError>;
+    fn handle_event(
+        &mut self,
+        event: &str,
+        params: HashMap<String, Value>,
+    ) -> Result<(), ComponentError>;
 
     /// Render component to HTML string
     fn render(&self, framework: Framework) -> Result<String, ComponentError>;

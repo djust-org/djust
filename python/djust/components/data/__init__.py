@@ -8,6 +8,6 @@ from .table import TableComponent
 from .pagination import PaginationComponent
 
 __all__ = [
-    'TableComponent',
-    'PaginationComponent',
+    "TableComponent",
+    "PaginationComponent",
 ]

@@ -6,6 +6,7 @@
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 
 pub mod context;
 pub mod errors;
@@ -39,16 +40,19 @@ impl Value {
             Value::Object(o) => !o.is_empty(),
         }
     }
+}
 
-    pub fn to_string(&self) -> String {
+// Implement Display trait instead of inherent to_string method
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Value::Null => String::new(),
-            Value::Bool(b) => b.to_string(),
-            Value::Integer(i) => i.to_string(),
-            Value::Float(f) => f.to_string(),
-            Value::String(s) => s.clone(),
-            Value::List(_) => "[List]".to_string(),
-            Value::Object(_) => "[Object]".to_string(),
+            Value::Null => write!(f, ""),
+            Value::Bool(b) => write!(f, "{b}"),
+            Value::Integer(i) => write!(f, "{i}"),
+            Value::Float(fl) => write!(f, "{fl}"),
+            Value::String(s) => write!(f, "{s}"),
+            Value::List(_) => write!(f, "[List]"),
+            Value::Object(_) => write!(f, "[Object]"),
         }
     }
 }

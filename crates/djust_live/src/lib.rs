@@ -3,17 +3,17 @@
 //! This is the main crate that ties together templates, virtual DOM, and
 //! provides Python bindings for reactive server-side rendering.
 
+use dashmap::DashMap;
 use djust_core::{Context, Value};
 use djust_templates::Template;
 use djust_vdom::{diff, parse_html, VNode};
+use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 use serde_json;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::path::PathBuf;
-use dashmap::DashMap;
-use once_cell::sync::Lazy;
+use std::sync::Arc;
 
 /// Global template cache - parse once, reuse for all sessions
 /// Using Arc<Template> for cheap cloning across threads
@@ -49,6 +49,12 @@ impl RustLiveViewBackend {
     /// Update state with a dictionary
     fn update_state(&mut self, updates: HashMap<String, Value>) {
         self.state.extend(updates);
+    }
+
+    /// Update the template source while preserving VDOM state
+    /// This allows dynamic templates to change without losing diffing capability
+    fn update_template(&mut self, new_template_source: String) {
+        self.template_source = new_template_source;
     }
 
     /// Get current state
@@ -94,23 +100,23 @@ impl RustLiveViewBackend {
         let html = template_arc.render(&context)?;
 
         // Parse new HTML to VDOM
-        let new_vdom = parse_html(&html).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-        })?;
+        let new_vdom = parse_html(&html)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
         // Compute diff if we have a previous render
-        let patches = if let Some(old_vdom) = &self.last_vdom {
-            let patches = diff(old_vdom, &new_vdom);
-            if !patches.is_empty() {
-                Some(serde_json::to_string(&patches).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-                })?)
+        let patches =
+            if let Some(old_vdom) = &self.last_vdom {
+                let patches = diff(old_vdom, &new_vdom);
+                if !patches.is_empty() {
+                    Some(serde_json::to_string(&patches).map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+                    })?)
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
         self.last_vdom = Some(new_vdom);
         self.version += 1;
@@ -133,16 +139,14 @@ impl RustLiveViewBackend {
         let context = Context::from_dict(self.state.clone());
         let html = template_arc.render(&context)?;
 
-        let new_vdom = parse_html(&html).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-        })?;
+        let new_vdom = parse_html(&html)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
         let patches_bytes = if let Some(old_vdom) = &self.last_vdom {
             let patches = diff(old_vdom, &new_vdom);
             if !patches.is_empty() {
-                let bytes = rmp_serde::to_vec(&patches).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-                })?;
+                let bytes = rmp_serde::to_vec(&patches)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
                 Some(PyBytes::new_bound(py, &bytes).into())
             } else {
                 None
@@ -184,17 +188,14 @@ fn render_template(template_source: String, context: HashMap<String, Value>) -> 
 /// Compute diff between two HTML strings
 #[pyfunction]
 fn diff_html(old_html: String, new_html: String) -> PyResult<String> {
-    let old = parse_html(&old_html).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-    })?;
-    let new = parse_html(&new_html).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-    })?;
+    let old = parse_html(&old_html)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    let new = parse_html(&new_html)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
     let patches = diff(&old, &new);
-    serde_json::to_string(&patches).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-    })
+    serde_json::to_string(&patches)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
 }
 
 /// Fast JSON serialization for Python objects
@@ -212,7 +213,10 @@ fn fast_json_dumps(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<String> {
     // Release GIL and serialize to JSON string
     py.allow_threads(|| {
         serde_json::to_string(&value).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("JSON serialization error: {}", e))
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "JSON serialization error: {}",
+                e
+            ))
         })
     })
 }
@@ -269,7 +273,7 @@ fn resolve_template_inheritance(
     template_path: String,
     template_dirs: Vec<String>,
 ) -> PyResult<String> {
-    use djust_vdom::template::{TemplateLoader, resolve_inheritance};
+    use djust_vdom::template::{resolve_inheritance, TemplateLoader};
 
     // Convert string paths to PathBuf
     let dirs: Vec<PathBuf> = template_dirs.iter().map(|s| PathBuf::from(s)).collect();
@@ -278,9 +282,8 @@ fn resolve_template_inheritance(
     let mut loader = TemplateLoader::new(dirs);
 
     // Resolve inheritance
-    let resolved = resolve_inheritance(&template_path, &mut loader).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-    })?;
+    let resolved = resolve_inheritance(&template_path, &mut loader)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
     Ok(resolved)
 }
@@ -294,10 +297,22 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
 
-    // Add Rust components
-    m.add_class::<djust_components::python::PyButton>()?;
-    m.add_class::<djust_components::python::PyInput>()?;
-    m.add_class::<djust_components::python::PyText>()?;
+    // Add pure Rust components (stateless, high-performance ~1μs rendering)
+    m.add_class::<djust_components::RustAlert>()?;
+    m.add_class::<djust_components::RustAvatar>()?;
+    m.add_class::<djust_components::RustBadge>()?;
+    m.add_class::<djust_components::RustButton>()?;
+    m.add_class::<djust_components::RustCard>()?;
+    m.add_class::<djust_components::RustDivider>()?;
+    m.add_class::<djust_components::RustIcon>()?;
+    m.add_class::<djust_components::RustModal>()?;
+    m.add_class::<djust_components::RustProgress>()?;
+    m.add_class::<djust_components::RustRange>()?;
+    m.add_class::<djust_components::RustSpinner>()?;
+    m.add_class::<djust_components::RustSwitch>()?;
+    m.add_class::<djust_components::RustTextArea>()?;
+    m.add_class::<djust_components::RustToast>()?;
+    m.add_class::<djust_components::RustTooltip>()?;
 
     Ok(())
 }

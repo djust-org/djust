@@ -221,6 +221,258 @@ def test_button_with_if_condition():
     print("\n✓ Test passed!")
 
 
+def test_simple_rust_input():
+    """Test rendering a simple RustInput in a template"""
+    print("\n" + "=" * 60)
+    print("TEST: Simple RustInput in Template")
+    print("=" * 60)
+
+    template = '''
+    <div class="form-group">
+        <RustInput id="email-input" placeholder="Enter email" />
+    </div>
+    '''
+
+    context = {}
+    result = render_template(template, context)
+
+    print("\nTemplate:")
+    print(template)
+    print("\nRendered HTML:")
+    print(result)
+
+    # Check that input was rendered
+    assert 'class="form-control"' in result
+    assert 'id="email-input"' in result
+    assert 'placeholder="Enter email"' in result
+    assert 'type="text"' in result
+    print("\n✓ Test passed!")
+
+
+def test_input_with_type():
+    """Test RustInput with different types"""
+    print("\n" + "=" * 60)
+    print("TEST: RustInput with Type")
+    print("=" * 60)
+
+    template = '<RustInput id="email" inputType="email" placeholder="user@example.com" />'
+
+    context = {}
+    result = render_template(template, context)
+
+    print("\nTemplate:")
+    print(template)
+    print("\nRendered HTML:")
+    print(result)
+
+    assert 'type="email"' in result
+    assert 'placeholder="user@example.com"' in result
+    print("\n✓ Test passed!")
+
+
+def test_input_with_size():
+    """Test RustInput with size prop"""
+    print("\n" + "=" * 60)
+    print("TEST: RustInput with Size")
+    print("=" * 60)
+
+    template = '<RustInput id="large-input" size="lg" />'
+
+    context = {}
+    result = render_template(template, context)
+
+    print("\nTemplate:")
+    print(template)
+    print("\nRendered HTML:")
+    print(result)
+
+    assert 'form-control-lg' in result
+    print("\n✓ Test passed!")
+
+
+def test_input_with_context_variables():
+    """Test RustInput with template variables"""
+    print("\n" + "=" * 60)
+    print("TEST: RustInput with Template Variables")
+    print("=" * 60)
+
+    template = '<RustInput id="{{ input_id }}" placeholder="{{ placeholder }}" value="{{ value }}" />'
+
+    context = {
+        "input_id": "username",
+        "placeholder": "Enter username",
+        "value": "john_doe"
+    }
+    result = render_template(template, context)
+
+    print("\nTemplate:")
+    print(template)
+    print("\nContext:", context)
+    print("\nRendered HTML:")
+    print(result)
+
+    assert 'id="username"' in result
+    assert 'placeholder="Enter username"' in result
+    assert 'value="john_doe"' in result
+    print("\n✓ Test passed!")
+
+
+def test_simple_rust_text():
+    """Test rendering a simple RustText in a template"""
+    print("\n" + "=" * 60)
+    print("TEST: Simple RustText in Template")
+    print("=" * 60)
+
+    template = '''
+    <div class="container">
+        <RustText content="Hello, World!" />
+    </div>
+    '''
+
+    context = {}
+    result = render_template(template, context)
+
+    print("\nTemplate:")
+    print(template)
+    print("\nRendered HTML:")
+    print(result)
+
+    # Check that text was rendered
+    assert '<span' in result
+    assert 'Hello, World!' in result
+    print("\n✓ Test passed!")
+
+
+def test_text_as_heading():
+    """Test RustText as heading"""
+    print("\n" + "=" * 60)
+    print("TEST: RustText as Heading")
+    print("=" * 60)
+
+    template = '<RustText content="Page Title" element="h1" />'
+
+    context = {}
+    result = render_template(template, context)
+
+    print("\nTemplate:")
+    print(template)
+    print("\nRendered HTML:")
+    print(result)
+
+    assert '<h1' in result
+    assert 'Page Title' in result
+    print("\n✓ Test passed!")
+
+
+def test_text_as_label():
+    """Test RustText as label for input"""
+    print("\n" + "=" * 60)
+    print("TEST: RustText as Label")
+    print("=" * 60)
+
+    template = '''
+    <RustText content="Email Address" element="label" forInput="email-input" />
+    <RustInput id="email-input" inputType="email" />
+    '''
+
+    context = {}
+    result = render_template(template, context)
+
+    print("\nTemplate:")
+    print(template)
+    print("\nRendered HTML:")
+    print(result)
+
+    assert '<label' in result
+    assert 'for="email-input"' in result
+    assert 'Email Address' in result
+    print("\n✓ Test passed!")
+
+
+def test_text_with_color():
+    """Test RustText with color"""
+    print("\n" + "=" * 60)
+    print("TEST: RustText with Color")
+    print("=" * 60)
+
+    template = '<RustText content="Success message" color="success" />'
+
+    context = {}
+    result = render_template(template, context)
+
+    print("\nTemplate:")
+    print(template)
+    print("\nRendered HTML:")
+    print(result)
+
+    assert 'text-success' in result
+    assert 'Success message' in result
+    print("\n✓ Test passed!")
+
+
+def test_text_with_weight():
+    """Test RustText with font weight"""
+    print("\n" + "=" * 60)
+    print("TEST: RustText with Font Weight")
+    print("=" * 60)
+
+    template = '<RustText content="Bold text" weight="bold" />'
+
+    context = {}
+    result = render_template(template, context)
+
+    print("\nTemplate:")
+    print(template)
+    print("\nRendered HTML:")
+    print(result)
+
+    assert 'fw-bold' in result
+    assert 'Bold text' in result
+    print("\n✓ Test passed!")
+
+
+def test_form_with_inputs_and_labels():
+    """Test complete form with RustText labels and RustInput fields"""
+    print("\n" + "=" * 60)
+    print("TEST: Complete Form")
+    print("=" * 60)
+
+    template = '''
+    <form>
+        <div class="mb-3">
+            <RustText content="Email" element="label" forInput="email" />
+            <RustInput id="email" inputType="email" placeholder="user@example.com" />
+        </div>
+        <div class="mb-3">
+            <RustText content="Password" element="label" forInput="password" />
+            <RustInput id="password" inputType="password" placeholder="Enter password" />
+        </div>
+        <RustButton id="submit-btn" label="Submit" variant="primary" />
+    </form>
+    '''
+
+    context = {}
+    result = render_template(template, context)
+
+    print("\nTemplate:")
+    print(template)
+    print("\nRendered HTML:")
+    print(result)
+
+    # Check labels
+    assert result.count('<label') == 2
+    assert 'for="email"' in result
+    assert 'for="password"' in result
+
+    # Check inputs
+    assert 'type="email"' in result
+    assert 'type="password"' in result
+
+    # Check button
+    assert 'btn-primary' in result
+    print("\n✓ Test passed!")
+
+
 def main():
     """Run all tests"""
     print("\n" + "🦀" * 30)
@@ -236,6 +488,16 @@ def main():
         test_multiple_buttons,
         test_button_in_for_loop,
         test_button_with_if_condition,
+        test_simple_rust_input,
+        test_input_with_type,
+        test_input_with_size,
+        test_input_with_context_variables,
+        test_simple_rust_text,
+        test_text_as_heading,
+        test_text_as_label,
+        test_text_with_color,
+        test_text_with_weight,
+        test_form_with_inputs_and_labels,
     ]
 
     passed = 0

@@ -4,10 +4,10 @@ PyO3 bindings for Python integration.
 Exposes Rust components to Python with a Pythonic API.
 */
 
+use crate::ui::{button::*, Button};
+use crate::{Component, Framework};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use crate::ui::{Button, button::*};
-use crate::{Component, Framework};
 
 /// Python wrapper for Button component
 #[pyclass(name = "RustButton")]
@@ -20,7 +20,12 @@ impl PyButton {
     /// Create a new button
     #[new]
     #[pyo3(signature = (id, label, **kwargs))]
-    fn new(py: Python, id: String, label: String, kwargs: Option<Bound<'_, PyDict>>) -> PyResult<Self> {
+    fn new(
+        py: Python,
+        id: String,
+        label: String,
+        kwargs: Option<Bound<'_, PyDict>>,
+    ) -> PyResult<Self> {
         let mut button = Button::new(id, label);
 
         // Process kwargs if provided
@@ -109,14 +114,16 @@ impl PyButton {
     fn render(&self) -> PyResult<String> {
         // Default to Bootstrap5 for now
         // TODO: Get framework from djust config
-        self.inner.render(Framework::Bootstrap5)
+        self.inner
+            .render(Framework::Bootstrap5)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
     }
 
     /// Render with specific framework
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
         let fw = Framework::from_str(&framework);
-        self.inner.render(fw)
+        self.inner
+            .render(fw)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
     }
 
@@ -152,7 +159,11 @@ impl PyButton {
     }
 
     fn __repr__(&self) -> String {
-        format!("<RustButton id='{}' label='{}'>", self.inner.id(), self.inner.label)
+        format!(
+            "<RustButton id='{}' label='{}'>",
+            self.inner.id(),
+            self.inner.label
+        )
     }
 }
 
@@ -269,13 +280,15 @@ impl PyInput {
     }
 
     fn render(&self) -> PyResult<String> {
-        self.inner.render(crate::Framework::Bootstrap5)
+        self.inner
+            .render(crate::Framework::Bootstrap5)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
     }
 
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
         let fw = crate::Framework::from_str(&framework);
-        self.inner.render(fw)
+        self.inner
+            .render(fw)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
     }
 }
@@ -366,13 +379,15 @@ impl PyText {
     }
 
     fn render(&self) -> PyResult<String> {
-        self.inner.render(crate::Framework::Bootstrap5)
+        self.inner
+            .render(crate::Framework::Bootstrap5)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
     }
 
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
         let fw = crate::Framework::from_str(&framework);
-        self.inner.render(fw)
+        self.inner
+            .render(fw)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
     }
 }
@@ -419,11 +434,583 @@ fn parse_font_weight(s: &str) -> crate::ui::text::FontWeight {
     }
 }
 
+/// Python wrapper for Card component
+#[pyclass(name = "RustCard")]
+pub struct PyCard {
+    inner: crate::ui::Card,
+}
+
+#[pymethods]
+impl PyCard {
+    #[new]
+    #[pyo3(signature = (body, **kwargs))]
+    fn new(_py: Python, body: String, kwargs: Option<Bound<'_, PyDict>>) -> PyResult<Self> {
+        let mut card = crate::ui::Card::new(body);
+
+        if let Some(kw) = kwargs {
+            if let Ok(Some(variant)) = kw.get_item("variant") {
+                if let Ok(v) = variant.extract::<String>() {
+                    card.variant = parse_card_variant(&v);
+                }
+            }
+
+            if let Ok(Some(header)) = kw.get_item("header") {
+                if let Ok(h) = header.extract::<String>() {
+                    card.header = Some(h);
+                }
+            }
+
+            if let Ok(Some(footer)) = kw.get_item("footer") {
+                if let Ok(f) = footer.extract::<String>() {
+                    card.footer = Some(f);
+                }
+            }
+
+            if let Ok(Some(border)) = kw.get_item("border") {
+                if let Ok(b) = border.extract::<bool>() {
+                    card.border = b;
+                }
+            }
+
+            if let Ok(Some(shadow)) = kw.get_item("shadow") {
+                if let Ok(s) = shadow.extract::<bool>() {
+                    card.shadow = s;
+                }
+            }
+
+            if let Ok(Some(id)) = kw.get_item("id") {
+                if let Ok(i) = id.extract::<String>() {
+                    card.id = Some(i);
+                }
+            }
+        }
+
+        Ok(PyCard { inner: card })
+    }
+
+    #[getter]
+    fn body(&self) -> String {
+        self.inner.body.clone()
+    }
+
+    #[setter]
+    fn set_body(&mut self, body: String) {
+        self.inner.body = body;
+    }
+
+    fn render(&self) -> PyResult<String> {
+        self.inner
+            .render(crate::Framework::Bootstrap5)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+    }
+
+    fn render_with_framework(&self, framework: String) -> PyResult<String> {
+        let fw = crate::Framework::from_str(&framework);
+        self.inner
+            .render(fw)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+    }
+
+    fn __repr__(&self) -> String {
+        format!("<RustCard>")
+    }
+}
+
+fn parse_card_variant(s: &str) -> crate::ui::card::CardVariant {
+    use crate::ui::card::CardVariant;
+    match s.to_lowercase().as_str() {
+        "primary" => CardVariant::Primary,
+        "secondary" => CardVariant::Secondary,
+        "success" => CardVariant::Success,
+        "danger" => CardVariant::Danger,
+        "warning" => CardVariant::Warning,
+        "info" => CardVariant::Info,
+        "light" => CardVariant::Light,
+        "dark" => CardVariant::Dark,
+        _ => CardVariant::Default,
+    }
+}
+
+/// Python wrapper for Alert component
+#[pyclass(name = "RustAlert")]
+pub struct PyAlert {
+    inner: crate::ui::Alert,
+}
+
+#[pymethods]
+impl PyAlert {
+    #[new]
+    #[pyo3(signature = (message, **kwargs))]
+    fn new(_py: Python, message: String, kwargs: Option<Bound<'_, PyDict>>) -> PyResult<Self> {
+        let mut alert = crate::ui::Alert::new(message);
+
+        if let Some(kw) = kwargs {
+            if let Ok(Some(variant)) = kw.get_item("variant") {
+                if let Ok(v) = variant.extract::<String>() {
+                    alert.variant = parse_alert_variant(&v);
+                }
+            }
+
+            if let Ok(Some(dismissible)) = kw.get_item("dismissible") {
+                if let Ok(d) = dismissible.extract::<bool>() {
+                    alert.dismissible = d;
+                }
+            }
+
+            if let Ok(Some(icon)) = kw.get_item("icon") {
+                if let Ok(i) = icon.extract::<String>() {
+                    alert.icon = Some(i);
+                }
+            }
+
+            if let Ok(Some(id)) = kw.get_item("id") {
+                if let Ok(i) = id.extract::<String>() {
+                    alert.id = Some(i);
+                }
+            }
+        }
+
+        Ok(PyAlert { inner: alert })
+    }
+
+    #[getter]
+    fn message(&self) -> String {
+        self.inner.message.clone()
+    }
+
+    #[setter]
+    fn set_message(&mut self, message: String) {
+        self.inner.message = message;
+    }
+
+    fn render(&self) -> PyResult<String> {
+        self.inner
+            .render(crate::Framework::Bootstrap5)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+    }
+
+    fn render_with_framework(&self, framework: String) -> PyResult<String> {
+        let fw = crate::Framework::from_str(&framework);
+        self.inner
+            .render(fw)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+    }
+
+    fn __repr__(&self) -> String {
+        format!("<RustAlert>")
+    }
+}
+
+fn parse_alert_variant(s: &str) -> crate::ui::alert::AlertVariant {
+    use crate::ui::alert::AlertVariant;
+    match s.to_lowercase().as_str() {
+        "primary" => AlertVariant::Primary,
+        "secondary" => AlertVariant::Secondary,
+        "success" => AlertVariant::Success,
+        "danger" => AlertVariant::Danger,
+        "warning" => AlertVariant::Warning,
+        "info" => AlertVariant::Info,
+        "light" => AlertVariant::Light,
+        "dark" => AlertVariant::Dark,
+        _ => AlertVariant::Info,
+    }
+}
+
+/// Python wrapper for Modal component
+#[pyclass(name = "RustModal")]
+pub struct PyModal {
+    inner: crate::ui::Modal,
+}
+
+#[pymethods]
+impl PyModal {
+    #[new]
+    #[pyo3(signature = (id, body, **kwargs))]
+    fn new(
+        _py: Python,
+        id: String,
+        body: String,
+        kwargs: Option<Bound<'_, PyDict>>,
+    ) -> PyResult<Self> {
+        let mut modal = crate::ui::Modal::new(id, body);
+
+        if let Some(kw) = kwargs {
+            if let Ok(Some(title)) = kw.get_item("title") {
+                if let Ok(t) = title.extract::<String>() {
+                    modal.title = Some(t);
+                }
+            }
+
+            if let Ok(Some(footer)) = kw.get_item("footer") {
+                if let Ok(f) = footer.extract::<String>() {
+                    modal.footer = Some(f);
+                }
+            }
+
+            if let Ok(Some(size)) = kw.get_item("size") {
+                if let Ok(s) = size.extract::<String>() {
+                    modal.size = parse_modal_size(&s);
+                }
+            }
+
+            if let Ok(Some(centered)) = kw.get_item("centered") {
+                if let Ok(c) = centered.extract::<bool>() {
+                    modal.centered = c;
+                }
+            }
+
+            if let Ok(Some(scrollable)) = kw.get_item("scrollable") {
+                if let Ok(s) = scrollable.extract::<bool>() {
+                    modal.scrollable = s;
+                }
+            }
+        }
+
+        Ok(PyModal { inner: modal })
+    }
+
+    #[getter]
+    fn body(&self) -> String {
+        self.inner.body.clone()
+    }
+
+    #[setter]
+    fn set_body(&mut self, body: String) {
+        self.inner.body = body;
+    }
+
+    fn render(&self) -> PyResult<String> {
+        self.inner
+            .render(crate::Framework::Bootstrap5)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+    }
+
+    fn render_with_framework(&self, framework: String) -> PyResult<String> {
+        let fw = crate::Framework::from_str(&framework);
+        self.inner
+            .render(fw)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+    }
+
+    fn __repr__(&self) -> String {
+        format!("<RustModal id='{}'>", self.inner.id)
+    }
+}
+
+fn parse_modal_size(s: &str) -> crate::ui::modal::ModalSize {
+    use crate::ui::modal::ModalSize;
+    match s.to_lowercase().as_str() {
+        "sm" | "small" => ModalSize::Small,
+        "lg" | "large" => ModalSize::Large,
+        "xl" | "extralarge" => ModalSize::ExtraLarge,
+        _ => ModalSize::Medium,
+    }
+}
+
+// ===== Dropdown =====
+
+#[pyclass(name = "RustDropdown")]
+pub struct PyDropdown {
+    inner: crate::ui::Dropdown,
+}
+
+#[pymethods]
+impl PyDropdown {
+    #[new]
+    #[pyo3(signature = (id, **kwargs))]
+    fn new(_py: Python, id: String, kwargs: Option<Bound<'_, PyDict>>) -> PyResult<Self> {
+        let mut dropdown = crate::ui::Dropdown::new(id);
+
+        if let Some(kwargs) = kwargs {
+            // items: list of dicts with 'label' and 'value'
+            if let Ok(items) = kwargs.get_item("items") {
+                if let Some(items_list) = items {
+                    if let Ok(items_py) = items_list.downcast::<pyo3::types::PyList>() {
+                        let mut items_vec = Vec::new();
+                        for item in items_py.iter() {
+                            if let Ok(item_dict) = item.downcast::<PyDict>() {
+                                if let (Ok(Some(label)), Ok(Some(value))) =
+                                    (item_dict.get_item("label"), item_dict.get_item("value"))
+                                {
+                                    let label_str: String = label.extract()?;
+                                    let value_str: String = value.extract()?;
+                                    items_vec.push(crate::ui::dropdown::DropdownItem {
+                                        label: label_str,
+                                        value: value_str,
+                                    });
+                                }
+                            }
+                        }
+                        dropdown.items = items_vec;
+                    }
+                }
+            }
+
+            if let Ok(Some(selected)) = kwargs.get_item("selected") {
+                dropdown.selected = Some(selected.extract()?);
+            }
+
+            if let Ok(Some(variant)) = kwargs.get_item("variant") {
+                let variant_str: String = variant.extract()?;
+                dropdown.variant = parse_dropdown_variant(&variant_str);
+            }
+
+            if let Ok(Some(size)) = kwargs.get_item("size") {
+                let size_str: String = size.extract()?;
+                dropdown.size = parse_dropdown_size(&size_str);
+            }
+
+            if let Ok(Some(disabled)) = kwargs.get_item("disabled") {
+                dropdown.disabled = disabled.extract()?;
+            }
+
+            if let Ok(Some(placeholder)) = kwargs.get_item("placeholder") {
+                dropdown.placeholder = Some(placeholder.extract()?);
+            }
+        }
+
+        Ok(PyDropdown { inner: dropdown })
+    }
+
+    fn render(&self) -> PyResult<String> {
+        self.inner
+            .render(crate::Framework::Bootstrap5)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+
+    fn render_with_framework(&self, framework: String) -> PyResult<String> {
+        let fw = crate::Framework::from_str(&framework);
+        self.inner
+            .render(fw)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+
+    #[getter]
+    fn id(&self) -> PyResult<String> {
+        Ok(self.inner.id.clone())
+    }
+
+    #[getter]
+    fn selected(&self) -> PyResult<Option<String>> {
+        Ok(self.inner.selected.clone())
+    }
+
+    #[setter]
+    fn set_selected(&mut self, value: Option<String>) {
+        self.inner.selected = value;
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("<RustDropdown id='{}'>", self.inner.id))
+    }
+}
+
+fn parse_dropdown_variant(s: &str) -> crate::ui::dropdown::DropdownVariant {
+    use crate::ui::dropdown::DropdownVariant;
+    match s.to_lowercase().as_str() {
+        "primary" => DropdownVariant::Primary,
+        "secondary" => DropdownVariant::Secondary,
+        "success" => DropdownVariant::Success,
+        "danger" => DropdownVariant::Danger,
+        "warning" => DropdownVariant::Warning,
+        "info" => DropdownVariant::Info,
+        "light" => DropdownVariant::Light,
+        "dark" => DropdownVariant::Dark,
+        _ => DropdownVariant::Primary,
+    }
+}
+
+fn parse_dropdown_size(s: &str) -> crate::ui::dropdown::DropdownSize {
+    use crate::ui::dropdown::DropdownSize;
+    match s.to_lowercase().as_str() {
+        "sm" | "small" => DropdownSize::Small,
+        "lg" | "large" => DropdownSize::Large,
+        _ => DropdownSize::Medium,
+    }
+}
+
+// ===== Tabs =====
+
+#[pyclass(name = "RustTabs")]
+pub struct PyTabs {
+    inner: crate::ui::Tabs,
+}
+
+#[pymethods]
+impl PyTabs {
+    #[new]
+    #[pyo3(signature = (id, **kwargs))]
+    fn new(_py: Python, id: String, kwargs: Option<Bound<'_, PyDict>>) -> PyResult<Self> {
+        let mut tabs = crate::ui::Tabs::new(id);
+
+        if let Some(kwargs) = kwargs {
+            // tabs: list of dicts with 'id', 'label', and 'content'
+            if let Ok(tabs_item) = kwargs.get_item("tabs") {
+                if let Some(tabs_list) = tabs_item {
+                    if let Ok(tabs_py) = tabs_list.downcast::<pyo3::types::PyList>() {
+                        let mut tabs_vec = Vec::new();
+                        for tab in tabs_py.iter() {
+                            if let Ok(tab_dict) = tab.downcast::<PyDict>() {
+                                if let (Ok(Some(id)), Ok(Some(label)), Ok(Some(content))) = (
+                                    tab_dict.get_item("id"),
+                                    tab_dict.get_item("label"),
+                                    tab_dict.get_item("content"),
+                                ) {
+                                    let id_str: String = id.extract()?;
+                                    let label_str: String = label.extract()?;
+                                    let content_str: String = content.extract()?;
+                                    tabs_vec.push(crate::ui::tabs::TabItem {
+                                        id: id_str,
+                                        label: label_str,
+                                        content: content_str,
+                                    });
+                                }
+                            }
+                        }
+                        if !tabs_vec.is_empty() && tabs.active.is_empty() {
+                            tabs.active = tabs_vec[0].id.clone();
+                        }
+                        tabs.tabs = tabs_vec;
+                    }
+                }
+            }
+
+            if let Ok(Some(active)) = kwargs.get_item("active") {
+                tabs.active = active.extract()?;
+            }
+
+            if let Ok(Some(variant)) = kwargs.get_item("variant") {
+                let variant_str: String = variant.extract()?;
+                tabs.variant = parse_tab_variant(&variant_str);
+            }
+
+            if let Ok(Some(vertical)) = kwargs.get_item("vertical") {
+                tabs.vertical = vertical.extract()?;
+            }
+        }
+
+        Ok(PyTabs { inner: tabs })
+    }
+
+    fn render(&self) -> PyResult<String> {
+        self.inner
+            .render(crate::Framework::Bootstrap5)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+
+    fn render_with_framework(&self, framework: String) -> PyResult<String> {
+        let fw = crate::Framework::from_str(&framework);
+        self.inner
+            .render(fw)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+
+    #[getter]
+    fn id(&self) -> PyResult<String> {
+        Ok(self.inner.id.clone())
+    }
+
+    #[getter]
+    fn active(&self) -> PyResult<String> {
+        Ok(self.inner.active.clone())
+    }
+
+    #[setter]
+    fn set_active(&mut self, value: String) {
+        self.inner.active = value;
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("<RustTabs id='{}'>", self.inner.id))
+    }
+}
+
+fn parse_tab_variant(s: &str) -> crate::ui::tabs::TabVariant {
+    use crate::ui::tabs::TabVariant;
+    match s.to_lowercase().as_str() {
+        "pills" => TabVariant::Pills,
+        "underline" => TabVariant::Underline,
+        _ => TabVariant::Default,
+    }
+}
+
+// ===== Divider =====
+
+#[pyclass(name = "RustDivider")]
+pub struct PyDivider {
+    inner: crate::simple::RustDivider,
+}
+
+#[pymethods]
+impl PyDivider {
+    #[new]
+    #[pyo3(signature = (text=None, style="solid", margin="md"))]
+    fn new(_py: Python, text: Option<String>, style: &str, margin: &str) -> PyResult<Self> {
+        let divider = crate::simple::RustDivider::new(text, style, margin);
+        Ok(PyDivider { inner: divider })
+    }
+
+    fn render(&self) -> PyResult<String> {
+        Ok(self.inner.render())
+    }
+
+    fn __str__(&self) -> PyResult<String> {
+        Ok(self.inner.render())
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(self.inner.__repr__())
+    }
+}
+
+// ===== Icon =====
+
+#[pyclass(name = "RustIcon")]
+pub struct PyIcon {
+    inner: crate::simple::RustIcon,
+}
+
+#[pymethods]
+impl PyIcon {
+    #[new]
+    #[pyo3(signature = (name, library="bootstrap", size="md", color=None, label=None))]
+    fn new(
+        _py: Python,
+        name: String,
+        library: &str,
+        size: &str,
+        color: Option<String>,
+        label: Option<String>,
+    ) -> PyResult<Self> {
+        let icon = crate::simple::RustIcon::new(name, library, size, color, label);
+        Ok(PyIcon { inner: icon })
+    }
+
+    fn render(&self) -> PyResult<String> {
+        Ok(self.inner.render())
+    }
+
+    fn __str__(&self) -> PyResult<String> {
+        Ok(self.inner.render())
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(self.inner.__repr__())
+    }
+}
+
 /// Register Python module
 #[pymodule]
 pub fn _rust_components(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyButton>()?;
     m.add_class::<PyInput>()?;
     m.add_class::<PyText>()?;
+    m.add_class::<PyCard>()?;
+    m.add_class::<PyAlert>()?;
+    m.add_class::<PyModal>()?;
+    m.add_class::<PyDropdown>()?;
+    m.add_class::<PyTabs>()?;
+    m.add_class::<PyDivider>()?;
+    m.add_class::<PyIcon>()?;
     Ok(())
 }

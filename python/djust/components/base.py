@@ -121,14 +121,11 @@ class Component(ABC):
                 from djust.config import config
 
                 # Pass framework from config to Rust (if Rust component supports it)
-                framework = config.get('css_framework', 'bootstrap5')
+                framework = config.get("css_framework", "bootstrap5")
 
                 # Try to create Rust instance with framework
                 try:
-                    self._rust_instance = self._rust_impl_class(
-                        **kwargs,
-                        framework=framework
-                    )
+                    self._rust_instance = self._rust_impl_class(**kwargs, framework=framework)
                 except TypeError:
                     # Rust component doesn't accept framework, try without it
                     self._rust_instance = self._rust_impl_class(**kwargs)
@@ -143,7 +140,7 @@ class Component(ABC):
             for key, value in kwargs.items():
                 setattr(self, key, value)
 
-    def update(self, **kwargs) -> 'Component':
+    def update(self, **kwargs) -> "Component":
         """
         Update component properties after initialization.
 
@@ -170,18 +167,19 @@ class Component(ABC):
         if self._rust_impl_class is not None:
             try:
                 from djust.config import config
-                framework = config.get('css_framework', 'bootstrap5')
+
+                framework = config.get("css_framework", "bootstrap5")
 
                 # Get current properties by inspecting instance attributes
                 current_props = {}
                 for key, value in self.__dict__.items():
-                    if not key.startswith('_'):
+                    if not key.startswith("_"):
                         current_props[key] = value
 
                 # CRITICAL: Include the 'id' property value (it's a property, not in __dict__)
                 # This ensures Rust instance is created with the correct ID
-                if hasattr(self, 'id'):
-                    current_props['id'] = self.id
+                if hasattr(self, "id"):
+                    current_props["id"] = self.id
 
                 # Merge with updates
                 current_props.update(kwargs)
@@ -189,8 +187,7 @@ class Component(ABC):
                 # Recreate Rust instance with updated properties
                 try:
                     self._rust_instance = self._rust_impl_class(
-                        **current_props,
-                        framework=framework
+                        **current_props, framework=framework
                     )
                 except TypeError:
                     self._rust_instance = self._rust_impl_class(**current_props)
@@ -232,7 +229,7 @@ class Component(ABC):
         """
         if self._explicit_id:
             return self._explicit_id
-        elif hasattr(self, '_auto_id'):
+        elif hasattr(self, "_auto_id"):
             return f"{self.__class__.__name__.lower()}-{self._auto_id}"
         else:
             return self.__class__.__name__.lower()
@@ -264,17 +261,19 @@ class Component(ABC):
         if self.template_string is not None:
             try:
                 from djust._rust import render_template
+
                 # Get context and inject component key
                 context = self.get_context_data()
-                context['_component_key'] = self._component_key
+                context["_component_key"] = self._component_key
                 return mark_safe(render_template(self.template_string, context))
             except (ImportError, AttributeError):
                 # Rust not available, fall back to Django template rendering
                 from django.template import Context, Template
+
                 template = Template(self.template_string)
                 # Get context and inject component key
                 context_data = self.get_context_data()
-                context_data['_component_key'] = self._component_key
+                context_data["_component_key"] = self._component_key
                 context = Context(context_data)
                 return mark_safe(template.render(context))
 
@@ -411,6 +410,7 @@ class LiveComponent(ABC):
     def _generate_id(self) -> str:
         """Generate a unique component ID"""
         import uuid
+
         return f"{self.__class__.__name__.lower()}_{uuid.uuid4().hex[:8]}"
 
     @abstractmethod
@@ -460,7 +460,7 @@ class LiveComponent(ABC):
         from django.utils.safestring import mark_safe
 
         context = self.get_context()
-        context['component_id'] = self.component_id
+        context["component_id"] = self.component_id
 
         return mark_safe(render_to_string(self.template_name, context))
 
@@ -480,5 +480,5 @@ class LiveComponent(ABC):
         This notifies the parent that the component state has changed
         and the view should be re-rendered.
         """
-        if self._parent and hasattr(self._parent, '_trigger_update'):
+        if self._parent and hasattr(self._parent, "_trigger_update"):
             self._parent._trigger_update()

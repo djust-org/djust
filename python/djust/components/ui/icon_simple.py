@@ -12,6 +12,7 @@ from ..base import Component
 # Try to import Rust implementation
 try:
     from djust._rust import RustIcon
+
     _RUST_AVAILABLE = True
 except (ImportError, AttributeError):
     _RUST_AVAILABLE = False
@@ -70,7 +71,7 @@ class Icon(Component):
 
     # Fallback: Hybrid rendering with template_string
     # Note: Using separate if blocks to avoid elif bug in Rust template engine
-    template_string = '''<i class="{% if library == "bootstrap" %}bi bi-{{ name }}{% endif %}{% if library == "fontawesome" %}{{ name }}{% endif %}{% if library == "custom" %}{{ name }}{% endif %}{% if size == "xs" %} icon-xs{% endif %}{% if size == "sm" %} icon-sm{% endif %}{% if size == "lg" %} icon-lg{% endif %}{% if size == "xl" %} icon-xl{% endif %}{% if color %} text-{{ color }}{% endif %}"{% if label %} aria-label="{{ label }}" role="img"{% endif %}></i>'''
+    template_string = """<i class="{% if library == "bootstrap" %}bi bi-{{ name }}{% endif %}{% if library == "fontawesome" %}{{ name }}{% endif %}{% if library == "custom" %}{{ name }}{% endif %}{% if size == "xs" %} icon-xs{% endif %}{% if size == "sm" %} icon-sm{% endif %}{% if size == "lg" %} icon-lg{% endif %}{% if size == "xl" %} icon-xl{% endif %}{% if color %} text-{{ color }}{% endif %}"{% if label %} aria-label="{{ label }}" role="img"{% endif %}></i>"""
 
     def __init__(
         self,
@@ -78,7 +79,7 @@ class Icon(Component):
         library: str = "bootstrap",
         size: str = "md",
         color: Optional[str] = None,
-        label: Optional[str] = None
+        label: Optional[str] = None,
     ):
         """
         Initialize icon component.
@@ -105,11 +106,11 @@ class Icon(Component):
     def get_context_data(self):
         """Context for hybrid rendering (if Rust not available)"""
         return {
-            'name': self.name,
-            'library': self.library,
-            'size': self.size,
-            'color': self.color,
-            'label': self.label,
+            "name": self.name,
+            "library": self.library,
+            "size": self.size,
+            "color": self.color,
+            "label": self.label,
         }
 
     def _render_custom(self) -> str:
@@ -120,11 +121,11 @@ class Icon(Component):
         """
         from djust.config import config
 
-        framework = config.get('css_framework', 'bootstrap5')
+        framework = config.get("css_framework", "bootstrap5")
 
-        if framework == 'bootstrap5':
+        if framework == "bootstrap5":
             return self._render_bootstrap()
-        elif framework == 'tailwind':
+        elif framework == "tailwind":
             return self._render_tailwind()
         else:
             return self._render_plain()
@@ -141,19 +142,19 @@ class Icon(Component):
 
         # Size classes (Bootstrap Icons uses font-size)
         size_map = {
-            'xs': ' fs-6',  # 1rem
-            'sm': ' fs-5',  # 1.25rem
-            'md': ' fs-4',  # 1.5rem
-            'lg': ' fs-3',  # 1.75rem
-            'xl': ' fs-2',  # 2rem
+            "xs": " fs-6",  # 1rem
+            "sm": " fs-5",  # 1.25rem
+            "md": " fs-4",  # 1.5rem
+            "lg": " fs-3",  # 1.75rem
+            "xl": " fs-2",  # 2rem
         }
-        size_class = size_map.get(self.size, ' fs-4')
+        size_class = size_map.get(self.size, " fs-4")
 
         # Color class
-        color_class = f' text-{self.color}' if self.color else ''
+        color_class = f" text-{self.color}" if self.color else ""
 
         # Accessibility
-        aria_label = f' aria-label="{self.label}" role="img"' if self.label else ''
+        aria_label = f' aria-label="{self.label}" role="img"' if self.label else ""
 
         return f'<i class="{icon_class}{size_class}{color_class}"{aria_label}></i>'
 
@@ -169,30 +170,30 @@ class Icon(Component):
 
         # Size classes
         size_map = {
-            'xs': ' text-base',  # 1rem
-            'sm': ' text-lg',    # 1.125rem
-            'md': ' text-xl',    # 1.25rem
-            'lg': ' text-2xl',   # 1.5rem
-            'xl': ' text-3xl',   # 1.875rem
+            "xs": " text-base",  # 1rem
+            "sm": " text-lg",  # 1.125rem
+            "md": " text-xl",  # 1.25rem
+            "lg": " text-2xl",  # 1.5rem
+            "xl": " text-3xl",  # 1.875rem
         }
-        size_class = size_map.get(self.size, ' text-xl')
+        size_class = size_map.get(self.size, " text-xl")
 
         # Color classes
         color_map = {
-            'primary': ' text-blue-600',
-            'secondary': ' text-gray-600',
-            'success': ' text-green-600',
-            'danger': ' text-red-600',
-            'warning': ' text-yellow-500',
-            'info': ' text-cyan-500',
-            'light': ' text-gray-300',
-            'dark': ' text-gray-900',
-            'muted': ' text-gray-500',
+            "primary": " text-blue-600",
+            "secondary": " text-gray-600",
+            "success": " text-green-600",
+            "danger": " text-red-600",
+            "warning": " text-yellow-500",
+            "info": " text-cyan-500",
+            "light": " text-gray-300",
+            "dark": " text-gray-900",
+            "muted": " text-gray-500",
         }
-        color_class = color_map.get(self.color, '') if self.color else ''
+        color_class = color_map.get(self.color, "") if self.color else ""
 
         # Accessibility
-        aria_label = f' aria-label="{self.label}" role="img"' if self.label else ''
+        aria_label = f' aria-label="{self.label}" role="img"' if self.label else ""
 
         return f'<i class="{icon_class}{size_class}{color_class}"{aria_label}></i>'
 
@@ -206,10 +207,10 @@ class Icon(Component):
         else:  # custom
             icon_class = self.name
 
-        size_class = f' icon-{self.size}' if self.size != 'md' else ''
-        color_class = f' icon-{self.color}' if self.color else ''
+        size_class = f" icon-{self.size}" if self.size != "md" else ""
+        color_class = f" icon-{self.color}" if self.color else ""
 
         # Accessibility
-        aria_label = f' aria-label="{self.label}" role="img"' if self.label else ''
+        aria_label = f' aria-label="{self.label}" role="img"' if self.label else ""
 
         return f'<i class="{icon_class}{size_class}{color_class}"{aria_label}></i>'

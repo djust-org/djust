@@ -16,6 +16,172 @@ Unlike npm packages that you install and configure, djust components are **code 
 
 Components automatically adapt to your configured CSS framework through the **Framework Adapter** pattern.
 
+## Two-Tier Component System
+
+djust provides two types of components, optimized for different use cases:
+
+### Component (Stateless, Presentational)
+
+**Simple components** for rendering UI without state or interactivity:
+
+```python
+from djust.components.base import Component
+
+class Badge(Component):
+    def __init__(self, text, variant="primary"):
+        self.text = text
+        self.variant = variant
+
+    def render(self):
+        return f'<span class="badge bg-{self.variant}">{self.text}</span>'
+```
+
+**Use for**: Buttons, badges, icons, cards - anything that just displays data.
+
+**Benefits**:
+- Zero overhead - just a render() method
+- No WebSocket connection or VDOM tree
+- Perfect for simple, reusable UI elements
+- Fast and lightweight
+
+### LiveComponent (Stateful, Interactive)
+
+**Smart components** with their own state, lifecycle, and reactivity:
+
+```python
+from djust import LiveComponent
+
+class TodoList(LiveComponent):
+    template_string = """
+        <ul>
+        {% for item in items %}
+            <li>
+                <input type="checkbox" @change="toggle" data-id="{{ item.id }}">
+                {{ item.text }}
+            </li>
+        {% endfor %}
+        </ul>
+    """
+
+    def mount(self, items=None):
+        self.items = items or []
+
+    def toggle(self, id: str = None):
+        item = next(i for i in self.items if i['id'] == int(id))
+        item['completed'] = not item['completed']
+        self.send_parent("todo_toggled", {"id": int(id)})
+```
+
+**Use for**: Forms, data tables, filters, tabs - anything with state and user interaction.
+
+**Benefits**:
+- Own VDOM tree with efficient updates
+- Event handlers with automatic routing
+- Props/events communication with parent
+- Lifecycle methods (mount/update/unmount)
+
+### Quick Reference: When to Use Which?
+
+| Scenario | Use This | Why |
+|----------|----------|-----|
+| Display a status badge | `Component` | No state, just renders |
+| Show user profile card | `Component` | Just displays data |
+| Render a button | `Component` | Simple, stateless |
+| Todo list with filters | `LiveComponent` | Has state + interaction |
+| Data table with sorting | `LiveComponent` | Complex state management |
+| Multi-step form wizard | `LiveComponent` | Multiple states + navigation |
+| Tabs that preserve state | `LiveComponent` | State persists across tab switches |
+
+**Golden Rule**: Start with the simplest pattern (inline template or `Component`), upgrade to `LiveComponent` only when you need state and interactivity.
+
+### Performance Optimization
+
+Components feature **automatic performance optimization** - the framework automatically chooses the fastest available implementation:
+
+**Unified Component Design:**
+
+```python
+from djust.components.ui import Badge
+
+# Same simple code, regardless of implementation
+badge = Badge("New", variant="primary")
+html = badge.render()
+
+# Behind the scenes, Component base class chooses:
+# 1. Pure Rust (if available) → ~1μs per render (fastest)
+# 2. Hybrid template_string → ~5μs per render (fast)
+# 3. Python render() → ~50μs per render (flexible)
+```
+
+**Core components in Rust** (automatically optimized):
+- Badge, Button, Icon, Spinner - used frequently, implemented in Rust
+- 50-100x faster than pure Python
+- Transparent to developers - same API
+
+**Custom components use hybrid** (when Rust not available):
+- `template_string` for Rust template rendering (10x faster than Python)
+- `_render_custom()` for full Python control (maximum flexibility)
+
+**Example with automatic optimization:**
+
+```python
+class StatusBadge(Component):
+    # Links to Rust implementation if available
+    _rust_impl_class = RustBadge  # Automatically used if Rust built
+
+    # Fallback: hybrid rendering
+    template_string = '<span class="badge bg-{{ variant }}">{{ text }}</span>'
+
+    def get_context_data(self):
+        return {'text': self.text, 'variant': self.variant}
+```
+
+See **[COMPONENT_UNIFIED_DESIGN.md](COMPONENT_UNIFIED_DESIGN.md)** for the complete unified design with automatic Rust optimization.
+
+### Documentation Guide
+
+For detailed information:
+
+- **[COMPONENT_UNIFIED_DESIGN.md](COMPONENT_UNIFIED_DESIGN.md)** - ⭐ **Start here!**
+  - Unified Component design with automatic Rust optimization
+  - Performance waterfall (Rust → Hybrid → Python)
+  - Core Rust component library (Badge, Button, Icon, etc.)
+  - Single API with transparent optimization
+
+- **[LIVECOMPONENT_ARCHITECTURE.md](LIVECOMPONENT_ARCHITECTURE.md)** - Complete architecture guide
+  - How the two-tier system works
+  - VDOM patching with separate trees
+  - Component lifecycle
+  - Performance characteristics
+
+- **[API_REFERENCE_COMPONENTS.md](API_REFERENCE_COMPONENTS.md)** - API documentation
+  - Complete `Component` API
+  - Complete `LiveComponent` API
+  - Lifecycle methods and event handling
+
+- **[COMPONENT_BEST_PRACTICES.md](COMPONENT_BEST_PRACTICES.md)** - Best practices guide
+  - Decision matrix for choosing component types
+  - Common patterns and anti-patterns
+  - Performance optimization
+  - When to upgrade from simple to complex
+
+- **[COMPONENT_MIGRATION_GUIDE.md](COMPONENT_MIGRATION_GUIDE.md)** - Migration guide
+  - How to migrate existing components
+  - Step-by-step refactoring patterns
+  - Identifying component types
+
+- **[COMPONENT_EXAMPLES.md](COMPONENT_EXAMPLES.md)** - Complete examples
+  - Full Todo app with filtering
+  - User management dashboard
+  - E-commerce product browser
+  - Real-world patterns
+
+- **[COMPONENT_PERFORMANCE_OPTIMIZATION.md](COMPONENT_PERFORMANCE_OPTIMIZATION.md)** - Performance guide
+  - Three-tier performance spectrum (Python → Hybrid → Rust)
+  - Optional `template_string` for Rust rendering
+  - Pure Rust components via PyO3
+  - Benchmarks and migration paths
+
 ## Quick Start
 
 ### 1. Configure Your CSS Framework
@@ -157,26 +323,20 @@ class NavbarComponent(LiveComponent):
 
 ## Creating Custom Components
 
-You can create your own components following the same pattern:
+### Simple Component (Stateless)
+
+For presentational components without state:
 
 ```python
-from djust.components.base import LiveComponent
+from djust.components.base import Component
 from djust.config import config
 
-class MyCustomComponent(LiveComponent):
-    """A custom component that adapts to your CSS framework"""
+class StatusBadge(Component):
+    """A simple status badge component"""
 
-    def mount(self, **kwargs):
-        """Initialize component state"""
-        self.title = kwargs.get('title', 'Default Title')
-        self.content = kwargs.get('content', '')
-
-    def get_context(self):
-        """Return context for rendering"""
-        return {
-            'title': self.title,
-            'content': self.content,
-        }
+    def __init__(self, status: str, label: str = None):
+        self.status = status
+        self.label = label or status.title()
 
     def render(self) -> str:
         """Render with framework-specific styling"""
@@ -192,43 +352,139 @@ class MyCustomComponent(LiveComponent):
             return mark_safe(self._render_plain())
 
     def _render_bootstrap(self) -> str:
-        """Bootstrap 5 rendering"""
-        return f'''
-        <div class="card">
-            <div class="card-header">
-                <h3>{self.title}</h3>
-            </div>
-            <div class="card-body">
-                <p>{self.content}</p>
-            </div>
-        </div>
-        '''
+        variants = {
+            'success': 'success',
+            'error': 'danger',
+            'warning': 'warning',
+            'info': 'info',
+        }
+        variant = variants.get(self.status, 'secondary')
+        return f'<span class="badge bg-{variant}">{self.label}</span>'
 
     def _render_tailwind(self) -> str:
-        """Tailwind CSS rendering"""
-        return f'''
-        <div class="rounded-lg border border-gray-200 bg-white">
-            <div class="border-b border-gray-200 px-4 py-3">
-                <h3 class="text-lg font-semibold">{self.title}</h3>
-            </div>
-            <div class="px-4 py-3">
-                <p class="text-gray-700">{self.content}</p>
-            </div>
-        </div>
-        '''
+        colors = {
+            'success': 'bg-green-100 text-green-800',
+            'error': 'bg-red-100 text-red-800',
+            'warning': 'bg-yellow-100 text-yellow-800',
+            'info': 'bg-blue-100 text-blue-800',
+        }
+        classes = colors.get(self.status, 'bg-gray-100 text-gray-800')
+        return f'<span class="px-2 py-1 rounded text-xs font-semibold {classes}">{self.label}</span>'
 
     def _render_plain(self) -> str:
-        """Plain HTML rendering"""
-        return f'''
-        <div class="custom-card">
-            <div class="custom-card-header">
-                <h3>{self.title}</h3>
-            </div>
-            <div class="custom-card-body">
-                <p>{self.content}</p>
+        return f'<span class="badge badge-{self.status}">{self.label}</span>'
+```
+
+**Usage**:
+```python
+# In your view
+badge = StatusBadge('success', 'Active')
+
+# In template
+{{ badge.render }}
+```
+
+### LiveComponent (Stateful)
+
+For interactive components with state:
+
+```python
+from djust import LiveComponent
+from djust.config import config
+
+class FilterWidget(LiveComponent):
+    """A filterable list component with state"""
+
+    template_string = """
+        <div class="filter-widget">
+            <input
+                type="text"
+                @input="on_search"
+                value="{{ search_query }}"
+                placeholder="Search..."
+            />
+            <select @change="on_category_change">
+                <option value="">All Categories</option>
+                {% for cat in categories %}
+                <option value="{{ cat }}" {% if cat == selected_category %}selected{% endif %}>
+                    {{ cat }}
+                </option>
+                {% endfor %}
+            </select>
+            <div class="results">
+                <p>{{ filtered_count }} results</p>
             </div>
         </div>
-        '''
+    """
+
+    def mount(self, items=None, categories=None):
+        """Initialize component state"""
+        self.items = items or []
+        self.categories = categories or []
+        self.search_query = ""
+        self.selected_category = ""
+
+    def update(self, items=None, **props):
+        """Called when parent updates props"""
+        if items is not None:
+            self.items = items
+
+    def on_search(self, value: str = "", **kwargs):
+        """Handle search input"""
+        self.search_query = value
+        # Notify parent of filter change
+        self.send_parent("filter_changed", self._get_filter_state())
+
+    def on_category_change(self, value: str = "", **kwargs):
+        """Handle category selection"""
+        self.selected_category = value
+        self.send_parent("filter_changed", self._get_filter_state())
+
+    def get_context_data(self):
+        """Return template context"""
+        return {
+            'search_query': self.search_query,
+            'categories': self.categories,
+            'selected_category': self.selected_category,
+            'filtered_count': self._count_filtered(),
+        }
+
+    def _count_filtered(self) -> int:
+        """Count items matching current filters"""
+        items = self.items
+        if self.search_query:
+            items = [i for i in items if self.search_query.lower() in i['name'].lower()]
+        if self.selected_category:
+            items = [i for i in items if i.get('category') == self.selected_category]
+        return len(items)
+
+    def _get_filter_state(self) -> dict:
+        """Get current filter state for parent"""
+        return {
+            'search_query': self.search_query,
+            'selected_category': self.selected_category,
+        }
+```
+
+**Usage in Parent View**:
+```python
+class ProductListView(LiveView):
+    def mount(self, request):
+        self.products = self._load_products()
+        self.filter_widget = FilterWidget(
+            items=self.products,
+            categories=['Electronics', 'Books', 'Clothing']
+        )
+
+    def handle_component_event(self, component_id: str, event: str, data: dict):
+        """Handle events from child components"""
+        if event == "filter_changed":
+            # Update filtered products
+            self.filtered_products = self._apply_filters(
+                self.products,
+                data['search_query'],
+                data['selected_category']
+            )
 ```
 
 ## Example: Navbar Component
@@ -285,7 +541,81 @@ class MyView(LiveView):
 
 ## Best Practices
 
-### 1. Create a Base View with Common Components
+### 1. Start Simple, Upgrade When Needed
+
+```python
+# ✅ Start with inline template
+class SimpleView(LiveView):
+    template_string = '<button @click="increment">{{ count }}</button>'
+
+    def mount(self, request):
+        self.count = 0
+
+    def increment(self):
+        self.count += 1
+
+# ✅ Upgrade to Component when you need reusability
+class CounterButton(Component):
+    def __init__(self, count):
+        self.count = count
+
+    def render(self):
+        return f'<button>Count: {self.count}</button>'
+
+# ✅ Upgrade to LiveComponent when you need state + interactivity
+class CounterWidget(LiveComponent):
+    template_string = '<button @click="increment">{{ count }}</button>'
+
+    def mount(self, initial_count=0):
+        self.count = initial_count
+
+    def increment(self):
+        self.count += 1
+```
+
+### 2. Component Communication: Props Down, Events Up
+
+```python
+# Parent view coordinates child components
+class DashboardView(LiveView):
+    def mount(self, request):
+        self.users = User.objects.all()
+        self.selected_user = None
+
+        # Create child components
+        self.user_list = UserListComponent(users=self.users)
+        self.user_detail = UserDetailComponent(user=None)
+
+    def handle_component_event(self, component_id: str, event: str, data: dict):
+        """Handle events from child components"""
+        if event == "user_selected":
+            # Update state
+            self.selected_user = User.objects.get(id=data['user_id'])
+            # Update child component props
+            self.user_detail.update(user=self.selected_user)
+```
+
+### 3. Use Simple Components for Presentation
+
+```python
+# ✅ Good: Simple component for status display
+class StatusBadge(Component):
+    def __init__(self, status):
+        self.status = status
+
+    def render(self):
+        colors = {'active': 'green', 'pending': 'yellow', 'inactive': 'red'}
+        color = colors.get(self.status, 'gray')
+        return f'<span class="badge bg-{color}">{self.status}</span>'
+
+# ❌ Bad: LiveComponent for simple presentation
+class StatusBadge(LiveComponent):  # Unnecessary overhead!
+    def mount(self, status):
+        self.status = status
+    # ... unnecessary VDOM tree, WebSocket connection
+```
+
+### 4. Create a Base View with Common Components
 
 ```python
 class BaseView(LiveView):
@@ -294,7 +624,7 @@ class BaseView(LiveView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
-        # Navbar available to all child views
+        # Use simple Component for navbar (presentational)
         context['navbar'] = NavbarComponent(
             brand_name="My App",
             items=self.get_nav_items(),
@@ -318,7 +648,7 @@ class HomeView(BaseView):
     template_name = 'home.html'
 ```
 
-### 2. Customize Components for Your Project
+### 5. Customize Components for Your Project
 
 Don't like how a component renders? **Copy the code and modify it!** That's the whole point:
 
@@ -337,7 +667,7 @@ class MyCustomNavbar(BaseNavbar):
         return '...'
 ```
 
-### 3. Use Configuration for Global Settings
+### 6. Use Configuration for Global Settings
 
 ```python
 # settings.py
@@ -400,14 +730,31 @@ export function Navbar({ items }) {
 ### djust Components (Python)
 
 ```python
-# navbar.py - framework-agnostic, server-side
-class NavbarComponent(LiveComponent):
+# Simple Component (stateless, for presentation)
+class StatusBadge(Component):
+    def __init__(self, status):
+        self.status = status
+
     def render(self):
         framework = config.get('css_framework')
         if framework == 'bootstrap5':
             return self._render_bootstrap()
-        elif framework == 'tailwind':
-            return self._render_tailwind()
+        # ... other frameworks
+
+# LiveComponent (stateful, for interactivity)
+class FilterWidget(LiveComponent):
+    template_string = """
+        <input @input="on_search" value="{{ query }}" />
+        <p>{{ results_count }} results</p>
+    """
+
+    def mount(self, items):
+        self.items = items
+        self.query = ""
+
+    def on_search(self, value=""):
+        self.query = value
+        self.send_parent("filter_changed", {"query": value})
 ```
 
 ✅ Framework-agnostic
@@ -415,6 +762,7 @@ class NavbarComponent(LiveComponent):
 ✅ Server-side (no build step)
 ✅ Full Python/Django integration
 ✅ Reactive with LiveView
+✅ Two-tier system: simple for presentation, powerful for interactivity
 
 ## Switching CSS Frameworks
 

@@ -91,11 +91,11 @@ class FormMixin:
             return
 
         # Ensure form state is initialized (defensive check)
-        if not hasattr(self, 'form_data'):
+        if not hasattr(self, "form_data"):
             self.form_data = {}
-        if not hasattr(self, 'field_errors'):
+        if not hasattr(self, "field_errors"):
             self.field_errors = {}
-        if not hasattr(self, 'form_instance'):
+        if not hasattr(self, "form_instance"):
             self.form_instance = None
 
         # Update form data
@@ -120,12 +120,12 @@ class FormMixin:
                 field.run_validators(cleaned_value)
 
                 # Set up cleaned_data for custom clean methods
-                if not hasattr(form, 'cleaned_data'):
+                if not hasattr(form, "cleaned_data"):
                     form.cleaned_data = {}
                 form.cleaned_data[field_name] = cleaned_value
 
                 # Run form's clean method for this field if it exists
-                clean_method = getattr(form, f'clean_{field_name}', None)
+                clean_method = getattr(form, f"clean_{field_name}", None)
                 if clean_method:
                     clean_method()
 
@@ -157,16 +157,13 @@ class FormMixin:
             self.form_instance = form
 
             # Call form_valid hook
-            if hasattr(self, 'form_valid'):
+            if hasattr(self, "form_valid"):
                 self.form_valid(form)
         else:
             self.is_valid = False
 
             # Store all errors
-            self.field_errors = {
-                field: errors
-                for field, errors in form.errors.items()
-            }
+            self.field_errors = {field: errors for field, errors in form.errors.items()}
 
             # Store non-field errors
             if form.non_field_errors():
@@ -175,7 +172,7 @@ class FormMixin:
             self.form_instance = form
 
             # Call form_invalid hook
-            if hasattr(self, 'form_invalid'):
+            if hasattr(self, "form_invalid"):
                 self.form_invalid(form)
 
     def reset_form(self):
@@ -240,8 +237,8 @@ class FormMixin:
         if has_errors:
             error_html = '<div class="invalid-feedback d-block">'
             for error in errors:
-                error_html += f'<div>{error}</div>'
-            error_html += '</div>'
+                error_html += f"<div>{error}</div>"
+            error_html += "</div>"
 
         return field_html + error_html
 
@@ -279,36 +276,32 @@ class FormMixin:
         bound_field: forms.BoundField,
         value: Any,
         field_type: str,
-        has_errors: bool
+        has_errors: bool,
     ) -> str:
         """Render the field widget HTML"""
         # Base attributes
-        attrs = {
-            'name': field_name,
-            'id': f'id_{field_name}',
-            'class': 'form-control'
-        }
+        attrs = {"name": field_name, "id": f"id_{field_name}", "class": "form-control"}
 
         if has_errors:
-            attrs['class'] += ' is-invalid'
+            attrs["class"] += " is-invalid"
 
         if field.required:
-            attrs['required'] = 'required'
+            attrs["required"] = "required"
 
         # Add LiveView change event for real-time validation
-        attrs['@change'] = 'validate_field'
-        attrs[f'data-field'] = field_name
+        attrs["@change"] = "validate_field"
+        attrs[f"data-field"] = field_name
 
         # Render based on field type
         if field_type == "textarea":
-            return f'<textarea {self._attrs_to_string(attrs)}>{value}</textarea>'
+            return f"<textarea {self._attrs_to_string(attrs)}>{value}</textarea>"
 
         elif field_type == "checkbox":
-            attrs['class'] = 'form-check-input'
-            attrs['type'] = 'checkbox'
+            attrs["class"] = "form-check-input"
+            attrs["type"] = "checkbox"
             if value:
-                attrs['checked'] = 'checked'
-            return f'<input {self._attrs_to_string(attrs)} />'
+                attrs["checked"] = "checked"
+            return f"<input {self._attrs_to_string(attrs)} />"
 
         elif field_type == "select":
             choices_html = ""
@@ -316,22 +309,22 @@ class FormMixin:
                 choices_html += '<option value="">---------</option>'
 
             for choice_value, choice_label in field.choices:
-                selected = 'selected' if str(value) == str(choice_value) else ''
+                selected = "selected" if str(value) == str(choice_value) else ""
                 choices_html += f'<option value="{choice_value}" {selected}>{choice_label}</option>'
 
-            del attrs['@change']  # Select uses different event
-            attrs['@change'] = 'validate_field'
-            return f'<select {self._attrs_to_string(attrs)}>{choices_html}</select>'
+            del attrs["@change"]  # Select uses different event
+            attrs["@change"] = "validate_field"
+            return f"<select {self._attrs_to_string(attrs)}>{choices_html}</select>"
 
         else:
             # Standard input field
-            attrs['type'] = field_type
-            attrs['value'] = value
-            return f'<input {self._attrs_to_string(attrs)} />'
+            attrs["type"] = field_type
+            attrs["value"] = value
+            return f"<input {self._attrs_to_string(attrs)} />"
 
     def _attrs_to_string(self, attrs: Dict[str, str]) -> str:
         """Convert attributes dict to HTML string"""
-        return ' '.join(f'{k}="{v}"' for k, v in attrs.items())
+        return " ".join(f'{k}="{v}"' for k, v in attrs.items())
 
     def as_live(self, **kwargs) -> str:
         """
@@ -362,10 +355,10 @@ class FormMixin:
         """
         from .frameworks import get_adapter
 
-        if not hasattr(self, 'form_instance') or not self.form_instance:
+        if not hasattr(self, "form_instance") or not self.form_instance:
             return "<!-- ERROR: form_instance not initialized. Did you call super().mount()? -->"
 
-        framework = kwargs.pop('framework', None)
+        framework = kwargs.pop("framework", None)
         adapter = get_adapter(framework)
 
         html = ""
@@ -412,7 +405,7 @@ class FormMixin:
 
         # Get adapter
         if adapter is None:
-            framework = kwargs.pop('framework', None)
+            framework = kwargs.pop("framework", None)
             adapter = get_adapter(framework)
 
         # Get current value and errors
@@ -432,14 +425,11 @@ class LiveViewForm(forms.Form):
 
     def get_field_errors_json(self) -> str:
         """Get field errors as JSON string"""
-        return json.dumps({
-            field: errors
-            for field, errors in self.errors.items()
-        })
+        return json.dumps({field: errors for field, errors in self.errors.items()})
 
     def get_field_value(self, field_name: str, default: Any = "") -> Any:
         """Get cleaned value for a field"""
-        if hasattr(self, 'cleaned_data'):
+        if hasattr(self, "cleaned_data"):
             return self.cleaned_data.get(field_name, default)
         return self.data.get(field_name, default)
 
@@ -451,8 +441,10 @@ def form_field(field_name: str, **field_kwargs):
     Usage in template:
         {{ form.render_field('email') }}
     """
+
     def render(view):
-        if hasattr(view, 'render_field'):
+        if hasattr(view, "render_field"):
             return view.render_field(field_name)
         return ""
+
     return render

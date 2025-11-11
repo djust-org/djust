@@ -65,9 +65,20 @@ bindings = "pyo3"
 manifest-path = "crates/djust_live/Cargo.toml"
 
 [tool.pytest.ini_options]
-DJANGO_SETTINGS_MODULE = "tests.settings"
 python_files = ["test_*.py", "*_test.py"]
-testpaths = ["tests"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+testpaths = ["python/tests"]
+addopts = [
+    "--verbose",
+    "--strict-markers",
+    "--tb=short",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "e2e: marks tests as end-to-end tests",
+]
 
 [tool.black]
 line-length = 100

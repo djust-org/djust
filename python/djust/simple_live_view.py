@@ -29,8 +29,8 @@ class LiveView(View):
         """Get context for rendering"""
         context = {}
         for key in dir(self):
-            if not key.startswith('_') and not callable(getattr(self, key)):
-                if key not in ['template_string']:
+            if not key.startswith("_") and not callable(getattr(self, key)):
+                if key not in ["template_string"]:
                     context[key] = getattr(self, key)
         return context
 

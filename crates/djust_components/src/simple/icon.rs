@@ -24,7 +24,7 @@ impl RustIcon {
         library: &str,
         size: &str,
         color: Option<String>,
-        label: Option<String>
+        label: Option<String>,
     ) -> Self {
         Self {
             name,
@@ -41,7 +41,7 @@ impl RustIcon {
         let icon_class = match self.library.as_str() {
             "bootstrap" => format!("bi bi-{}", self.name),
             "fontawesome" => self.name.clone(),
-            _ => self.name.clone(),  // custom
+            _ => self.name.clone(), // custom
         };
 
         let mut classes = icon_class;
@@ -54,7 +54,7 @@ impl RustIcon {
             "md" => classes.push_str(" fs-4"),
             "lg" => classes.push_str(" fs-3"),
             "xl" => classes.push_str(" fs-2"),
-            _ => classes.push_str(" fs-4"),  // default to md
+            _ => classes.push_str(" fs-4"), // default to md
         }
 
         // Add color class
@@ -103,7 +103,7 @@ mod tests {
         let icon = RustIcon::new("star-fill".to_string(), "bootstrap", "md", None, None);
         let html = icon.render();
         assert!(html.contains("bi bi-star-fill"));
-        assert!(html.contains("fs-4"));  // md size
+        assert!(html.contains("fs-4")); // md size
     }
 
     #[test]
@@ -111,7 +111,7 @@ mod tests {
         let icon = RustIcon::new("fa-heart".to_string(), "fontawesome", "lg", None, None);
         let html = icon.render();
         assert!(html.contains("fa-heart"));
-        assert!(html.contains("fs-3"));  // lg size
+        assert!(html.contains("fs-3")); // lg size
         assert!(!html.contains("bi bi-"));
     }
 
@@ -120,7 +120,7 @@ mod tests {
         let icon = RustIcon::new("custom-logo".to_string(), "custom", "sm", None, None);
         let html = icon.render();
         assert!(html.contains("custom-logo"));
-        assert!(html.contains("fs-5"));  // sm size
+        assert!(html.contains("fs-5")); // sm size
     }
 
     #[test]
@@ -145,7 +145,7 @@ mod tests {
             "bootstrap",
             "md",
             Some("success".to_string()),
-            None
+            None,
         );
         let html = icon.render();
         assert!(html.contains("text-success"));
@@ -158,7 +158,7 @@ mod tests {
             "bootstrap",
             "md",
             None,
-            Some("Information".to_string())
+            Some("Information".to_string()),
         );
         let html = icon.render();
         assert!(html.contains(r#"aria-label="Information""#));
@@ -172,7 +172,7 @@ mod tests {
             "bootstrap",
             "md",
             None,
-            Some("<script>alert('xss')</script>".to_string())
+            Some("<script>alert('xss')</script>".to_string()),
         );
         let html = icon.render();
         assert!(html.contains("&lt;script&gt;"));
@@ -193,10 +193,16 @@ mod tests {
         assert!(html.ends_with("</i>"), "Icon should end with '</i>'");
 
         // Check 2: Should have '>' before '</i>' (not '""</i>')
-        assert!(html.contains("></i>"), "Icon should have ></i> at the end, not \"\"</i>");
+        assert!(
+            html.contains("></i>"),
+            "Icon should have ></i> at the end, not \"\"</i>"
+        );
 
         // Check 3: Should NOT contain the malformed pattern '""<'
-        assert!(!html.contains("\"\"<"), "Icon should not have malformed closing '\"\"<'");
+        assert!(
+            !html.contains("\"\"<"),
+            "Icon should not have malformed closing '\"\"<'"
+        );
 
         // Check 4: With aria-label, should still be valid
         let icon_with_label = RustIcon::new(
@@ -204,10 +210,16 @@ mod tests {
             "bootstrap",
             "md",
             Some("primary".to_string()),
-            Some("Info".to_string())
+            Some("Info".to_string()),
         );
         let html_with_label = icon_with_label.render();
-        assert!(html_with_label.contains("></i>"), "Icon with aria-label should have ></i>");
-        assert!(!html_with_label.contains("\"\"<"), "Icon with aria-label should not have '\"\"<'");
+        assert!(
+            html_with_label.contains("></i>"),
+            "Icon with aria-label should have ></i>"
+        );
+        assert!(
+            !html_with_label.contains("\"\"<"),
+            "Icon with aria-label should not have '\"\"<'"
+        );
     }
 }

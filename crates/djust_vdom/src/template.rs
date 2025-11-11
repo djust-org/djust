@@ -5,8 +5,8 @@
 
 use djust_core::{DjangoRustError, Result};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 
 /// Template tag types
 #[derive(Debug, Clone, PartialEq)]
@@ -53,8 +53,11 @@ impl Template {
             .map_err(|e| DjangoRustError::TemplateError(format!("Regex error: {}", e)))?;
 
         if let Some(captures) = re.captures(content) {
-            let template_path = captures.get(1)
-                .ok_or_else(|| DjangoRustError::TemplateError("Invalid extends syntax".to_string()))?
+            let template_path = captures
+                .get(1)
+                .ok_or_else(|| {
+                    DjangoRustError::TemplateError("Invalid extends syntax".to_string())
+                })?
                 .as_str()
                 .to_string();
             Ok(Some(template_path))
@@ -74,12 +77,14 @@ impl Template {
             .map_err(|e| DjangoRustError::TemplateError(format!("Regex error: {}", e)))?;
 
         for captures in re.captures_iter(content) {
-            let block_name = captures.get(1)
+            let block_name = captures
+                .get(1)
                 .ok_or_else(|| DjangoRustError::TemplateError("Invalid block syntax".to_string()))?
                 .as_str()
                 .to_string();
 
-            let block_content = captures.get(2)
+            let block_content = captures
+                .get(2)
                 .ok_or_else(|| DjangoRustError::TemplateError("Invalid block content".to_string()))?
                 .as_str()
                 .to_string();
@@ -106,7 +111,8 @@ impl Template {
                 // Keep original block content (from base template)
                 captures.get(2).unwrap().as_str().to_string()
             }
-        }).to_string()
+        })
+        .to_string()
     }
 }
 
@@ -149,10 +155,12 @@ impl TemplateLoader {
         for dir in &self.template_dirs {
             let full_path = dir.join(path);
             if full_path.exists() {
-                let content = fs::read_to_string(&full_path)
-                    .map_err(|e| DjangoRustError::TemplateError(
-                        format!("Failed to read template {}: {}", path, e)
-                    ))?;
+                let content = fs::read_to_string(&full_path).map_err(|e| {
+                    DjangoRustError::TemplateError(format!(
+                        "Failed to read template {}: {}",
+                        path, e
+                    ))
+                })?;
 
                 // Cache the content
                 if self.cache_enabled {
@@ -163,9 +171,10 @@ impl TemplateLoader {
             }
         }
 
-        Err(DjangoRustError::TemplateError(
-            format!("Template not found: {}", path)
-        ))
+        Err(DjangoRustError::TemplateError(format!(
+            "Template not found: {}",
+            path
+        )))
     }
 
     /// Clear the template cache
@@ -190,10 +199,7 @@ pub fn merge_blocks(
 }
 
 /// Resolve template inheritance and return merged template content
-pub fn resolve_inheritance(
-    template_path: &str,
-    loader: &mut TemplateLoader,
-) -> Result<String> {
+pub fn resolve_inheritance(template_path: &str, loader: &mut TemplateLoader) -> Result<String> {
     // Load and parse the child template
     let content = loader.load(template_path)?;
     let mut template = Template::new(content);

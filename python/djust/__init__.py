@@ -7,7 +7,15 @@ powered by Rust for maximum performance.
 
 from .live_view import LiveView, live_view
 from .component import Component
-from .decorators import reactive, event_handler
+from .decorators import (
+    reactive,
+    event_handler,
+    event,
+    state,
+    computed,
+    debounce,
+    throttle,
+)
 from .react import react_components, register_react_component, ReactMixin
 from .forms import FormMixin, LiveViewForm, form_field
 
@@ -17,6 +25,7 @@ try:
 except ImportError as e:
     # Fallback for when Rust extension isn't built
     import warnings
+
     warnings.warn(f"Could not import Rust extension: {e}. Performance will be degraded.")
     render_template = None
     diff_html = None
@@ -37,6 +46,11 @@ __all__ = [
     "Component",
     "reactive",
     "event_handler",
+    "event",
+    "state",
+    "computed",
+    "debounce",
+    "throttle",
     "render_template",
     "diff_html",
     "react_components",

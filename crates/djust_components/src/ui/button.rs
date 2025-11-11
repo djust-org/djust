@@ -11,10 +11,10 @@ A versatile button component with:
 - Event handlers
 */
 
-use crate::{Component, ComponentError, ComponentBuilder, Framework};
 use crate::html::element;
-use djust_core::Value;
+use crate::{Component, ComponentBuilder, ComponentError, Framework};
 use ahash::AHashMap as HashMap;
+use djust_core::Value;
 
 /// Button variant
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,7 +152,11 @@ impl Button {
 
         // Add variant with proper prefix
         let variant_prefix = if self.outline { "btn-outline-" } else { "btn-" };
-        classes.push(format!("{}{}", variant_prefix, self.variant.as_bootstrap_class()));
+        classes.push(format!(
+            "{}{}",
+            variant_prefix,
+            self.variant.as_bootstrap_class()
+        ));
 
         // Add size class if not medium
         let size_class = self.size.as_bootstrap_class();
@@ -248,7 +252,7 @@ impl Button {
 
         match self.size {
             ButtonSize::Small => classes.push("button-sm".to_string()),
-            ButtonSize::Medium => {},
+            ButtonSize::Medium => {}
             ButtonSize::Large => classes.push("button-lg".to_string()),
         }
 
@@ -298,7 +302,10 @@ impl Component for Button {
         let mut state = HashMap::default();
         state.insert("label".to_string(), Value::String(self.label.clone()));
         state.insert("disabled".to_string(), Value::Bool(self.disabled));
-        state.insert("variant".to_string(), Value::String(self.variant.as_bootstrap_class().to_string()));
+        state.insert(
+            "variant".to_string(),
+            Value::String(self.variant.as_bootstrap_class().to_string()),
+        );
         state
     }
 
@@ -311,13 +318,20 @@ impl Component for Button {
         }
     }
 
-    fn handle_event(&mut self, event: &str, _params: HashMap<String, Value>) -> Result<(), ComponentError> {
+    fn handle_event(
+        &mut self,
+        event: &str,
+        _params: HashMap<String, Value>,
+    ) -> Result<(), ComponentError> {
         match event {
             "click" if self.on_click.is_some() => {
                 // Event handling is done by the LiveView system
                 Ok(())
             }
-            _ => Err(ComponentError::EventError(format!("Unknown event: {}", event))),
+            _ => Err(ComponentError::EventError(format!(
+                "Unknown event: {}",
+                event
+            ))),
         }
     }
 

@@ -1,7 +1,7 @@
 //! Django-compatible template filters
 
-use djust_core::{DjangoRustError, Result, Value};
 use chrono::{DateTime, Utc};
+use djust_core::{DjangoRustError, Result, Value};
 
 pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Result<Value> {
     match filter_name {
@@ -26,24 +26,20 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
         }
         "escape" => Ok(Value::String(html_escape(&value.to_string()))),
         "safe" => Ok(value.clone()), // Mark as safe (no escaping)
-        "first" => {
-            match value {
-                Value::List(l) => Ok(l.first().cloned().unwrap_or(Value::Null)),
-                Value::String(s) => Ok(Value::String(
-                    s.chars().next().map(|c| c.to_string()).unwrap_or_default()
-                )),
-                _ => Ok(Value::Null),
-            }
-        }
-        "last" => {
-            match value {
-                Value::List(l) => Ok(l.last().cloned().unwrap_or(Value::Null)),
-                Value::String(s) => Ok(Value::String(
-                    s.chars().last().map(|c| c.to_string()).unwrap_or_default()
-                )),
-                _ => Ok(Value::Null),
-            }
-        }
+        "first" => match value {
+            Value::List(l) => Ok(l.first().cloned().unwrap_or(Value::Null)),
+            Value::String(s) => Ok(Value::String(
+                s.chars().next().map(|c| c.to_string()).unwrap_or_default(),
+            )),
+            _ => Ok(Value::Null),
+        },
+        "last" => match value {
+            Value::List(l) => Ok(l.last().cloned().unwrap_or(Value::Null)),
+            Value::String(s) => Ok(Value::String(
+                s.chars().last().map(|c| c.to_string()).unwrap_or_default(),
+            )),
+            _ => Ok(Value::Null),
+        },
         "join" => {
             // join with separator argument
             let separator = arg.unwrap_or(", ");
@@ -78,9 +74,10 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
                 Err(_) => Ok(value.clone()), // If parsing fails, return original value
             }
         }
-        _ => Err(DjangoRustError::TemplateError(
-            format!("Unknown filter: {}", filter_name)
-        )),
+        _ => Err(DjangoRustError::TemplateError(format!(
+            "Unknown filter: {}",
+            filter_name
+        ))),
     }
 }
 
@@ -120,7 +117,10 @@ fn truncate_chars(text: &str, num_chars: usize) -> String {
     if text.chars().count() <= num_chars {
         text.to_string()
     } else {
-        text.chars().take(num_chars.saturating_sub(3)).collect::<String>() + "..."
+        text.chars()
+            .take(num_chars.saturating_sub(3))
+            .collect::<String>()
+            + "..."
     }
 }
 

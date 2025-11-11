@@ -9,6 +9,7 @@ from ..base import Component
 
 try:
     from djust._rust import RustModal
+
     _RUST_AVAILABLE = True
 except ImportError:
     _RUST_AVAILABLE = False
@@ -45,7 +46,7 @@ class Modal(Component):
 
     _rust_impl_class = RustModal if _RUST_AVAILABLE else None
 
-    template_string = '''<div class="modal fade{% if show %} show{% endif %}" id="{{ id }}" tabindex="-1" aria-labelledby="{{ id }}Label" aria-hidden="true">
+    template_string = """<div class="modal fade{% if show %} show{% endif %}" id="{{ id }}" tabindex="-1" aria-labelledby="{{ id }}Label" aria-hidden="true">
     <div class="modal-dialog{% if size != "md" %} modal-{{ size }}{% endif %}{% if centered %} modal-dialog-centered{% endif %}">
         <div class="modal-content">{% if title %}
             <div class="modal-header">
@@ -60,7 +61,7 @@ class Modal(Component):
             </div>{% endif %}
         </div>
     </div>
-</div>'''
+</div>"""
 
     def __init__(
         self,
@@ -96,14 +97,14 @@ class Modal(Component):
     def get_context_data(self):
         """Return context for template rendering."""
         return {
-            'body': self.body,
-            'title': self.title,
-            'footer': self.footer,
-            'size': self.size,
-            'centered': self.centered,
-            'dismissable': self.dismissable,
-            'id': self.id,
-            'show': self.show,
+            "body": self.body,
+            "title": self.title,
+            "footer": self.footer,
+            "size": self.size,
+            "centered": self.centered,
+            "dismissable": self.dismissable,
+            "id": self.id,
+            "show": self.show,
         }
 
     def _render_custom(self) -> str:
@@ -129,26 +130,32 @@ class Modal(Component):
         # Add header if title exists
         if self.title:
             parts.append('            <div class="modal-header">')
-            parts.append(f'                <h5 class="modal-title" id="{self.id}Label">{self.title}</h5>')
+            parts.append(
+                f'                <h5 class="modal-title" id="{self.id}Label">{self.title}</h5>'
+            )
             if self.dismissable:
-                parts.append('                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>')
-            parts.append('            </div>')
+                parts.append(
+                    '                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>'
+                )
+            parts.append("            </div>")
 
         # Body
         parts.append('            <div class="modal-body">')
-        parts.append(f'                {self.body}')
-        parts.append('            </div>')
+        parts.append(f"                {self.body}")
+        parts.append("            </div>")
 
         # Add footer if exists
         if self.footer:
             parts.append('            <div class="modal-footer">')
-            parts.append(f'                {self.footer}')
-            parts.append('            </div>')
+            parts.append(f"                {self.footer}")
+            parts.append("            </div>")
 
-        parts.extend([
-            '        </div>',
-            '    </div>',
-            '</div>',
-        ])
+        parts.extend(
+            [
+                "        </div>",
+                "    </div>",
+                "</div>",
+            ]
+        )
 
-        return '\n'.join(parts)
+        return "\n".join(parts)

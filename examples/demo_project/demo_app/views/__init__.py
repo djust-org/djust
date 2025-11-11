@@ -40,6 +40,33 @@ from .components_guide import ComponentsGuideView
 # Import demos index view
 from .demos import DemosIndexView
 
+# Import Rust components demo
+from .rust_components_demo import RustComponentsDemo
+
+# Import components-only demo
+from .components_only_demo import ComponentsOnlyDemo
+
+# Import no-template demo
+from .no_template_demo import NoTemplateDemo
+
+# Import unified components demo
+from .components_demo import ComponentsDemoView
+
+# Import toast demo
+from .toast_demo import toast_demo
+
+# Import dropdown demo
+from .dropdown_demo import DropdownDemo
+
+# Import navbar demo
+from .navbar_demo import NavBarDemoView
+
+# Import offcanvas demo
+from .offcanvas_demo import OffcanvasDemoView
+
+# Import component showcase
+from .component_showcase import ComponentShowcaseView
+
 # Import homepage demo views
 from .homepage import (
     HomeCounterDemo,
@@ -58,6 +85,15 @@ __all__ = [
     'PerformanceTestView',
     'ProductDataTableView',
     'DemosIndexView',
+    'RustComponentsDemo',
+    'ComponentsOnlyDemo',
+    'NoTemplateDemo',
+    'ComponentsDemoView',
+    'toast_demo',
+    'DropdownDemo',
+    'NavBarDemoView',
+    'OffcanvasDemoView',
+    'ComponentShowcaseView',
     'FormsIndexView',
     'RegistrationFormView',
     'ContactFormView',

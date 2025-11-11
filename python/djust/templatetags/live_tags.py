@@ -48,8 +48,8 @@ def live_form(view, **kwargs):
             <button type="submit">Submit</button>
         </form>
     """
-    if not hasattr(view, 'as_live'):
-        return f'<!-- ERROR: View does not have as_live() method. Did you use FormMixin? -->'
+    if not hasattr(view, "as_live"):
+        return f"<!-- ERROR: View does not have as_live() method. Did you use FormMixin? -->"
 
     return view.as_live(**kwargs)
 
@@ -79,8 +79,8 @@ def live_field(view, field_name: str, **kwargs):
         {% live_field view "email" %}
         {% live_field view "password" label="Custom Password Label" %}
     """
-    if not hasattr(view, 'as_live_field'):
-        return f'<!-- ERROR: View does not have as_live_field() method. Did you use FormMixin? -->'
+    if not hasattr(view, "as_live_field"):
+        return f"<!-- ERROR: View does not have as_live_field() method. Did you use FormMixin? -->"
 
     return view.as_live_field(field_name, **kwargs)
 
@@ -103,23 +103,23 @@ def live_errors(view, field_name: str = None):
         {% live_errors view %}  <!-- non-field errors -->
     """
     if field_name:
-        if hasattr(view, 'get_field_errors'):
+        if hasattr(view, "get_field_errors"):
             errors = view.get_field_errors(field_name)
             if errors:
                 html = '<div class="invalid-feedback d-block">'
                 for error in errors:
-                    html += f'<div>{error}</div>'
-                html += '</div>'
+                    html += f"<div>{error}</div>"
+                html += "</div>"
                 return html
     else:
-        if hasattr(view, 'form_errors') and view.form_errors:
+        if hasattr(view, "form_errors") and view.form_errors:
             html = '<div class="alert alert-danger">'
             for error in view.form_errors:
-                html += f'<div>{error}</div>'
-            html += '</div>'
+                html += f"<div>{error}</div>"
+            html += "</div>"
             return html
 
-    return ''
+    return ""
 
 
 @register.filter
@@ -138,9 +138,9 @@ def field_value(view, field_name: str) -> Any:
         {% load live_tags %}
         <input type="text" value="{{ view|field_value:'email' }}">
     """
-    if hasattr(view, 'get_field_value'):
+    if hasattr(view, "get_field_value"):
         return view.get_field_value(field_name)
-    return ''
+    return ""
 
 
 @register.filter
@@ -159,6 +159,6 @@ def has_errors(view, field_name: str) -> bool:
         {% load live_tags %}
         <input class="{% if view|has_errors:'email' %}is-invalid{% endif %}">
     """
-    if hasattr(view, 'has_field_errors'):
+    if hasattr(view, "has_field_errors"):
         return view.has_field_errors(field_name)
     return False

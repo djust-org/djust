@@ -8,10 +8,10 @@ A versatile text component for labels, headings, and paragraphs with:
 - Font weight and style
 */
 
-use crate::{Component, ComponentError, ComponentBuilder, Framework};
 use crate::html::element;
-use djust_core::Value;
+use crate::{Component, ComponentBuilder, ComponentError, Framework};
 use ahash::AHashMap as HashMap;
+use djust_core::Value;
 
 /// Text element type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,7 +156,7 @@ impl FontWeight {
 
 /// Text component
 pub struct Text {
-    pub(crate) id: Option<String>,
+    pub id: Option<String>,
     pub content: String,
     pub element: TextElement,
     pub variant: TextVariant,
@@ -164,7 +164,7 @@ pub struct Text {
     pub align: Option<TextAlign>,
     pub weight: FontWeight,
     pub italic: bool,
-    pub for_input: Option<String>,  // For label elements
+    pub for_input: Option<String>, // For label elements
 }
 
 impl Text {
@@ -398,8 +398,15 @@ impl Component for Text {
         }
     }
 
-    fn handle_event(&mut self, event: &str, _params: HashMap<String, Value>) -> Result<(), ComponentError> {
-        Err(ComponentError::EventError(format!("Text component does not handle events: {}", event)))
+    fn handle_event(
+        &mut self,
+        event: &str,
+        _params: HashMap<String, Value>,
+    ) -> Result<(), ComponentError> {
+        Err(ComponentError::EventError(format!(
+            "Text component does not handle events: {}",
+            event
+        )))
     }
 
     fn render(&self, framework: Framework) -> Result<String, ComponentError> {

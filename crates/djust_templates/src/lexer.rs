@@ -5,10 +5,11 @@ use djust_core::Result;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Text(String),
-    Variable(String),      // {{ var }}
+    Variable(String),         // {{ var }}
     Tag(String, Vec<String>), // {% tag args %}
-    Comment,               // {# comment #}
-    JsxComponent {         // <Button prop="value">children</Button>
+    Comment,                  // {# comment #}
+    JsxComponent {
+        // <Button prop="value">children</Button>
         name: String,
         props: Vec<(String, String)>,
         children: Vec<Token>,
@@ -90,7 +91,10 @@ fn parse_jsx_component(chars: &mut std::iter::Peekable<std::str::Chars>) -> Resu
             }
 
             // Skip whitespace
-            while chars.peek() == Some(&' ') || chars.peek() == Some(&'\n') || chars.peek() == Some(&'\t') {
+            while chars.peek() == Some(&' ')
+                || chars.peek() == Some(&'\n')
+                || chars.peek() == Some(&'\t')
+            {
                 chars.next();
             }
         } else {
@@ -197,7 +201,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>> {
                         }
 
                         let mut var_content = String::new();
-                        let mut depth = 0;
+                        let depth = 0;
 
                         while let Some(ch) = chars.next() {
                             if ch == '}' && chars.peek() == Some(&'}') {
@@ -230,10 +234,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>> {
                                     .collect();
 
                                 if let Some(tag_name) = parts.first() {
-                                    tokens.push(Token::Tag(
-                                        tag_name.clone(),
-                                        parts[1..].to_vec(),
-                                    ));
+                                    tokens.push(Token::Tag(tag_name.clone(), parts[1..].to_vec()));
                                 }
                                 tag_content.clear();
                                 break;
@@ -291,26 +292,35 @@ mod tests {
     #[test]
     fn test_tokenize_variable() {
         let tokens = tokenize("Hello {{ name }}").unwrap();
-        assert_eq!(tokens, vec![
-            Token::Text("Hello ".to_string()),
-            Token::Variable("name".to_string()),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Text("Hello ".to_string()),
+                Token::Variable("name".to_string()),
+            ]
+        );
     }
 
     #[test]
     fn test_tokenize_tag() {
         let tokens = tokenize("{% if true %}yes{% endif %}").unwrap();
-        assert_eq!(tokens[0], Token::Tag("if".to_string(), vec!["true".to_string()]));
+        assert_eq!(
+            tokens[0],
+            Token::Tag("if".to_string(), vec!["true".to_string()])
+        );
     }
 
     #[test]
     fn test_tokenize_comment() {
         let tokens = tokenize("Hello {# comment #} World").unwrap();
-        assert_eq!(tokens, vec![
-            Token::Text("Hello ".to_string()),
-            Token::Comment,
-            Token::Text(" World".to_string()),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Text("Hello ".to_string()),
+                Token::Comment,
+                Token::Text(" World".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -318,7 +328,13 @@ mod tests {
         let tokens = tokenize("Hello <Button label=\"Click me\" />").unwrap();
         assert_eq!(tokens.len(), 2);
         assert_eq!(tokens[0], Token::Text("Hello ".to_string()));
-        if let Token::JsxComponent { name, props, self_closing, .. } = &tokens[1] {
+        if let Token::JsxComponent {
+            name,
+            props,
+            self_closing,
+            ..
+        } = &tokens[1]
+        {
             assert_eq!(name, "Button");
             assert_eq!(props.len(), 1);
             assert_eq!(props[0].0, "label");
@@ -333,7 +349,13 @@ mod tests {
     fn test_tokenize_jsx_with_children() {
         let tokens = tokenize("<Button>Click me</Button>").unwrap();
         assert_eq!(tokens.len(), 1);
-        if let Token::JsxComponent { name, children, self_closing, .. } = &tokens[0] {
+        if let Token::JsxComponent {
+            name,
+            children,
+            self_closing,
+            ..
+        } = &tokens[0]
+        {
             assert_eq!(name, "Button");
             assert!(!self_closing);
             assert_eq!(children.len(), 1);

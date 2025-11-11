@@ -10,10 +10,10 @@ A versatile input component with:
 - Event handlers
 */
 
-use crate::{Component, ComponentError, ComponentBuilder, Framework};
 use crate::html::element;
-use djust_core::Value;
+use crate::{Component, ComponentBuilder, ComponentError, Framework};
 use ahash::AHashMap as HashMap;
+use djust_core::Value;
 
 /// Input type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -321,7 +321,7 @@ impl Input {
 
         match self.size {
             InputSize::Small => classes.push("input-sm".to_string()),
-            InputSize::Medium => {},
+            InputSize::Medium => {}
             InputSize::Large => classes.push("input-lg".to_string()),
         }
 
@@ -415,7 +415,11 @@ impl Component for Input {
         }
     }
 
-    fn handle_event(&mut self, event: &str, params: HashMap<String, Value>) -> Result<(), ComponentError> {
+    fn handle_event(
+        &mut self,
+        event: &str,
+        params: HashMap<String, Value>,
+    ) -> Result<(), ComponentError> {
         match event {
             "input" | "change" if self.on_input.is_some() || self.on_change.is_some() => {
                 // Extract value from params
@@ -424,7 +428,10 @@ impl Component for Input {
                 }
                 Ok(())
             }
-            _ => Err(ComponentError::EventError(format!("Unknown event: {}", event))),
+            _ => Err(ComponentError::EventError(format!(
+                "Unknown event: {}",
+                event
+            ))),
         }
     }
 

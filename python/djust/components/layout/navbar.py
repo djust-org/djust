@@ -13,6 +13,7 @@ from ...config import config
 
 class NavItem:
     """Represents a navigation item"""
+
     def __init__(
         self,
         label: str,
@@ -22,14 +23,14 @@ class NavItem:
         external: bool = False,
         target: Optional[str] = None,
         badge: Optional[int] = None,
-        badge_variant: str = 'primary'
+        badge_variant: str = "primary",
     ):
         self.label = label
         self.href = href
         self.active = active
         self.icon = icon
         self.external = external
-        self.target = target or ('_blank' if external else None)
+        self.target = target or ("_blank" if external else None)
         self.badge = badge
         self.badge_variant = badge_variant
 
@@ -77,26 +78,26 @@ class NavbarComponent(LiveComponent):
 
     def mount(self, **kwargs):
         """Initialize navbar state"""
-        self.brand_name = kwargs.get('brand_name', 'App')
-        self.brand_logo = kwargs.get('brand_logo', None)
-        self.brand_href = kwargs.get('brand_href', '/')
-        self.items = kwargs.get('items', [])
-        self.fixed_top = kwargs.get('fixed_top', True)
-        self.container_fluid = kwargs.get('container_fluid', False)
-        self.custom_classes = kwargs.get('custom_classes', '')
-        self.logo_height = kwargs.get('logo_height', 16)  # Default to 16px like GitHub
+        self.brand_name = kwargs.get("brand_name", "App")
+        self.brand_logo = kwargs.get("brand_logo", None)
+        self.brand_href = kwargs.get("brand_href", "/")
+        self.items = kwargs.get("items", [])
+        self.fixed_top = kwargs.get("fixed_top", True)
+        self.container_fluid = kwargs.get("container_fluid", False)
+        self.custom_classes = kwargs.get("custom_classes", "")
+        self.logo_height = kwargs.get("logo_height", 16)  # Default to 16px like GitHub
 
     def get_context(self) -> Dict[str, Any]:
         """Get navbar context"""
         return {
-            'brand_name': self.brand_name,
-            'brand_logo': self.brand_logo,
-            'brand_href': self.brand_href,
-            'items': self.items,
-            'fixed_top': self.fixed_top,
-            'container_fluid': self.container_fluid,
-            'custom_classes': self.custom_classes,
-            'logo_height': self.logo_height,
+            "brand_name": self.brand_name,
+            "brand_logo": self.brand_logo,
+            "brand_href": self.brand_href,
+            "items": self.items,
+            "fixed_top": self.fixed_top,
+            "container_fluid": self.container_fluid,
+            "custom_classes": self.custom_classes,
+            "logo_height": self.logo_height,
         }
 
     def add_item(self, item: NavItem):
@@ -107,46 +108,48 @@ class NavbarComponent(LiveComponent):
     def set_active(self, href: str):
         """Set the active navigation item by href"""
         for item in self.items:
-            item.active = (item.href == href)
+            item.active = item.href == href
         self.trigger_update()
 
     def render(self) -> str:
         """Render navbar with framework-specific styling"""
-        framework = config.get('css_framework', 'bootstrap5')
+        framework = config.get("css_framework", "bootstrap5")
 
-        if framework == 'bootstrap5':
+        if framework == "bootstrap5":
             return mark_safe(self._render_bootstrap())
-        elif framework == 'tailwind':
+        elif framework == "tailwind":
             return mark_safe(self._render_tailwind())
         else:
             return mark_safe(self._render_plain())
 
     def _render_bootstrap(self) -> str:
         """Render Bootstrap 5 navbar"""
-        position_class = 'fixed-top' if self.fixed_top else ''
-        container_class = 'container-fluid' if self.container_fluid else 'container'
+        position_class = "fixed-top" if self.fixed_top else ""
+        container_class = "container-fluid" if self.container_fluid else "container"
 
         # Logo HTML
-        logo_html = ''
+        logo_html = ""
         if self.brand_logo:
-            alt_text = self.brand_name or 'Logo'
-            margin_style = ' margin-right: 0.5rem;' if self.brand_name else ''
+            alt_text = self.brand_name or "Logo"
+            margin_style = " margin-right: 0.5rem;" if self.brand_name else ""
             logo_html = f'<img src="{self.brand_logo}" alt="{alt_text}" height="{self.logo_height}" style="width: auto;{margin_style}">'
 
         # Navigation items
-        nav_items_html = ''
+        nav_items_html = ""
         for item in self.items:
-            active_class = 'active' if item.active else ''
-            target_attr = f' target="{item.target}"' if item.target else ''
-            icon_html = f'{item.icon} ' if item.icon else ''
+            active_class = "active" if item.active else ""
+            target_attr = f' target="{item.target}"' if item.target else ""
+            icon_html = f"{item.icon} " if item.icon else ""
 
             # Badge HTML
-            badge_html = ''
+            badge_html = ""
             if item.badge is not None and item.badge > 0:
-                badge_html = f' <span class="badge bg-{item.badge_variant} rounded-pill">{item.badge}</span>'
+                badge_html = (
+                    f' <span class="badge bg-{item.badge_variant} rounded-pill">{item.badge}</span>'
+                )
 
             # External link styling
-            link_style = ''
+            link_style = ""
             if item.external:
                 link_style = ' style="color: #667eea !important; font-weight: 600;"'
 
@@ -157,7 +160,7 @@ class NavbarComponent(LiveComponent):
             '''
 
         # Brand name HTML (only if not None)
-        brand_name_html = f'<strong>{self.brand_name}</strong>' if self.brand_name else ''
+        brand_name_html = f"<strong>{self.brand_name}</strong>" if self.brand_name else ""
 
         return f'''
         <nav class="navbar navbar-expand-lg navbar-custom {position_class} {self.custom_classes}" id="{self.component_id}">
@@ -177,28 +180,36 @@ class NavbarComponent(LiveComponent):
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS navbar"""
-        position_classes = 'fixed top-0 left-0 right-0 z-50' if self.fixed_top else ''
-        container_class = 'container mx-auto' if not self.container_fluid else 'w-full'
+        position_classes = "fixed top-0 left-0 right-0 z-50" if self.fixed_top else ""
+        container_class = "container mx-auto" if not self.container_fluid else "w-full"
 
         # Logo HTML
-        logo_html = ''
+        logo_html = ""
         if self.brand_logo:
-            alt_text = self.brand_name or 'Logo'
+            alt_text = self.brand_name or "Logo"
             logo_html = f'<img src="{self.brand_logo}" alt="{alt_text}" class="h-4 w-auto mr-2">'
 
         # Brand name HTML (only if not None)
-        brand_name_html = f'<span class="text-xl font-bold text-gray-900">{self.brand_name}</span>' if self.brand_name else ''
+        brand_name_html = (
+            f'<span class="text-xl font-bold text-gray-900">{self.brand_name}</span>'
+            if self.brand_name
+            else ""
+        )
 
         # Navigation items
-        nav_items_html = ''
+        nav_items_html = ""
         for item in self.items:
-            active_class = 'text-blue-600 font-semibold' if item.active else 'text-gray-700 hover:text-blue-600'
-            target_attr = f' target="{item.target}"' if item.target else ''
-            icon_html = f'{item.icon} ' if item.icon else ''
+            active_class = (
+                "text-blue-600 font-semibold"
+                if item.active
+                else "text-gray-700 hover:text-blue-600"
+            )
+            target_attr = f' target="{item.target}"' if item.target else ""
+            icon_html = f"{item.icon} " if item.icon else ""
 
             # External link styling
             if item.external:
-                active_class = 'text-purple-600 font-semibold hover:text-purple-700'
+                active_class = "text-purple-600 font-semibold hover:text-purple-700"
 
             nav_items_html += f'''
                 <a href="{item.href}"{target_attr}
@@ -225,24 +236,26 @@ class NavbarComponent(LiveComponent):
 
     def _render_plain(self) -> str:
         """Render plain HTML navbar with semantic classes for custom CSS"""
-        position_class = 'navbar-fixed' if self.fixed_top else ''
+        position_class = "navbar-fixed" if self.fixed_top else ""
 
         # Logo HTML
-        logo_html = ''
+        logo_html = ""
         if self.brand_logo:
-            alt_text = self.brand_name or 'Logo'
+            alt_text = self.brand_name or "Logo"
             logo_html = f'<img src="{self.brand_logo}" alt="{alt_text}" class="navbar-logo">'
 
         # Brand name HTML (only if not None)
-        brand_name_html = f'<span class="navbar-brand-text">{self.brand_name}</span>' if self.brand_name else ''
+        brand_name_html = (
+            f'<span class="navbar-brand-text">{self.brand_name}</span>' if self.brand_name else ""
+        )
 
         # Navigation items
-        nav_items_html = ''
+        nav_items_html = ""
         for item in self.items:
-            active_class = 'active' if item.active else ''
-            target_attr = f' target="{item.target}"' if item.target else ''
-            external_class = 'external' if item.external else ''
-            icon_html = f'<span class="nav-icon">{item.icon}</span>' if item.icon else ''
+            active_class = "active" if item.active else ""
+            target_attr = f' target="{item.target}"' if item.target else ""
+            external_class = "external" if item.external else ""
+            icon_html = f'<span class="nav-icon">{item.icon}</span>' if item.icon else ""
 
             nav_items_html += f'''
                 <li class="nav-item {active_class} {external_class}">

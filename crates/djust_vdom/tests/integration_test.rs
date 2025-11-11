@@ -211,10 +211,9 @@ fn test_patch_indices_account_for_whitespace() {
 
     // Verify we have a text change patch
     assert!(
-        patches.iter().any(|p| matches!(
-            p,
-            djust_vdom::Patch::SetText { .. }
-        )),
+        patches
+            .iter()
+            .any(|p| matches!(p, djust_vdom::Patch::SetText { .. })),
         "Should have SetText patch for modified content"
     );
 }

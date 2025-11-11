@@ -22,10 +22,7 @@ class ReactComponentRegistry:
         self._component_modules: Dict[str, str] = {}
 
     def register(
-        self,
-        name: str,
-        module_path: Optional[str] = None,
-        component_name: Optional[str] = None
+        self, name: str, module_path: Optional[str] = None, component_name: Optional[str] = None
     ):
         """
         Decorator to register a React component.
@@ -40,14 +37,16 @@ class ReactComponentRegistry:
             def button_renderer(props, children):
                 return f'<button class="{props.get("className", "")}">{children}</button>'
         """
+
         def decorator(func: Callable):
             self._components[name] = func
             if module_path:
                 self._component_modules[name] = {
-                    'module': module_path,
-                    'export': component_name or name
+                    "module": module_path,
+                    "export": component_name or name,
                 }
             return func
+
         return decorator
 
     def get(self, name: str) -> Optional[Callable]:
@@ -81,7 +80,7 @@ class ReactComponentRegistry:
 
         # Wrap in container with hydration data
         module_info = self.get_module_info(name)
-        props_json = json.dumps(props).replace('"', '&quot;')
+        props_json = json.dumps(props).replace('"', "&quot;")
 
         html = f'<div data-react-component="{name}" data-react-props="{props_json}"'
 
@@ -89,7 +88,7 @@ class ReactComponentRegistry:
             html += f' data-react-module="{module_info["module"]}"'
             html += f' data-react-export="{module_info["export"]}"'
 
-        html += f'>{content}</div>'
+        html += f">{content}</div>"
 
         return html
 
@@ -103,9 +102,7 @@ react_components = ReactComponentRegistry()
 
 
 def register_react_component(
-    name: str,
-    module_path: Optional[str] = None,
-    component_name: Optional[str] = None
+    name: str, module_path: Optional[str] = None, component_name: Optional[str] = None
 ):
     """
     Convenience function to register React components.
