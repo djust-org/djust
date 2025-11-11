@@ -376,6 +376,50 @@ class MyView(LiveView):
         self._count = value
 ```
 
+### Configuration
+
+Configure djust in your Django `settings.py`:
+
+```python
+LIVEVIEW_CONFIG = {
+    # Transport mode
+    'use_websocket': True,  # Set to False for HTTP-only mode (no WebSocket dependency)
+
+    # Debug settings
+    'debug_vdom': False,  # Enable detailed VDOM patch logging (for troubleshooting)
+
+    # CSS Framework
+    'css_framework': 'bootstrap5',  # Options: 'bootstrap5', 'tailwind', None
+}
+```
+
+**Common Configuration Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `use_websocket` | `True` | Use WebSocket transport (requires Django Channels) |
+| `debug_vdom` | `False` | Enable detailed VDOM debugging logs |
+| `css_framework` | `'bootstrap5'` | CSS framework for components |
+
+**Debug Mode:**
+
+When troubleshooting VDOM issues, enable debug logging:
+
+```python
+# In settings.py
+LIVEVIEW_CONFIG = {
+    'debug_vdom': True,
+}
+
+# Or programmatically
+from djust.config import config
+config.set('debug_vdom', True)
+```
+
+This will log:
+- Server-side: Patch generation details (stderr)
+- Client-side: Patch application and DOM traversal (browser console)
+
 ## 🏗️ Architecture
 
 ```

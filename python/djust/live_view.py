@@ -728,12 +728,26 @@ class LiveView(View):
         if not patches_json:
             print(f"[LiveView] NO PATCHES GENERATED!", file=sys.stderr)
         else:
-            # Show first few patches for debugging
-            import json as json_module
-            patches_list = json_module.loads(patches_json) if patches_json else []
-            print(f"[LiveView] Generated {len(patches_list)} patches:", file=sys.stderr)
-            for i, patch in enumerate(patches_list[:3]):  # Show first 3 patches
-                print(f"[LiveView]   Patch {i}: {patch}", file=sys.stderr)
+            # Show first few patches for debugging (if enabled)
+            from djust.config import config
+            if config.get('debug_vdom', False):
+                import json as json_module
+                patches_list = json_module.loads(patches_json) if patches_json else []
+                print(f"[LiveView] Generated {len(patches_list)} patches:", file=sys.stderr)
+                for i, patch in enumerate(patches_list[:5]):  # Show first 5 patches
+                    patch_type = patch.get('type', 'Unknown')
+                    path = patch.get('path', [])
+
+                    # Add context about what we're patching
+                    if patch_type == 'SetAttr':
+                        print(f"[LiveView]   Patch {i}: {patch_type} '{patch.get('key')}' = '{patch.get('value')}' at path {path}", file=sys.stderr)
+                    elif patch_type == 'RemoveAttr':
+                        print(f"[LiveView]   Patch {i}: {patch_type} '{patch.get('key')}' at path {path}", file=sys.stderr)
+                    elif patch_type == 'SetText':
+                        text_preview = patch.get('text', '')[:50]
+                        print(f"[LiveView]   Patch {i}: {patch_type} to '{text_preview}' at path {path}", file=sys.stderr)
+                    else:
+                        print(f"[LiveView]   Patch {i}: {patch}", file=sys.stderr)
 
         return (html, patches_json, version)
 
@@ -781,11 +795,63 @@ class LiveView(View):
                     # Skip read-only properties
                     pass
 
+    def _assign_component_ids(self):
+        """
+        Automatically assign IDs to components based on their attribute names.
+
+        This is called after mount() to ensure components have stable, deterministic IDs
+        instead of random UUIDs. For example:
+            self.navbar_example = NavBar(...)  → automatically gets _auto_id="navbar_example"
+
+        This makes HTTP mode work seamlessly with VDOM diffing, as IDs remain consistent
+        across requests without needing session storage.
+        """
+        from .components.base import Component, LiveComponent
+
+        for key, value in self.__dict__.items():
+            if isinstance(value, (Component, LiveComponent)) and not key.startswith('_'):
+                # Assign automatic ID based on variable name
+                value._auto_id = key
+
+    def _save_components_to_session(self, request, context: dict):
+        """
+        Save component state to session with stable IDs.
+
+        This is the DRY method used by both GET and POST handlers to persist
+        component state (including Component and LiveComponent IDs) across requests.
+        Essential for HTTP mode where view instances are recreated on each request.
+
+        Args:
+            request: Django request object
+            context: Context dictionary containing components
+        """
+        from .components.base import Component, LiveComponent
+
+        view_key = f'liveview_{request.path}'
+        component_state = {}
+
+        for key, component in context.items():
+            # Save state for both Component and LiveComponent to preserve IDs across requests
+            if isinstance(component, (Component, LiveComponent)):
+                # Automatic ID assignment: attribute name -> component_id
+                # e.g., self.navbar_example gets component_id="navbar_example"
+                component.component_id = key
+                component_state[key] = self._extract_component_state(component)
+
+        # Serialize component state to ensure session-compatible types
+        component_state_json = json.dumps(component_state, cls=DjangoJSONEncoder)
+        component_state_serializable = json.loads(component_state_json)
+        request.session[f'{view_key}_components'] = component_state_serializable
+        request.session.modified = True
+
     @method_decorator(ensure_csrf_cookie)
     def get(self, request, *args, **kwargs):
         """Handle GET requests - initial page load"""
         # IMPORTANT: mount() must be called first to initialize clean state
         self.mount(request, **kwargs)
+
+        # Automatically assign deterministic IDs to components based on variable names
+        self._assign_component_ids()
 
         # Ensure session exists and is saved
         if not request.session.session_key:
@@ -802,23 +868,8 @@ class LiveView(View):
         state_serializable = json.loads(state_json)
         request.session[view_key] = state_serializable
 
-        # Store component state separately and assign stable IDs based on attribute names
-        # This is the magic that enables automatic component identification:
-        # When you write `self.alert_success = AlertComponent(...)`, the attribute name
-        # "alert_success" becomes the stable component_id automatically.
-        component_state = {}
-        for key, component in context.items():
-            if isinstance(component, LiveComponent):
-                # Automatic ID assignment: attribute name -> component_id
-                # e.g., self.alert_success gets component_id="alert_success"
-                component.component_id = key
-                component_state[key] = self._extract_component_state(component)
-
-        # Serialize component state to ensure session-compatible types
-        component_state_json = json.dumps(component_state, cls=DjangoJSONEncoder)
-        component_state_serializable = json.loads(component_state_json)
-        request.session[f'{view_key}_components'] = component_state_serializable
-        request.session.modified = True  # Force session save
+        # Save component state to session (DRY helper method)
+        self._save_components_to_session(request, context)
 
         session_key = request.session.session_key
         cache_key = f'{session_key}_{view_key}'
@@ -837,6 +888,16 @@ class LiveView(View):
         # For initial GET request, render the full template (with template inheritance)
         # This ensures the browser gets the complete HTML (DOCTYPE, head, nav, etc.)
         self._initialize_rust_view(request)
+
+        # CRITICAL: Reset VDOM state on GET requests (page loads/reloads)
+        # This ensures the client's fresh DOM matches the server's VDOM baseline.
+        # In HTTP-only mode, GET requests represent fresh page loads, so the VDOM
+        # should start from a clean state to match the client's newly rendered DOM.
+        if self._rust_view:
+            import sys
+            print(f"[LiveView] Resetting VDOM state on GET request (HTTP-only mode)", file=sys.stderr)
+            self._rust_view.reset()
+
         self._sync_state_to_rust()
 
         # IMPORTANT: Always call get_template() on GET requests to set _full_template
@@ -891,7 +952,7 @@ class LiveView(View):
     def post(self, request, *args, **kwargs):
         """Handle POST requests - event handling"""
         import sys
-        from .components.base import LiveComponent
+        from .components.base import Component, LiveComponent
         try:
             data = json.loads(request.body)
             event_name = data.get('event')
@@ -901,11 +962,8 @@ class LiveView(View):
             view_key = f'liveview_{request.path}'
             saved_state = request.session.get(view_key, {})
 
-            # IMPORTANT: Call mount() to recreate component instances
-            # This ensures all components are available for event handlers
-            self.mount(request, **kwargs)
-
-            # Restore state to self (skip read-only properties)
+            # IMPORTANT: Restore state BEFORE calling mount()
+            # This ensures components are created with the correct restored state values
             for key, value in saved_state.items():
                 if not key.startswith('_') and not callable(value):
                     try:
@@ -914,11 +972,19 @@ class LiveView(View):
                         # Skip read-only properties
                         pass
 
-            # Restore component state
+            # Now call mount() to recreate component instances with restored state
+            self.mount(request, **kwargs)
+
+            # Automatically assign deterministic IDs to components based on variable names
+            self._assign_component_ids()
+
+            # Restore component state (both Component and LiveComponent)
+            # This preserves any component-specific state that wasn't captured by mount()
             component_state = request.session.get(f'{view_key}_components', {})
             for key, state in component_state.items():
                 component = getattr(self, key, None)
-                if component and isinstance(component, LiveComponent):
+                # Restore state for both Component and LiveComponent to preserve IDs
+                if component and isinstance(component, (Component, LiveComponent)):
                     self._restore_component_state(component, state)
 
             # Call the event handler
@@ -937,20 +1003,8 @@ class LiveView(View):
             state_serializable = json.loads(state_json)
             request.session[view_key] = state_serializable
 
-            # Save updated component state with stable IDs based on attribute names
-            # Maintain automatic component ID assignment after event processing
-            component_state = {}
-            for key, component in updated_context.items():
-                if isinstance(component, LiveComponent):
-                    # Automatic ID assignment: attribute name -> component_id
-                    # Ensures IDs remain stable across WebSocket events
-                    component.component_id = key
-                    component_state[key] = self._extract_component_state(component)
-            # Serialize component state to ensure session-compatible types
-            component_state_json = json.dumps(component_state, cls=DjangoJSONEncoder)
-            component_state_serializable = json.loads(component_state_json)
-            request.session[f'{view_key}_components'] = component_state_serializable
-            request.session.modified = True  # Force session save
+            # Save updated component state to session (DRY helper method)
+            self._save_components_to_session(request, updated_context)
 
             # Render with diff to get patches
             html, patches_json, version = self.render_with_diff(request)
@@ -1081,11 +1135,13 @@ class LiveView(View):
 
         # Get WebSocket setting from config
         use_websocket = config.get('use_websocket', True)
+        debug_vdom = config.get('debug_vdom', False)
 
         config_script = f"""
         <script>
             // djust configuration
             window.DJUST_USE_WEBSOCKET = {str(use_websocket).lower()};
+            window.DJUST_DEBUG_VDOM = {str(debug_vdom).lower()};
         </script>
         """
 
@@ -1730,7 +1786,9 @@ class LiveView(View):
 
             function applyPatches(patches) {
                 const parsedPatches = JSON.parse(patches);
-                console.log('[LiveView] Applying', parsedPatches.length, 'patches');
+                if (window.DJUST_DEBUG_VDOM) {
+                    console.log('[LiveView] Applying', parsedPatches.length, 'patches');
+                }
 
                 // Sort patches to ensure RemoveChild operations are applied in descending index order
                 // within the same path. This prevents index invalidation when removing multiple children.
@@ -1748,7 +1806,7 @@ class LiveView(View):
                 });
 
                 // Debug: log patch types for small patch sets
-                if (parsedPatches.length > 0 && parsedPatches.length <= 20) {
+                if (window.DJUST_DEBUG_VDOM && parsedPatches.length > 0 && parsedPatches.length <= 20) {
                     console.log('[LiveView] Patch count:', parsedPatches.length);
                     for (let i = 0; i < Math.min(5, parsedPatches.length); i++) {
                         console.log('  Patch', i, ':', parsedPatches[i].type, 'at', parsedPatches[i].path);
@@ -1782,10 +1840,19 @@ class LiveView(View):
 
                                 if (patch.path[i] >= children.length) {
                                     console.warn(`  FAILED: Index ${patch.path[i]} out of bounds (only ${children.length} children)`);
+                                    console.warn(`  Current node HTML (first 500 chars):`);
+                                    console.warn(debugNode.outerHTML ? debugNode.outerHTML.substring(0, 500) : 'N/A');
                                     break;
                                 }
 
                                 debugNode = children[patch.path[i]];
+
+                                // After moving to the next node, show what it contains
+                                if (i === 3) { // At the critical failing level [3, 0, 2, 1]
+                                    console.warn(`  >>> At critical path[3], showing node details:`);
+                                    console.warn(`      Tag: ${debugNode.tagName}, ID: ${debugNode.id || 'none'}, Class: ${debugNode.className || 'none'}`);
+                                    console.warn(`      HTML (first 800 chars): ${debugNode.outerHTML ? debugNode.outerHTML.substring(0, 800) : 'N/A'}`);
+                                }
                             }
                         }
                         continue;
@@ -1811,6 +1878,12 @@ class LiveView(View):
                             node.setAttribute(patch.key, patch.value);
                         }
                     } else if (patch.type === 'RemoveAttr') {
+                        if (window.DJUST_DEBUG_VDOM) {
+                            console.log(`[LiveView] Patch RemoveAttr '${patch.key}' at path (${patch.path.length}) [${patch.path.join(', ')}]`);
+                            console.log(`[LiveView]   Target element: <${node.tagName || 'unknown'}> with ${(node.children || []).length} children`);
+                            if (node.id) console.log(`[LiveView]     id="${node.id}"`);
+                            if (node.className) console.log(`[LiveView]     class="${node.className}"`);
+                        }
                         node.removeAttribute(patch.key);
                     } else if (patch.type === 'InsertChild') {
                         const newChild = createNodeFromVNode(patch.node);
@@ -1862,7 +1935,9 @@ class LiveView(View):
                     }
                 }
 
-                console.log(`[LiveView] Patch summary: ${successCount} succeeded, ${failedCount} failed`);
+                if (window.DJUST_DEBUG_VDOM) {
+                    console.log(`[LiveView] Patch summary: ${successCount} succeeded, ${failedCount} failed`);
+                }
 
                 // If any patches failed, return false to trigger page reload
                 if (failedCount > 0) {

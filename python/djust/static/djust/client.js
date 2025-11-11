@@ -98,7 +98,22 @@
                 if (clickHandler) {
                     element.addEventListener('click', (e) => {
                         e.preventDefault();
-                        this.sendEvent(clickHandler, {});
+
+                        // Extract data-* attributes as event parameters
+                        const params = {};
+                        Array.from(e.currentTarget.attributes).forEach(attr => {
+                            if (attr.name.startsWith('data-')) {
+                                const key = attr.name.slice(5); // Remove 'data-' prefix
+                                // Try to parse as JSON for complex types, otherwise use as string
+                                try {
+                                    params[key] = JSON.parse(attr.value);
+                                } catch {
+                                    params[key] = attr.value;
+                                }
+                            }
+                        });
+
+                        this.sendEvent(clickHandler, params);
                     });
                 }
 
@@ -159,41 +174,52 @@
 
             console.log('[LiveView] Applying patches:', patches);
 
-            patches.forEach(patch => {
-                const element = this.getElementByPath(patch.path);
-                if (!element) {
-                    console.warn('[LiveView] Element not found for path:', patch.path);
-                    return;
-                }
+            patches.forEach((patch, patchIndex) => {
+                try {
+                    const element = this.getElementByPath(patch.path);
+                    if (!element) {
+                        console.warn('[LiveView] Element not found for path:', patch.path);
+                        return;
+                    }
 
-                switch (patch.type) {
-                    case 'Replace':
-                        this.patchReplace(element, patch.node);
-                        break;
+                    switch (patch.type) {
+                        case 'Replace':
+                            this.patchReplace(element, patch.node);
+                            break;
 
-                    case 'SetText':
-                        this.patchSetText(element, patch.text);
-                        break;
+                        case 'SetText':
+                            this.patchSetText(element, patch.text);
+                            break;
 
-                    case 'SetAttr':
-                        this.patchSetAttr(element, patch.key, patch.value);
-                        break;
+                        case 'SetAttr':
+                            this.patchSetAttr(element, patch.key, patch.value);
+                            break;
 
-                    case 'RemoveAttr':
-                        this.patchRemoveAttr(element, patch.key);
-                        break;
+                        case 'RemoveAttr':
+                            console.log(`[LiveView] Patch ${patchIndex}: RemoveAttr '${patch.key}' at path (${patch.path.length}) [${patch.path.join(', ')}]`);
+                            console.log(`[LiveView]   Target element: <${element.tagName}> with ${element.children.length} children`);
+                            this.patchRemoveAttr(element, patch.key);
+                            break;
 
-                    case 'InsertChild':
-                        this.patchInsertChild(element, patch.index, patch.node);
-                        break;
+                        case 'InsertChild':
+                            this.patchInsertChild(element, patch.index, patch.node);
+                            break;
 
-                    case 'RemoveChild':
-                        this.patchRemoveChild(element, patch.index);
-                        break;
+                        case 'RemoveChild':
+                            this.patchRemoveChild(element, patch.index);
+                            break;
 
-                    case 'MoveChild':
-                        this.patchMoveChild(element, patch.from, patch.to);
-                        break;
+                        case 'MoveChild':
+                            this.patchMoveChild(element, patch.from, patch.to);
+                            break;
+                    }
+                } catch (error) {
+                    console.error(`[LiveView] FAILED: Patch ${patchIndex} at path [${patch.path.join(', ')}]`);
+                    console.error(`[LiveView]   Patch type: ${patch.type}`);
+                    console.error(`[LiveView]   Error: ${error.message}`);
+
+                    // Show what we found at each step of the path
+                    this.debugPath(patch.path);
                 }
             });
 
@@ -215,6 +241,39 @@
                 }
             }
             return element;
+        }
+
+        /**
+         * Debug helper: Show what's at each step of a path
+         */
+        debugPath(path) {
+            console.log('[LiveView] === Path Debug ===');
+            let element = document.body;
+            console.log(`[LiveView] Path[root] = BODY with ${element.children.length} children`);
+
+            for (let i = 0; i < path.length; i++) {
+                const index = path[i];
+                console.log(`[LiveView] Path[${i}] = ${index}, available children: ${element.children.length}`);
+
+                // Show all children tags
+                const childTags = Array.from(element.children).map((child, idx) =>
+                    `[${idx}]=${child.tagName}`
+                ).join(' ');
+                console.log(`[LiveView]   Children: ${childTags}`);
+
+                if (element.children[index]) {
+                    element = element.children[index];
+                    console.log(`[LiveView]   Selected: <${element.tagName}> with ${element.children.length} children`);
+
+                    // Show some attributes if present
+                    if (element.id) console.log(`[LiveView]     id="${element.id}"`);
+                    if (element.className) console.log(`[LiveView]     class="${element.className}"`);
+                } else {
+                    console.log(`[LiveView]   FAILED: Index ${index} out of bounds (only ${element.children.length} children)`);
+                    break;
+                }
+            }
+            console.log('[LiveView] === End Path Debug ===');
         }
 
         patchReplace(element, node) {
