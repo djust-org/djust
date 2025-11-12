@@ -11,6 +11,7 @@
 // Actor system module
 pub mod actors;
 
+use actors::{ActorSupervisor, SessionActorHandle};
 use dashmap::DashMap;
 use djust_core::{Context, Value};
 use djust_templates::Template;
@@ -21,10 +22,39 @@ use pyo3::types::{PyBytes, PyDict, PyList};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Global template cache - parse once, reuse for all sessions
 /// Using Arc<Template> for cheap cloning across threads
 static TEMPLATE_CACHE: Lazy<DashMap<String, Arc<Template>>> = Lazy::new(DashMap::new);
+
+/// Global supervisor for managing actor lifecycle
+/// Created once with 1-hour TTL
+static SUPERVISOR: Lazy<Arc<ActorSupervisor>> = Lazy::new(|| {
+    let supervisor = Arc::new(ActorSupervisor::new(Duration::from_secs(3600)));
+    supervisor
+});
+
+/// Flag to track if supervisor background tasks have been started
+static SUPERVISOR_STARTED: Lazy<std::sync::atomic::AtomicBool> =
+    Lazy::new(|| std::sync::atomic::AtomicBool::new(false));
+
+/// Ensure supervisor background tasks are started (idempotent)
+fn ensure_supervisor_started() {
+    use tracing::info;
+
+    if !SUPERVISOR_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        // First time - start background tasks
+        let ttl_secs = SUPERVISOR.stats().ttl_secs;
+        info!(
+            ttl_secs = ttl_secs,
+            cleanup_interval_secs = 60,
+            health_check_interval_secs = 30,
+            "Starting ActorSupervisor background tasks"
+        );
+        SUPERVISOR.clone().start();
+    }
+}
 
 /// A LiveView component that manages state and rendering (Rust backend)
 #[pyclass(name = "RustLiveView")]
@@ -337,7 +367,6 @@ fn resolve_template_inheritance(
 // Actor System Python Bindings
 // ============================================================================
 
-use crate::actors::{SessionActor, SessionActorHandle};
 use pyo3_async_runtimes::tokio::future_into_py;
 
 /// Python wrapper for SessionActorHandle
@@ -517,8 +546,11 @@ impl SessionActorHandlePy {
 #[pyfunction]
 pub fn create_session_actor(py: Python<'_>, session_id: String) -> PyResult<Bound<'_, PyAny>> {
     future_into_py(py, async move {
-        let (actor, handle) = SessionActor::new(session_id);
-        tokio::spawn(actor.run());
+        // Ensure supervisor background tasks are started (idempotent)
+        ensure_supervisor_started();
+
+        // Use global supervisor to get or create session
+        let handle = SUPERVISOR.get_or_create_session(session_id).await;
 
         Python::with_gil(|py| -> PyResult<PyObject> {
             Ok(Py::new(py, SessionActorHandlePy { handle })?.into_py(py))
@@ -526,19 +558,32 @@ pub fn create_session_actor(py: Python<'_>, session_id: String) -> PyResult<Boun
     })
 }
 
+/// Supervisor statistics exposed to Python
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct SupervisorStatsPy {
+    /// Number of active sessions
+    #[pyo3(get)]
+    pub active_sessions: usize,
+    /// Time-to-live for idle sessions in seconds
+    #[pyo3(get)]
+    pub ttl_secs: u64,
+}
+
 /// Get actor system statistics
 ///
-/// Returns basic statistics about the actor system.
+/// Returns statistics about the actor supervisor including active sessions
+/// and configured TTL.
 ///
 /// Returns:
-///     dict: {"info": str}
+///     SupervisorStats: Object with active_sessions and ttl_secs attributes
 #[pyfunction]
-pub fn get_actor_stats() -> PyResult<PyObject> {
-    Python::with_gil(|py| {
-        let dict = PyDict::new_bound(py);
-        dict.set_item("info", "Actor stats not yet implemented")?;
-        Ok(dict.into())
-    })
+pub fn get_actor_stats() -> SupervisorStatsPy {
+    let stats = SUPERVISOR.stats();
+    SupervisorStatsPy {
+        active_sessions: stats.active_sessions,
+        ttl_secs: stats.ttl_secs,
+    }
 }
 
 // Helper functions for Python ↔ Rust conversion
@@ -624,6 +669,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Actor system exports
     m.add_class::<SessionActorHandlePy>()?;
+    m.add_class::<SupervisorStatsPy>()?;
     m.add_function(wrap_pyfunction!(create_session_actor, m)?)?;
     m.add_function(wrap_pyfunction!(get_actor_stats, m)?)?;
 

@@ -50,18 +50,24 @@ class TestActorIntegration:
 
     @pytest.mark.asyncio
     async def test_actor_stats(self):
-        """Test getting actor system statistics"""
+        """Test getting actor system statistics (Phase 7: supervisor stats)"""
         from djust._rust import get_actor_stats, create_session_actor
 
+        # Initially should have no active sessions
         stats = get_actor_stats()
-        assert "info" in stats
+        assert hasattr(stats, 'active_sessions')
+        assert hasattr(stats, 'ttl_secs')
+        assert stats.ttl_secs == 3600  # Default 1-hour TTL
+        initial_count = stats.active_sessions
 
-        # Create and shutdown an actor
+        # Create an actor - supervisor should track it
         handle = await create_session_actor("stats-test")
-        await handle.shutdown()
+        stats_with_session = get_actor_stats()
+        assert stats_with_session.active_sessions == initial_count + 1
 
-        stats2 = get_actor_stats()
-        assert stats2 is not None
+        # Shutdown - but supervisor may still track it briefly
+        await handle.shutdown()
+        # Note: Session cleanup happens async, so we don't assert exact count here
 
     @pytest.mark.asyncio
     async def test_actor_lifecycle_stress(self):
