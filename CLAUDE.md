@@ -625,6 +625,22 @@ When reviewing or writing code:
 - `COMPONENT_EXAMPLES.md`: Complete working examples (Todo app, User dashboard, etc.)
 - `COMPONENT_PERFORMANCE_OPTIMIZATION.md`: Performance optimization strategies (Python → Hybrid → Rust)
 
+### State Management Documentation
+- `docs/STATE_MANAGEMENT_API.md`: ⭐ Complete API reference for state management decorators (@debounce, @throttle, @optimistic, @cache, @client_state, DraftModeMixin)
+- `docs/STATE_MANAGEMENT_PATTERNS.md`: Common patterns, best practices, and anti-patterns for state management
+- `docs/STATE_MANAGEMENT_TUTORIAL.md`: Step-by-step tutorial building a Product Search feature with state management
+- `docs/STATE_MANAGEMENT_EXAMPLES.md`: Copy-paste ready examples for e-commerce, chat, dashboards, forms, and more
+- `docs/STATE_MANAGEMENT_MIGRATION.md`: Migration guide from manual JavaScript to Python decorators
+- `docs/STATE_MANAGEMENT_ARCHITECTURE.md`: Implementation architecture for contributors (backend, frontend, wire protocol)
+- `docs/STATE_MANAGEMENT_COMPARISON.md`: Framework comparison with Phoenix LiveView and Laravel Livewire
+
+**Key Concepts:**
+- **Python-Only State Management**: Use decorators like `@debounce`, `@optimistic`, `@cache` to eliminate manual JavaScript
+- **87% Code Reduction**: State management decorators reduce 889 lines of JavaScript to ~120 lines of Python
+- **Zero JavaScript Required**: Common patterns (debouncing, optimistic updates, caching, drafts) work without writing any JS
+- **Bundle Size**: 7.1 KB client.js (still smallest: Phoenix ~30KB, Livewire ~50KB)
+- **Competitive Advantage**: Python decorators match Phoenix LiveView and Laravel Livewire developer experience
+
 ### Implementation Details
 - `VDOM_PATCHING_ISSUE.md`: VDOM form value preservation details
 - `PYTHONIC_FORMS_IMPLEMENTATION.md`: Forms system implementation details
