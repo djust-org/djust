@@ -129,6 +129,7 @@ impl SessionActor {
                     component_id,
                     template_string,
                     initial_props,
+                    python_component, // Phase 8.2
                     reply,
                 } => {
                     debug!(
@@ -138,7 +139,7 @@ impl SessionActor {
                         "Handling CreateComponent"
                     );
                     let result = self
-                        .handle_create_component(view_id, component_id, template_string, initial_props)
+                        .handle_create_component(view_id, component_id, template_string, initial_props, python_component)
                         .await;
                     let _ = reply.send(result);
                 }
@@ -320,13 +321,14 @@ impl SessionActor {
     // Phase 8: Component Management Handler Methods
     // ========================================================================
 
-    /// Handle create component request (Phase 8)
+    /// Handle create component request (Phase 8.2: Added python_component)
     async fn handle_create_component(
         &self,
         view_id: String,
         component_id: String,
         template_string: String,
         initial_props: HashMap<String, Value>,
+        python_component: Option<pyo3::Py<pyo3::PyAny>>, // Phase 8.2
     ) -> Result<String, ActorError> {
         let view_handle = self
             .views
@@ -334,7 +336,7 @@ impl SessionActor {
             .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {}", view_id)))?;
 
         view_handle
-            .create_component(component_id, template_string, initial_props)
+            .create_component(component_id, template_string, initial_props, python_component)
             .await
     }
 
@@ -535,6 +537,7 @@ impl SessionActorHandle {
         component_id: String,
         template_string: String,
         initial_props: HashMap<String, Value>,
+        python_component: Option<pyo3::Py<pyo3::PyAny>>, // Phase 8.2
     ) -> Result<String, ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -544,6 +547,7 @@ impl SessionActorHandle {
                 component_id,
                 template_string,
                 initial_props,
+                python_component, // Phase 8.2
                 reply: tx,
             })
             .await

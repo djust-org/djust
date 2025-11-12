@@ -709,3 +709,240 @@ class TestActorIntegration:
 
         await handle.shutdown()
 
+    # ========================================================================
+    # Phase 8.2: Python Event Handler Integration Tests
+    # ========================================================================
+
+    @pytest.mark.asyncio
+    async def test_component_with_python_handler(self):
+        """Test component with Python event handler (Phase 8.2)."""
+        from djust._rust import create_session_actor
+
+        # Create a Python component class with event handlers
+        class CounterComponent:
+            def __init__(self):
+                self.count = 0
+
+            def increment(self, amount=1, **kwargs):
+                """Event handler called from Rust ComponentActor."""
+                self.count += int(amount)
+
+            def decrement(self, amount=1, **kwargs):
+                """Another event handler."""
+                self.count -= int(amount)
+
+            def get_context_data(self):
+                """Return current state for template rendering."""
+                return {"count": self.count}
+
+        handle = await create_session_actor("test-phase8.2-python-handler")
+
+        # Mount a view
+        view_path = "test.CounterView"
+        result = await handle.mount(view_path, {}, None)
+        view_id = result["view_id"]
+
+        # Create Python component instance
+        py_component = CounterComponent()
+        assert py_component.count == 0
+
+        # Create component with Python instance
+        template = "<div>Count: {{ count }}</div>"
+        html = await handle.create_component(
+            view_id,
+            "counter-comp",
+            template,
+            {"count": 0},
+            py_component,  # Phase 8.2: Pass Python component
+        )
+
+        assert "Count: 0" in html
+
+        # Send event that calls Python handler
+        html = await handle.component_event(
+            view_id, "counter-comp", "increment", {"amount": 5}
+        )
+
+        # Verify Python handler was called and state updated
+        assert py_component.count == 5
+        assert "Count: 5" in html
+
+        # Send another event
+        html = await handle.component_event(
+            view_id, "counter-comp", "decrement", {"amount": 2}
+        )
+
+        assert py_component.count == 3
+        assert "Count: 3" in html
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_component_state_sync_from_python(self):
+        """Test state synchronization from Python get_context_data() (Phase 8.2)."""
+        from djust._rust import create_session_actor
+
+        class TodoComponent:
+            def __init__(self):
+                self.items = []
+                self.next_id = 1
+
+            def add_item(self, text="", **kwargs):
+                """Add item and update state."""
+                self.items.append({"id": self.next_id, "text": text, "done": False})
+                self.next_id += 1
+
+            def toggle_item(self, id=None, **kwargs):
+                """Toggle item completion."""
+                for item in self.items:
+                    if item["id"] == int(id):
+                        item["done"] = not item["done"]
+                        break
+
+            def get_context_data(self):
+                """Rust syncs this state after event handlers."""
+                return {
+                    "items": self.items,
+                    "count": len(self.items),
+                    "completed": sum(1 for i in self.items if i["done"]),
+                }
+
+        handle = await create_session_actor("test-phase8.2-state-sync")
+        result = await handle.mount("test.TodoView", {}, None)
+        view_id = result["view_id"]
+
+        py_component = TodoComponent()
+
+        template = """
+        <div>
+            <p>Total: {{ count }}, Completed: {{ completed }}</p>
+        </div>
+        """
+
+        html = await handle.create_component(
+            view_id, "todo-comp", template, {"count": 0, "completed": 0}, py_component
+        )
+
+        assert "Total: 0" in html
+        assert "Completed: 0" in html
+
+        # Add items via event handlers
+        await handle.component_event(
+            view_id, "todo-comp", "add_item", {"text": "Buy milk"}
+        )
+        html = await handle.component_event(
+            view_id, "todo-comp", "add_item", {"text": "Walk dog"}
+        )
+
+        # State should sync from get_context_data()
+        assert "Total: 2" in html
+        assert "Completed: 0" in html
+
+        # Toggle first item
+        html = await handle.component_event(
+            view_id, "todo-comp", "toggle_item", {"id": 1}
+        )
+
+        assert "Total: 2" in html
+        assert "Completed: 1" in html
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_component_without_python_handler_fallback(self):
+        """Test component without Python handler uses fallback (Phase 8.2)."""
+        from djust._rust import create_session_actor
+
+        handle = await create_session_actor("test-phase8.2-fallback")
+        result = await handle.mount("test.View", {}, None)
+        view_id = result["view_id"]
+
+        # Create component WITHOUT Python instance
+        template = "<div>{{ message }}</div>"
+        html = await handle.create_component(
+            view_id, "simple-comp", template, {"message": "Hello"}, None  # No Python component
+        )
+
+        assert "Hello" in html
+
+        # Event should still work using fallback (direct state update)
+        html = await handle.component_event(
+            view_id, "simple-comp", "update", {"message": "Goodbye"}
+        )
+
+        assert "Goodbye" in html
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_component_python_handler_not_found(self):
+        """Test calling non-existent Python handler (Phase 8.2)."""
+        from djust._rust import create_session_actor
+
+        class SimpleComponent:
+            def get_context_data(self):
+                return {"value": 42}
+
+        handle = await create_session_actor("test-phase8.2-handler-not-found")
+        result = await handle.mount("test.View", {}, None)
+        view_id = result["view_id"]
+
+        py_component = SimpleComponent()
+
+        template = "<div>{{ value }}</div>"
+        await handle.create_component(
+            view_id, "comp", template, {"value": 42}, py_component
+        )
+
+        # Call handler that doesn't exist - should fall back to state update
+        html = await handle.component_event(
+            view_id, "comp", "nonexistent_handler", {"value": 99}
+        )
+
+        # Should use fallback and update state
+        assert "99" in html
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_component_multiple_with_python_handlers(self):
+        """Test multiple components each with their own Python handlers (Phase 8.2)."""
+        from djust._rust import create_session_actor
+
+        class Counter:
+            def __init__(self, start=0):
+                self.value = start
+
+            def increment(self, **kwargs):
+                self.value += 1
+
+            def get_context_data(self):
+                return {"value": self.value}
+
+        handle = await create_session_actor("test-phase8.2-multiple")
+        result = await handle.mount("test.View", {}, None)
+        view_id = result["view_id"]
+
+        # Create two components with separate Python instances
+        counter1 = Counter(start=0)
+        counter2 = Counter(start=100)
+
+        template = "<div>{{ value }}</div>"
+
+        await handle.create_component(view_id, "c1", template, {}, counter1)
+        await handle.create_component(view_id, "c2", template, {}, counter2)
+
+        # Increment counter1
+        html1 = await handle.component_event(view_id, "c1", "increment", {})
+        assert "1" in html1
+        assert counter1.value == 1
+        assert counter2.value == 100  # Counter2 unchanged
+
+        # Increment counter2
+        html2 = await handle.component_event(view_id, "c2", "increment", {})
+        assert "101" in html2
+        assert counter1.value == 1  # Counter1 unchanged
+        assert counter2.value == 101
+
+        await handle.shutdown()
+

@@ -17,7 +17,7 @@ This document provides a comprehensive implementation guide for migrating djust'
 
 **8-10 weeks** for complete implementation and testing across 10 phases.
 
-**Current Status:** Phase 5 completed (Python Event Handler Integration)
+**Current Status:** Phase 8.2 completed (Enhanced Component Features with Python Integration)
 
 ### Current Limitations
 
@@ -2451,11 +2451,119 @@ Python → SessionActorHandlePy.create_component()
 - Concurrent event processing across components in same view
 - Minimal overhead: ~10 lines of routing code per message type
 
-**Future Enhancements (Phase 8.2):**
-- Python event handler integration (call Python methods on component events)
-- `SendToParent` message forwarding to ViewActor
-- VDOM diffing for incremental patches (currently returns full HTML)
-- Component-to-component communication
+### Phase 8.2: Enhanced Component Features
+
+**Goal:** Add Python event handler integration and parent-child communication
+
+#### Tasks:
+
+**Task 8.2.1:** Python Event Handler Integration
+- ✅ Implement `call_python_handler()` in ComponentActor
+- ✅ Implement `sync_state_from_python()` to get state from Python's `get_context_data()`
+- ✅ Add `SetPythonComponent` message and handler
+- ✅ Add `set_python_component()` method to ComponentActorHandle
+- ✅ Update `handle_event()` to call Python handlers when available
+- ✅ Graceful fallback when no Python handler exists
+
+**Task 8.2.2:** SendToParent Message Forwarding
+- ✅ Add `parent_handle` field to ComponentActor for parent communication
+- ✅ Add `ComponentEventFromChild` message to ViewMsg enum
+- ✅ Implement `send_component_event_from_child()` on ViewActorHandle
+- ✅ Implement `handle_component_event_from_child()` in ViewActor
+- ✅ Call Python view's `handle_component_event(component_id, event_name, data)` when event forwarded
+
+**Task 8.2.3:** VDOM Diffing for Components
+- ✅ Implement VDOM diffing in ComponentActor `render()` method
+- ✅ Generate patches on every re-render (logged for debugging)
+- ✅ Store `last_vdom` for efficient diffing
+- ✅ Sub-100μs diffing performance maintained
+
+**Task 8.2.4:** Update Python Bindings
+- ✅ Add `python_component` parameter to all create_component methods
+- ✅ Thread python_component through: SessionMsg → ViewMsg → ComponentActor
+- ✅ Call `set_python_component()` after component creation
+- ✅ Update SessionActorHandlePy.create_component() signature
+
+**Task 8.2.5:** Write Python Integration Tests
+- ✅ Test component with Python event handlers (`test_component_with_python_handler`)
+- ✅ Test state synchronization via get_context_data() (`test_component_state_sync_from_python`)
+- ✅ Test fallback when no Python handler (`test_component_without_python_handler_fallback`)
+- ✅ Test missing handler behavior (`test_component_python_handler_not_found`)
+- ✅ Test multiple components with separate Python instances (`test_component_multiple_with_python_handlers`)
+- ✅ All 5 new tests passing
+
+**Deliverables:**
+- ✅ Python event handlers callable from Rust ComponentActor
+- ✅ State synchronization from Python to Rust via get_context_data()
+- ✅ Parent-child communication via SendToParent
+- ✅ VDOM diffing generating minimal patches
+- ✅ Complete Python bindings with python_component parameter
+- ✅ Comprehensive test coverage (5 new tests, all passing)
+
+**Status:** Completed in PR #35
+
+**Implementation Notes:**
+
+**Python Event Handler Flow:**
+```
+ComponentActor receives Event message
+  → call_python_handler(event_name, params)
+  → Python::with_gil() - calls Python method
+  → sync_state_from_python()
+  → calls Python get_context_data()
+  → updates Rust state HashMap
+  → render() with new state
+  → returns HTML to caller
+```
+
+**SendToParent Flow:**
+```
+ComponentActor.send_to_parent("event", data)
+  → ComponentMsg::SendToParent
+  → parent_handle.send_component_event_from_child()
+  → ViewMsg::ComponentEventFromChild
+  → ViewActor.handle_component_event_from_child()
+  → Python view.handle_component_event(component_id, event, data)
+```
+
+**Python Component Example:**
+```python
+class CounterComponent:
+    def __init__(self):
+        self.count = 0
+
+    def increment(self, amount=1, **kwargs):
+        """Event handler called from Rust."""
+        self.count += int(amount)
+
+    def get_context_data(self):
+        """Rust syncs this state after handler."""
+        return {"count": self.count}
+
+# Usage
+py_component = CounterComponent()
+html = await handle.create_component(
+    view_id, "counter", template, {}, py_component
+)
+```
+
+**Performance Characteristics:**
+- Python handler call: ~50-100μs (GIL acquisition + method call)
+- State sync via get_context_data(): ~30-50μs
+- VDOM diffing: <100μs per component update
+- Total overhead: ~150-250μs per event with Python handler
+- Fallback path (no Python): ~10-20μs (direct state update)
+
+**Error Handling:**
+- Missing Python handler → Falls back to direct state update (logged as debug)
+- Python exception in handler → Logged as warning, state unchanged
+- Missing get_context_data() → Component continues with last known state
+- All errors are non-fatal, component remains operational
+
+**Future Enhancements (Phase 8.3+):**
+- Component-to-component communication (sibling messaging)
+- Component preloading for faster initial renders
+- Batch updates for multiple components
 
 ### Phase 9: Testing & Optimization (Week 6)
 

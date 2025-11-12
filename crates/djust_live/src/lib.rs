@@ -556,12 +556,9 @@ impl SessionActorHandlePy {
 
         future_into_py(py, async move {
             let html = handle
-                .create_component(view_id, component_id, template_string, props_rust)
+                .create_component(view_id, component_id, template_string, props_rust, python_component)
                 .await
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-
-            // TODO: Phase 8.2 - Store python_component in ComponentActor for event handlers
-            // Will require adding SetPythonComponent message to ComponentActor
 
             Ok(html)
         })

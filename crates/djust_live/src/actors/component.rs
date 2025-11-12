@@ -10,11 +10,13 @@
 use super::error::ActorError;
 use djust_core::{Context, Value};
 use djust_templates::Template;
-use djust_vdom::{diff, parse_html, Patch, VNode};
+use djust_vdom::{diff, parse_html, VNode};
+use pyo3::types::{PyAnyMethods, PyDictMethods};
+use pyo3::{FromPyObject, ToPyObject};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Messages that ComponentActor can receive
 #[derive(Debug)]
@@ -43,6 +45,12 @@ pub enum ComponentMsg {
         reply: tokio::sync::oneshot::Sender<Result<String, ActorError>>,
     },
 
+    /// Set Python component instance for event handlers (Phase 8.2)
+    SetPythonComponent {
+        component: pyo3::Py<pyo3::PyAny>,
+        reply: tokio::sync::oneshot::Sender<Result<(), ActorError>>,
+    },
+
     /// Shutdown this component
     Shutdown,
 }
@@ -65,6 +73,8 @@ pub struct ComponentActor {
     receiver: mpsc::Receiver<ComponentMsg>,
     /// Optional Python component instance for event handlers
     python_component: Option<pyo3::Py<pyo3::PyAny>>,
+    /// Optional handle to parent ViewActor for SendToParent (Phase 8.2)
+    parent_handle: Option<super::view::ViewActorHandle>,
 }
 
 /// Handle for sending messages to ComponentActor
@@ -82,6 +92,7 @@ impl ComponentActor {
     /// * `component_id` - Unique identifier for this component
     /// * `template_string` - Template for rendering
     /// * `initial_props` - Initial component state
+    /// * `parent_handle` - Optional handle to parent ViewActor for SendToParent (Phase 8.2)
     ///
     /// # Returns
     ///
@@ -91,6 +102,7 @@ impl ComponentActor {
         component_id: String,
         template_string: String,
         initial_props: HashMap<String, Value>,
+        parent_handle: Option<super::view::ViewActorHandle>,
     ) -> Result<(Self, ComponentActorHandle), ActorError> {
         // Parse template once
         let template = Template::new(&template_string)
@@ -112,6 +124,7 @@ impl ComponentActor {
             version: 0,
             receiver: rx,
             python_component: None,
+            parent_handle,
         };
 
         let handle = ComponentActorHandle {
@@ -155,15 +168,36 @@ impl ComponentActor {
                     debug!(
                         component_id = %self.component_id,
                         event = %event_name,
-                        "SendToParent (not yet implemented)"
+                        "Forwarding event to parent ViewActor"
                     );
-                    // TODO: Phase 8.2 - Forward to parent ViewActor
+                    // Phase 8.2: Forward to parent ViewActor
+                    if let Some(ref parent) = self.parent_handle {
+                        let component_id = self.component_id.clone();
+                        let _ = parent
+                            .send_component_event_from_child(component_id, event_name, data)
+                            .await;
+                    } else {
+                        warn!(
+                            component_id = %self.component_id,
+                            event = %event_name,
+                            "No parent handle set, cannot forward event"
+                        );
+                    }
                 }
 
                 ComponentMsg::Render { reply } => {
                     debug!(component_id = %self.component_id, "Handling Render");
                     let result = self.render();
                     let _ = reply.send(result);
+                }
+
+                ComponentMsg::SetPythonComponent { component, reply } => {
+                    debug!(
+                        component_id = %self.component_id,
+                        "Setting Python component instance"
+                    );
+                    self.python_component = Some(component);
+                    let _ = reply.send(Ok(()));
                 }
 
                 ComponentMsg::Shutdown => {
@@ -193,31 +227,140 @@ impl ComponentActor {
         self.render()
     }
 
-    /// Handle event within component
+    /// Handle event within component (Phase 8.2: Now with Python handler support)
     async fn handle_event(
         &mut self,
         event_name: String,
         params: HashMap<String, Value>,
     ) -> Result<String, ActorError> {
-        // TODO: Phase 8.2 - Call Python event handler if available
-        if let Some(ref py_component) = self.python_component {
-            // Call Python handler
-            // For now, just re-render
+        // Phase 8.2: Call Python event handler if available
+        let result = self.call_python_handler(&event_name, &params);
+
+        // If handler call succeeded, sync state from Python
+        if result.is_ok() {
+            if let Err(e) = self.sync_state_from_python() {
+                warn!(
+                    component_id = %self.component_id,
+                    error = %e,
+                    "Failed to sync state from Python"
+                );
+            }
+        } else {
+            // No Python handler or handler failed - fall back to simple state update
             debug!(
                 component_id = %self.component_id,
                 event = %event_name,
-                "Python event handler not yet implemented"
+                "No Python handler available, using fallback"
             );
+            self.state.extend(params);
         }
-
-        // Update state with event params (simplified for now)
-        self.state.extend(params);
 
         // Re-render after state change
         self.render()
     }
 
-    /// Render component with current state
+    /// Call Python event handler (Phase 8.2)
+    ///
+    /// Calls the specified method on the Python component instance with the given parameters.
+    fn call_python_handler(
+        &self,
+        event_name: &str,
+        params: &HashMap<String, Value>,
+    ) -> Result<(), ActorError> {
+        use pyo3::types::PyDict;
+        use pyo3::Python;
+
+        // If no Python component is set, return error (will use fallback)
+        let python_component = self
+            .python_component
+            .as_ref()
+            .ok_or_else(|| ActorError::Python("No Python component set".to_string()))?;
+
+        // Call Python handler with GIL
+        Python::with_gil(|py| {
+            let component = python_component.bind(py);
+
+            // Get the handler method
+            let handler = component.getattr(event_name).map_err(|e| {
+                ActorError::Python(format!(
+                    "Handler '{}' not found on component '{}': {}",
+                    event_name, self.component_id, e
+                ))
+            })?;
+
+            // Convert params to Python dict
+            let params_dict = PyDict::new_bound(py);
+            for (key, value) in params {
+                params_dict
+                    .set_item(key, value.to_object(py))
+                    .map_err(|e| {
+                        ActorError::Python(format!("Failed to convert param '{}': {}", key, e))
+                    })?;
+            }
+
+            // Call handler(**params)
+            handler.call((), Some(&params_dict)).map_err(|e| {
+                ActorError::Python(format!(
+                    "Error in component '{}' handler '{}': {}",
+                    self.component_id, event_name, e
+                ))
+            })?;
+
+            Ok::<_, ActorError>(())
+        })
+    }
+
+    /// Sync state from Python component to Rust state (Phase 8.2)
+    ///
+    /// Calls get_context_data() on the Python component and updates the Rust state.
+    fn sync_state_from_python(&mut self) -> Result<(), ActorError> {
+        use pyo3::types::PyDict;
+        use pyo3::Python;
+
+        let python_component = match &self.python_component {
+            Some(component) => component,
+            None => return Ok(()), // No Python component, nothing to sync
+        };
+
+        Python::with_gil(|py| {
+            let component = python_component.bind(py);
+
+            // Get context_data (calls component.get_context_data())
+            let context_method = component.getattr("get_context_data").map_err(|e| {
+                ActorError::Python(format!(
+                    "get_context_data() not found on component '{}': {}",
+                    self.component_id, e
+                ))
+            })?;
+
+            let context_dict = context_method.call0().map_err(|e| {
+                ActorError::Python(format!("Error calling get_context_data(): {}", e))
+            })?;
+
+            let context_dict = context_dict.downcast::<PyDict>().map_err(|e| {
+                ActorError::Python(format!("get_context_data() did not return dict: {}", e))
+            })?;
+
+            // Convert to HashMap and update state
+            let mut state = HashMap::new();
+            for (key, value) in context_dict.iter() {
+                let key_str: String = key.extract().map_err(|e| {
+                    ActorError::Python(format!("Failed to extract key as string: {}", e))
+                })?;
+
+                let rust_value = Value::extract_bound(&value).map_err(|e| {
+                    ActorError::Python(format!("Failed to convert value for key '{}': {}", key_str, e))
+                })?;
+
+                state.insert(key_str, rust_value);
+            }
+
+            self.state = state;
+            Ok::<_, ActorError>(())
+        })
+    }
+
+    /// Render component with current state (Phase 8.2: Now with VDOM diffing)
     fn render(&mut self) -> Result<String, ActorError> {
         // Create context from state
         let context = Context::from_dict(self.state.clone());
@@ -231,6 +374,18 @@ impl ComponentActor {
         // Parse to VDOM
         let new_vdom = parse_html(&html)
             .map_err(|e| ActorError::Vdom(format!("Failed to parse HTML: {}", e)))?;
+
+        // Phase 8.2: Compute VDOM diff if we have a previous render
+        if let Some(ref old_vdom) = self.last_vdom {
+            let patches = diff(old_vdom, &new_vdom);
+            debug!(
+                component_id = %self.component_id,
+                version = %self.version,
+                num_patches = %patches.len(),
+                "Generated VDOM patches for component update"
+            );
+            // TODO: In future, return patches to client for efficient DOM updates
+        }
 
         // Store for future diffs
         self.last_vdom = Some(new_vdom);
@@ -288,6 +443,21 @@ impl ComponentActorHandle {
         rx.await.map_err(|_| ActorError::Shutdown)?
     }
 
+    /// Set Python component instance for event handling
+    pub async fn set_python_component(
+        &self,
+        component: pyo3::Py<pyo3::PyAny>,
+    ) -> Result<(), ActorError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.sender
+            .send(ComponentMsg::SetPythonComponent { component, reply: tx })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+
+        rx.await.map_err(|_| ActorError::Shutdown)?
+    }
+
     /// Send event to parent ViewActor
     pub async fn send_to_parent(&self, event_name: String, data: HashMap<String, Value>) {
         // Fire and forget - parent may or may not be listening
@@ -318,7 +488,7 @@ mod tests {
         let mut props = HashMap::new();
         props.insert("message".to_string(), Value::String("Hello".to_string()));
 
-        let result = ComponentActor::new("test-comp".to_string(), template, props);
+        let result = ComponentActor::new("test-comp".to_string(), template, props, None);
         assert!(result.is_ok());
 
         let (actor, handle) = result.unwrap();
@@ -334,7 +504,7 @@ mod tests {
         let mut props = HashMap::new();
         props.insert("message".to_string(), Value::String("Hello".to_string()));
 
-        let (actor, handle) = ComponentActor::new("test-comp".to_string(), template, props).unwrap();
+        let (actor, handle) = ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
         tokio::spawn(actor.run());
 
         let html = handle.render().await.unwrap();
@@ -349,7 +519,7 @@ mod tests {
         let mut props = HashMap::new();
         props.insert("message".to_string(), Value::String("Hello".to_string()));
 
-        let (actor, handle) = ComponentActor::new("test-comp".to_string(), template, props).unwrap();
+        let (actor, handle) = ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
         tokio::spawn(actor.run());
 
         // Initial render
@@ -371,7 +541,7 @@ mod tests {
         let mut props = HashMap::new();
         props.insert("count".to_string(), Value::Integer(0));
 
-        let (actor, handle) = ComponentActor::new("test-comp".to_string(), template, props).unwrap();
+        let (actor, handle) = ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
         tokio::spawn(actor.run());
 
         // Trigger event (simplified - just updates state)
@@ -388,7 +558,7 @@ mod tests {
         let template = "<div>{{ message }}</div>".to_string();
         let props = HashMap::new();
 
-        let (actor, handle) = ComponentActor::new("test-comp".to_string(), template, props).unwrap();
+        let (actor, handle) = ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
         tokio::spawn(actor.run());
 
         // Should not panic or block

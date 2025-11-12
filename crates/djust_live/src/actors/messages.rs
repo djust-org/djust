@@ -41,12 +41,13 @@ pub enum SessionMsg {
     },
 
     // Phase 8: Component management messages
-    /// Create a component in a specific view
+    /// Create a component in a specific view (Phase 8.2: Added python_component)
     CreateComponent {
         view_id: String,
         component_id: String,
         template_string: String,
         initial_props: HashMap<String, Value>,
+        python_component: Option<Py<PyAny>>, // Phase 8.2: Python component for event handlers
         reply: oneshot::Sender<Result<String>>, // Returns rendered HTML
     },
 
@@ -141,11 +142,12 @@ pub enum ViewMsg {
         reply: oneshot::Sender<Result<RenderResult>>,
     },
 
-    /// Create a child ComponentActor (Phase 8)
+    /// Create a child ComponentActor (Phase 8.2: Added python_component)
     CreateComponent {
         component_id: String,
         template_string: String,
         initial_props: HashMap<String, Value>,
+        python_component: Option<Py<PyAny>>, // Phase 8.2: Python component for event handlers
         reply: oneshot::Sender<Result<String>>, // Returns rendered HTML
     },
 
@@ -168,6 +170,13 @@ pub enum ViewMsg {
     RemoveComponent {
         component_id: String,
         reply: oneshot::Sender<Result<()>>,
+    },
+
+    /// Receive event from child component (Phase 8.2)
+    ComponentEventFromChild {
+        component_id: String,
+        event_name: String,
+        data: HashMap<String, Value>,
     },
 
     /// Reset state

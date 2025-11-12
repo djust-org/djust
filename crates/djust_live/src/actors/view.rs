@@ -11,7 +11,8 @@ use crate::RustLiveViewBackend;
 use djust_core::Value;
 use indexmap::IndexMap;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods};
+use pyo3::ToPyObject;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -23,6 +24,7 @@ use tracing::{debug, info, warn};
 pub struct ViewActor {
     view_path: String,
     receiver: mpsc::Receiver<ViewMsg>,
+    sender: mpsc::Sender<ViewMsg>, // Phase 8.2: For creating child component handles
     backend: RustLiveViewBackend,
     /// Python LiveView instance for calling event handlers
     /// Set via SetPythonView message after actor creation
@@ -73,6 +75,7 @@ impl ViewActor {
         let actor = ViewActor {
             view_path: view_path.clone(),
             receiver: rx,
+            sender: tx.clone(), // Phase 8.2: Store sender for creating child component handles
             backend,
             python_view: None, // Phase 5: Set via SetPythonView message
             components: IndexMap::new(), // Phase 8: Child components
@@ -137,6 +140,7 @@ impl ViewActor {
                     component_id,
                     template_string,
                     initial_props,
+                    python_component, // Phase 8.2
                     reply,
                 } => {
                     debug!(
@@ -144,7 +148,7 @@ impl ViewActor {
                         component_id = %component_id,
                         "CreateComponent"
                     );
-                    self.handle_create_component(component_id, template_string, initial_props, reply)
+                    self.handle_create_component(component_id, template_string, initial_props, python_component, reply)
                         .await;
                 }
 
@@ -188,6 +192,21 @@ impl ViewActor {
                         "RemoveComponent"
                     );
                     self.handle_remove_component(component_id, reply).await;
+                }
+
+                ViewMsg::ComponentEventFromChild {
+                    component_id,
+                    event_name,
+                    data,
+                } => {
+                    debug!(
+                        view_path = %self.view_path,
+                        component_id = %component_id,
+                        event = %event_name,
+                        "Received event from child component"
+                    );
+                    self.handle_component_event_from_child(component_id, event_name, data)
+                        .await;
                 }
 
                 ViewMsg::Reset => {
@@ -417,7 +436,7 @@ impl ViewActor {
     // Phase 8: Component Management Methods
     // ========================================================================
 
-    /// Handle CreateComponent message (Phase 8)
+    /// Handle CreateComponent message (Phase 8.2: Added python_component)
     ///
     /// Creates a new ComponentActor, spawns it, and stores the handle.
     async fn handle_create_component(
@@ -425,15 +444,39 @@ impl ViewActor {
         component_id: String,
         template_string: String,
         initial_props: HashMap<String, Value>,
+        python_component: Option<Py<PyAny>>, // Phase 8.2
         reply: tokio::sync::oneshot::Sender<Result<String, ActorError>>,
     ) {
-        // Create ComponentActor
-        let result = ComponentActor::new(component_id.clone(), template_string, initial_props);
+        // Create parent handle for SendToParent (Phase 8.2)
+        let parent_handle = ViewActorHandle {
+            sender: self.sender.clone(),
+            view_path: self.view_path.clone(),
+        };
+
+        // Create ComponentActor with parent handle
+        let result = ComponentActor::new(
+            component_id.clone(),
+            template_string,
+            initial_props,
+            Some(parent_handle),
+        );
 
         let response = match result {
             Ok((actor, handle)) => {
                 // Spawn the component actor
                 tokio::spawn(actor.run());
+
+                // Phase 8.2: Set Python component instance if provided
+                if let Some(py_component) = python_component {
+                    if let Err(e) = handle.set_python_component(py_component).await {
+                        warn!(
+                            view_path = %self.view_path,
+                            component_id = %component_id,
+                            error = %e,
+                            "Failed to set Python component instance"
+                        );
+                    }
+                }
 
                 // Get initial rendered HTML
                 let html_result = handle.render().await;
@@ -521,6 +564,88 @@ impl ViewActor {
         };
 
         let _ = reply.send(result);
+    }
+
+    /// Handle ComponentEventFromChild message (Phase 8.2)
+    ///
+    /// Called when a child component sends an event to its parent via send_parent().
+    /// If a Python view is set, tries to call handle_component_event() method.
+    async fn handle_component_event_from_child(
+        &mut self,
+        component_id: String,
+        event_name: String,
+        data: HashMap<String, Value>,
+    ) {
+        // If no Python view is set, just log and ignore
+        let python_view = match &self.python_view {
+            Some(view) => view,
+            None => {
+                debug!(
+                    view_path = %self.view_path,
+                    component_id = %component_id,
+                    event = %event_name,
+                    "No Python view set, ignoring component event"
+                );
+                return;
+            }
+        };
+
+        // Try to call handle_component_event(component_id, event_name, data) on Python view
+        Python::with_gil(|py| {
+            let view = python_view.bind(py);
+
+            // Try to get handle_component_event method
+            match view.getattr("handle_component_event") {
+                Ok(handler) => {
+                    // Convert data to Python dict
+                    let data_dict = PyDict::new_bound(py);
+
+                    // Populate dict
+                    for (key, value) in &data {
+                        if let Err(e) = data_dict.set_item(key, value.to_object(py)) {
+                            warn!(
+                                view_path = %self.view_path,
+                                component_id = %component_id,
+                                error = %e,
+                                "Failed to convert data to Python dict"
+                            );
+                            return;
+                        }
+                    }
+
+                    // Call handler(component_id, event_name, data)
+                    if let Err(e) = handler.call1((
+                        component_id.clone(),
+                        event_name.clone(),
+                        data_dict,
+                    )) {
+                        warn!(
+                            view_path = %self.view_path,
+                            component_id = %component_id,
+                            event = %event_name,
+                            error = %e,
+                            "Error calling handle_component_event"
+                        );
+                    } else {
+                        debug!(
+                            view_path = %self.view_path,
+                            component_id = %component_id,
+                            event = %event_name,
+                            "Successfully called handle_component_event"
+                        );
+                    }
+                }
+                Err(_) => {
+                    // Method doesn't exist - this is fine, component events are optional
+                    debug!(
+                        view_path = %self.view_path,
+                        component_id = %component_id,
+                        event = %event_name,
+                        "No handle_component_event method, ignoring event"
+                    );
+                }
+            }
+        });
     }
 }
 
@@ -654,13 +779,14 @@ impl ViewActorHandle {
     // Phase 8: Component Management API
     // ========================================================================
 
-    /// Create a child ComponentActor (Phase 8)
+    /// Create a child ComponentActor (Phase 8.2: Added python_component)
     ///
     /// # Arguments
     ///
     /// * `component_id` - Unique identifier for this component
     /// * `template_string` - Template for rendering the component
     /// * `initial_props` - Initial component state/props
+    /// * `python_component` - Optional Python component instance for event handlers (Phase 8.2)
     ///
     /// # Returns
     ///
@@ -676,6 +802,7 @@ impl ViewActorHandle {
         component_id: String,
         template_string: String,
         initial_props: HashMap<String, Value>,
+        python_component: Option<Py<PyAny>>, // Phase 8.2
     ) -> Result<String, ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -684,6 +811,7 @@ impl ViewActorHandle {
                 component_id,
                 template_string,
                 initial_props,
+                python_component, // Phase 8.2
                 reply: tx,
             })
             .await
@@ -790,6 +918,32 @@ impl ViewActorHandle {
             .map_err(|_| ActorError::Shutdown)?;
 
         rx.await.map_err(|_| ActorError::Shutdown)?
+    }
+
+    /// Receive event from child component (Phase 8.2)
+    ///
+    /// This is called by child ComponentActors when they send events to their parent.
+    /// Fire-and-forget (no response) since components don't wait for parent handling.
+    ///
+    /// # Arguments
+    ///
+    /// * `component_id` - ID of the child component sending the event
+    /// * `event_name` - Name of the event
+    /// * `data` - Event data
+    pub async fn send_component_event_from_child(
+        &self,
+        component_id: String,
+        event_name: String,
+        data: HashMap<String, Value>,
+    ) {
+        let _ = self
+            .sender
+            .send(ViewMsg::ComponentEventFromChild {
+                component_id,
+                event_name,
+                data,
+            })
+            .await;
     }
 
     /// Shutdown the actor gracefully
