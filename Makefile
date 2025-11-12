@@ -150,6 +150,12 @@ lint: ## Run linters
 	@uv run ruff check python/
 	@cargo clippy
 
+.PHONY: lint-ci
+lint-ci: ## Run linters in CI mode (warnings as errors)
+	@echo "$(GREEN)Running linters in CI mode (strict)...$(NC)"
+	@uv run ruff check python/
+	@cargo clippy -- -D warnings
+
 .PHONY: format
 format: ## Format code
 	@echo "$(GREEN)Formatting code...$(NC)"
