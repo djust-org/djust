@@ -15,9 +15,11 @@ from django.utils.decorators import method_decorator
 from django.db import models
 
 try:
-    from ._rust import RustLiveView
+    from ._rust import RustLiveView, create_session_actor, SessionActorHandle
 except ImportError:
     RustLiveView = None
+    create_session_actor = None
+    SessionActorHandle = None
 
 
 class DjangoJSONEncoder(json.JSONEncoder):
@@ -190,6 +192,7 @@ class LiveView(View):
     Usage:
         class CounterView(LiveView):
             template_name = 'counter.html'
+            use_actors = True  # Enable actor-based state management (optional)
 
             def mount(self, request, **kwargs):
                 self.count = 0
@@ -203,10 +206,12 @@ class LiveView(View):
 
     template_name: Optional[str] = None
     template_string: Optional[str] = None
+    use_actors: bool = False  # Enable Tokio actor-based state management (Phase 5+)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._rust_view: Optional[RustLiveView] = None
+        self._actor_handle: Optional[SessionActorHandle] = None
         self._session_id: Optional[str] = None
         self._cache_key: Optional[str] = None
 
@@ -1545,6 +1550,21 @@ class LiveView(View):
                 });
             }
 
+            // Smart default rate limiting by input type
+            // Prevents VDOM version mismatches from high-frequency events
+            const DEFAULT_RATE_LIMITS = {
+                'range': { type: 'throttle', ms: 150 },      // Sliders
+                'number': { type: 'throttle', ms: 100 },     // Number spinners
+                'color': { type: 'throttle', ms: 150 },      // Color pickers
+                'text': { type: 'debounce', ms: 300 },       // Text inputs
+                'search': { type: 'debounce', ms: 300 },     // Search boxes
+                'email': { type: 'debounce', ms: 300 },      // Email inputs
+                'url': { type: 'debounce', ms: 300 },        // URL inputs
+                'tel': { type: 'debounce', ms: 300 },        // Phone inputs
+                'password': { type: 'debounce', ms: 300 },   // Password inputs
+                'textarea': { type: 'debounce', ms: 300 }    // Multi-line text
+            };
+
             function bindLiveViewEvents() {
                 // Find all interactive elements
                 const allElements = document.querySelectorAll('*');
@@ -1637,7 +1657,9 @@ class LiveView(View):
                     const inputHandler = element.getAttribute('@input');
                     if (inputHandler && !element.dataset.liveviewInputBound) {
                         element.dataset.liveviewInputBound = 'true';
-                        element.addEventListener('input', async (e) => {
+
+                        // Create the base handler function
+                        const baseHandler = async (e) => {
                             const params = {};
 
                             // For checkboxes, send the checked state
@@ -1664,7 +1686,51 @@ class LiveView(View):
                             }
 
                             await handleEvent(inputHandler, params);
-                        });
+                        };
+
+                        // Determine rate limiting strategy (priority order):
+                        // 1. Explicit data-throttle or data-debounce attribute
+                        // 2. Smart default based on input type
+                        // 3. No rate limiting (immediate)
+                        let rateLimitedHandler = baseHandler;
+
+                        if (element.dataset.throttle) {
+                            // Explicit throttle attribute
+                            const ms = parseInt(element.dataset.throttle);
+                            rateLimitedHandler = throttle(baseHandler, ms);
+                        } else if (element.dataset.debounce) {
+                            // Explicit debounce attribute
+                            const ms = parseInt(element.dataset.debounce);
+                            rateLimitedHandler = debounce(baseHandler, ms);
+                        } else {
+                            // Check for smart defaults
+                            const inputType = element.tagName.toLowerCase() === 'textarea'
+                                ? 'textarea'
+                                : (element.type || 'text');
+                            const defaultLimit = DEFAULT_RATE_LIMITS[inputType];
+
+                            if (defaultLimit) {
+                                if (defaultLimit.type === 'throttle') {
+                                    rateLimitedHandler = throttle(baseHandler, defaultLimit.ms);
+                                } else if (defaultLimit.type === 'debounce') {
+                                    rateLimitedHandler = debounce(baseHandler, defaultLimit.ms);
+                                }
+                            }
+                        }
+
+                        // Create optimistic UI handler for immediate feedback
+                        // This runs immediately (not rate-limited) to update display
+                        const optimisticHandler = (e) => {
+                            // Optimistic UI update for high-frequency inputs
+                            if (e.target.type === 'range' || e.target.type === 'number' || e.target.type === 'color') {
+                                updateDisplayValue(e.target);
+                            }
+
+                            // Then call rate-limited server update
+                            rateLimitedHandler(e);
+                        };
+
+                        element.addEventListener('input', optimisticHandler);
                     }
                 });
             }
@@ -2002,6 +2068,77 @@ class LiveView(View):
                 return true; // All patches applied successfully
             }
 
+            // Throttle utility: Limits function calls to at most once per interval
+            // Guarantees the last call will always execute (trailing edge)
+            function throttle(func, interval) {
+                let lastCall = 0;
+                let timeout = null;
+
+                return function(...args) {
+                    const now = Date.now();
+                    const timeSinceLastCall = now - lastCall;
+
+                    if (timeSinceLastCall >= interval) {
+                        // Enough time has passed, execute immediately
+                        lastCall = now;
+                        func.apply(this, args);
+                    } else {
+                        // Too soon, schedule for later (ensures last value is sent)
+                        clearTimeout(timeout);
+                        timeout = setTimeout(() => {
+                            lastCall = Date.now();
+                            func.apply(this, args);
+                        }, interval - timeSinceLastCall);
+                    }
+                };
+            }
+
+            // Debounce utility: Delays function call until after wait period of inactivity
+            // Resets timer on each call (only executes after user stops)
+            function debounce(func, wait) {
+                let timeout = null;
+
+                return function(...args) {
+                    clearTimeout(timeout);
+                    timeout = setTimeout(() => {
+                        func.apply(this, args);
+                    }, wait);
+                };
+            }
+
+            // Optimistic UI update: Immediately update display elements
+            // This provides instant visual feedback before server responds
+            function updateDisplayValue(inputElement) {
+                const value = inputElement.value;
+
+                // Strategy 1: Check for explicit data-display-target attribute
+                const targetId = inputElement.dataset.displayTarget;
+                if (targetId) {
+                    const targetElement = document.getElementById(targetId);
+                    if (targetElement) {
+                        targetElement.textContent = value;
+                        return;
+                    }
+                }
+
+                // Strategy 2: Find nearby <output> element (semantic HTML)
+                const outputElement = inputElement.parentElement?.querySelector('output');
+                if (outputElement) {
+                    outputElement.textContent = value;
+                    return;
+                }
+
+                // Strategy 3: Find sibling <span> or <div> with .value or .display class
+                const displayElement =
+                    inputElement.parentElement?.querySelector('.value') ||
+                    inputElement.parentElement?.querySelector('.display') ||
+                    inputElement.parentElement?.querySelector('span[class*="value"]');
+
+                if (displayElement) {
+                    displayElement.textContent = value;
+                }
+            }
+
             async function handleEvent(eventName, params) {
                 console.log('[LiveView] Event:', eventName, params);
 
@@ -2084,10 +2221,100 @@ class LiveView(View):
                             initTodoItems();
                             bindLiveViewEvents();
                         }
+                    } else {
+                        // Handle HTTP errors (500, 404, etc.)
+                        const errorData = await response.json().catch(() => ({}));
+
+                        console.error('[LiveView] Server Error:', {
+                            status: response.status,
+                            statusText: response.statusText,
+                            error: errorData
+                        });
+
+                        // Show user-friendly error notification
+                        showErrorNotification(errorData, response.status);
                     }
                 } catch (error) {
-                    console.error('[LiveView] Error:', error);
+                    console.error('[LiveView] Network Error:', error);
+                    showErrorNotification({ error: 'Network error occurred. Please check your connection.' }, 0);
                 }
+            }
+
+            function showErrorNotification(errorData, statusCode) {
+                // Create error notification element
+                const notification = document.createElement('div');
+                notification.style.cssText = `
+                    position: fixed;
+                    top: 20px;
+                    right: 20px;
+                    max-width: 500px;
+                    background: #dc3545;
+                    color: white;
+                    padding: 16px 20px;
+                    border-radius: 8px;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                    z-index: 10000;
+                    animation: slideIn 0.3s ease-out;
+                `;
+
+                // Build error message
+                let message = '';
+                if (errorData.error) {
+                    message = `<strong>Error:</strong> ${escapeHtml(errorData.error)}`;
+
+                    // Show detailed error info if available (DEBUG mode)
+                    if (errorData.type) {
+                        message += `<br><small><strong>${escapeHtml(errorData.type)}</strong></small>`;
+                    }
+                    if (errorData.event) {
+                        message += `<br><small>Event: <code style="background: rgba(0,0,0,0.2); padding: 2px 4px; border-radius: 3px;">${escapeHtml(errorData.event)}</code></small>`;
+                    }
+                    if (errorData.traceback) {
+                        message += `<br><details style="margin-top: 8px; cursor: pointer;">
+                            <summary style="font-size: 12px;">Show Traceback</summary>
+                            <pre style="font-size: 11px; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; overflow-x: auto; margin-top: 4px;">${escapeHtml(errorData.traceback)}</pre>
+                        </details>`;
+                    }
+                } else {
+                    message = `<strong>Error ${statusCode}:</strong> An error occurred while processing your request.`;
+                }
+
+                notification.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;">
+                        <div style="flex: 1;">${message}</div>
+                        <button onclick="this.parentElement.parentElement.remove()"
+                                style="background: none; border: none; color: white; font-size: 20px;
+                                       cursor: pointer; padding: 0; line-height: 1; opacity: 0.8;"
+                                title="Close">×</button>
+                    </div>
+                `;
+
+                // Add animation styles
+                const style = document.createElement('style');
+                style.textContent = `
+                    @keyframes slideIn {
+                        from { transform: translateX(400px); opacity: 0; }
+                        to { transform: translateX(0); opacity: 1; }
+                    }
+                `;
+                if (!document.querySelector('style[data-liveview-error-styles]')) {
+                    style.setAttribute('data-liveview-error-styles', '');
+                    document.head.appendChild(style);
+                }
+
+                document.body.appendChild(notification);
+
+                // Auto-remove after 10 seconds
+                setTimeout(() => {
+                    notification.style.animation = 'slideIn 0.3s ease-out reverse';
+                    setTimeout(() => notification.remove(), 300);
+                }, 10000);
+            }
+
+            function escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
             }
 
             function getCookie(name) {

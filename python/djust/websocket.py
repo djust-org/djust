@@ -8,6 +8,12 @@ from typing import Dict, Any, Optional
 from channels.generic.websocket import AsyncWebsocketConsumer
 from .live_view import DjangoJSONEncoder
 
+try:
+    from ._rust import create_session_actor, SessionActorHandle
+except ImportError:
+    create_session_actor = None
+    SessionActorHandle = None
+
 
 class LiveViewConsumer(AsyncWebsocketConsumer):
     """
@@ -23,8 +29,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.view_instance: Optional[Any] = None
+        self.actor_handle: Optional[SessionActorHandle] = None
         self.session_id: Optional[str] = None
         self.use_binary = False  # Use JSON for now (MessagePack support TODO)
+        self.use_actors = False  # Will be set based on view class
 
     async def connect(self):
         """Handle WebSocket connection"""
@@ -45,8 +53,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection"""
+        # Clean up actor if using actors
+        if self.use_actors and self.actor_handle:
+            try:
+                await self.actor_handle.shutdown()
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Error shutting down actor: {e}")
+
         # Clean up session state
         self.view_instance = None
+        self.actor_handle = None
 
     async def receive(self, text_data=None, bytes_data=None):
         """Handle incoming WebSocket messages"""
@@ -201,6 +218,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Instantiate the view
         try:
             self.view_instance = view_class()
+
+            # Check if view uses actor-based state management
+            self.use_actors = getattr(view_class, "use_actors", False)
+
+            if self.use_actors and create_session_actor:
+                # Create SessionActor for this session
+                logger.info(f"Creating SessionActor for {view_path}")
+                self.actor_handle = await create_session_actor(self.session_id)
+                logger.info(f"SessionActor created: {self.actor_handle.session_id}")
+
         except Exception as e:
             error_msg = f"Failed to instantiate {view_path}: {type(e).__name__}: {str(e)}"
             logger.error(error_msg, exc_info=True)

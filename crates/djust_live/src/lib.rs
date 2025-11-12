@@ -8,6 +8,9 @@
 // Parameter only used in recursion for Python value conversion
 #![allow(clippy::only_used_in_recursion)]
 
+// Actor system module
+pub mod actors;
+
 use dashmap::DashMap;
 use djust_core::{Context, Value};
 use djust_templates::Template;
@@ -172,6 +175,45 @@ impl RustLiveViewBackend {
     }
 }
 
+// Public Rust API (for use by other Rust crates like djust_actors)
+impl RustLiveViewBackend {
+    /// Create a new RustLiveViewBackend (Rust API)
+    pub fn new_rust(template_source: String) -> Self {
+        Self::new(template_source)
+    }
+
+    /// Update state (Rust API)
+    pub fn update_state_rust(&mut self, updates: HashMap<String, Value>) {
+        self.update_state(updates)
+    }
+
+    /// Render the template (Rust API)
+    pub fn render_rust(&mut self) -> Result<String, djust_core::DjangoRustError> {
+        self.render().map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))
+    }
+
+    /// Render with diff (Rust API)
+    /// Returns (html, patches_json, version)
+    pub fn render_with_diff_rust(&mut self) -> Result<(String, Option<Vec<djust_vdom::Patch>>, u64), djust_core::DjangoRustError> {
+        let (html, patches_json, version) = self.render_with_diff()
+            .map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))?;
+
+        let patches = if let Some(json) = patches_json {
+            Some(serde_json::from_str(&json)
+                .map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))?)
+        } else {
+            None
+        };
+
+        Ok((html, patches, version))
+    }
+
+    /// Reset the view state (Rust API)
+    pub fn reset_rust(&mut self) {
+        self.reset()
+    }
+}
+
 /// Fast template rendering
 #[pyfunction]
 fn render_template(template_source: String, context: HashMap<String, Value>) -> PyResult<String> {
@@ -291,6 +333,258 @@ fn resolve_template_inheritance(
     Ok(resolved)
 }
 
+// ============================================================================
+// Actor System Python Bindings
+// ============================================================================
+
+use crate::actors::{SessionActor, SessionActorHandle};
+use pyo3_async_runtimes::tokio::future_into_py;
+
+/// Python wrapper for SessionActorHandle
+///
+/// This class provides async methods that can be called from Python's asyncio.
+#[pyclass(name = "SessionActorHandle")]
+pub struct SessionActorHandlePy {
+    handle: SessionActorHandle,
+}
+
+#[pymethods]
+impl SessionActorHandlePy {
+    /// Mount a view
+    ///
+    /// Creates a ViewActor, initializes its state, and renders the initial HTML.
+    ///
+    /// Args:
+    ///     view_path (str): Python path to the LiveView class (e.g. "app.views.Counter")
+    ///     params (dict): Initial state parameters
+    ///
+    /// Returns:
+    ///     dict: {"html": str, "session_id": str}
+    fn mount<'py>(
+        &self,
+        py: Python<'py>,
+        view_path: String,
+        params: &Bound<'py, PyDict>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = self.handle.clone();
+
+        // Convert Python dict to Rust HashMap<String, Value>
+        let params_rust = python_dict_to_hashmap(params)?;
+
+        future_into_py(py, async move {
+            let result = handle
+                .mount(view_path, params_rust)
+                .await
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+            Python::with_gil(|py| -> PyResult<PyObject> {
+                let dict = PyDict::new_bound(py);
+                dict.set_item("html", result.html)?;
+                dict.set_item("session_id", result.session_id)?;
+                Ok(dict.into_py(py))
+            })
+        })
+    }
+
+    /// Handle an event
+    ///
+    /// Routes the event to the appropriate ViewActor and returns the resulting
+    /// VDOM patches or full HTML.
+    ///
+    /// Args:
+    ///     event_name (str): Name of the event (e.g. "increment", "submit_form")
+    ///     params (dict): Event parameters
+    ///
+    /// Returns:
+    ///     dict: {"patches": Optional[str], "html": Optional[str], "version": int}
+    fn event<'py>(
+        &self,
+        py: Python<'py>,
+        event_name: String,
+        params: &Bound<'py, PyDict>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = self.handle.clone();
+
+        // Convert Python dict to Rust HashMap<String, Value>
+        let params_rust = python_dict_to_hashmap(params)?;
+
+        future_into_py(py, async move {
+            let result = handle
+                .event(event_name, params_rust)
+                .await
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+            Python::with_gil(|py| -> PyResult<PyObject> {
+                let dict = PyDict::new_bound(py);
+
+                // Add patches if available
+                if let Some(patches) = result.patches {
+                    let patches_json = serde_json::to_string(&patches)
+                        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+                    dict.set_item("patches", patches_json)?;
+                } else {
+                    dict.set_item("patches", py.None())?;
+                }
+
+                // Add html if available
+                if let Some(html) = result.html {
+                    dict.set_item("html", html)?;
+                } else {
+                    dict.set_item("html", py.None())?;
+                }
+
+                dict.set_item("version", result.version)?;
+                Ok(dict.into_py(py))
+            })
+        })
+    }
+
+    /// Health check ping
+    ///
+    /// Verifies that the session actor is still responsive.
+    ///
+    /// Returns:
+    ///     None
+    fn ping<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let handle = self.handle.clone();
+
+        future_into_py(py, async move {
+            handle
+                .ping()
+                .await
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+            Ok(())
+        })
+    }
+
+    /// Shutdown the session gracefully
+    ///
+    /// Shuts down all child ViewActors and then the SessionActor itself.
+    fn shutdown<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let handle = self.handle.clone();
+
+        future_into_py(py, async move {
+            handle.shutdown().await;
+            Ok(())
+        })
+    }
+
+    /// Get the session ID
+    #[getter]
+    fn session_id(&self) -> String {
+        self.handle.session_id().to_string()
+    }
+}
+
+/// Create a new session actor
+///
+/// This function creates a SessionActor, spawns it on the Tokio runtime,
+/// and returns a handle wrapped for Python.
+///
+/// Args:
+///     session_id (str): Unique identifier for this session
+///
+/// Returns:
+///     SessionActorHandle: Handle to send messages to the actor
+#[pyfunction]
+pub fn create_session_actor(py: Python<'_>, session_id: String) -> PyResult<Bound<'_, PyAny>> {
+    future_into_py(py, async move {
+        let (actor, handle) = SessionActor::new(session_id);
+        tokio::spawn(actor.run());
+
+        Python::with_gil(|py| -> PyResult<PyObject> {
+            Ok(Py::new(py, SessionActorHandlePy { handle })?.into_py(py))
+        })
+    })
+}
+
+/// Get actor system statistics
+///
+/// Returns basic statistics about the actor system.
+///
+/// Returns:
+///     dict: {"info": str}
+#[pyfunction]
+pub fn get_actor_stats() -> PyResult<PyObject> {
+    Python::with_gil(|py| {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("info", "Actor stats not yet implemented")?;
+        Ok(dict.into())
+    })
+}
+
+// Helper functions for Python ↔ Rust conversion
+
+/// Convert Python dict to Rust HashMap<String, Value>
+fn python_dict_to_hashmap(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, Value>> {
+    let mut map = HashMap::new();
+
+    for (key, value) in dict.iter() {
+        let key_str = key.extract::<String>()?;
+        let rust_value = python_to_value(&value)?;
+        map.insert(key_str, rust_value);
+    }
+
+    Ok(map)
+}
+
+/// Convert Python object to Rust Value
+fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+    // String
+    if let Ok(s) = obj.extract::<String>() {
+        return Ok(Value::String(s));
+    }
+
+    // Integer
+    if let Ok(i) = obj.extract::<i64>() {
+        return Ok(Value::Integer(i));
+    }
+
+    // Float
+    if let Ok(f) = obj.extract::<f64>() {
+        return Ok(Value::Float(f));
+    }
+
+    // Boolean
+    if let Ok(b) = obj.extract::<bool>() {
+        return Ok(Value::Bool(b));
+    }
+
+    // None
+    if obj.is_none() {
+        return Ok(Value::Null);
+    }
+
+    // List
+    if let Ok(list) = obj.downcast::<PyList>() {
+        let mut vec = Vec::new();
+        for item in list.iter() {
+            vec.push(python_to_value(&item)?);
+        }
+        return Ok(Value::List(vec));
+    }
+
+    // Dict - recursively convert nested values
+    if let Ok(dict) = obj.downcast::<PyDict>() {
+        let mut map = HashMap::new();
+        for (key, value) in dict.iter() {
+            let key_str = key.extract::<String>()?;
+            map.insert(key_str, python_to_value(&value)?);
+        }
+        return Ok(Value::Object(map));
+    }
+
+    // Fallback: try to convert to string
+    if let Ok(s) = obj.str() {
+        let s_str: String = s.extract()?;
+        return Ok(Value::String(s_str));
+    }
+
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+        format!("Cannot convert Python type to Value"),
+    ))
+}
+
 /// Python module
 #[pymodule]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -299,6 +593,11 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
+
+    // Actor system exports
+    m.add_class::<SessionActorHandlePy>()?;
+    m.add_function(wrap_pyfunction!(create_session_actor, m)?)?;
+    m.add_function(wrap_pyfunction!(get_actor_stats, m)?)?;
 
     // Add pure Rust components (stateless, high-performance ~1μs rendering)
     m.add_class::<djust_components::RustAlert>()?;
