@@ -350,7 +350,7 @@ pub struct SessionActorHandlePy {
 
 #[pymethods]
 impl SessionActorHandlePy {
-    /// Mount a view (Phase 5: Now accepts Python view instance)
+    /// Mount a view (Phase 6: Now returns view_id for routing)
     ///
     /// Creates a ViewActor, initializes its state, and renders the initial HTML.
     ///
@@ -360,7 +360,7 @@ impl SessionActorHandlePy {
     ///     python_view (Optional[Any]): Python LiveView instance for event handler callbacks
     ///
     /// Returns:
-    ///     dict: {"html": str, "session_id": str}
+    ///     dict: {"html": str, "session_id": str, "view_id": str}
     #[pyo3(signature = (view_path, params, python_view=None))]
     fn mount<'py>(
         &self,
@@ -384,12 +384,13 @@ impl SessionActorHandlePy {
                 let dict = PyDict::new_bound(py);
                 dict.set_item("html", result.html)?;
                 dict.set_item("session_id", result.session_id)?;
+                dict.set_item("view_id", result.view_id)?; // Phase 6: Return view_id
                 Ok(dict.into_py(py))
             })
         })
     }
 
-    /// Handle an event
+    /// Handle an event (Phase 6: Now supports view_id routing)
     ///
     /// Routes the event to the appropriate ViewActor and returns the resulting
     /// VDOM patches or full HTML.
@@ -397,14 +398,17 @@ impl SessionActorHandlePy {
     /// Args:
     ///     event_name (str): Name of the event (e.g. "increment", "submit_form")
     ///     params (dict): Event parameters
+    ///     view_id (Optional[str]): View ID for routing. If None, routes to first view (backward compat)
     ///
     /// Returns:
     ///     dict: {"patches": Optional[str], "html": Optional[str], "version": int}
+    #[pyo3(signature = (event_name, params, view_id=None))]
     fn event<'py>(
         &self,
         py: Python<'py>,
         event_name: String,
         params: &Bound<'py, PyDict>,
+        view_id: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let handle = self.handle.clone();
 
@@ -413,7 +417,7 @@ impl SessionActorHandlePy {
 
         future_into_py(py, async move {
             let result = handle
-                .event(event_name, params_rust)
+                .event(event_name, params_rust, view_id)
                 .await
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
@@ -439,6 +443,27 @@ impl SessionActorHandlePy {
                 dict.set_item("version", result.version)?;
                 Ok(dict.into_py(py))
             })
+        })
+    }
+
+    /// Unmount a specific view (Phase 6)
+    ///
+    /// Shuts down a specific ViewActor and removes it from the session.
+    ///
+    /// Args:
+    ///     view_id (str): The UUID of the view to unmount
+    ///
+    /// Returns:
+    ///     None
+    fn unmount<'py>(&self, py: Python<'py>, view_id: String) -> PyResult<Bound<'py, PyAny>> {
+        let handle = self.handle.clone();
+
+        future_into_py(py, async move {
+            handle
+                .unmount(view_id)
+                .await
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+            Ok(())
         })
     }
 

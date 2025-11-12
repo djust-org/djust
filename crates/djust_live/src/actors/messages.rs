@@ -30,7 +30,14 @@ pub enum SessionMsg {
     Event {
         event_name: String,
         params: HashMap<String, Value>,
+        view_id: Option<String>, // Phase 6: Route to specific view by UUID
         reply: oneshot::Sender<Result<PatchResponse>>,
+    },
+
+    /// Unmount a specific view (Phase 6)
+    Unmount {
+        view_id: String,
+        reply: oneshot::Sender<Result<()>>,
     },
 
     /// Health check ping
@@ -47,6 +54,8 @@ pub struct MountResponse {
     pub html: String,
     /// Session ID
     pub session_id: String,
+    /// View ID (UUID) for routing events to specific views (Phase 6)
+    pub view_id: String,
 }
 
 /// Response from handling an event
@@ -152,15 +161,18 @@ mod tests {
         let response = MountResponse {
             html: "<div>Test</div>".to_string(),
             session_id: "session-123".to_string(),
+            view_id: "view-456".to_string(),
         };
 
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("session-123"));
+        assert!(json.contains("view-456"));
         assert!(json.contains("<div>Test</div>"));
 
         let deserialized: MountResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.html, response.html);
         assert_eq!(deserialized.session_id, response.session_id);
+        assert_eq!(deserialized.view_id, response.view_id);
     }
 
     #[test]

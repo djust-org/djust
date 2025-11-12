@@ -8,16 +8,20 @@ use super::error::ActorError;
 use super::messages::{MountResponse, PatchResponse, SessionMsg};
 use super::view::{ViewActor, ViewActorHandle};
 use djust_core::Value;
+use indexmap::IndexMap;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tracing::{debug, info};
+use uuid::Uuid;
 
 /// SessionActor manages a user's session and routes messages to views
 pub struct SessionActor {
     session_id: String,
     receiver: mpsc::Receiver<SessionMsg>,
-    views: HashMap<String, ViewActorHandle>,
+    /// Views stored in insertion order (IndexMap) to ensure deterministic
+    /// backward compatibility when routing events without explicit view_id
+    views: IndexMap<String, ViewActorHandle>,
     created_at: Instant,
     last_activity: Instant,
 }
@@ -57,7 +61,7 @@ impl SessionActor {
         let actor = SessionActor {
             session_id: session_id.clone(),
             receiver: rx,
-            views: HashMap::new(),
+            views: IndexMap::new(),
             created_at: now,
             last_activity: now,
         };
@@ -96,14 +100,26 @@ impl SessionActor {
                 SessionMsg::Event {
                     event_name,
                     params,
+                    view_id,
                     reply,
                 } => {
                     debug!(
                         session_id = %self.session_id,
                         event = %event_name,
+                        view_id = ?view_id,
                         "Handling Event"
                     );
-                    let result = self.handle_event(event_name, params).await;
+                    let result = self.handle_event(event_name, params, view_id).await;
+                    let _ = reply.send(result);
+                }
+
+                SessionMsg::Unmount { view_id, reply } => {
+                    debug!(
+                        session_id = %self.session_id,
+                        view_id = %view_id,
+                        "Handling Unmount"
+                    );
+                    let result = self.handle_unmount(view_id).await;
                     let _ = reply.send(result);
                 }
 
@@ -128,13 +144,23 @@ impl SessionActor {
         );
     }
 
-    /// Handle mount request - creates a new ViewActor (Phase 5: Now sets Python view)
+    /// Handle mount request - creates a new ViewActor (Phase 6: Now uses UUID)
     async fn handle_mount(
         &mut self,
         view_path: String,
         params: HashMap<String, Value>,
         python_view: Option<pyo3::Py<pyo3::PyAny>>,
     ) -> Result<MountResponse, ActorError> {
+        // Phase 6: Generate unique view ID
+        let view_id = Uuid::new_v4().to_string();
+
+        info!(
+            session_id = %self.session_id,
+            view_id = %view_id,
+            view_path = %view_path,
+            "Creating new view"
+        );
+
         // Create ViewActor
         let (view_actor, view_handle) = ViewActor::new(view_path.clone());
         tokio::spawn(view_actor.run());
@@ -150,37 +176,39 @@ impl SessionActor {
         // Render initial HTML
         let result = view_handle.render_with_diff().await?;
 
-        // Store handle for future events
-        self.views.insert(view_path, view_handle);
+        // Phase 6: Store handle with UUID key
+        self.views.insert(view_id.clone(), view_handle);
 
         Ok(MountResponse {
             html: result.html,
             session_id: self.session_id.clone(),
+            view_id,
         })
     }
 
-    /// Handle event - routes to appropriate ViewActor
+    /// Handle event - routes to appropriate ViewActor (Phase 6: Now uses UUID)
     async fn handle_event(
         &mut self,
         event_name: String,
         params: HashMap<String, Value>,
+        view_id: Option<String>,
     ) -> Result<PatchResponse, ActorError> {
-        // LIMITATION (Phase 5.2): View identification system not implemented
-        // Currently routes to first view, which means:
-        // - Only one view per session supported
-        // - Cannot distinguish between multiple views
-        // - Future: Use UUID-based view IDs passed in params
-        let view_handle = self
-            .views
-            .values()
-            .next()
-            .ok_or_else(|| ActorError::ViewNotFound("No views mounted".to_string()))?;
+        // Phase 6: Route by view_id
+        let view_handle = if let Some(id) = view_id {
+            // Explicit view_id provided - route to specific view
+            self.views
+                .get(&id)
+                .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {}", id)))?
+        } else {
+            // No view_id - backward compatibility: route to first view
+            // This maintains Phase 5 behavior for existing code
+            self.views
+                .values()
+                .next()
+                .ok_or_else(|| ActorError::ViewNotFound("No views mounted".to_string()))?
+        };
 
-        // Phase 5.2: Now forwards events to ViewActor for Python handler calling
-        // ViewActor.handle_event() will:
-        // 1. Call Python event handler (Phase 5.3 TODO)
-        // 2. Sync state back from Python (Phase 5.3 TODO)
-        // 3. Render with diff
+        // Phase 5: ViewActor handles event by calling Python handler
         let result = view_handle.event(event_name, params).await?;
 
         // Check if patches exist before moving
@@ -197,10 +225,28 @@ impl SessionActor {
         })
     }
 
+    /// Handle unmount request - removes a specific view (Phase 6)
+    async fn handle_unmount(&mut self, view_id: String) -> Result<(), ActorError> {
+        if let Some(view_handle) = self.views.shift_remove(&view_id) {
+            info!(
+                session_id = %self.session_id,
+                view_id = %view_id,
+                "Unmounting view"
+            );
+            view_handle.shutdown().await;
+            Ok(())
+        } else {
+            Err(ActorError::ViewNotFound(format!(
+                "View not found: {}",
+                view_id
+            )))
+        }
+    }
+
     /// Shutdown all views
     async fn shutdown(&mut self) {
-        for (view_path, view) in self.views.drain() {
-            debug!(view_path = %view_path, "Shutting down view");
+        for (view_id, view) in self.views.drain(..) {
+            debug!(view_id = %view_id, "Shutting down view");
             view.shutdown().await;
         }
     }
@@ -253,7 +299,7 @@ impl SessionActorHandle {
         rx.await.map_err(|_| ActorError::Shutdown)?
     }
 
-    /// Send an event to the view
+    /// Send an event to the view (Phase 6: Now supports view_id)
     ///
     /// Routes the event to the appropriate ViewActor and returns the resulting
     /// VDOM patches or full HTML.
@@ -262,17 +308,19 @@ impl SessionActorHandle {
     ///
     /// * `event_name` - Name of the event (e.g. "increment", "submit_form")
     /// * `params` - Event parameters
+    /// * `view_id` - Optional view ID for routing (if None, routes to first view for backward compat)
     ///
     /// # Errors
     ///
     /// Returns:
     /// - `ActorError::Shutdown` if the session actor has been shutdown
-    /// - `ActorError::ViewNotFound` if no views are mounted
+    /// - `ActorError::ViewNotFound` if no views are mounted or view_id not found
     /// - `ActorError::Template` if template rendering fails
     pub async fn event(
         &self,
         event_name: String,
         params: HashMap<String, Value>,
+        view_id: Option<String>,
     ) -> Result<PatchResponse, ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -280,6 +328,34 @@ impl SessionActorHandle {
             .send(SessionMsg::Event {
                 event_name,
                 params,
+                view_id,
+                reply: tx,
+            })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+
+        rx.await.map_err(|_| ActorError::Shutdown)?
+    }
+
+    /// Unmount a specific view (Phase 6)
+    ///
+    /// Shuts down a specific ViewActor and removes it from the session.
+    ///
+    /// # Arguments
+    ///
+    /// * `view_id` - The UUID of the view to unmount
+    ///
+    /// # Errors
+    ///
+    /// Returns:
+    /// - `ActorError::Shutdown` if the session actor has been shutdown
+    /// - `ActorError::ViewNotFound` if the view_id is not found
+    pub async fn unmount(&self, view_id: String) -> Result<(), ActorError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.sender
+            .send(SessionMsg::Unmount {
+                view_id,
                 reply: tx,
             })
             .await
@@ -355,6 +431,7 @@ mod tests {
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.session_id, "test-session");
+        assert!(!response.view_id.is_empty()); // Phase 6: view_id is now returned
         // HTML will be empty since we have no template loaded
         assert!(response.html.is_empty() || !response.html.is_empty());
 
@@ -367,7 +444,7 @@ mod tests {
         tokio::spawn(actor.run());
 
         // Try to send event before mounting any view
-        let result = handle.event("click".to_string(), HashMap::new()).await;
+        let result = handle.event("click".to_string(), HashMap::new(), None).await;
 
         // Should fail with ViewNotFound error
         assert!(result.is_err());
@@ -391,8 +468,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Now send event
-        let result = handle.event("click".to_string(), HashMap::new()).await;
+        // Now send event (backward compat: no view_id)
+        let result = handle.event("click".to_string(), HashMap::new(), None).await;
 
         assert!(result.is_ok());
 
@@ -405,17 +482,23 @@ mod tests {
         tokio::spawn(actor.run());
 
         // Mount multiple views
-        handle
+        let view1 = handle
             .mount("view1".to_string(), HashMap::new(), None)
             .await
             .unwrap();
-        handle
+        let view2 = handle
             .mount("view2".to_string(), HashMap::new(), None)
             .await
             .unwrap();
 
-        // Event should route to one of them (currently first)
-        let result = handle.event("click".to_string(), HashMap::new()).await;
+        // Phase 6: Event with explicit view_id routes to specific view
+        let result = handle
+            .event("click".to_string(), HashMap::new(), Some(view1.view_id.clone()))
+            .await;
+        assert!(result.is_ok());
+
+        // Event without view_id routes to first view (backward compat)
+        let result = handle.event("click".to_string(), HashMap::new(), None).await;
         assert!(result.is_ok());
 
         handle.shutdown().await;
@@ -466,5 +549,56 @@ mod tests {
         // Subsequent operations should fail
         let result = handle.ping().await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_session_actor_unmount() {
+        let (actor, handle) = SessionActor::new("test-session".to_string());
+        tokio::spawn(actor.run());
+
+        // Mount two views
+        let view1 = handle
+            .mount("view1".to_string(), HashMap::new(), None)
+            .await
+            .unwrap();
+        let view2 = handle
+            .mount("view2".to_string(), HashMap::new(), None)
+            .await
+            .unwrap();
+
+        // Unmount view1
+        let result = handle.unmount(view1.view_id.clone()).await;
+        assert!(result.is_ok());
+
+        // Event to view1 should fail
+        let result = handle
+            .event("click".to_string(), HashMap::new(), Some(view1.view_id.clone()))
+            .await;
+        assert!(result.is_err());
+
+        // Event to view2 should still work
+        let result = handle
+            .event("click".to_string(), HashMap::new(), Some(view2.view_id.clone()))
+            .await;
+        assert!(result.is_ok());
+
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_session_actor_unmount_nonexistent() {
+        let (actor, handle) = SessionActor::new("test-session".to_string());
+        tokio::spawn(actor.run());
+
+        // Try to unmount non-existent view
+        let result = handle.unmount("nonexistent-uuid".to_string()).await;
+        assert!(result.is_err());
+        if let Err(ActorError::ViewNotFound(_)) = result {
+            // Expected
+        } else {
+            panic!("Expected ViewNotFound error");
+        }
+
+        handle.shutdown().await;
     }
 }

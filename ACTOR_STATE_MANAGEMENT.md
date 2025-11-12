@@ -2263,36 +2263,50 @@ if __name__ == "__main__":
 
 **Documentation:** See `PHASE5_DESIGN.md` for complete architecture and design decisions.
 
-### Phase 6: View Identification (Next)
+### Phase 6: View Identification
 
 **Goal:** Implement UUID-based view identification for multiple views per session
 
 #### Tasks:
 
 **Task 6.1:** UUID-based view identification
-- [ ] Generate unique view_id (UUID) for each mounted view
-- [ ] Update SessionActor to use HashMap<Uuid, ViewActorHandle>
-- [ ] Pass view_id in event messages
-- [ ] Route events to specific views by UUID
-- [ ] Update Python bindings to return view_id
+- ✅ Generate unique view_id (UUID) for each mounted view
+- ✅ Update SessionActor to use IndexMap<String, ViewActorHandle> (HashMap → IndexMap for deterministic ordering)
+- ✅ Pass view_id in event messages
+- ✅ Route events to specific views by UUID
+- ✅ Update Python bindings to return view_id
 
 **Task 6.2:** Multiple views per session
-- [ ] Support mounting multiple views in single session
-- [ ] Test concurrent events to different views
-- [ ] Test view-specific state isolation
-- [ ] Document multi-view patterns
+- ✅ Support mounting multiple views in single session
+- ✅ Test concurrent events to different views
+- ✅ Test view-specific state isolation
+- ✅ Document multi-view patterns
 
 **Task 6.3:** View lifecycle management
-- [ ] Add unmount/destroy view functionality
-- [ ] Cleanup view actors when unmounted
-- [ ] Test memory cleanup
-- [ ] Document view lifecycle
+- ✅ Add unmount/destroy view functionality
+- ✅ Cleanup view actors when unmounted
+- ✅ Test memory cleanup
+- ✅ Document view lifecycle
 
 **Deliverables:**
-- Multiple views per session working
-- View-specific event routing
-- Proper resource cleanup
-- Tests passing
+- ✅ Multiple views per session working
+- ✅ View-specific event routing
+- ✅ Proper resource cleanup
+- ✅ 7 Phase 6 integration tests passing (including deterministic routing test)
+
+**Critical Bug Fix:**
+- Fixed HashMap iteration order issue that broke backward compatibility
+- Changed from `HashMap` to `IndexMap` to ensure `.values().next()` is deterministic
+- Ensures events without view_id always route to first-mounted view
+- Added comprehensive test for deterministic routing behavior
+
+**Status:** Completed in PR #31
+
+**Implementation Notes:**
+- Used `IndexMap` instead of `HashMap` to preserve insertion order
+- Used `shift_remove()` instead of deprecated `remove()` to maintain order on unmount
+- Used `drain(..)` syntax for IndexMap (requires range parameter)
+- Backward compatibility: Events without view_id route to first mounted view deterministically
 
 ### Phase 7: Supervision & Lifecycle (Week 4)
 
