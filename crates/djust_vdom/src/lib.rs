@@ -3,6 +3,9 @@
 //! This crate provides a virtual DOM with fast diffing algorithms to
 //! minimize DOM updates for reactive server-side rendering.
 
+// PyResult type annotations are required by PyO3 API
+#![allow(clippy::useless_conversion)]
+
 use djust_core::Result;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};

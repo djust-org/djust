@@ -175,6 +175,7 @@ fn diff_indexed_children(old: &[VNode], new: &[VNode], path: &[usize]) -> Vec<Pa
 
     // Add new children
     if new_len > old_len {
+        #[allow(clippy::needless_range_loop)]
         for i in old_len..new_len {
             patches.push(Patch::InsertChild {
                 path: path.to_vec(),

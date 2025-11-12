@@ -157,7 +157,7 @@ fn render_rust_component(
         })
         .unwrap_or("bootstrap5");
 
-    let fw = djust_components::Framework::from_str(framework);
+    let fw = framework.parse().unwrap();
 
     // Match component name and instantiate
     match name {

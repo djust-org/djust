@@ -4,6 +4,13 @@ PyO3 bindings for Python integration.
 Exposes Rust components to Python with a Pythonic API.
 */
 
+// PyResult type annotations are required by PyO3 API - false positive warnings
+#![allow(clippy::useless_conversion)]
+// Complex component constructors - will refactor to builder pattern in follow-up
+#![allow(clippy::too_many_arguments)]
+// Nested if-let patterns are clearer for error handling
+#![allow(clippy::collapsible_match)]
+
 use crate::ui::{button::*, Button};
 use crate::{Component, Framework};
 use pyo3::prelude::*;
@@ -21,7 +28,7 @@ impl PyButton {
     #[new]
     #[pyo3(signature = (id, label, **kwargs))]
     fn new(
-        py: Python,
+        _py: Python,
         id: String,
         label: String,
         kwargs: Option<Bound<'_, PyDict>>,
@@ -121,7 +128,7 @@ impl PyButton {
 
     /// Render with specific framework
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
-        let fw = Framework::from_str(&framework);
+        let fw = framework.parse().unwrap();
         self.inner
             .render(fw)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
@@ -286,7 +293,7 @@ impl PyInput {
     }
 
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
-        let fw = crate::Framework::from_str(&framework);
+        let fw = framework.parse().unwrap();
         self.inner
             .render(fw)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
@@ -385,7 +392,7 @@ impl PyText {
     }
 
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
-        let fw = crate::Framework::from_str(&framework);
+        let fw = framework.parse().unwrap();
         self.inner
             .render(fw)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
@@ -505,7 +512,7 @@ impl PyCard {
     }
 
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
-        let fw = crate::Framework::from_str(&framework);
+        let fw = framework.parse().unwrap();
         self.inner
             .render(fw)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
@@ -590,7 +597,7 @@ impl PyAlert {
     }
 
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
-        let fw = crate::Framework::from_str(&framework);
+        let fw = framework.parse().unwrap();
         self.inner
             .render(fw)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
@@ -686,7 +693,7 @@ impl PyModal {
     }
 
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
-        let fw = crate::Framework::from_str(&framework);
+        let fw = framework.parse().unwrap();
         self.inner
             .render(fw)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))
@@ -779,7 +786,7 @@ impl PyDropdown {
     }
 
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
-        let fw = crate::Framework::from_str(&framework);
+        let fw = framework.parse().unwrap();
         self.inner
             .render(fw)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
@@ -899,7 +906,7 @@ impl PyTabs {
     }
 
     fn render_with_framework(&self, framework: String) -> PyResult<String> {
-        let fw = crate::Framework::from_str(&framework);
+        let fw = framework.parse().unwrap();
         self.inner
             .render(fw)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))

@@ -3,6 +3,11 @@
 //! This is the main crate that ties together templates, virtual DOM, and
 //! provides Python bindings for reactive server-side rendering.
 
+// PyResult type annotations are required by PyO3 API
+#![allow(clippy::useless_conversion)]
+// Parameter only used in recursion for Python value conversion
+#![allow(clippy::only_used_in_recursion)]
+
 use dashmap::DashMap;
 use djust_core::{Context, Value};
 use djust_templates::Template;

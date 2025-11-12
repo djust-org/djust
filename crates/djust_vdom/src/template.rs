@@ -156,9 +156,7 @@ impl TemplateLoader {
             let full_path = dir.join(path);
             if full_path.exists() {
                 let content = fs::read_to_string(&full_path).map_err(|e| {
-                    DjangoRustError::TemplateError(format!(
-                        "Failed to read template {path}: {e}"
-                    ))
+                    DjangoRustError::TemplateError(format!("Failed to read template {path}: {e}"))
                 })?;
 
                 // Cache the content

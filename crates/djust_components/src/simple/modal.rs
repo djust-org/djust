@@ -16,6 +16,7 @@ pub struct RustModal {
 impl RustModal {
     #[new]
     #[pyo3(signature = (body, id, title=None, footer=None, size="md", centered=false, dismissable=true, show=false))]
+    #[allow(clippy::too_many_arguments)] // Constructor with defaults - will refactor to builder pattern
     pub fn new(
         body: String,
         id: String,

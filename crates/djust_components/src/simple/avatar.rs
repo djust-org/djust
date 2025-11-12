@@ -54,9 +54,8 @@ impl RustAvatar {
             "rounded"
         };
 
-        let mut html = format!(
-            r#"<div class="position-relative d-inline-block" style="{size_style}">"#
-        );
+        let mut html =
+            format!(r#"<div class="position-relative d-inline-block" style="{size_style}">"#);
 
         // Image or initials
         if let Some(ref src) = self.src {

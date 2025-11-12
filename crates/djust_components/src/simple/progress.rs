@@ -17,6 +17,7 @@ pub struct RustProgress {
 impl RustProgress {
     #[new]
     #[pyo3(signature = (value, variant="primary", striped=false, animated=false, show_label=false, label=None, height=None, min_value=0.0, max_value=100.0))]
+    #[allow(clippy::too_many_arguments)] // Constructor with defaults - will refactor to builder pattern
     pub fn new(
         value: f64,
         variant: &str,

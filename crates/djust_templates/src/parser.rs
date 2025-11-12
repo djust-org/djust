@@ -69,9 +69,10 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                         // Strip surrounding quotes from the argument (single or double)
                         if ((arg.starts_with('"') && arg.ends_with('"'))
                             || (arg.starts_with('\'') && arg.ends_with('\'')))
-                            && arg.len() >= 2 {
-                                arg = arg[1..arg.len() - 1].to_string();
-                            }
+                            && arg.len() >= 2
+                        {
+                            arg = arg[1..arg.len() - 1].to_string();
+                        }
 
                         (filter_name, Some(arg))
                     } else {

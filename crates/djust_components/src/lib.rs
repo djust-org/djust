@@ -38,13 +38,15 @@ pub enum Framework {
     Plain,
 }
 
-impl Framework {
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
+impl std::str::FromStr for Framework {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
             "bootstrap5" | "bootstrap" => Self::Bootstrap5,
             "tailwind" => Self::Tailwind,
             _ => Self::Plain,
-        }
+        })
     }
 }
 
@@ -126,10 +128,19 @@ mod tests {
 
     #[test]
     fn test_framework_from_str() {
-        assert_eq!(Framework::from_str("bootstrap5"), Framework::Bootstrap5);
-        assert_eq!(Framework::from_str("Bootstrap"), Framework::Bootstrap5);
-        assert_eq!(Framework::from_str("tailwind"), Framework::Tailwind);
-        assert_eq!(Framework::from_str("plain"), Framework::Plain);
-        assert_eq!(Framework::from_str("unknown"), Framework::Plain);
+        assert_eq!(
+            "bootstrap5".parse::<Framework>().unwrap(),
+            Framework::Bootstrap5
+        );
+        assert_eq!(
+            "Bootstrap".parse::<Framework>().unwrap(),
+            Framework::Bootstrap5
+        );
+        assert_eq!(
+            "tailwind".parse::<Framework>().unwrap(),
+            Framework::Tailwind
+        );
+        assert_eq!("plain".parse::<Framework>().unwrap(), Framework::Plain);
+        assert_eq!("unknown".parse::<Framework>().unwrap(), Framework::Plain);
     }
 }

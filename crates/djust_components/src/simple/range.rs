@@ -35,6 +35,7 @@ impl RustRange {
         help_text=None,
         disabled=false
     ))]
+    #[allow(clippy::too_many_arguments)] // Constructor with defaults - will refactor to builder pattern
     pub fn new(
         name: String,
         id: Option<String>,

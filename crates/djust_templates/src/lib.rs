@@ -4,6 +4,9 @@
 //! with Django template syntax, including variables, filters, tags, and
 //! template inheritance.
 
+// PyResult type annotations are required by PyO3 API
+#![allow(clippy::useless_conversion)]
+
 use djust_core::{Context, Result, Value};
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
@@ -19,8 +22,11 @@ pub mod tags;
 use parser::Node;
 use renderer::render_nodes;
 
+// These regexes may be used in future template parsing improvements
+#[allow(dead_code)]
 static VAR_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{\{([^}]+)\}\}").unwrap());
 
+#[allow(dead_code)]
 static TAG_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{%([^%]+)%\}").unwrap());
 
 /// A compiled Django template

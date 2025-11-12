@@ -201,7 +201,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>> {
                         }
 
                         let mut var_content = String::new();
-                        let depth = 0;
+                        let _depth = 0;
 
                         while let Some(ch) = chars.next() {
                             if ch == '}' && chars.peek() == Some(&'}') {

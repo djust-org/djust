@@ -22,6 +22,7 @@ pub struct RustSwitch {
 impl RustSwitch {
     #[new]
     #[pyo3(signature = (name, label, id=None, checked=false, disabled=false, help_text=None, value="on".to_string(), inline=false))]
+    #[allow(clippy::too_many_arguments)] // Constructor with defaults - will refactor to builder pattern
     pub fn new(
         name: String,
         label: String,

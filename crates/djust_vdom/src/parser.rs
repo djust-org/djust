@@ -45,7 +45,9 @@ fn find_root(handle: &Handle) -> Handle {
 
     // Fallback: return first element found
     for child in handle.children.borrow().iter() {
-        if let NodeData::Element { .. } = child.data { return child.clone() }
+        if let NodeData::Element { .. } = child.data {
+            return child.clone();
+        }
     }
     handle.clone()
 }

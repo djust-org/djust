@@ -39,6 +39,7 @@ impl RustTextArea {
         validation_state=None,
         validation_message=None
     ))]
+    #[allow(clippy::too_many_arguments)] // Constructor with defaults - will refactor to builder pattern
     pub fn new(
         name: String,
         id: Option<String>,
