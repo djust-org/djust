@@ -40,6 +40,40 @@ pub enum SessionMsg {
         reply: oneshot::Sender<Result<()>>,
     },
 
+    // Phase 8: Component management messages
+    /// Create a component in a specific view
+    CreateComponent {
+        view_id: String,
+        component_id: String,
+        template_string: String,
+        initial_props: HashMap<String, Value>,
+        reply: oneshot::Sender<Result<String>>, // Returns rendered HTML
+    },
+
+    /// Send event to a component in a specific view
+    ComponentEvent {
+        view_id: String,
+        component_id: String,
+        event_name: String,
+        params: HashMap<String, Value>,
+        reply: oneshot::Sender<Result<String>>, // Returns rendered HTML
+    },
+
+    /// Update props for a component in a specific view
+    UpdateComponentProps {
+        view_id: String,
+        component_id: String,
+        props: HashMap<String, Value>,
+        reply: oneshot::Sender<Result<String>>, // Returns rendered HTML
+    },
+
+    /// Remove a component from a specific view
+    RemoveComponent {
+        view_id: String,
+        component_id: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
+
     /// Health check ping
     Ping { reply: oneshot::Sender<()> },
 
@@ -105,6 +139,35 @@ pub enum ViewMsg {
         event_name: String,
         params: HashMap<String, Value>,
         reply: oneshot::Sender<Result<RenderResult>>,
+    },
+
+    /// Create a child ComponentActor (Phase 8)
+    CreateComponent {
+        component_id: String,
+        template_string: String,
+        initial_props: HashMap<String, Value>,
+        reply: oneshot::Sender<Result<String>>, // Returns rendered HTML
+    },
+
+    /// Route event to a specific child component (Phase 8)
+    ComponentEvent {
+        component_id: String,
+        event_name: String,
+        params: HashMap<String, Value>,
+        reply: oneshot::Sender<Result<String>>, // Returns rendered HTML
+    },
+
+    /// Update props for a specific child component (Phase 8)
+    UpdateComponentProps {
+        component_id: String,
+        props: HashMap<String, Value>,
+        reply: oneshot::Sender<Result<String>>, // Returns rendered HTML
+    },
+
+    /// Remove a child component (Phase 8)
+    RemoveComponent {
+        component_id: String,
+        reply: oneshot::Sender<Result<()>>,
     },
 
     /// Reset state

@@ -508,3 +508,204 @@ class TestActorIntegration:
 
         await handle.shutdown()
 
+    # ========================================
+    # Phase 8: ComponentActor Integration Tests
+    # ========================================
+
+    @pytest.mark.asyncio
+    async def test_create_component(self):
+        """Test creating a component in a view"""
+        from djust._rust import create_session_actor
+
+        handle = await create_session_actor("test-phase8-create")
+
+        # Mount a view first
+        view = await handle.mount("test.View", {}, None)
+        view_id = view["view_id"]
+
+        # Create a component
+        html = await handle.create_component(
+            view_id, "counter-1", "<div>Count: {{ count }}</div>", {"count": 0}
+        )
+
+        assert html is not None
+        assert "Count: 0" in html
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_component_event(self):
+        """Test sending events to a component"""
+        from djust._rust import create_session_actor
+
+        handle = await create_session_actor("test-phase8-event")
+
+        # Mount view
+        view = await handle.mount("test.View", {}, None)
+        view_id = view["view_id"]
+
+        # Create component
+        await handle.create_component(
+            view_id, "counter-1", "<div>Count: {{ count }}</div>", {"count": 0}
+        )
+
+        # Send event to component (simplified - updates props)
+        html = await handle.component_event(view_id, "counter-1", "increment", {"count": 5})
+
+        assert "Count: 5" in html
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_update_component_props(self):
+        """Test updating component props"""
+        from djust._rust import create_session_actor
+
+        handle = await create_session_actor("test-phase8-update-props")
+
+        # Mount view
+        view = await handle.mount("test.View", {}, None)
+        view_id = view["view_id"]
+
+        # Create component
+        await handle.create_component(
+            view_id, "counter-1", "<div>Count: {{ count }}</div>", {"count": 0}
+        )
+
+        # Update props
+        html = await handle.update_component_props(view_id, "counter-1", {"count": 42})
+
+        assert "Count: 42" in html
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_remove_component(self):
+        """Test removing a component"""
+        from djust._rust import create_session_actor
+
+        handle = await create_session_actor("test-phase8-remove")
+
+        # Mount view
+        view = await handle.mount("test.View", {}, None)
+        view_id = view["view_id"]
+
+        # Create component
+        await handle.create_component(
+            view_id, "counter-1", "<div>Count: {{ count }}</div>", {"count": 0}
+        )
+
+        # Remove component
+        await handle.remove_component(view_id, "counter-1")
+
+        # Trying to send event to removed component should fail
+        with pytest.raises(Exception) as exc_info:
+            await handle.component_event(view_id, "counter-1", "increment", {})
+
+        assert "not found" in str(exc_info.value).lower()
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_multiple_components(self):
+        """Test managing multiple components in a single view"""
+        from djust._rust import create_session_actor
+
+        handle = await create_session_actor("test-phase8-multiple")
+
+        # Mount view
+        view = await handle.mount("test.View", {}, None)
+        view_id = view["view_id"]
+
+        # Create multiple components
+        html1 = await handle.create_component(
+            view_id, "counter-1", "<div>Counter 1: {{ count }}</div>", {"count": 1}
+        )
+        html2 = await handle.create_component(
+            view_id, "counter-2", "<div>Counter 2: {{ count }}</div>", {"count": 2}
+        )
+
+        assert "Counter 1: 1" in html1
+        assert "Counter 2: 2" in html2
+
+        # Update first component
+        html1_updated = await handle.update_component_props(view_id, "counter-1", {"count": 10})
+        assert "Counter 1: 10" in html1_updated
+
+        # Second component should be unchanged (update its props to verify)
+        html2_check = await handle.update_component_props(view_id, "counter-2", {})
+        assert "Counter 2: 2" in html2_check
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_component_not_found(self):
+        """Test error when component doesn't exist"""
+        from djust._rust import create_session_actor
+
+        handle = await create_session_actor("test-phase8-not-found")
+
+        # Mount view
+        view = await handle.mount("test.View", {}, None)
+        view_id = view["view_id"]
+
+        # Try to send event to non-existent component
+        with pytest.raises(Exception) as exc_info:
+            await handle.component_event(view_id, "nonexistent", "click", {})
+
+        assert "not found" in str(exc_info.value).lower()
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_component_in_unmounted_view(self):
+        """Test that component operations fail after view is unmounted"""
+        from djust._rust import create_session_actor
+
+        handle = await create_session_actor("test-phase8-unmounted-view")
+
+        # Mount view and create component
+        view = await handle.mount("test.View", {}, None)
+        view_id = view["view_id"]
+
+        await handle.create_component(
+            view_id, "counter-1", "<div>Count: {{ count }}</div>", {"count": 0}
+        )
+
+        # Unmount the view
+        await handle.unmount(view_id)
+
+        # Component operations should fail
+        with pytest.raises(Exception) as exc_info:
+            await handle.component_event(view_id, "counter-1", "increment", {})
+
+        assert "not found" in str(exc_info.value).lower()
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_component_cleanup_on_view_shutdown(self):
+        """Verify components are shut down when view is unmounted"""
+        from djust._rust import create_session_actor
+
+        handle = await create_session_actor("test-cleanup")
+        view = await handle.mount("test.View", {}, None)
+        view_id = view["view_id"]
+
+        # Create multiple components
+        for i in range(5):
+            await handle.create_component(
+                view_id, f"comp-{i}", "<div>{{ x }}</div>", {"x": i}
+            )
+
+        # Unmount view - should shut down all components
+        await handle.unmount(view_id)
+
+        # Attempting to access component should fail (view not found)
+        with pytest.raises(Exception) as exc_info:
+            await handle.component_event(view_id, "comp-0", "click", {})
+
+        assert "not found" in str(exc_info.value).lower()
+
+        await handle.shutdown()
+

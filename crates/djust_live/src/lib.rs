@@ -526,6 +526,133 @@ impl SessionActorHandlePy {
         })
     }
 
+    // ========================================================================
+    // Phase 8: Component Management Python API
+    // ========================================================================
+
+    /// Create a component in a specific view (Phase 8)
+    ///
+    /// Args:
+    ///     view_id (str): ID of the view to create the component in
+    ///     component_id (str): Unique identifier for the component
+    ///     template_string (str): Template for rendering the component
+    ///     initial_props (dict): Initial component state/props
+    ///     python_component (Optional[Any]): Python component instance for event handlers (Phase 8.2)
+    ///
+    /// Returns:
+    ///     str: Initial rendered HTML of the component
+    #[pyo3(signature = (view_id, component_id, template_string, initial_props, python_component=None))]
+    fn create_component<'py>(
+        &self,
+        py: Python<'py>,
+        view_id: String,
+        component_id: String,
+        template_string: String,
+        initial_props: &Bound<'py, PyDict>,
+        python_component: Option<Py<PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = self.handle.clone();
+        let props_rust = python_dict_to_hashmap(initial_props)?;
+
+        future_into_py(py, async move {
+            let html = handle
+                .create_component(view_id, component_id, template_string, props_rust)
+                .await
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+            // TODO: Phase 8.2 - Store python_component in ComponentActor for event handlers
+            // Will require adding SetPythonComponent message to ComponentActor
+
+            Ok(html)
+        })
+    }
+
+    /// Route event to a specific component (Phase 8)
+    ///
+    /// Args:
+    ///     view_id (str): ID of the view containing the component
+    ///     component_id (str): ID of the component to send event to
+    ///     event_name (str): Name of the event handler to call
+    ///     params (dict): Event parameters
+    ///
+    /// Returns:
+    ///     str: Rendered HTML after the component handles the event
+    fn component_event<'py>(
+        &self,
+        py: Python<'py>,
+        view_id: String,
+        component_id: String,
+        event_name: String,
+        params: &Bound<'py, PyDict>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = self.handle.clone();
+        let params_rust = python_dict_to_hashmap(params)?;
+
+        future_into_py(py, async move {
+            let html = handle
+                .component_event(view_id, component_id, event_name, params_rust)
+                .await
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+            Ok(html)
+        })
+    }
+
+    /// Update props for a specific component (Phase 8)
+    ///
+    /// Args:
+    ///     view_id (str): ID of the view containing the component
+    ///     component_id (str): ID of the component to update
+    ///     props (dict): New props to merge into component state
+    ///
+    /// Returns:
+    ///     str: Rendered HTML after updating props
+    fn update_component_props<'py>(
+        &self,
+        py: Python<'py>,
+        view_id: String,
+        component_id: String,
+        props: &Bound<'py, PyDict>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = self.handle.clone();
+        let props_rust = python_dict_to_hashmap(props)?;
+
+        future_into_py(py, async move {
+            let html = handle
+                .update_component_props(view_id, component_id, props_rust)
+                .await
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+            Ok(html)
+        })
+    }
+
+    /// Remove a component (Phase 8)
+    ///
+    /// Args:
+    ///     view_id (str): ID of the view containing the component
+    ///     component_id (str): ID of the component to remove
+    ///
+    /// Returns:
+    ///     None
+    fn remove_component<'py>(
+        &self,
+        py: Python<'py>,
+        view_id: String,
+        component_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = self.handle.clone();
+
+        future_into_py(py, async move {
+            handle
+                .remove_component(view_id, component_id)
+                .await
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+            Ok(())
+        })
+    }
+
     /// Get the session ID
     #[getter]
     fn session_id(&self) -> String {

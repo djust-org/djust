@@ -4,10 +4,12 @@
 //! state and render HTML with VDOM diffs. Each LiveView instance has its own
 //! ViewActor, providing isolated state and concurrent rendering.
 
+use super::component::{ComponentActor, ComponentActorHandle};
 use super::error::ActorError;
 use super::messages::{RenderResult, ViewMsg};
 use crate::RustLiveViewBackend;
 use djust_core::Value;
+use indexmap::IndexMap;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
@@ -16,7 +18,8 @@ use tracing::{debug, info, warn};
 
 /// ViewActor manages a LiveView instance's state and rendering
 ///
-/// Phase 5: Now includes Python view instance for event handler callbacks
+/// Phase 5: Includes Python view instance for event handler callbacks
+/// Phase 8: Includes child ComponentActors for LiveComponents
 pub struct ViewActor {
     view_path: String,
     receiver: mpsc::Receiver<ViewMsg>,
@@ -24,6 +27,9 @@ pub struct ViewActor {
     /// Python LiveView instance for calling event handlers
     /// Set via SetPythonView message after actor creation
     python_view: Option<Py<PyAny>>,
+    /// Child component actors (Phase 8)
+    /// Keyed by component_id for routing messages
+    components: IndexMap<String, ComponentActorHandle>,
 }
 
 /// Handle for sending messages to a ViewActor
@@ -69,6 +75,7 @@ impl ViewActor {
             receiver: rx,
             backend,
             python_view: None, // Phase 5: Set via SetPythonView message
+            components: IndexMap::new(), // Phase 8: Child components
         };
 
         let handle = ViewActorHandle {
@@ -125,6 +132,64 @@ impl ViewActor {
                     self.handle_event(event_name, params, reply);
                 }
 
+                // Phase 8: Component management messages
+                ViewMsg::CreateComponent {
+                    component_id,
+                    template_string,
+                    initial_props,
+                    reply,
+                } => {
+                    debug!(
+                        view_path = %self.view_path,
+                        component_id = %component_id,
+                        "CreateComponent"
+                    );
+                    self.handle_create_component(component_id, template_string, initial_props, reply)
+                        .await;
+                }
+
+                ViewMsg::ComponentEvent {
+                    component_id,
+                    event_name,
+                    params,
+                    reply,
+                } => {
+                    debug!(
+                        view_path = %self.view_path,
+                        component_id = %component_id,
+                        event = %event_name,
+                        "ComponentEvent"
+                    );
+                    self.handle_component_event(component_id, event_name, params, reply)
+                        .await;
+                }
+
+                ViewMsg::UpdateComponentProps {
+                    component_id,
+                    props,
+                    reply,
+                } => {
+                    debug!(
+                        view_path = %self.view_path,
+                        component_id = %component_id,
+                        "UpdateComponentProps"
+                    );
+                    self.handle_update_component_props(component_id, props, reply)
+                        .await;
+                }
+
+                ViewMsg::RemoveComponent {
+                    component_id,
+                    reply,
+                } => {
+                    debug!(
+                        view_path = %self.view_path,
+                        component_id = %component_id,
+                        "RemoveComponent"
+                    );
+                    self.handle_remove_component(component_id, reply).await;
+                }
+
                 ViewMsg::Reset => {
                     debug!(view_path = %self.view_path, "Reset");
                     self.backend.reset_rust();
@@ -132,6 +197,11 @@ impl ViewActor {
 
                 ViewMsg::Shutdown => {
                     info!(view_path = %self.view_path, "Shutting down");
+                    // Shutdown all child components
+                    for (component_id, component_handle) in self.components.drain(..) {
+                        debug!(component_id = %component_id, "Shutting down component");
+                        component_handle.shutdown().await;
+                    }
                     break;
                 }
             }
@@ -342,6 +412,116 @@ impl ViewActor {
             Ok::<_, ActorError>(())
         })
     }
+
+    // ========================================================================
+    // Phase 8: Component Management Methods
+    // ========================================================================
+
+    /// Handle CreateComponent message (Phase 8)
+    ///
+    /// Creates a new ComponentActor, spawns it, and stores the handle.
+    async fn handle_create_component(
+        &mut self,
+        component_id: String,
+        template_string: String,
+        initial_props: HashMap<String, Value>,
+        reply: tokio::sync::oneshot::Sender<Result<String, ActorError>>,
+    ) {
+        // Create ComponentActor
+        let result = ComponentActor::new(component_id.clone(), template_string, initial_props);
+
+        let response = match result {
+            Ok((actor, handle)) => {
+                // Spawn the component actor
+                tokio::spawn(actor.run());
+
+                // Get initial rendered HTML
+                let html_result = handle.render().await;
+
+                // Store the handle
+                self.components.insert(component_id.clone(), handle);
+
+                html_result
+            }
+            Err(e) => Err(e),
+        };
+
+        let _ = reply.send(response);
+    }
+
+    /// Handle ComponentEvent message (Phase 8)
+    ///
+    /// Routes an event to a specific child component.
+    async fn handle_component_event(
+        &mut self,
+        component_id: String,
+        event_name: String,
+        params: HashMap<String, Value>,
+        reply: tokio::sync::oneshot::Sender<Result<String, ActorError>>,
+    ) {
+        // Look up component handle
+        let result = match self.components.get(&component_id) {
+            Some(handle) => {
+                // Forward event to component
+                handle.event(event_name, params).await
+            }
+            None => Err(ActorError::ComponentNotFound(format!(
+                "Component '{}' not found in view '{}'",
+                component_id, self.view_path
+            ))),
+        };
+
+        let _ = reply.send(result);
+    }
+
+    /// Handle UpdateComponentProps message (Phase 8)
+    ///
+    /// Updates props for a specific child component.
+    async fn handle_update_component_props(
+        &mut self,
+        component_id: String,
+        props: HashMap<String, Value>,
+        reply: tokio::sync::oneshot::Sender<Result<String, ActorError>>,
+    ) {
+        // Look up component handle
+        let result = match self.components.get(&component_id) {
+            Some(handle) => {
+                // Update component props
+                handle.update_props(props).await
+            }
+            None => Err(ActorError::ComponentNotFound(format!(
+                "Component '{}' not found in view '{}'",
+                component_id, self.view_path
+            ))),
+        };
+
+        let _ = reply.send(result);
+    }
+
+    /// Handle RemoveComponent message (Phase 8)
+    ///
+    /// Removes a child component and shuts it down.
+    async fn handle_remove_component(
+        &mut self,
+        component_id: String,
+        reply: tokio::sync::oneshot::Sender<Result<(), ActorError>>,
+    ) {
+        // Remove component from map
+        // Use shift_remove to preserve IndexMap insertion order
+        let result = match self.components.shift_remove(&component_id) {
+            Some(handle) => {
+                // Shutdown the component
+                handle.shutdown().await;
+                Ok(())
+            }
+            None => Err(ActorError::ComponentNotFound(format!(
+                "Component '{}' not found in view '{}'",
+                component_id, self.view_path
+            ))),
+        };
+
+        let _ = reply.send(result);
+    }
 }
 
 impl ViewActorHandle {
@@ -468,6 +648,148 @@ impl ViewActorHandle {
             .send(ViewMsg::Reset)
             .await
             .map_err(|_| ActorError::Shutdown)
+    }
+
+    // ========================================================================
+    // Phase 8: Component Management API
+    // ========================================================================
+
+    /// Create a child ComponentActor (Phase 8)
+    ///
+    /// # Arguments
+    ///
+    /// * `component_id` - Unique identifier for this component
+    /// * `template_string` - Template for rendering the component
+    /// * `initial_props` - Initial component state/props
+    ///
+    /// # Returns
+    ///
+    /// Returns the initial rendered HTML of the component.
+    ///
+    /// # Errors
+    ///
+    /// Returns:
+    /// - `ActorError::Shutdown` if the actor has been shutdown
+    /// - `ActorError::Template` if component creation or rendering fails
+    pub async fn create_component(
+        &self,
+        component_id: String,
+        template_string: String,
+        initial_props: HashMap<String, Value>,
+    ) -> Result<String, ActorError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.sender
+            .send(ViewMsg::CreateComponent {
+                component_id,
+                template_string,
+                initial_props,
+                reply: tx,
+            })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+
+        rx.await.map_err(|_| ActorError::Shutdown)?
+    }
+
+    /// Route event to a specific child component (Phase 8)
+    ///
+    /// # Arguments
+    ///
+    /// * `component_id` - ID of the component to send event to
+    /// * `event_name` - Name of the event handler to call
+    /// * `params` - Event parameters
+    ///
+    /// # Returns
+    ///
+    /// Returns the rendered HTML after the component handles the event.
+    ///
+    /// # Errors
+    ///
+    /// Returns:
+    /// - `ActorError::Shutdown` if the actor has been shutdown
+    /// - `ActorError::NotFound` if the component doesn't exist
+    /// - `ActorError::Template` if rendering fails
+    pub async fn component_event(
+        &self,
+        component_id: String,
+        event_name: String,
+        params: HashMap<String, Value>,
+    ) -> Result<String, ActorError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.sender
+            .send(ViewMsg::ComponentEvent {
+                component_id,
+                event_name,
+                params,
+                reply: tx,
+            })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+
+        rx.await.map_err(|_| ActorError::Shutdown)?
+    }
+
+    /// Update props for a specific child component (Phase 8)
+    ///
+    /// # Arguments
+    ///
+    /// * `component_id` - ID of the component to update
+    /// * `props` - New props to merge into component state
+    ///
+    /// # Returns
+    ///
+    /// Returns the rendered HTML after updating props.
+    ///
+    /// # Errors
+    ///
+    /// Returns:
+    /// - `ActorError::Shutdown` if the actor has been shutdown
+    /// - `ActorError::NotFound` if the component doesn't exist
+    /// - `ActorError::Template` if rendering fails
+    pub async fn update_component_props(
+        &self,
+        component_id: String,
+        props: HashMap<String, Value>,
+    ) -> Result<String, ActorError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.sender
+            .send(ViewMsg::UpdateComponentProps {
+                component_id,
+                props,
+                reply: tx,
+            })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+
+        rx.await.map_err(|_| ActorError::Shutdown)?
+    }
+
+    /// Remove a child component (Phase 8)
+    ///
+    /// # Arguments
+    ///
+    /// * `component_id` - ID of the component to remove
+    ///
+    /// # Errors
+    ///
+    /// Returns:
+    /// - `ActorError::Shutdown` if the actor has been shutdown
+    /// - `ActorError::NotFound` if the component doesn't exist
+    pub async fn remove_component(&self, component_id: String) -> Result<(), ActorError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.sender
+            .send(ViewMsg::RemoveComponent {
+                component_id,
+                reply: tx,
+            })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+
+        rx.await.map_err(|_| ActorError::Shutdown)?
     }
 
     /// Shutdown the actor gracefully

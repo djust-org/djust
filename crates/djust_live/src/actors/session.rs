@@ -123,6 +123,79 @@ impl SessionActor {
                     let _ = reply.send(result);
                 }
 
+                // Phase 8: Component management message handlers
+                SessionMsg::CreateComponent {
+                    view_id,
+                    component_id,
+                    template_string,
+                    initial_props,
+                    reply,
+                } => {
+                    debug!(
+                        session_id = %self.session_id,
+                        view_id = %view_id,
+                        component_id = %component_id,
+                        "Handling CreateComponent"
+                    );
+                    let result = self
+                        .handle_create_component(view_id, component_id, template_string, initial_props)
+                        .await;
+                    let _ = reply.send(result);
+                }
+
+                SessionMsg::ComponentEvent {
+                    view_id,
+                    component_id,
+                    event_name,
+                    params,
+                    reply,
+                } => {
+                    debug!(
+                        session_id = %self.session_id,
+                        view_id = %view_id,
+                        component_id = %component_id,
+                        event = %event_name,
+                        "Handling ComponentEvent"
+                    );
+                    let result = self
+                        .handle_component_event(view_id, component_id, event_name, params)
+                        .await;
+                    let _ = reply.send(result);
+                }
+
+                SessionMsg::UpdateComponentProps {
+                    view_id,
+                    component_id,
+                    props,
+                    reply,
+                } => {
+                    debug!(
+                        session_id = %self.session_id,
+                        view_id = %view_id,
+                        component_id = %component_id,
+                        "Handling UpdateComponentProps"
+                    );
+                    let result = self
+                        .handle_update_component_props(view_id, component_id, props)
+                        .await;
+                    let _ = reply.send(result);
+                }
+
+                SessionMsg::RemoveComponent {
+                    view_id,
+                    component_id,
+                    reply,
+                } => {
+                    debug!(
+                        session_id = %self.session_id,
+                        view_id = %view_id,
+                        component_id = %component_id,
+                        "Handling RemoveComponent"
+                    );
+                    let result = self.handle_remove_component(view_id, component_id).await;
+                    let _ = reply.send(result);
+                }
+
                 SessionMsg::Ping { reply } => {
                     debug!(session_id = %self.session_id, "Ping");
                     let _ = reply.send(());
@@ -243,6 +316,75 @@ impl SessionActor {
         }
     }
 
+    // ========================================================================
+    // Phase 8: Component Management Handler Methods
+    // ========================================================================
+
+    /// Handle create component request (Phase 8)
+    async fn handle_create_component(
+        &self,
+        view_id: String,
+        component_id: String,
+        template_string: String,
+        initial_props: HashMap<String, Value>,
+    ) -> Result<String, ActorError> {
+        let view_handle = self
+            .views
+            .get(&view_id)
+            .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {}", view_id)))?;
+
+        view_handle
+            .create_component(component_id, template_string, initial_props)
+            .await
+    }
+
+    /// Handle component event request (Phase 8)
+    async fn handle_component_event(
+        &self,
+        view_id: String,
+        component_id: String,
+        event_name: String,
+        params: HashMap<String, Value>,
+    ) -> Result<String, ActorError> {
+        let view_handle = self
+            .views
+            .get(&view_id)
+            .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {}", view_id)))?;
+
+        view_handle
+            .component_event(component_id, event_name, params)
+            .await
+    }
+
+    /// Handle update component props request (Phase 8)
+    async fn handle_update_component_props(
+        &self,
+        view_id: String,
+        component_id: String,
+        props: HashMap<String, Value>,
+    ) -> Result<String, ActorError> {
+        let view_handle = self
+            .views
+            .get(&view_id)
+            .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {}", view_id)))?;
+
+        view_handle.update_component_props(component_id, props).await
+    }
+
+    /// Handle remove component request (Phase 8)
+    async fn handle_remove_component(
+        &self,
+        view_id: String,
+        component_id: String,
+    ) -> Result<(), ActorError> {
+        let view_handle = self
+            .views
+            .get(&view_id)
+            .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {}", view_id)))?;
+
+        view_handle.remove_component(component_id).await
+    }
+
     /// Shutdown all views
     async fn shutdown(&mut self) {
         for (view_id, view) in self.views.drain(..) {
@@ -356,6 +498,167 @@ impl SessionActorHandle {
         self.sender
             .send(SessionMsg::Unmount {
                 view_id,
+                reply: tx,
+            })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+
+        rx.await.map_err(|_| ActorError::Shutdown)?
+    }
+
+    // ========================================================================
+    // Phase 8: Component Management API
+    // ========================================================================
+
+    /// Create a component in a specific view (Phase 8)
+    ///
+    /// # Arguments
+    ///
+    /// * `view_id` - ID of the view to create the component in
+    /// * `component_id` - Unique identifier for the component
+    /// * `template_string` - Template for rendering the component
+    /// * `initial_props` - Initial component state/props
+    ///
+    /// # Returns
+    ///
+    /// Returns the initial rendered HTML of the component.
+    ///
+    /// # Errors
+    ///
+    /// Returns:
+    /// - `ActorError::Shutdown` if the session actor has been shutdown
+    /// - `ActorError::ViewNotFound` if the view_id is not found
+    /// - `ActorError::Template` if component creation or rendering fails
+    pub async fn create_component(
+        &self,
+        view_id: String,
+        component_id: String,
+        template_string: String,
+        initial_props: HashMap<String, Value>,
+    ) -> Result<String, ActorError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.sender
+            .send(SessionMsg::CreateComponent {
+                view_id,
+                component_id,
+                template_string,
+                initial_props,
+                reply: tx,
+            })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+
+        rx.await.map_err(|_| ActorError::Shutdown)?
+    }
+
+    /// Route event to a specific component (Phase 8)
+    ///
+    /// # Arguments
+    ///
+    /// * `view_id` - ID of the view containing the component
+    /// * `component_id` - ID of the component to send event to
+    /// * `event_name` - Name of the event handler to call
+    /// * `params` - Event parameters
+    ///
+    /// # Returns
+    ///
+    /// Returns the rendered HTML after the component handles the event.
+    ///
+    /// # Errors
+    ///
+    /// Returns:
+    /// - `ActorError::Shutdown` if the session actor has been shutdown
+    /// - `ActorError::ViewNotFound` if the view_id is not found
+    /// - `ActorError::ComponentNotFound` if the component_id is not found
+    /// - `ActorError::Template` if rendering fails
+    pub async fn component_event(
+        &self,
+        view_id: String,
+        component_id: String,
+        event_name: String,
+        params: HashMap<String, Value>,
+    ) -> Result<String, ActorError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.sender
+            .send(SessionMsg::ComponentEvent {
+                view_id,
+                component_id,
+                event_name,
+                params,
+                reply: tx,
+            })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+
+        rx.await.map_err(|_| ActorError::Shutdown)?
+    }
+
+    /// Update props for a specific component (Phase 8)
+    ///
+    /// # Arguments
+    ///
+    /// * `view_id` - ID of the view containing the component
+    /// * `component_id` - ID of the component to update
+    /// * `props` - New props to merge into component state
+    ///
+    /// # Returns
+    ///
+    /// Returns the rendered HTML after updating props.
+    ///
+    /// # Errors
+    ///
+    /// Returns:
+    /// - `ActorError::Shutdown` if the session actor has been shutdown
+    /// - `ActorError::ViewNotFound` if the view_id is not found
+    /// - `ActorError::ComponentNotFound` if the component_id is not found
+    /// - `ActorError::Template` if rendering fails
+    pub async fn update_component_props(
+        &self,
+        view_id: String,
+        component_id: String,
+        props: HashMap<String, Value>,
+    ) -> Result<String, ActorError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.sender
+            .send(SessionMsg::UpdateComponentProps {
+                view_id,
+                component_id,
+                props,
+                reply: tx,
+            })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+
+        rx.await.map_err(|_| ActorError::Shutdown)?
+    }
+
+    /// Remove a component (Phase 8)
+    ///
+    /// # Arguments
+    ///
+    /// * `view_id` - ID of the view containing the component
+    /// * `component_id` - ID of the component to remove
+    ///
+    /// # Errors
+    ///
+    /// Returns:
+    /// - `ActorError::Shutdown` if the session actor has been shutdown
+    /// - `ActorError::ViewNotFound` if the view_id is not found
+    /// - `ActorError::ComponentNotFound` if the component_id is not found
+    pub async fn remove_component(
+        &self,
+        view_id: String,
+        component_id: String,
+    ) -> Result<(), ActorError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.sender
+            .send(SessionMsg::RemoveComponent {
+                view_id,
+                component_id,
                 reply: tx,
             })
             .await
