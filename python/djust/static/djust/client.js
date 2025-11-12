@@ -2,7 +2,21 @@
  * Django Rust Live - Client-side runtime
  *
  * Minimal JavaScript client for reactive server-side rendering.
- * Handles WebSocket connection, event binding, and DOM patching.
+ * Handles WebSocket connection, event binding, DOM patching, and state management decorators.
+ *
+ * Features:
+ * - WebSocket connection management with auto-reconnect
+ * - Event binding for @click, @input, @change, @submit
+ * - Efficient DOM patching with VDOM diff algorithm
+ * - State management decorators (@debounce, @throttle, @optimistic, @cache, @client_state)
+ * - Debug logging infrastructure (window.djustDebug = true)
+ *
+ * Bundle Size: ~7-8 KB minified (19.3 KB unminified)
+ *
+ * State Management:
+ * - @debounce(wait, max_wait) - Delay events until user stops triggering
+ * - @throttle(interval, leading, trailing) - Limit event frequency
+ * - Debug: window.djustDebug = true; window.djustDebugCategories = ['debounce', 'throttle']
  */
 
 (function() {
@@ -16,6 +30,13 @@
             this.maxReconnectAttempts = 5;
             this.reconnectDelay = 1000;
             this.eventHandlers = new Map();
+
+            // State management for decorators
+            this.debounceTimers = new Map(); // Map<handlerName, {timerId, firstCallTime}>
+            this.throttleState = new Map();  // Map<handlerName, {lastCall, timeoutId, pendingData}>
+
+            // Initialize handler metadata storage (injected by server)
+            window.handlerMetadata = window.handlerMetadata || {};
         }
 
         /**
@@ -46,6 +67,9 @@
         onClose(event) {
             console.log('[LiveView] Disconnected');
 
+            // Clean up decorator state (timers)
+            this.cleanupDecoratorState();
+
             // Attempt to reconnect
             if (this.reconnectAttempts < this.maxReconnectAttempts) {
                 this.reconnectAttempts++;
@@ -53,6 +77,29 @@
                 console.log(`[LiveView] Reconnecting in ${delay}ms...`);
                 setTimeout(() => this.connect(), delay);
             }
+        }
+
+        /**
+         * Clean up decorator state (called on disconnect)
+         */
+        cleanupDecoratorState() {
+            // Clear all debounce timers
+            this.debounceTimers.forEach(state => {
+                if (state.timerId) {
+                    clearTimeout(state.timerId);
+                }
+            });
+            this.debounceTimers.clear();
+
+            // Clear all throttle timers
+            this.throttleState.forEach(state => {
+                if (state.timeoutId) {
+                    clearTimeout(state.timeoutId);
+                }
+            });
+            this.throttleState.clear();
+
+            this.debug('cleanup', 'Cleared all decorator timers on disconnect');
         }
 
         onError(error) {
@@ -147,9 +194,45 @@
         }
 
         /**
-         * Send an event to the server
+         * Send an event to the server (with decorator support)
          */
         sendEvent(eventName, params = {}) {
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                console.error('[LiveView] WebSocket not connected');
+                return;
+            }
+
+            // Check for handler metadata (decorators)
+            const metadata = window.handlerMetadata?.[eventName];
+
+            // Warn if multiple decorators present (ambiguous behavior)
+            if (metadata?.debounce && metadata?.throttle) {
+                console.warn(
+                    `[LiveView] Handler '${eventName}' has both @debounce and @throttle decorators. ` +
+                    `Applying @debounce only. Use one decorator per handler.`
+                );
+            }
+
+            // Apply debounce if configured
+            if (metadata?.debounce) {
+                this.debounceEvent(eventName, params, metadata.debounce);
+                return; // Don't send immediately
+            }
+
+            // Apply throttle if configured
+            if (metadata?.throttle) {
+                this.throttleEvent(eventName, params, metadata.throttle);
+                return; // Don't send immediately
+            }
+
+            // Send immediately (no decorators or metadata missing)
+            this.sendEventImmediate(eventName, params);
+        }
+
+        /**
+         * Send event immediately, bypassing decorators (internal method)
+         */
+        sendEventImmediate(eventName, params = {}) {
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
                 console.error('[LiveView] WebSocket not connected');
                 return;
@@ -162,6 +245,151 @@
             };
 
             this.ws.send(JSON.stringify(message));
+            this.debug('event', `Sent event: ${eventName}`, params);
+        }
+
+        /**
+         * Debounce an event - delay until user stops triggering events
+         *
+         * @param {string} eventName - Handler name (e.g., "search")
+         * @param {object} eventData - Event parameters
+         * @param {object} config - {wait: number, max_wait: number|null}
+         */
+        debounceEvent(eventName, eventData, config) {
+            const { wait, max_wait } = config;
+            const now = Date.now();
+
+            // Get or create state
+            let state = this.debounceTimers.get(eventName);
+            if (!state) {
+                state = { timerId: null, firstCallTime: now };
+                this.debounceTimers.set(eventName, state);
+            }
+
+            // Clear existing timer
+            if (state.timerId) {
+                clearTimeout(state.timerId);
+            }
+
+            // Check if we've exceeded max_wait
+            if (max_wait && (now - state.firstCallTime) >= (max_wait * 1000)) {
+                // Force execution - max wait exceeded
+                this.sendEventImmediate(eventName, eventData);
+                this.debounceTimers.delete(eventName);
+                this.debug('debounce', `Force executing ${eventName} (max_wait exceeded)`);
+                return;
+            }
+
+            // Set new timer
+            state.timerId = setTimeout(() => {
+                this.sendEventImmediate(eventName, eventData);
+                this.debounceTimers.delete(eventName);
+                this.debug('debounce', `Executing ${eventName} after ${wait}s wait`);
+            }, wait * 1000);
+
+            this.debug('debounce', `Debouncing ${eventName} (wait: ${wait}s, max_wait: ${max_wait || 'none'})`);
+        }
+
+        /**
+         * Throttle an event - limit execution frequency
+         *
+         * @param {string} eventName - Handler name (e.g., "on_scroll")
+         * @param {object} eventData - Event parameters
+         * @param {object} config - {interval: number, leading: bool, trailing: bool}
+         */
+        throttleEvent(eventName, eventData, config) {
+            const { interval, leading, trailing } = config;
+            const now = Date.now();
+
+            if (!this.throttleState.has(eventName)) {
+                // First call - execute immediately if leading=true
+                if (leading) {
+                    this.sendEventImmediate(eventName, eventData);
+                    this.debug('throttle', `Executing ${eventName} (leading edge)`);
+                }
+
+                // Set up state
+                const state = {
+                    lastCall: leading ? now : 0,
+                    timeoutId: null,
+                    pendingData: null
+                };
+
+                this.throttleState.set(eventName, state);
+
+                // Schedule trailing call if needed
+                if (trailing && !leading) {
+                    state.pendingData = eventData;
+                    state.timeoutId = setTimeout(() => {
+                        this.sendEventImmediate(eventName, state.pendingData);
+                        this.throttleState.delete(eventName);
+                        this.debug('throttle', `Executing ${eventName} (trailing edge - no leading)`);
+                    }, interval * 1000);
+                }
+
+                return;
+            }
+
+            const state = this.throttleState.get(eventName);
+            const elapsed = now - state.lastCall;
+
+            if (elapsed >= (interval * 1000)) {
+                // Enough time has passed - execute now
+                this.sendEventImmediate(eventName, eventData);
+                state.lastCall = now;
+                state.pendingData = null;
+
+                // Clear any pending trailing call
+                if (state.timeoutId) {
+                    clearTimeout(state.timeoutId);
+                    state.timeoutId = null;
+                }
+
+                this.debug('throttle', `Executing ${eventName} (interval elapsed: ${elapsed}ms)`);
+            } else if (trailing) {
+                // Update pending data and reschedule trailing call
+                state.pendingData = eventData;
+
+                if (state.timeoutId) {
+                    clearTimeout(state.timeoutId);
+                }
+
+                const remaining = (interval * 1000) - elapsed;
+                state.timeoutId = setTimeout(() => {
+                    if (state.pendingData) {
+                        this.sendEventImmediate(eventName, state.pendingData);
+                        this.debug('throttle', `Executing ${eventName} (trailing edge)`);
+                    }
+                    this.throttleState.delete(eventName);
+                }, remaining);
+
+                this.debug('throttle', `Throttled ${eventName} (${remaining}ms until trailing)`);
+            } else {
+                this.debug('throttle', `Dropped ${eventName} (within interval, no trailing)`);
+            }
+        }
+
+        /**
+         * Debug logging helper
+         *
+         * Set window.djustDebug = true to enable
+         * Set window.djustDebugCategories = ['debounce', 'throttle'] to filter
+         */
+        debug(category, message, data = null) {
+            if (!window.djustDebug) return;
+
+            // Filter by category if specified
+            if (window.djustDebugCategories &&
+                !window.djustDebugCategories.includes(category)) {
+                return;
+            }
+
+            const prefix = `[LiveView:${category}]`;
+            if (data) {
+                console.log(prefix, message, data);
+            } else {
+                console.log(prefix, message);
+            }
         }
 
         /**

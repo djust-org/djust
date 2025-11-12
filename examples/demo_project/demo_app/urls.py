@@ -33,6 +33,10 @@ urlpatterns = [
     path('demos/offcanvas/', views.OffcanvasDemoView.as_view(), name='demos-offcanvas'),
     path('demos/component-showcase/', views.ComponentShowcaseView.as_view(), name='demos-component-showcase'),
 
+    # State Management Demos (Phase 2)
+    path('demos/debounce/', views.DebounceSearchView.as_view(), name='demos-debounce'),
+    path('demos/throttle/', views.ThrottleScrollView.as_view(), name='demos-throttle'),
+
     # Component Library Kitchen Sink
     path('kitchen-sink/', views.KitchenSinkView.as_view(), name='kitchen-sink'),
 
