@@ -6,7 +6,7 @@ event handlers, reactive state, and computed properties.
 """
 
 import functools
-from typing import Callable, Any, TypeVar, cast
+from typing import Callable, Any, TypeVar, cast, Dict, List, Optional, Union
 
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -165,7 +165,7 @@ def computed(func: F) -> F:
     return cast(F, wrapper)
 
 
-def debounce(wait: float = 0.3):
+def debounce(wait: float = 0.3, max_wait: Optional[float] = None) -> Callable[[F], F]:
     """
     Debounce event handler calls on the client side.
 
@@ -175,13 +175,18 @@ def debounce(wait: float = 0.3):
 
     Usage:
         class MyView(LiveView):
-            @event
             @debounce(wait=0.5)
-            def on_search(self, value: str = "", **kwargs):
-                self.results = search_database(value)
+            def search(self, query: str = "", **kwargs):
+                self.results = Product.objects.filter(name__icontains=query)
+
+            @debounce(wait=0.5, max_wait=2.0)
+            def auto_save(self, **kwargs):
+                # Debounced but forced after 2 seconds
+                self.save_draft()
 
     Args:
-        wait: Seconds to wait before triggering (default: 0.3)
+        wait: Seconds to wait after last event before triggering (default: 0.3)
+        max_wait: Maximum seconds to wait before forcing execution (default: None)
 
     Returns:
         Decorator function
@@ -192,14 +197,25 @@ def debounce(wait: float = 0.3):
         def wrapper(*args, **kwargs):
             return func(*args, **kwargs)
 
+        # New standardized format
+        if not hasattr(wrapper, '_djust_decorators'):
+            wrapper._djust_decorators = {}  # type: ignore
+
+        wrapper._djust_decorators['debounce'] = {  # type: ignore
+            'wait': wait,
+            'max_wait': max_wait
+        }
+
+        # Backward compatibility (will be removed in future version)
         wrapper._debounce_seconds = wait  # type: ignore
         wrapper._debounce_ms = int(wait * 1000)  # type: ignore
+
         return cast(F, wrapper)
 
     return decorator
 
 
-def throttle(interval: float = 0.1):
+def throttle(interval: float = 0.1, leading: bool = True, trailing: bool = True) -> Callable[[F], F]:
     """
     Throttle event handler calls on the client side.
 
@@ -209,13 +225,19 @@ def throttle(interval: float = 0.1):
 
     Usage:
         class MyView(LiveView):
-            @event
             @throttle(interval=0.1)
             def on_scroll(self, scroll_y: int = 0, **kwargs):
                 self.scroll_position = scroll_y
 
+            @throttle(interval=1.0, leading=True, trailing=False)
+            def on_resize(self, width: int = 0, **kwargs):
+                # Fire immediately on first event, ignore trailing events
+                self.viewport_width = width
+
     Args:
         interval: Minimum interval between calls in seconds (default: 0.1)
+        leading: Execute on leading edge of interval (default: True)
+        trailing: Execute on trailing edge of interval (default: True)
 
     Returns:
         Decorator function
@@ -226,8 +248,152 @@ def throttle(interval: float = 0.1):
         def wrapper(*args, **kwargs):
             return func(*args, **kwargs)
 
+        # New standardized format
+        if not hasattr(wrapper, '_djust_decorators'):
+            wrapper._djust_decorators = {}  # type: ignore
+
+        wrapper._djust_decorators['throttle'] = {  # type: ignore
+            'interval': interval,
+            'leading': leading,
+            'trailing': trailing
+        }
+
+        # Backward compatibility (will be removed in future version)
         wrapper._throttle_seconds = interval  # type: ignore
         wrapper._throttle_ms = int(interval * 1000)  # type: ignore
+
+        return cast(F, wrapper)
+
+    return decorator
+
+
+def optimistic(func: F) -> F:
+    """
+    Apply optimistic updates before server validation.
+
+    The client will update the UI instantly based on the event data,
+    then apply server corrections if needed. This provides instant
+    feedback for user interactions.
+
+    Usage:
+        class MyView(LiveView):
+            @optimistic
+            def increment(self, **kwargs):
+                self.count += 1
+
+            @optimistic
+            def toggle_todo(self, todo_id: int = 0, **kwargs):
+                todo = Todo.objects.get(id=todo_id)
+                todo.completed = not todo.completed
+                todo.save()
+
+    The client will optimistically update the DOM based on the event data,
+    then apply any corrections from the server response.
+
+    Returns:
+        Decorated function with optimistic metadata
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+
+    if not hasattr(wrapper, '_djust_decorators'):
+        wrapper._djust_decorators = {}  # type: ignore
+
+    wrapper._djust_decorators['optimistic'] = True  # type: ignore
+
+    return cast(F, wrapper)
+
+
+def cache(ttl: int = 60, key_params: Optional[List[str]] = None) -> Callable[[F], F]:
+    """
+    Cache handler responses client-side.
+
+    Responses are cached in the browser with a TTL (time-to-live).
+    Cache keys are built from the handler name plus specified parameters.
+
+    Usage:
+        class MyView(LiveView):
+            @cache(ttl=60, key_params=["query"])
+            def search(self, query: str = "", **kwargs):
+                self.results = Product.objects.filter(name__icontains=query)
+
+            @cache(ttl=300)  # 5 minutes, cache key is just handler name
+            def get_stats(self, **kwargs):
+                self.stats = expensive_calculation()
+
+    Args:
+        ttl: Cache time-to-live in seconds (default: 60)
+        key_params: Parameters to include in cache key (default: [])
+                   Example: ["query", "page"] creates key "search:laptop:1"
+
+    Returns:
+        Decorator function
+    """
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+
+        if not hasattr(wrapper, '_djust_decorators'):
+            wrapper._djust_decorators = {}  # type: ignore
+
+        wrapper._djust_decorators['cache'] = {  # type: ignore
+            'ttl': ttl,
+            'key_params': key_params or []
+        }
+
+        return cast(F, wrapper)
+
+    return decorator
+
+
+def client_state(keys: List[str]) -> Callable[[F], F]:
+    """
+    Share state via client-side StateBus (pub/sub pattern).
+
+    When this handler executes, the specified keys are published to
+    the StateBus. Other handlers decorated with @client_state and
+    subscribed to the same keys will be notified of changes.
+
+    Usage:
+        class DashboardView(LiveView):
+            @client_state(keys=["filter"])
+            def update_filter(self, filter: str = "", **kwargs):
+                # Publishes "filter" to StateBus
+                self.filter = filter
+
+            @client_state(keys=["filter"])
+            def on_filter_change(self, filter: str = "", **kwargs):
+                # Automatically called when "filter" changes
+                self.apply_filter()
+
+            @client_state(keys=["filter", "sort"])
+            def apply_filters(self, filter: str = "", sort: str = "", **kwargs):
+                # Publishes both "filter" and "sort"
+                self.filter = filter
+                self.sort = sort
+                self.update_results()
+
+    Args:
+        keys: List of state keys to publish/subscribe
+              Example: ["filter", "sort", "page"]
+
+    Returns:
+        Decorator function
+    """
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+
+        if not hasattr(wrapper, '_djust_decorators'):
+            wrapper._djust_decorators = {}  # type: ignore
+
+        wrapper._djust_decorators['client_state'] = {  # type: ignore
+            'keys': keys
+        }
+
         return cast(F, wrapper)
 
     return decorator
@@ -241,4 +407,7 @@ __all__ = [
     "computed",
     "debounce",
     "throttle",
+    "optimistic",
+    "cache",
+    "client_state",
 ]

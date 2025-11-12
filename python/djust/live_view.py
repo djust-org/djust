@@ -3,6 +3,7 @@ LiveView base class and decorator for reactive Django views
 """
 
 import json
+import logging
 import sys
 from datetime import datetime, date, time
 from decimal import Decimal
@@ -13,6 +14,9 @@ from django.views import View
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils.decorators import method_decorator
 from django.db import models
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 try:
     from ._rust import RustLiveView, create_session_actor, SessionActorHandle
@@ -214,6 +218,7 @@ class LiveView(View):
         self._actor_handle: Optional[SessionActorHandle] = None
         self._session_id: Optional[str] = None
         self._cache_key: Optional[str] = None
+        self._handler_metadata: Optional[dict] = None  # Cache for decorator metadata
 
     def get_template(self) -> str:
         """
@@ -477,6 +482,74 @@ class LiveView(View):
 
             self._rust_view.update_state(json_compatible_context)
 
+    def _extract_handler_metadata(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Extract decorator metadata from all event handlers.
+
+        Inspects all methods for the _djust_decorators attribute
+        added by decorators like @debounce, @throttle, @optimistic, etc.
+
+        Results are cached after first extraction since decorator metadata
+        is static for a given view class.
+
+        Returns:
+            Dictionary mapping handler names to their decorator metadata.
+
+            Example:
+                {
+                    "search": {
+                        "debounce": {"wait": 0.5, "max_wait": None},
+                        "optimistic": True
+                    },
+                    "update_slider": {
+                        "throttle": {"interval": 0.1, "leading": True, "trailing": True}
+                    }
+                }
+        """
+        # Return cached metadata if available
+        if self._handler_metadata is not None:
+            logger.debug(
+                f"[LiveView] Using cached handler metadata for {self.__class__.__name__} "
+                f"({len(self._handler_metadata)} handlers)"
+            )
+            return self._handler_metadata
+
+        logger.debug(f"[LiveView] Extracting handler metadata for {self.__class__.__name__}")
+        metadata = {}
+
+        # Iterate all methods
+        for name in dir(self):
+            # Skip private methods
+            if name.startswith('_'):
+                continue
+
+            try:
+                method = getattr(self, name)
+
+                # Check if it's callable
+                if not callable(method):
+                    continue
+
+                # Check for decorator metadata
+                if hasattr(method, '_djust_decorators'):
+                    metadata[name] = method._djust_decorators
+                    logger.debug(
+                        f"[LiveView]   Found decorated handler: {name} -> "
+                        f"{list(method._djust_decorators.keys())}"
+                    )
+
+            except (AttributeError, TypeError):
+                # Skip attributes that can't be accessed
+                continue
+
+        # Cache the result
+        self._handler_metadata = metadata
+        logger.debug(
+            f"[LiveView] Extracted {len(metadata)} decorated handlers, caching for future use"
+        )
+
+        return metadata
+
     def render(self, request=None) -> str:
         """
         Render the view to HTML.
@@ -488,13 +561,66 @@ class LiveView(View):
             request: The request object
 
         Returns:
-            Rendered HTML
+            Rendered HTML with embedded handler metadata
         """
         self._initialize_rust_view(request)
         self._sync_state_to_rust()
         html = self._rust_view.render()
+
         # Post-process to hydrate React components
         html = self._hydrate_react_components(html)
+
+        # Inject handler metadata for client-side decorators
+        html = self._inject_handler_metadata(html)
+
+        return html
+
+    def _inject_handler_metadata(self, html: str) -> str:
+        """
+        Inject handler metadata script into HTML.
+
+        Adds a <script> tag that sets window.handlerMetadata with
+        decorator metadata for all handlers.
+
+        Args:
+            html: Rendered HTML
+
+        Returns:
+            HTML with injected metadata script
+        """
+        # Extract metadata
+        metadata = self._extract_handler_metadata()
+
+        # Skip injection if no metadata
+        if not metadata:
+            logger.debug("[LiveView] No handler metadata to inject, skipping script injection")
+            return html
+
+        logger.debug(
+            f"[LiveView] Injecting handler metadata script for {len(metadata)} handlers"
+        )
+
+        # Build script tag
+        script = f"""
+<script>
+// Handler metadata for client-side decorators
+window.handlerMetadata = window.handlerMetadata || {{}};
+Object.assign(window.handlerMetadata, {json.dumps(metadata)});
+</script>"""
+
+        # Try to inject before </body>
+        if '</body>' in html:
+            html = html.replace('</body>', f'{script}\n</body>')
+            logger.debug("[LiveView] Injected metadata script before </body>")
+        # Fallback: inject before </html>
+        elif '</html>' in html:
+            html = html.replace('</html>', f'{script}\n</html>')
+            logger.debug("[LiveView] Injected metadata script before </html>")
+        # Fallback: append to end (for template fragments)
+        else:
+            html = html + script
+            logger.debug("[LiveView] Appended metadata script to end of HTML")
+
         return html
 
     def _strip_comments_and_whitespace(self, html: str) -> str:
