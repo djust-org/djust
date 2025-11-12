@@ -2986,6 +2986,43 @@ This document provides a complete implementation guide for migrating djust to an
 - [ ] Migration guide tested
 - [ ] Production deployment successful
 
+### Known Issues / Technical Debt
+
+#### Phase 5: Exception Propagation (High Priority)
+
+**Issue:** Python exceptions not properly propagated through Rust FFI boundary
+
+**Affected Tests:**
+- `test_actor_event_missing_handler` - Expects exception when calling non-existent handler
+- `test_actor_event_python_exception` - Expects exception when Python handler raises
+- `test_actor_event_invalid_return_from_get_context_data` - Expects exception for invalid return type
+
+**Current Behavior:**
+- Python exceptions are being caught/suppressed somewhere in the Rust → Python → Rust call chain
+- Tests expect `pytest.raises(Exception)` but no exception is raised
+- The ViewActor likely continues execution instead of propagating errors
+
+**Impact:**
+- Medium severity: Error handling works for some cases but not all
+- Phase 5 functionality mostly works (8/11 integration tests passing)
+- Does not block Phase 6+ development
+- Should be fixed before production deployment
+
+**Root Cause:**
+- In `crates/djust_live/src/actors/view.rs`, the `handle_event()` method calls Python handler
+- Exceptions from Python may not be properly converted to Rust `Result::Err`
+- PyO3 error handling may need explicit `PyErr::occurred()` checks
+
+**Proposed Fix:**
+1. Review ViewActor's Python event handler invocation code
+2. Ensure PyO3 exceptions are caught and converted to ActorError
+3. Add explicit error propagation tests
+4. Consider adding PyO3 GIL error handling patterns
+
+**Tracking:** TODO - Create separate issue/PR for exception propagation fix
+
+**Status:** Known issue, non-blocking for Phase 7+ development
+
 ### Resources
 
 - **Tokio docs**: https://tokio.rs/
@@ -2995,14 +3032,17 @@ This document provides a complete implementation guide for migrating djust to an
 
 ---
 
-**Document Version:** 2.0
-**Last Updated:** 2025-11-11
+**Document Version:** 2.1
+**Last Updated:** 2025-11-12
 **Author:** Generated from implementation research
-**Status:** 🚧 In Progress - Phase 5 of 10 completed
+**Status:** 🚧 In Progress - Phase 6 of 10 completed
 
 **Recent Updates:**
+- Phase 6 completed: View Identification with UUIDs (PR #31)
+  - Critical bug fix: Replaced HashMap with IndexMap for deterministic routing
+  - Added 7 Phase 6 integration tests, all passing
+  - Documented known exception propagation tech debt from Phase 5
 - Phase 5 completed: Python Event Handler Integration (PR #30)
 - Phases 1-4 completed: Core infrastructure (PR #29)
 - Document updated to reflect actual implementation status
 - Phase numbering adjusted: original Phase 5-8 → now Phase 7-10
-- New Phase 6 added: View identification with UUIDs
