@@ -2425,6 +2425,9 @@ class LiveView(View):
                 initReactCounters();  // Initialize client-side React components
                 initTodoItems();      // Initialize todo item checkboxes
                 bindLiveViewEvents();
+
+                // Expose sendEvent globally for manual event handling (e.g., optimistic updates)
+                window.sendEvent = handleEvent;
             });
         </script>
         """
