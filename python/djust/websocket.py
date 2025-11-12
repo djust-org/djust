@@ -295,22 +295,42 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
             return
 
-        # Get initial HTML (needs sync_to_async for database/session operations)
+        # Get initial HTML
         try:
-            # Initialize Rust view and sync state
-            await sync_to_async(self.view_instance._initialize_rust_view)(request)
-            await sync_to_async(self.view_instance._sync_state_to_rust)()
+            if self.use_actors and self.actor_handle:
+                # Phase 5: Use actor system for rendering
+                logger.info(f"Mounting {view_path} with actor system")
 
-            # IMPORTANT: Use render_with_diff() to establish initial VDOM baseline
-            # This ensures the first event will be able to generate patches instead of falling back to html_update
-            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+                # Get initial state from Python view
+                context_data = await sync_to_async(self.view_instance.get_context_data)()
 
-            # Strip comments and normalize whitespace to match Rust VDOM parser
-            html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
+                # Mount with actor system (passes Python view instance)
+                result = await self.actor_handle.mount(
+                    view_path,
+                    context_data,
+                    self.view_instance  # Pass Python view for event handlers!
+                )
 
-            # Extract innerHTML of [data-liveview-root] for WebSocket client
-            # Client expects just the content to insert into existing container
-            html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
+                html = result["html"]
+                logger.info(f"Actor mount successful, HTML length: {len(html)}")
+
+            else:
+                # Non-actor mode: Use traditional flow
+                # Initialize Rust view and sync state
+                await sync_to_async(self.view_instance._initialize_rust_view)(request)
+                await sync_to_async(self.view_instance._sync_state_to_rust)()
+
+                # IMPORTANT: Use render_with_diff() to establish initial VDOM baseline
+                # This ensures the first event will be able to generate patches instead of falling back to html_update
+                html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+
+                # Strip comments and normalize whitespace to match Rust VDOM parser
+                html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
+
+                # Extract innerHTML of [data-liveview-root] for WebSocket client
+                # Client expects just the content to insert into existing container
+                html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
+
         except Exception as e:
             error_msg = f"Error rendering {view_path}: {type(e).__name__}: {str(e)}"
             logger.error(error_msg, exc_info=True)
@@ -367,62 +387,47 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
             return
 
-        # Call the event handler
+        # Handle the event
         from asgiref.sync import sync_to_async
 
-        handler = getattr(self.view_instance, event_name, None)
-        if handler and callable(handler):
+        if self.use_actors and self.actor_handle:
+            # Phase 5: Use actor system for event handling
             try:
-                # Call handler (needs sync_to_async)
-                if params:
-                    await sync_to_async(handler)(**params)
-                else:
-                    await sync_to_async(handler)()
+                logger.info(f"Handling event '{event_name}' with actor system")
 
-                # Get updated HTML and patches (needs sync_to_async)
-                html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+                # Call actor event handler (will call Python handler internally)
+                result = await self.actor_handle.event(event_name, params)
 
-                # For views with dynamic templates (template_string as property),
-                # patches may be empty because VDOM state is lost on recreation.
-                # In that case, send full HTML update.
+                # Send patches if available, otherwise full HTML
+                patches = result.get("patches")
+                html = result.get("html")
+                version = result.get("version", 0)
+
                 if patches:
+                    # Parse patches JSON string to list
+                    if isinstance(patches, str):
+                        patches = json.loads(patches)
+
                     if self.use_binary:
                         # Send as MessagePack
-                        patches_data = msgpack.packb(json.loads(patches))
+                        patches_data = msgpack.packb(patches)
                         await self.send(bytes_data=patches_data)
                     else:
                         # Send as JSON
                         await self.send_json(
                             {
                                 "type": "patch",
-                                "patches": json.loads(patches),
+                                "patches": patches,
                                 "version": version,
                             }
                         )
                 else:
-                    # No patches - send full HTML update for views with dynamic templates
-                    # Strip comments and whitespace to match Rust VDOM parser
-                    html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(
-                        html
-                    )
-                    # Extract innerHTML to avoid nesting <div data-liveview-root> divs
-                    html_content = await sync_to_async(
-                        self.view_instance._extract_liveview_content
-                    )(html)
-                    import sys
-
-                    print(
-                        "[WebSocket] No patches generated, sending full HTML update",
-                        file=sys.stderr,
-                    )
-                    print(
-                        f"[WebSocket] html_content length: {len(html_content)}, starts with: {html_content[:150]}...",
-                        file=sys.stderr,
-                    )
+                    # No patches - send full HTML update
+                    logger.info(f"No patches from actor, sending full HTML update (length: {len(html) if html else 0})")
                     await self.send_json(
                         {
                             "type": "html_update",
-                            "html": html_content,
+                            "html": html,
                             "version": version,
                         }
                     )
@@ -431,7 +436,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 view_class = (
                     self.view_instance.__class__.__name__ if self.view_instance else "Unknown"
                 )
-                error_msg = f"Error in {view_class}.{event_name}(): {type(e).__name__}: {str(e)}"
+                error_msg = f"Error in actor event handling for {view_class}.{event_name}(): {type(e).__name__}: {str(e)}"
                 logger.error(error_msg, exc_info=True)
 
                 # In debug mode, send detailed error
@@ -454,26 +459,114 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             "error": "An error occurred processing your request.",
                         }
                     )
-        else:
-            error_msg = f"Unknown event handler: {event_name}"
-            if self.view_instance:
-                view_class = self.view_instance.__class__.__name__
-                available_handlers = [
-                    m
-                    for m in dir(self.view_instance)
-                    if not m.startswith("_") and callable(getattr(self.view_instance, m))
-                ]
-                error_msg += (
-                    f" in {view_class}. Available handlers: {', '.join(available_handlers[:5])}"
-                )
 
-            logger.warning(error_msg)
-            await self.send_json(
-                {
-                    "type": "error",
-                    "error": error_msg,
-                }
-            )
+        else:
+            # Non-actor mode: Use traditional flow
+            handler = getattr(self.view_instance, event_name, None)
+            if handler and callable(handler):
+                try:
+                    # Call handler (needs sync_to_async)
+                    if params:
+                        await sync_to_async(handler)(**params)
+                    else:
+                        await sync_to_async(handler)()
+
+                    # Get updated HTML and patches (needs sync_to_async)
+                    html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+
+                    # For views with dynamic templates (template_string as property),
+                    # patches may be empty because VDOM state is lost on recreation.
+                    # In that case, send full HTML update.
+                    if patches:
+                        if self.use_binary:
+                            # Send as MessagePack
+                            patches_data = msgpack.packb(json.loads(patches))
+                            await self.send(bytes_data=patches_data)
+                        else:
+                            # Send as JSON
+                            await self.send_json(
+                                {
+                                    "type": "patch",
+                                    "patches": json.loads(patches),
+                                    "version": version,
+                                }
+                            )
+                    else:
+                        # No patches - send full HTML update for views with dynamic templates
+                        # Strip comments and whitespace to match Rust VDOM parser
+                        html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(
+                            html
+                        )
+                        # Extract innerHTML to avoid nesting <div data-liveview-root> divs
+                        html_content = await sync_to_async(
+                            self.view_instance._extract_liveview_content
+                        )(html)
+                        import sys
+
+                        print(
+                            "[WebSocket] No patches generated, sending full HTML update",
+                            file=sys.stderr,
+                        )
+                        print(
+                            f"[WebSocket] html_content length: {len(html_content)}, starts with: {html_content[:150]}...",
+                            file=sys.stderr,
+                        )
+                        await self.send_json(
+                            {
+                                "type": "html_update",
+                                "html": html_content,
+                                "version": version,
+                            }
+                        )
+
+                except Exception as e:
+                    view_class = (
+                        self.view_instance.__class__.__name__ if self.view_instance else "Unknown"
+                    )
+                    error_msg = f"Error in {view_class}.{event_name}(): {type(e).__name__}: {str(e)}"
+                    logger.error(error_msg, exc_info=True)
+
+                    # In debug mode, send detailed error
+                    from django.conf import settings
+
+                    if settings.DEBUG:
+                        await self.send_json(
+                            {
+                                "type": "error",
+                                "error": error_msg,
+                                "traceback": traceback.format_exc(),
+                                "event": event_name,
+                                "params": params,
+                            }
+                        )
+                    else:
+                        await self.send_json(
+                            {
+                                "type": "error",
+                                "error": "An error occurred processing your request.",
+                            }
+                        )
+            else:
+                # Handler not found in non-actor mode
+                error_msg = f"Unknown event handler: {event_name}"
+                if self.view_instance:
+                    view_class = self.view_instance.__class__.__name__
+                    available_handlers = [
+                        m
+                        for m in dir(self.view_instance)
+                        if not m.startswith("_") and callable(getattr(self.view_instance, m))
+                    ]
+                    error_msg += (
+                        f" in {view_class}. Available handlers: {', '.join(available_handlers[:5])}"
+                    )
+
+                logger.warning(error_msg)
+                await self.send_json(
+                    {
+                        "type": "error",
+                        "error": error_msg,
+                    }
+                )
 
     async def send_json(self, data: Dict[str, Any]):
         """Send JSON message to client with Django type support"""

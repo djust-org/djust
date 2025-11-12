@@ -81,6 +81,7 @@ impl SessionActor {
                 SessionMsg::Mount {
                     view_path,
                     params,
+                    python_view,
                     reply,
                 } => {
                     debug!(
@@ -88,7 +89,7 @@ impl SessionActor {
                         view_path = %view_path,
                         "Handling Mount"
                     );
-                    let result = self.handle_mount(view_path, params).await;
+                    let result = self.handle_mount(view_path, params, python_view).await;
                     let _ = reply.send(result);
                 }
 
@@ -127,15 +128,21 @@ impl SessionActor {
         );
     }
 
-    /// Handle mount request - creates a new ViewActor
+    /// Handle mount request - creates a new ViewActor (Phase 5: Now sets Python view)
     async fn handle_mount(
         &mut self,
         view_path: String,
         params: HashMap<String, Value>,
+        python_view: Option<pyo3::Py<pyo3::PyAny>>,
     ) -> Result<MountResponse, ActorError> {
         // Create ViewActor
         let (view_actor, view_handle) = ViewActor::new(view_path.clone());
         tokio::spawn(view_actor.run());
+
+        // Phase 5: Set Python view instance if provided
+        if let Some(python_view) = python_view {
+            view_handle.set_python_view(python_view).await?;
+        }
 
         // Initialize state
         view_handle.update_state(params).await?;
@@ -155,10 +162,10 @@ impl SessionActor {
     /// Handle event - routes to appropriate ViewActor
     async fn handle_event(
         &mut self,
-        _event_name: String,
-        _params: HashMap<String, Value>,
+        event_name: String,
+        params: HashMap<String, Value>,
     ) -> Result<PatchResponse, ActorError> {
-        // LIMITATION (Phase 5): View identification system not implemented
+        // LIMITATION (Phase 5.2): View identification system not implemented
         // Currently routes to first view, which means:
         // - Only one view per session supported
         // - Cannot distinguish between multiple views
@@ -169,13 +176,12 @@ impl SessionActor {
             .next()
             .ok_or_else(|| ActorError::ViewNotFound("No views mounted".to_string()))?;
 
-        // LIMITATION (Phase 5): Python event handlers not called
-        // This TODO represents incomplete functionality:
-        // - Events trigger re-renders but DON'T execute Python event handlers
-        // - No PyO3 callback mechanism implemented yet
-        // - Actor system is infrastructure-only (Phases 1-4)
-        // Future: Call Python view.event_name(**params) via PyO3 before rendering
-        let result = view_handle.render_with_diff().await?;
+        // Phase 5.2: Now forwards events to ViewActor for Python handler calling
+        // ViewActor.handle_event() will:
+        // 1. Call Python event handler (Phase 5.3 TODO)
+        // 2. Sync state back from Python (Phase 5.3 TODO)
+        // 3. Render with diff
+        let result = view_handle.event(event_name, params).await?;
 
         // Check if patches exist before moving
         let has_patches = result.patches.is_some();
@@ -211,7 +217,7 @@ impl SessionActor {
 }
 
 impl SessionActorHandle {
-    /// Mount a new view
+    /// Mount a new view (Phase 5: Now accepts Python view instance)
     ///
     /// Creates a ViewActor, initializes its state, and renders the initial HTML.
     ///
@@ -219,6 +225,7 @@ impl SessionActorHandle {
     ///
     /// * `view_path` - Python path to the LiveView class (e.g. "app.views.Counter")
     /// * `params` - Initial state parameters
+    /// * `python_view` - Optional Python LiveView instance for event handler callbacks
     ///
     /// # Errors
     ///
@@ -229,6 +236,7 @@ impl SessionActorHandle {
         &self,
         view_path: String,
         params: HashMap<String, Value>,
+        python_view: Option<pyo3::Py<pyo3::PyAny>>,
     ) -> Result<MountResponse, ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -236,6 +244,7 @@ impl SessionActorHandle {
             .send(SessionMsg::Mount {
                 view_path,
                 params,
+                python_view,
                 reply: tx,
             })
             .await
@@ -341,7 +350,7 @@ mod tests {
         let (actor, handle) = SessionActor::new("test-session".to_string());
         tokio::spawn(actor.run());
 
-        let result = handle.mount("test.view".to_string(), HashMap::new()).await;
+        let result = handle.mount("test.view".to_string(), HashMap::new(), None).await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
@@ -378,7 +387,7 @@ mod tests {
 
         // Mount view first
         handle
-            .mount("test.view".to_string(), HashMap::new())
+            .mount("test.view".to_string(), HashMap::new(), None)
             .await
             .unwrap();
 
@@ -397,11 +406,11 @@ mod tests {
 
         // Mount multiple views
         handle
-            .mount("view1".to_string(), HashMap::new())
+            .mount("view1".to_string(), HashMap::new(), None)
             .await
             .unwrap();
         handle
-            .mount("view2".to_string(), HashMap::new())
+            .mount("view2".to_string(), HashMap::new(), None)
             .await
             .unwrap();
 
@@ -434,7 +443,7 @@ mod tests {
 
         // Mount a view
         handle
-            .mount("test.view".to_string(), HashMap::new())
+            .mount("test.view".to_string(), HashMap::new(), None)
             .await
             .unwrap();
 

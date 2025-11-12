@@ -2110,6 +2110,7 @@ class LiveView(View):
             // This provides instant visual feedback before server responds
             function updateDisplayValue(inputElement) {
                 const value = inputElement.value;
+                let updated = false;
 
                 // Strategy 1: Check for explicit data-display-target attribute
                 const targetId = inputElement.dataset.displayTarget;
@@ -2117,7 +2118,7 @@ class LiveView(View):
                     const targetElement = document.getElementById(targetId);
                     if (targetElement) {
                         targetElement.textContent = value;
-                        return;
+                        updated = true;
                     }
                 }
 
@@ -2125,17 +2126,60 @@ class LiveView(View):
                 const outputElement = inputElement.parentElement?.querySelector('output');
                 if (outputElement) {
                     outputElement.textContent = value;
-                    return;
+                    updated = true;
                 }
 
-                // Strategy 3: Find sibling <span> or <div> with .value or .display class
-                const displayElement =
-                    inputElement.parentElement?.querySelector('.value') ||
-                    inputElement.parentElement?.querySelector('.display') ||
-                    inputElement.parentElement?.querySelector('span[class*="value"]');
+                // Strategy 3: Find badge in sibling label (Range component pattern)
+                // Range structure: <label>Volume <span class="badge">50</span></label><input>
+                const parentDiv = inputElement.parentElement;
+                if (parentDiv) {
+                    // Find label sibling
+                    const label = parentDiv.querySelector('label');
+                    if (label) {
+                        const badge = label.querySelector('.badge');
+                        if (badge) {
+                            badge.textContent = value;
+                            updated = true;
+                        }
+                    }
+                }
 
-                if (displayElement) {
-                    displayElement.textContent = value;
+                // Strategy 4: Find nearby <strong> element (percentage display)
+                // Look in parent and grandparent for <strong> elements
+                const searchContainers = [
+                    inputElement.parentElement,
+                    inputElement.parentElement?.parentElement
+                ];
+
+                for (const container of searchContainers) {
+                    if (container) {
+                        const strongElements = container.querySelectorAll('strong');
+                        strongElements.forEach(strong => {
+                            // Check if it contains a number (likely our display)
+                            if (strong.textContent.match(/\d+/)) {
+                                // Update with or without % suffix based on original content
+                                if (strong.textContent.includes('%')) {
+                                    strong.textContent = `${value}%`;
+                                } else {
+                                    strong.textContent = value;
+                                }
+                                updated = true;
+                            }
+                        });
+                    }
+                }
+
+                // Strategy 5: Find sibling <span> or <div> with .value or .display class
+                if (!updated && parentDiv) {
+                    const displayElement =
+                        parentDiv.querySelector('.value') ||
+                        parentDiv.querySelector('.display') ||
+                        parentDiv.querySelector('span[class*="value"]');
+
+                    if (displayElement) {
+                        displayElement.textContent = value;
+                        updated = true;
+                    }
                 }
             }
 

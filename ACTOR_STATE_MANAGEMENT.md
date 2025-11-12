@@ -15,7 +15,9 @@ This document provides a comprehensive implementation guide for migrating djust'
 
 ### Timeline
 
-**6-7 weeks** for complete implementation and testing across 8 phases.
+**8-10 weeks** for complete implementation and testing across 10 phases.
+
+**Current Status:** Phase 5 completed (Python Event Handler Integration)
 
 ### Current Limitations
 
@@ -692,10 +694,9 @@ impl SessionActor {
         let view_handle = self.views.values().next()
             .ok_or_else(|| ActorError::ViewNotFound("No views mounted".to_string()))?;
 
-        // TODO: Call Python event handler via PyO3
-        // For now, just re-render
-
-        let result = view_handle.render_with_diff().await?;
+        // Phase 5: Call Python event handler via PyO3 (✅ IMPLEMENTED)
+        // ViewActor now calls Python handler, syncs state, and renders
+        let result = view_handle.event(event_name, params).await?;
 
         Ok(PatchResponse {
             patches: result.patches,
@@ -2075,150 +2076,245 @@ if __name__ == "__main__":
 
 ## Implementation Roadmap
 
-### Phase 1: Foundation (Week 1)
+### Phase 1: Foundation ✅ COMPLETED
 
 **Goal:** Set up crate structure and core message types
 
 #### Tasks:
 
 **Task 1.1:** Create `djust_actors` crate
-- [ ] Create directory structure
-- [ ] Add `Cargo.toml` with dependencies
-- [ ] Update workspace `Cargo.toml`
-- [ ] Add crate to build system
+- [x] Create directory structure
+- [x] Add `Cargo.toml` with dependencies
+- [x] Update workspace `Cargo.toml`
+- [x] Add crate to build system
 
 **Task 1.2:** Implement message types
-- [ ] Define `SessionMsg`, `ViewMsg`, `ComponentMsg` enums
-- [ ] Define response types (`MountResponse`, `PatchResponse`)
-- [ ] Add `ActorError` type with `thiserror`
-- [ ] Add serialization traits where needed
-- [ ] Write unit tests for serialization
+- [x] Define `SessionMsg`, `ViewMsg`, `ComponentMsg` enums
+- [x] Define response types (`MountResponse`, `PatchResponse`)
+- [x] Add `ActorError` type with `thiserror`
+- [x] Add serialization traits where needed
+- [x] Write unit tests for serialization
 
 **Task 1.3:** Set up logging
-- [ ] Configure `tracing-subscriber`
-- [ ] Add structured logging macros
-- [ ] Create debug/release log levels
-- [ ] Add environment variable configuration
+- [x] Configure `tracing-subscriber`
+- [x] Add structured logging macros
+- [x] Create debug/release log levels
+- [x] Add environment variable configuration
 
 **Deliverables:**
-- Compiling `djust_actors` crate
-- Message type tests passing
-- Logging working in tests
+- ✅ Compiling `djust_actors` crate (integrated into `djust_live`)
+- ✅ Message type tests passing
+- ✅ Logging working in tests
 
-### Phase 2: Core Actors (Week 2)
+**Status:** Completed in PR #29
+
+### Phase 2: Core Actors ✅ COMPLETED
 
 **Goal:** Implement ViewActor and SessionActor
 
 #### Tasks:
 
 **Task 2.1:** Implement ViewActor
-- [ ] Create `view.rs` with actor struct
-- [ ] Implement message handler loop
-- [ ] Handle `UpdateState`, `Render`, `RenderWithDiff`
-- [ ] Integrate with `RustLiveViewBackend`
-- [ ] Write unit tests
+- [x] Create `view.rs` with actor struct
+- [x] Implement message handler loop
+- [x] Handle `UpdateState`, `Render`, `RenderWithDiff`
+- [x] Integrate with `RustLiveViewBackend`
+- [x] Write unit tests
 
 **Task 2.2:** Implement SessionActor
-- [ ] Create `session.rs` with actor struct
-- [ ] Implement message handler loop
-- [ ] Handle `Mount`, `Event`, `Ping`, `Shutdown`
-- [ ] Manage ViewActor lifecycle
-- [ ] Write unit tests
+- [x] Create `session.rs` with actor struct
+- [x] Implement message handler loop
+- [x] Handle `Mount`, `Event`, `Ping`, `Shutdown`
+- [x] Manage ViewActor lifecycle
+- [x] Write unit tests
 
 **Task 2.3:** Implement actor handles
-- [ ] `ViewActorHandle` with async methods
-- [ ] `SessionActorHandle` with async methods
-- [ ] Test message passing
-- [ ] Test oneshot response channels
+- [x] `ViewActorHandle` with async methods
+- [x] `SessionActorHandle` with async methods
+- [x] Test message passing
+- [x] Test oneshot response channels
 
 **Deliverables:**
-- ViewActor tests passing
-- SessionActor tests passing
-- Integration test: mount + event working
+- ✅ ViewActor tests passing (10 tests)
+- ✅ SessionActor tests passing (10 tests)
+- ✅ Integration test: mount + event working
 
-### Phase 3: PyO3 Integration (Week 2-3)
+**Status:** Completed in PR #29
+
+### Phase 3: PyO3 Integration ✅ COMPLETED
 
 **Goal:** Expose actors to Python
 
 #### Tasks:
 
 **Task 3.1:** Set up pyo3-async-runtimes
-- [ ] Add dependency
-- [ ] Configure Tokio runtime
-- [ ] Test async bridge with simple function
-- [ ] Document async patterns
+- [x] Add dependency
+- [x] Configure Tokio runtime
+- [x] Test async bridge with simple function
+- [x] Document async patterns
 
 **Task 3.2:** Create Python bindings
-- [ ] Wrap `SessionActorHandle` in `#[pyclass]`
-- [ ] Implement `create_session_actor()` function
-- [ ] Expose `mount()`, `event()`, `shutdown()` methods
-- [ ] Test from Python
+- [x] Wrap `SessionActorHandle` in `#[pyclass]`
+- [x] Implement `create_session_actor()` function
+- [x] Expose `mount()`, `event()`, `shutdown()` methods
+- [x] Test from Python
 
 **Task 3.3:** Update Python `LiveView` class
-- [ ] Add `_session_actor` field
-- [ ] Implement `_initialize_actor()` method
-- [ ] Add `render_async()` method
-- [ ] Add feature flag (`use_actors`)
-- [ ] Maintain backward compatibility
+- [x] Add `_session_actor` field
+- [x] Implement `_initialize_actor()` method
+- [x] Add `render_async()` method
+- [x] Add feature flag (`use_actors`)
+- [x] Maintain backward compatibility
 
 **Deliverables:**
-- Python can create actors
-- Python can call mount/event
-- LiveView works with actors
-- Backward compatibility maintained
+- ✅ Python can create actors
+- ✅ Python can call mount/event
+- ✅ LiveView works with actors
+- ✅ Backward compatibility maintained
 
-### Phase 4: WebSocket Integration (Week 3)
+**Status:** Completed in PR #29
+
+### Phase 4: WebSocket Integration ✅ COMPLETED
 
 **Goal:** Integrate actors with WebSocket consumer
 
 #### Tasks:
 
 **Task 4.1:** Update `LiveViewConsumer`
-- [ ] Add `session_actor` field
-- [ ] Update `connect()` to create actor
-- [ ] Update `handle_mount()` to use actor
-- [ ] Update `handle_event()` to use actor
-- [ ] Update `disconnect()` to shutdown actor
+- [x] Add `session_actor` field
+- [x] Update `connect()` to create actor
+- [x] Update `handle_mount()` to use actor
+- [x] Update `handle_event()` to use actor
+- [x] Update `disconnect()` to shutdown actor
 
 **Task 4.2:** Test WebSocket integration
-- [ ] Test connection lifecycle
-- [ ] Test mount flow
-- [ ] Test event flow
-- [ ] Test reconnection
-- [ ] Test error handling
+- [x] Test connection lifecycle
+- [x] Test mount flow
+- [x] Test event flow
+- [x] Test reconnection
+- [x] Test error handling
 
 **Task 4.3:** Performance testing
-- [ ] Measure event latency
-- [ ] Measure concurrent session throughput
-- [ ] Compare with legacy system
-- [ ] Identify bottlenecks
+- [x] Measure event latency
+- [x] Measure concurrent session throughput
+- [x] Compare with legacy system
+- [x] Identify bottlenecks
 
 **Deliverables:**
-- WebSocket consumer working with actors
-- Demo app working end-to-end
-- Performance metrics collected
+- ✅ WebSocket consumer working with actors
+- ✅ Demo app working end-to-end
+- ✅ Performance metrics collected
 
-### Phase 5: Supervision & Lifecycle (Week 4)
+**Status:** Completed in PR #29
+
+### Phase 5: Python Event Handler Integration ✅ COMPLETED
+
+**Goal:** Enable ViewActors to call Python event handlers and sync state
+
+#### Tasks:
+
+**Task 5.1:** Python view storage infrastructure
+- [x] Add `python_view: Option<Py<PyAny>>` field to ViewActor
+- [x] Implement `SetPythonView` message and handler
+- [x] ViewActorHandle can store Python LiveView instances
+- [x] Write unit tests
+
+**Task 5.2:** Event message and routing
+- [x] Add `Event` message variant to ViewMsg enum
+- [x] Implement `ViewActorHandle::event()` method
+- [x] SessionActor forwards events to ViewActor
+- [x] Test event routing
+
+**Task 5.3:** Python event handler calling (CORE FEATURE)
+- [x] Implement `call_python_handler()` with PyO3
+- [x] Use `Python::with_gil()` for safe calls
+- [x] Convert Rust params to Python dict
+- [x] Call handler with `handler.call((), Some(&params_dict))`
+- [x] Proper error handling for missing handlers
+- [x] Write integration tests
+
+**Task 5.4:** State synchronization
+- [x] Implement `sync_state_from_python()` method
+- [x] Call `view.get_context_data()` after handler
+- [x] Convert Python dict to Rust HashMap
+- [x] Update backend state with synced values
+- [x] Handle invalid return types gracefully
+
+**Task 5.5:** Python bindings
+- [x] Update `SessionMsg::Mount` to accept `python_view: Option<Py<PyAny>>`
+- [x] `SessionActor::handle_mount()` sets Python view on ViewActor
+- [x] `SessionActorHandlePy::mount(view_path, params, python_view=None)`
+- [x] Maintain backward compatibility (defaults to None)
+
+**Task 5.6:** LiveViewConsumer integration
+- [x] `handle_mount()` passes `self.view_instance` to actor
+- [x] `handle_event()` uses `actor.event()` when `use_actors=True`
+- [x] Full backward compatibility for non-actor mode
+- [x] Integration tests (8 comprehensive tests)
+
+**Deliverables:**
+- ✅ Python event handlers called from Rust actors
+- ✅ Bidirectional state sync (Python ↔ Rust)
+- ✅ Error handling (missing handlers, Python exceptions, invalid returns)
+- ✅ Backward compatible (python_view defaults to None)
+- ✅ 8 integration tests passing
+
+**Status:** Completed in PR #30
+
+**Documentation:** See `PHASE5_DESIGN.md` for complete architecture and design decisions.
+
+### Phase 6: View Identification (Next)
+
+**Goal:** Implement UUID-based view identification for multiple views per session
+
+#### Tasks:
+
+**Task 6.1:** UUID-based view identification
+- [ ] Generate unique view_id (UUID) for each mounted view
+- [ ] Update SessionActor to use HashMap<Uuid, ViewActorHandle>
+- [ ] Pass view_id in event messages
+- [ ] Route events to specific views by UUID
+- [ ] Update Python bindings to return view_id
+
+**Task 6.2:** Multiple views per session
+- [ ] Support mounting multiple views in single session
+- [ ] Test concurrent events to different views
+- [ ] Test view-specific state isolation
+- [ ] Document multi-view patterns
+
+**Task 6.3:** View lifecycle management
+- [ ] Add unmount/destroy view functionality
+- [ ] Cleanup view actors when unmounted
+- [ ] Test memory cleanup
+- [ ] Document view lifecycle
+
+**Deliverables:**
+- Multiple views per session working
+- View-specific event routing
+- Proper resource cleanup
+- Tests passing
+
+### Phase 7: Supervision & Lifecycle (Week 4)
 
 **Goal:** Add supervision and session management
 
 #### Tasks:
 
-**Task 5.1:** Implement `ActorSupervisor`
+**Task 7.1:** Implement `ActorSupervisor`
 - [ ] Create supervisor struct
 - [ ] Implement TTL cleanup task
 - [ ] Implement health monitoring task
 - [ ] Implement panic recovery
 - [ ] Write tests
 
-**Task 5.2:** Implement session registry
+**Task 7.2:** Implement session registry
 - [ ] Use DashMap for thread-safe storage
 - [ ] Implement `get_or_create_session()`
 - [ ] Implement `remove_session()`
 - [ ] Add stats tracking
 - [ ] Expose to Python
 
-**Task 5.3:** Session management
+**Task 7.3:** Session management
 - [ ] Implement TTL expiration
 - [ ] Implement graceful shutdown
 - [ ] Test cleanup under load
@@ -2229,20 +2325,20 @@ if __name__ == "__main__":
 - Health monitoring working
 - Supervisor stats accessible from Python
 
-### Phase 6: Component Actors (Week 5)
+### Phase 8: Component Actors (Week 5)
 
 **Goal:** Add component-level actors
 
 #### Tasks:
 
-**Task 6.1:** Implement `ComponentActor`
+**Task 8.1:** Implement `ComponentActor`
 - [ ] Create `component.rs` with actor struct
 - [ ] Implement message loop
 - [ ] Handle `UpdateProps`, `SendToParent`
 - [ ] Integrate with ViewActor
 - [ ] Write tests
 
-**Task 6.2:** Integrate with `LiveComponent`
+**Task 8.2:** Integrate with `LiveComponent`
 - [ ] Update Python `LiveComponent` class
 - [ ] Add component actor creation
 - [ ] Test parent-child communication
@@ -2253,62 +2349,65 @@ if __name__ == "__main__":
 - LiveComponent using actors
 - Parent-child messaging working
 
-### Phase 7: Testing & Optimization (Week 6)
+### Phase 9: Testing & Optimization (Week 6)
 
 **Goal:** Comprehensive testing and optimization
 
 #### Tasks:
 
-**Task 7.1:** Write integration tests
+**Task 9.1:** Write integration tests
 - [ ] Full lifecycle test
 - [ ] Concurrent sessions test
 - [ ] Error handling test
 - [ ] Graceful shutdown test
 
-**Task 7.2:** Write concurrency tests
+**Task 9.2:** Write concurrency tests
 - [ ] No deadlock tests
 - [ ] Backpressure tests
 - [ ] Channel overflow tests
 - [ ] Race condition tests
 
-**Task 7.3:** Benchmarking
+**Task 9.3:** Benchmarking
 - [ ] Implement Python benchmarks
 - [ ] Compare with legacy system
 - [ ] Measure throughput
 - [ ] Measure latency
 - [ ] Measure memory usage
 
-**Task 7.4:** Performance optimization
+**Task 9.4:** Performance optimization
 - [ ] Profile with `cargo flamegraph`
 - [ ] Optimize hot paths
 - [ ] Tune channel capacities
 - [ ] Consider message batching if needed
+- [ ] Combine GIL acquisitions (Phase 5 optimization)
+- [ ] Add event name security validation
 
 **Deliverables:**
 - All tests passing
 - Performance targets met
 - Optimization report
 
-### Phase 8: Documentation & Migration (Week 7)
+### Phase 10: Documentation & Migration (Week 7)
 
 **Goal:** Production readiness
 
 #### Tasks:
 
-**Task 8.1:** Write documentation
-- [ ] This architecture document
+**Task 10.1:** Write documentation
+- [x] This architecture document (ACTOR_STATE_MANAGEMENT.md)
+- [x] Phase 5 design document (PHASE5_DESIGN.md)
 - [ ] API reference
 - [ ] Migration guide
 - [ ] Performance tuning guide
 - [ ] Update CLAUDE.md
 
-**Task 8.2:** Create migration path
-- [ ] Feature flag implementation
-- [ ] Backward compatibility testing
+**Task 10.2:** Create migration path
+- [x] Feature flag implementation (`use_actors`)
+- [x] Backward compatibility testing
 - [ ] Migration checklist
 - [ ] Rollback procedure
 
-**Task 8.3:** Update examples
+**Task 10.3:** Update examples
 - [ ] Update `demo_project` to use actors
 - [ ] Add actor-specific examples
 - [ ] Add performance comparison demos
@@ -2882,7 +2981,14 @@ This document provides a complete implementation guide for migrating djust to an
 
 ---
 
-**Document Version:** 1.0
+**Document Version:** 2.0
 **Last Updated:** 2025-11-11
 **Author:** Generated from implementation research
-**Status:** ✅ Complete and ready for implementation
+**Status:** 🚧 In Progress - Phase 5 of 10 completed
+
+**Recent Updates:**
+- Phase 5 completed: Python Event Handler Integration (PR #30)
+- Phases 1-4 completed: Core infrastructure (PR #29)
+- Document updated to reflect actual implementation status
+- Phase numbering adjusted: original Phase 5-8 → now Phase 7-10
+- New Phase 6 added: View identification with UUIDs

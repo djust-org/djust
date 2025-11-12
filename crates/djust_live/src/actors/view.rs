@@ -8,15 +8,22 @@ use super::error::ActorError;
 use super::messages::{RenderResult, ViewMsg};
 use crate::RustLiveViewBackend;
 use djust_core::Value;
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// ViewActor manages a LiveView instance's state and rendering
+///
+/// Phase 5: Now includes Python view instance for event handler callbacks
 pub struct ViewActor {
     view_path: String,
     receiver: mpsc::Receiver<ViewMsg>,
     backend: RustLiveViewBackend,
+    /// Python LiveView instance for calling event handlers
+    /// Set via SetPythonView message after actor creation
+    python_view: Option<Py<PyAny>>,
 }
 
 /// Handle for sending messages to a ViewActor
@@ -61,6 +68,7 @@ impl ViewActor {
             view_path: view_path.clone(),
             receiver: rx,
             backend,
+            python_view: None, // Phase 5: Set via SetPythonView message
         };
 
         let handle = ViewActorHandle {
@@ -97,6 +105,24 @@ impl ViewActor {
                 ViewMsg::RenderWithDiff { reply } => {
                     debug!(view_path = %self.view_path, "RenderWithDiff");
                     self.handle_render_with_diff(reply);
+                }
+
+                ViewMsg::SetPythonView { view, reply } => {
+                    debug!(view_path = %self.view_path, "SetPythonView");
+                    self.handle_set_python_view(view, reply);
+                }
+
+                ViewMsg::Event {
+                    event_name,
+                    params,
+                    reply,
+                } => {
+                    debug!(
+                        view_path = %self.view_path,
+                        event = %event_name,
+                        "Event"
+                    );
+                    self.handle_event(event_name, params, reply);
                 }
 
                 ViewMsg::Reset => {
@@ -149,6 +175,172 @@ impl ViewActor {
             .map_err(|e| ActorError::template(e.to_string()));
 
         let _ = reply.send(result);
+    }
+
+    /// Handle SetPythonView message (Phase 5)
+    ///
+    /// Store reference to Python LiveView instance for calling event handlers.
+    fn handle_set_python_view(
+        &mut self,
+        view: Py<PyAny>,
+        reply: tokio::sync::oneshot::Sender<Result<(), ActorError>>,
+    ) {
+        self.python_view = Some(view);
+        let _ = reply.send(Ok(()));
+    }
+
+    /// Handle Event message (Phase 5.3)
+    ///
+    /// Calls Python event handler, syncs state, and renders with diff.
+    /// This is the core of Phase 5 - integrating Python event handlers with actor system.
+    fn handle_event(
+        &mut self,
+        event_name: String,
+        params: HashMap<String, Value>,
+        reply: tokio::sync::oneshot::Sender<Result<RenderResult, ActorError>>,
+    ) {
+        // Phase 5.3: Call Python event handler
+        let result = self.call_python_handler(&event_name, &params);
+
+        // If handler call succeeded, sync state and render
+        let render_result = match result {
+            Ok(()) => {
+                // Sync state from Python to Rust backend
+                if let Err(e) = self.sync_state_from_python() {
+                    warn!(
+                        view_path = %self.view_path,
+                        error = %e,
+                        "Failed to sync state from Python"
+                    );
+                }
+
+                // Render with diff
+                self.backend
+                    .render_with_diff_rust()
+                    .map(|(html, patches, version)| RenderResult {
+                        html,
+                        patches,
+                        version,
+                    })
+                    .map_err(|e| ActorError::template(e.to_string()))
+            }
+            Err(e) => {
+                // Handler call failed - still try to render current state
+                warn!(
+                    view_path = %self.view_path,
+                    event = %event_name,
+                    error = %e,
+                    "Python event handler failed"
+                );
+
+                // Return error but include current rendered state
+                self.backend
+                    .render_with_diff_rust()
+                    .map(|(html, patches, version)| RenderResult {
+                        html,
+                        patches,
+                        version,
+                    })
+                    .map_err(|e| ActorError::template(e.to_string()))
+            }
+        };
+
+        let _ = reply.send(render_result);
+    }
+
+    /// Call Python event handler (Phase 5.3)
+    ///
+    /// Calls the specified method on the Python LiveView instance with the given parameters.
+    fn call_python_handler(
+        &self,
+        event_name: &str,
+        params: &HashMap<String, Value>,
+    ) -> Result<(), ActorError> {
+        // If no Python view is set, return error
+        let python_view = self
+            .python_view
+            .as_ref()
+            .ok_or_else(|| ActorError::Python("No Python view set".to_string()))?;
+
+        // Call Python handler with GIL
+        Python::with_gil(|py| {
+            let view = python_view.bind(py);
+
+            // Get the handler method
+            let handler = view.getattr(event_name).map_err(|e| {
+                ActorError::Python(format!(
+                    "Handler '{}' not found on {}: {}",
+                    event_name, self.view_path, e
+                ))
+            })?;
+
+            // Convert params to Python dict
+            let params_dict = PyDict::new_bound(py);
+            for (key, value) in params {
+                params_dict
+                    .set_item(key, value.to_object(py))
+                    .map_err(|e| {
+                        ActorError::Python(format!("Failed to convert param '{}': {}", key, e))
+                    })?;
+            }
+
+            // Call handler(**params)
+            handler.call((), Some(&params_dict)).map_err(|e| {
+                ActorError::Python(format!(
+                    "Error in {}.{}(): {}",
+                    self.view_path, event_name, e
+                ))
+            })?;
+
+            Ok::<_, ActorError>(())
+        })
+    }
+
+    /// Sync state from Python view to Rust backend (Phase 5.3)
+    ///
+    /// Calls get_context_data() on the Python view and updates the Rust backend state.
+    fn sync_state_from_python(&mut self) -> Result<(), ActorError> {
+        let python_view = match &self.python_view {
+            Some(view) => view,
+            None => return Ok(()), // No Python view, nothing to sync
+        };
+
+        Python::with_gil(|py| {
+            let view = python_view.bind(py);
+
+            // Get context_data (calls view.get_context_data())
+            let context_method = view.getattr("get_context_data").map_err(|e| {
+                ActorError::Python(format!(
+                    "get_context_data() not found on {}: {}",
+                    self.view_path, e
+                ))
+            })?;
+
+            let context_dict = context_method.call0().map_err(|e| {
+                ActorError::Python(format!("Error calling get_context_data(): {}", e))
+            })?;
+
+            let context_dict = context_dict.downcast::<PyDict>().map_err(|e| {
+                ActorError::Python(format!("get_context_data() did not return dict: {}", e))
+            })?;
+
+            // Convert to HashMap and update backend
+            let mut state = HashMap::new();
+            for (key, value) in context_dict.iter() {
+                let key_str: String = key.extract().map_err(|e| {
+                    ActorError::Python(format!("Failed to extract key as string: {}", e))
+                })?;
+
+                let rust_value = Value::extract_bound(&value).map_err(|e| {
+                    ActorError::Python(format!("Failed to convert value for key '{}': {}", key_str, e))
+                })?;
+
+                state.insert(key_str, rust_value);
+            }
+
+            self.backend.update_state_rust(state);
+            Ok::<_, ActorError>(())
+        })
     }
 }
 
@@ -211,6 +403,57 @@ impl ViewActorHandle {
 
         self.sender
             .send(ViewMsg::RenderWithDiff { reply: tx })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+
+        rx.await.map_err(|_| ActorError::Shutdown)?
+    }
+
+    /// Set the Python view instance for event handler callbacks (Phase 5)
+    ///
+    /// # Arguments
+    ///
+    /// * `view` - Python LiveView instance
+    ///
+    /// # Errors
+    ///
+    /// Returns `ActorError::Shutdown` if the actor has been shutdown.
+    pub async fn set_python_view(&self, view: Py<PyAny>) -> Result<(), ActorError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.sender
+            .send(ViewMsg::SetPythonView { view, reply: tx })
+            .await
+            .map_err(|_| ActorError::Shutdown)?;
+
+        rx.await.map_err(|_| ActorError::Shutdown)?
+    }
+
+    /// Handle an event by calling Python event handler (Phase 5)
+    ///
+    /// # Arguments
+    ///
+    /// * `event_name` - Name of the event handler method to call
+    /// * `params` - Event parameters to pass to the handler
+    ///
+    /// # Errors
+    ///
+    /// Returns:
+    /// - `ActorError::Shutdown` if the actor has been shutdown
+    /// - `ActorError::Template` if template rendering fails
+    pub async fn event(
+        &self,
+        event_name: String,
+        params: HashMap<String, Value>,
+    ) -> Result<RenderResult, ActorError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.sender
+            .send(ViewMsg::Event {
+                event_name,
+                params,
+                reply: tx,
+            })
             .await
             .map_err(|_| ActorError::Shutdown)?;
 

@@ -87,3 +87,224 @@ class TestActorIntegration:
         # Run 10 actors concurrently
         tasks = [actor_lifecycle(f"concurrent-{i}") for i in range(10)]
         await asyncio.gather(*tasks)
+
+    # ========================================
+    # Phase 5: Python Event Handler Integration Tests
+    # ========================================
+
+    @pytest.mark.asyncio
+    async def test_actor_mount_with_python_view(self):
+        """Test mounting a view with Python instance (Phase 5)"""
+        from djust._rust import create_session_actor
+
+        # Create a mock Python view
+        class MockView:
+            def __init__(self):
+                self.count = 0
+
+            def get_context_data(self):
+                return {"count": self.count}
+
+            def increment(self):
+                self.count += 1
+
+        # Create actor and mount
+        handle = await create_session_actor("test-phase5-mount")
+        view = MockView()
+
+        # Mount with Python view instance
+        result = await handle.mount(
+            "test.MockView",
+            {"count": 0},
+            view  # Pass Python view instance!
+        )
+
+        assert result is not None
+        assert "html" in result
+        assert "session_id" in result
+        assert result["session_id"] == "test-phase5-mount"
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_actor_event_calls_python_handler(self):
+        """Test that actor events call Python handlers (Phase 5 core feature)"""
+        from djust._rust import create_session_actor
+
+        # Create a mock Python view with event handler
+        class CounterView:
+            def __init__(self):
+                self.count = 0
+                self.increment_called = False
+
+            def get_context_data(self):
+                return {"count": self.count}
+
+            def increment(self):
+                self.increment_called = True
+                self.count += 1
+
+            def decrement(self):
+                self.count -= 1
+
+        # Create actor and mount
+        handle = await create_session_actor("test-phase5-events")
+        view = CounterView()
+
+        # Mount with Python view
+        await handle.mount(
+            "test.CounterView",
+            {"count": 0},
+            view
+        )
+
+        # Trigger event
+        result = await handle.event("increment", {})
+
+        # Verify Python handler was called
+        assert view.increment_called, "Python increment() handler should have been called"
+        assert view.count == 1, "Python state should have been updated"
+
+        # Verify result has expected structure
+        assert result is not None
+        assert "version" in result
+
+        # Trigger another event
+        await handle.event("increment", {})
+        assert view.count == 2
+
+        # Test decrement
+        await handle.event("decrement", {})
+        assert view.count == 1
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_actor_event_with_params(self):
+        """Test actor events with parameters"""
+        from djust._rust import create_session_actor
+
+        class FormView:
+            def __init__(self):
+                self.name = ""
+                self.age = 0
+
+            def get_context_data(self):
+                return {"name": self.name, "age": self.age}
+
+            def update_profile(self, name=None, age=None):
+                if name is not None:
+                    self.name = name
+                if age is not None:
+                    self.age = age
+
+        # Create actor and mount
+        handle = await create_session_actor("test-phase5-params")
+        view = FormView()
+
+        await handle.mount("test.FormView", {}, view)
+
+        # Trigger event with params
+        await handle.event("update_profile", {"name": "Alice", "age": 30})
+
+        assert view.name == "Alice"
+        assert view.age == 30
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_actor_event_missing_handler(self):
+        """Test actor event with missing handler raises error"""
+        from djust._rust import create_session_actor
+
+        class MinimalView:
+            def get_context_data(self):
+                return {}
+
+        handle = await create_session_actor("test-phase5-missing")
+        view = MinimalView()
+
+        await handle.mount("test.MinimalView", {}, view)
+
+        # Calling non-existent handler should raise error
+        with pytest.raises(Exception) as exc_info:
+            await handle.event("nonexistent_handler", {})
+
+        assert "not found" in str(exc_info.value).lower() or "error" in str(exc_info.value).lower()
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_actor_mount_without_python_view(self):
+        """Test that mount works without Python view (backward compatibility)"""
+        from djust._rust import create_session_actor
+
+        handle = await create_session_actor("test-phase5-no-view")
+
+        # Mount without Python view (python_view=None)
+        result = await handle.mount(
+            "test.SomeView",
+            {"initial": "data"},
+            None  # No Python view
+        )
+
+        assert result is not None
+        assert "html" in result
+
+        # Events will fail without Python view, but mount should succeed
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_actor_event_python_exception(self):
+        """Test that Python exceptions are properly handled"""
+        from djust._rust import create_session_actor
+
+        class BuggyView:
+            def get_context_data(self):
+                return {}
+
+            def broken_handler(self):
+                raise ValueError("Intentional error for testing")
+
+        handle = await create_session_actor("test-phase5-exception")
+        view = BuggyView()
+
+        await handle.mount("test.BuggyView", {}, view)
+
+        # Python exception should be caught and converted to error
+        with pytest.raises(Exception) as exc_info:
+            await handle.event("broken_handler", {})
+
+        error_msg = str(exc_info.value).lower()
+        assert "error" in error_msg or "intentional" in error_msg
+
+        await handle.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_actor_event_invalid_return_from_get_context_data(self):
+        """Test that invalid get_context_data() return is handled"""
+        from djust._rust import create_session_actor
+
+        class InvalidView:
+            def get_context_data(self):
+                # Should return dict, but returns string
+                return "not a dict"
+
+            def some_event(self):
+                pass
+
+        handle = await create_session_actor("test-phase5-invalid-context")
+        view = InvalidView()
+
+        await handle.mount("test.InvalidView", {}, view)
+
+        # Should handle invalid context_data gracefully
+        with pytest.raises(Exception) as exc_info:
+            await handle.event("some_event", {})
+
+        # Error should mention the problem
+        error_msg = str(exc_info.value).lower()
+        assert "error" in error_msg or "dict" in error_msg
+
+        await handle.shutdown()
+

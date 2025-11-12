@@ -6,6 +6,7 @@
 use super::error::Result;
 use djust_core::Value;
 use djust_vdom::Patch;
+use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::sync::oneshot;
@@ -17,10 +18,11 @@ use tokio::sync::oneshot;
 /// Messages sent to SessionActor
 #[derive(Debug)]
 pub enum SessionMsg {
-    /// Mount a new view
+    /// Mount a new view (Phase 5: Now includes Python view instance)
     Mount {
         view_path: String,
         params: HashMap<String, Value>,
+        python_view: Option<Py<PyAny>>,
         reply: oneshot::Sender<Result<MountResponse>>,
     },
 
@@ -80,6 +82,19 @@ pub enum ViewMsg {
 
     /// Render and compute VDOM diff
     RenderWithDiff {
+        reply: oneshot::Sender<Result<RenderResult>>,
+    },
+
+    /// Set Python view instance for event handler callbacks (Phase 5)
+    SetPythonView {
+        view: Py<PyAny>,
+        reply: oneshot::Sender<Result<()>>,
+    },
+
+    /// Handle an event by calling Python event handler (Phase 5)
+    Event {
+        event_name: String,
+        params: HashMap<String, Value>,
         reply: oneshot::Sender<Result<RenderResult>>,
     },
 

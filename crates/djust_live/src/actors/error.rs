@@ -29,6 +29,10 @@ pub enum ActorError {
     #[error("View not found: {0}")]
     ViewNotFound(String),
 
+    /// Python error (Phase 5)
+    #[error("Python error: {0}")]
+    Python(String),
+
     /// Serialization error
     #[error("Serialization error: {0}")]
     Serialization(String),

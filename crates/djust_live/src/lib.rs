@@ -350,21 +350,24 @@ pub struct SessionActorHandlePy {
 
 #[pymethods]
 impl SessionActorHandlePy {
-    /// Mount a view
+    /// Mount a view (Phase 5: Now accepts Python view instance)
     ///
     /// Creates a ViewActor, initializes its state, and renders the initial HTML.
     ///
     /// Args:
     ///     view_path (str): Python path to the LiveView class (e.g. "app.views.Counter")
     ///     params (dict): Initial state parameters
+    ///     python_view (Optional[Any]): Python LiveView instance for event handler callbacks
     ///
     /// Returns:
     ///     dict: {"html": str, "session_id": str}
+    #[pyo3(signature = (view_path, params, python_view=None))]
     fn mount<'py>(
         &self,
         py: Python<'py>,
         view_path: String,
         params: &Bound<'py, PyDict>,
+        python_view: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let handle = self.handle.clone();
 
@@ -373,7 +376,7 @@ impl SessionActorHandlePy {
 
         future_into_py(py, async move {
             let result = handle
-                .mount(view_path, params_rust)
+                .mount(view_path, params_rust, python_view)
                 .await
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
