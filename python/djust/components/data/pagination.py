@@ -4,7 +4,7 @@ Pagination component for djust.
 Provides pagination controls for navigating through data sets.
 """
 
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any
 from ..base import LiveComponent
 
 

@@ -7,7 +7,7 @@ Usage:
     python manage.py cleanup_liveview_sessions --stats     # Show stats only
 """
 
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
 from djust.live_view import cleanup_expired_sessions, get_session_stats, DEFAULT_SESSION_TTL
 
 

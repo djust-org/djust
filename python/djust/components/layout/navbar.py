@@ -5,7 +5,7 @@ A style-independent navigation bar component that adapts to different CSS framew
 Similar to shadcn/ui components - framework-agnostic with customizable styles.
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 from ..base import LiveComponent
 from django.utils.safestring import mark_safe
 from ...config import config

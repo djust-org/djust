@@ -8,7 +8,7 @@ to render form fields with appropriate styling.
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
 from django import forms
-from django.utils.html import format_html, escape
+from django.utils.html import escape
 from .config import config
 
 

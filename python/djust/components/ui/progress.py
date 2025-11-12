@@ -4,7 +4,7 @@ Progress component for djust.
 Provides progress bars for showing completion status.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from ..base import LiveComponent
 from django.utils.safestring import mark_safe
 
@@ -91,7 +91,6 @@ class ProgressComponent(LiveComponent):
 
     def render(self) -> str:
         """Render progress with inline HTML"""
-        from django.utils.safestring import mark_safe
         from ...config import config
 
         framework = config.get("css_framework", "bootstrap5")
@@ -180,7 +179,7 @@ class ProgressComponent(LiveComponent):
         # Add shimmer animation style if needed
         if self.animated:
             html = (
-                f"<style>@keyframes shimmer {{0% {{background-position: -100% 0;}} 100% {{background-position: 100% 0;}}}}</style>"
+                "<style>@keyframes shimmer {0% {background-position: -100% 0;} 100% {background-position: 100% 0;}}</style>"
                 + html
             )
 

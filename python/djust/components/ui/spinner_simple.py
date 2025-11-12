@@ -28,7 +28,6 @@ Performance:
     - Python: ~0.2 μs (f-string fallback)
 """
 
-from typing import Optional
 from ..base import Component
 
 # Try to import Rust implementation

@@ -290,7 +290,7 @@ class FormMixin:
 
         # Add LiveView change event for real-time validation
         attrs["@change"] = "validate_field"
-        attrs[f"data-field"] = field_name
+        attrs["data-field"] = field_name
 
         # Render based on field type
         if field_type == "textarea":

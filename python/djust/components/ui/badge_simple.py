@@ -6,7 +6,6 @@ This is a stateless Component optimized for performance.
 Use BadgeComponent for interactive badges with state.
 """
 
-from typing import Optional
 from ..base import Component
 
 

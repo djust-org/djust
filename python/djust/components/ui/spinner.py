@@ -4,7 +4,7 @@ Spinner component for djust.
 Provides loading spinners for indicating activity.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from ..base import LiveComponent
 from django.utils.safestring import mark_safe
 

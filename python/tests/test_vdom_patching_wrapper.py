@@ -56,7 +56,7 @@ def test_vdom_patching_generates_patches():
     assert "Count: <strong>0</strong>" in initial_html
     assert "<div data-liveview-root>" in initial_html
 
-    print(f"\n[TEST] Initial HTML rendered")
+    print("\n[TEST] Initial HTML rendered")
     print(f"[TEST] Session key: {get_request.session.session_key}")
 
     # Simulate POST request (increment counter)

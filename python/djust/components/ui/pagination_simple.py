@@ -4,7 +4,6 @@ Pagination component for djust.
 Simple stateless pagination component with automatic Rust optimization.
 """
 
-from typing import Optional
 from ..base import Component
 
 try:
@@ -168,7 +167,7 @@ class Pagination(Component):
             else:
                 # Page number
                 active = " active" if page == self.current_page else ""
-                aria = f' aria-current="page"' if page == self.current_page else ""
+                aria = ' aria-current="page"' if page == self.current_page else ""
                 parts.append(f'    <li class="page-item{active}">')
                 parts.append(
                     f'      <a class="page-link" href="#" data-page="{page}"{aria}>{page}</a>'

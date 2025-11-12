@@ -8,7 +8,7 @@ Provides centralized configuration for:
 - Template preferences
 """
 
-from typing import Dict, Any, Optional, Type
+from typing import Dict, Any
 
 
 class LiveViewConfig:

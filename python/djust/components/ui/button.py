@@ -4,7 +4,7 @@ Button component for djust.
 Provides buttons with multiple variants, sizes, and states.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from ..base import LiveComponent
 from django.utils.safestring import mark_safe
 
@@ -83,7 +83,6 @@ class ButtonComponent(LiveComponent):
 
     def render(self) -> str:
         """Render button with inline HTML"""
-        from django.utils.safestring import mark_safe
         from ...config import config
 
         framework = config.get("css_framework", "bootstrap5")

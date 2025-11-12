@@ -6,13 +6,9 @@ Simple stateless tabs with automatic Rust optimization.
 
 from typing import List, Dict, Optional
 from ..base import Component
+import importlib.util
 
-try:
-    from djust._rust import RustTabs
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
+_RUST_AVAILABLE = importlib.util.find_spec("djust._rust") is not None
 
 
 class Tabs(Component):

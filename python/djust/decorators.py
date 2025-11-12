@@ -63,9 +63,6 @@ def reactive(func: Callable) -> property:
             def count(self, value):
                 self._count = value
     """
-    # Store the getter
-    getter = func
-
     # Create internal property name
     internal_name = f"_{func.__name__}_reactive"
 

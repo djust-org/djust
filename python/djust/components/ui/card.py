@@ -53,7 +53,6 @@ class CardComponent(LiveComponent):
 
     def render(self) -> str:
         """Render card with inline HTML"""
-        from django.utils.safestring import mark_safe
         from ...config import config
 
         framework = config.get("css_framework", "bootstrap5")

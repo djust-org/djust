@@ -4,7 +4,7 @@ Dropdown component for djust.
 Provides dropdown menus with items and actions.
 """
 
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from ..base import LiveComponent
 from django.utils.safestring import mark_safe
@@ -107,7 +107,6 @@ class DropdownComponent(LiveComponent):
 
     def render(self) -> str:
         """Render dropdown with inline HTML"""
-        from django.utils.safestring import mark_safe
         from ...config import config
 
         framework = config.get("css_framework", "bootstrap5")

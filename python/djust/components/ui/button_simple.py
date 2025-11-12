@@ -6,7 +6,6 @@ This is a stateless Component optimized for performance.
 For interactive buttons with event handlers, use them in LiveView event handlers.
 """
 
-from typing import Optional
 from ..base import Component
 
 

@@ -4,7 +4,7 @@ Table component for djust.
 Provides data tables with sorting, selection, and actions.
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 from ..base import LiveComponent
 
 

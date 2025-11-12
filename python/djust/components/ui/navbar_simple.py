@@ -237,7 +237,7 @@ class NavBar(Component):
 
                 parts.append('                <li class="nav-item dropdown">')
                 parts.append(
-                    f'                    <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">'
+                    '                    <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">'
                 )
                 parts.append(f"                        {label}")
                 parts.append("                    </a>")
@@ -273,7 +273,7 @@ class NavBar(Component):
                 aria_current = ' aria-current="page"' if active else ""
                 disabled_attr = ' aria-disabled="true"' if disabled else ""
 
-                parts.append(f'                <li class="nav-item">')
+                parts.append('                <li class="nav-item">')
                 parts.append(
                     f'                    <a class="nav-link{active_class}{disabled_class}" href="{url}"{aria_current}{disabled_attr}>{label}</a>'
                 )
@@ -527,7 +527,7 @@ class NavBar(Component):
                 active_class = " active" if active else ""
                 disabled_class = " disabled" if disabled else ""
 
-                parts.append(f'                <li class="nav-item">')
+                parts.append('                <li class="nav-item">')
                 parts.append(
                     f'                    <a href="{url}" class="nav-link{active_class}{disabled_class}">{label}</a>'
                 )

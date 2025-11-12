@@ -5,7 +5,7 @@ Provides list of items with optional actions, active highlighting, and variants.
 This is a stateless Component optimized for performance.
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict
 from ..base import Component
 
 

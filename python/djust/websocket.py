@@ -187,7 +187,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 }
             )
             return
-        except AttributeError as e:
+        except AttributeError:
             error_msg = f"Class {class_name} not found in module {module_path}"
             logger.error(error_msg)
             await self.send_json(
@@ -385,7 +385,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     import sys
 
                     print(
-                        f"[WebSocket] No patches generated, sending full HTML update",
+                        "[WebSocket] No patches generated, sending full HTML update",
                         file=sys.stderr,
                     )
                     print(

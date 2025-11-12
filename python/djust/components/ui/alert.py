@@ -128,16 +128,16 @@ class AlertComponent(LiveComponent):
         classes = type_map.get(self.type, "bg-blue-50 text-blue-800 border-blue-200")
 
         html = f'<div class="rounded-md border p-4 {classes}" id="{self.component_id}">'
-        html += f'<div class="flex">'
+        html += '<div class="flex">'
         html += f'<div class="flex-1">{self.message}</div>'
 
         if self.dismissible:
             html += f'<button type="button" @click="dismiss" data-component-id="{self.component_id}" class="ml-3 inline-flex rounded-md p-1.5 hover:bg-opacity-20">'
-            html += f'<span class="sr-only">Dismiss</span>'
-            html += f'<svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>'
-            html += f"</button>"
+            html += '<span class="sr-only">Dismiss</span>'
+            html += '<svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>'
+            html += "</button>"
 
-        html += f"</div>"
+        html += "</div>"
         html += "</div>"
         return html
 

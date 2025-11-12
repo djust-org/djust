@@ -5,7 +5,7 @@ Groups multiple buttons together with Bootstrap 5 button group styling.
 This is a stateless Component optimized for performance.
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict
 from ..base import Component
 
 

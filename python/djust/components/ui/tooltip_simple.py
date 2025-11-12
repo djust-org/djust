@@ -5,7 +5,6 @@ Provides tooltips for displaying contextual information on hover/click/focus.
 This is a stateless Component optimized for performance.
 """
 
-from typing import Optional
 from ..base import Component
 
 

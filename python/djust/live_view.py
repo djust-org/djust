@@ -3,8 +3,6 @@ LiveView base class and decorator for reactive Django views
 """
 
 import json
-import asyncio
-import hashlib
 import sys
 from datetime import datetime, date, time
 from decimal import Decimal
@@ -12,7 +10,6 @@ from uuid import UUID
 from typing import Any, Dict, Optional, Callable
 from django.http import HttpResponse, JsonResponse
 from django.views import View
-from django.template.loader import render_to_string
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils.decorators import method_decorator
 from django.db import models
@@ -273,7 +270,6 @@ class LiveView(View):
                     # The child template contains {% block content %}...{% endblock %} which wraps
                     # the LiveView root content
                     import re
-                    import sys
 
                     # Remove {% extends %} and extract all blocks
                     child_content = re.sub(
@@ -307,7 +303,7 @@ class LiveView(View):
                 except Exception as e:
                     # Fallback to raw template if Rust resolution fails
                     print(f"[LiveView] Template inheritance resolution failed: {e}")
-                    print(f"[LiveView] Falling back to raw template source")
+                    print("[LiveView] Falling back to raw template source")
                     # Store full template for render_full_template()
                     self._full_template = template_source
                     # Extract liveview-root div (with wrapper) for VDOM tracking
@@ -316,7 +312,6 @@ class LiveView(View):
                     # CRITICAL: Strip comments and whitespace from template BEFORE Rust VDOM sees it
                     extracted = self._strip_comments_and_whitespace(extracted)
 
-                    import sys
 
                     print(
                         f"[LiveView] Extracted and stripped liveview-root: {len(extracted)} chars (from {len(template_source)} chars)",
@@ -336,7 +331,6 @@ class LiveView(View):
             # This ensures Rust VDOM baseline matches client DOM structure
             extracted = self._strip_comments_and_whitespace(extracted)
 
-            import sys
 
             print(
                 f"[LiveView] No inheritance - extracted and stripped liveview-root: {len(extracted)} chars (from {len(template_source)} chars)",
@@ -398,7 +392,6 @@ class LiveView(View):
 
     def _initialize_rust_view(self, request=None):
         """Initialize the Rust LiveView backend"""
-        import sys
 
         print(
             f"[LiveView] _initialize_rust_view() called, _rust_view={self._rust_view}",
@@ -424,14 +417,14 @@ class LiveView(View):
                 if self._cache_key in _rust_view_cache:
                     cached_view, timestamp = _rust_view_cache[self._cache_key]
                     self._rust_view = cached_view
-                    print(f"[LiveView] Cache HIT! Using cached RustLiveView", file=sys.stderr)
+                    print("[LiveView] Cache HIT! Using cached RustLiveView", file=sys.stderr)
                     # Update timestamp on access
                     import time
 
                     _rust_view_cache[self._cache_key] = (cached_view, time.time())
                     return
                 else:
-                    print(f"[LiveView] Cache MISS! Will create new RustLiveView", file=sys.stderr)
+                    print("[LiveView] Cache MISS! Will create new RustLiveView", file=sys.stderr)
 
             # Create new RustLiveView with the template
             # The template includes <div data-liveview-root> which matches what the client patches
@@ -439,7 +432,6 @@ class LiveView(View):
             # or raw template for non-inheritance
             template_source = self.get_template()
 
-            import sys
 
             print(
                 f"[LiveView] Creating NEW RustLiveView for cache_key={self._cache_key}",
@@ -725,7 +717,6 @@ class LiveView(View):
         Returns:
             Tuple of (html, patches_json, version)
         """
-        import sys
 
         print(
             f"[LiveView] render_with_diff() called (extract_liveview_root={extract_liveview_root})",
@@ -741,7 +732,7 @@ class LiveView(View):
         if hasattr(self.__class__, "template_string") and isinstance(
             getattr(self.__class__, "template_string"), property
         ):
-            print(f"[LiveView] template_string is a property - updating template", file=sys.stderr)
+            print("[LiveView] template_string is a property - updating template", file=sys.stderr)
             new_template = self.get_template()
             self._rust_view.update_template(new_template)
 
@@ -771,7 +762,7 @@ class LiveView(View):
             file=sys.stderr,
         )
         if not patches_json:
-            print(f"[LiveView] NO PATCHES GENERATED!", file=sys.stderr)
+            print("[LiveView] NO PATCHES GENERATED!", file=sys.stderr)
         else:
             # Show first few patches for debugging (if enabled)
             from djust.config import config
@@ -929,9 +920,6 @@ class LiveView(View):
         # Save component state to session (DRY helper method)
         self._save_components_to_session(request, context)
 
-        session_key = request.session.session_key
-        cache_key = f"{session_key}_{view_key}"
-
         # NOTE: Don't clear the cache on GET! The cache persists across requests
         # to maintain VDOM state. Only clear if we detect the user explicitly
         # wants a fresh page (e.g., query param ?refresh=1)
@@ -952,10 +940,9 @@ class LiveView(View):
         # In HTTP-only mode, GET requests represent fresh page loads, so the VDOM
         # should start from a clean state to match the client's newly rendered DOM.
         if self._rust_view:
-            import sys
 
             print(
-                f"[LiveView] Resetting VDOM state on GET request (HTTP-only mode)", file=sys.stderr
+                "[LiveView] Resetting VDOM state on GET request (HTTP-only mode)", file=sys.stderr
             )
             self._rust_view.reset()
 
@@ -1015,7 +1002,6 @@ class LiveView(View):
 
     def post(self, request, *args, **kwargs):
         """Handle POST requests - event handling"""
-        import sys
         from .components.base import Component, LiveComponent
 
         try:

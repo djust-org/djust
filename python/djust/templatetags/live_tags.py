@@ -49,7 +49,7 @@ def live_form(view, **kwargs):
         </form>
     """
     if not hasattr(view, "as_live"):
-        return f"<!-- ERROR: View does not have as_live() method. Did you use FormMixin? -->"
+        return "<!-- ERROR: View does not have as_live() method. Did you use FormMixin? -->"
 
     return view.as_live(**kwargs)
 
@@ -80,7 +80,7 @@ def live_field(view, field_name: str, **kwargs):
         {% live_field view "password" label="Custom Password Label" %}
     """
     if not hasattr(view, "as_live_field"):
-        return f"<!-- ERROR: View does not have as_live_field() method. Did you use FormMixin? -->"
+        return "<!-- ERROR: View does not have as_live_field() method. Did you use FormMixin? -->"
 
     return view.as_live_field(field_name, **kwargs)
 

@@ -6,7 +6,7 @@ This is a stateless Component optimized for performance.
 For interactive tables with event handlers, use them in LiveView event handlers.
 """
 
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Any
 from ..base import Component
 
 

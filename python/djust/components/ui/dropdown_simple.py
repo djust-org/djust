@@ -247,7 +247,7 @@ class Dropdown(Component):
 
         if self.split:
             # Split button
-            parts.append(f'    <div class="inline-flex rounded-md shadow-sm">')
+            parts.append('    <div class="inline-flex rounded-md shadow-sm">')
             parts.append(
                 f'        <button type="button" class="{button_class} rounded-l-md">{self.label}</button>'
             )

@@ -4,7 +4,7 @@ Tabs component for djust.
 Provides tabbed navigation with multiple panels.
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 from dataclasses import dataclass
 from ..base import LiveComponent
 

@@ -83,7 +83,6 @@ class BadgeComponent(LiveComponent):
             return ""
 
         from ...config import config
-        from django.utils.safestring import mark_safe
 
         framework = config.get("css_framework", "bootstrap5")
 

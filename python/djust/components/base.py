@@ -130,7 +130,7 @@ class Component(ABC):
                     # Rust component doesn't accept framework, try without it
                     self._rust_instance = self._rust_impl_class(**kwargs)
 
-            except Exception as e:
+            except Exception:
                 # Fall back to Python/hybrid implementation
                 # Silently fail - Rust might not be built, which is OK
                 self._rust_instance = None
@@ -192,7 +192,7 @@ class Component(ABC):
                 except TypeError:
                     self._rust_instance = self._rust_impl_class(**current_props)
 
-            except Exception as e:
+            except Exception:
                 # Fall back to Python/hybrid - just update attributes
                 self._rust_instance = None
                 for key, value in kwargs.items():
