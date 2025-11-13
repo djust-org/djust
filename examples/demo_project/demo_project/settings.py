@@ -129,6 +129,7 @@ LIVEVIEW_ALLOWED_MODULES = [
 # LiveView Configuration
 LIVEVIEW_CONFIG = {
     'use_websocket': True,  # Use HTTP-only mode (disable WebSocket)
+    'debug_vdom': False,  # Enable detailed VDOM patch logging
 }
 
 # djust State Backend Configuration

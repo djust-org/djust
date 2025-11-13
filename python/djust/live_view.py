@@ -237,40 +237,20 @@ class LiveView(View):
                     # Store full template for initial GET rendering
                     self._full_template = resolved
 
-                    # For VDOM tracking, use the child template only (without base.html)
-                    # This prevents tracking the entire document (DOCTYPE, head, nav, etc.)
-                    # The child template contains {% block content %}...{% endblock %} which wraps
-                    # the LiveView root content
-                    import re
+                    # For VDOM tracking, extract liveview-root from the RESOLVED template
+                    # This ensures Rust VDOM tracks exactly what the client receives
+                    # Extract liveview-root div (with wrapper) for VDOM tracking
+                    vdom_template = self._extract_liveview_root_with_wrapper(resolved)
 
-                    # Remove {% extends %} and extract all blocks
-                    child_content = re.sub(
-                        r'{%\s*extends\s+["\'].*?["\']\s*%}', "", template_source
-                    )
+                    # CRITICAL: Strip comments and whitespace from template BEFORE Rust VDOM sees it
+                    # This ensures Rust VDOM baseline matches client DOM structure
+                    vdom_template = self._strip_comments_and_whitespace(vdom_template)
 
-                    # Extract content from all {% block %} tags and concatenate
-                    blocks = re.findall(
-                        r"{%\s*block\s+\w+\s*%}(.*?){%\s*endblock\s*%}", child_content, re.DOTALL
+                    print(
+                        f"[LiveView] Template inheritance resolved ({len(resolved)} chars), extracted liveview-root for VDOM ({len(vdom_template)} chars)",
+                        file=sys.stderr,
                     )
-                    if blocks:
-                        # Join all block contents
-                        vdom_template = "".join(blocks)
-                        # Extract liveview-root div (with wrapper) for VDOM tracking
-                        vdom_template = self._extract_liveview_root_with_wrapper(vdom_template)
-                        print(
-                            f"[LiveView] Using child template blocks for VDOM tracking ({len(vdom_template)} chars), full template for rendering ({len(resolved)} chars)",
-                            file=sys.stderr,
-                        )
-                        return vdom_template
-                    else:
-                        # No blocks found, use the child template as-is (minus extends)
-                        # Extract liveview-root div (with wrapper) for VDOM tracking
-                        child_vdom = self._extract_liveview_root_with_wrapper(child_content)
-                        print(
-                            f"[LiveView] Using child template for VDOM tracking ({len(child_vdom)} chars)",
-                            file=sys.stderr,
-                        )
-                        return child_vdom
+                    return vdom_template
 
                 except Exception as e:
                     # Fallback to raw template if Rust resolution fails
@@ -681,7 +661,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         import re
 
         # Find the opening tag for [data-liveview-root]
-        opening_match = re.search(r"<div\s+data-liveview-root[^>]*>", html, re.IGNORECASE)
+        # Match data-liveview-root anywhere in the div tag attributes
+        opening_match = re.search(r"<div\s+[^>]*data-liveview-root[^>]*>", html, re.IGNORECASE)
 
         if not opening_match:
             # No [data-liveview-root] found - return full HTML
@@ -737,7 +718,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         import re
 
         # Find the opening tag for [data-liveview-root]
-        opening_match = re.search(r"<div\s+data-liveview-root[^>]*>", template, re.IGNORECASE)
+        # Match data-liveview-root anywhere in the div tag attributes
+        opening_match = re.search(r"<div\s+[^>]*data-liveview-root[^>]*>", template, re.IGNORECASE)
 
         if not opening_match:
             # No [data-liveview-root] found - return template as-is
@@ -793,7 +775,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         import re
 
         # Find the opening tag for [data-liveview-root]
-        opening_match = re.search(r"<div\s+data-liveview-root[^>]*>", template, re.IGNORECASE)
+        # Match data-liveview-root anywhere in the div tag attributes
+        opening_match = re.search(r"<div\s+[^>]*data-liveview-root[^>]*>", template, re.IGNORECASE)
 
         if not opening_match:
             # No [data-liveview-root] found - return template as-is
@@ -831,6 +814,73 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         # If we get here, couldn't find matching closing tag - return template as-is
         return template
+
+    def _strip_liveview_root_in_html(self, html: str) -> str:
+        """
+        Strip comments and whitespace from [data-liveview-root] div in full HTML page.
+
+        This ensures the liveview-root div structure matches the stripped template used
+        by the server VDOM, while preserving the rest of the page (DOCTYPE, head, body, etc.)
+        as-is.
+
+        Args:
+            html: Full HTML page including DOCTYPE, html, head, body tags
+
+        Returns:
+            HTML with liveview-root div stripped but rest of page preserved
+        """
+        import re
+
+        # Find the liveview-root div (WITH wrapper)
+        # Match data-liveview-root anywhere in the div tag attributes
+        opening_match = re.search(r"<div\s+[^>]*data-liveview-root[^>]*>", html, re.IGNORECASE)
+
+        if not opening_match:
+            # No [data-liveview-root] found - return HTML as-is
+            return html
+
+        start_pos = opening_match.start()  # Start of <div tag
+        inner_start_pos = opening_match.end()  # End of opening tag
+
+        # Count nested divs to find the matching closing tag
+        depth = 1
+        pos = inner_start_pos
+
+        while depth > 0 and pos < len(html):
+            # Look for next <div or </div
+            open_match = re.search(r"<div\b", html[pos:], re.IGNORECASE)
+            close_match = re.search(r"</div>", html[pos:], re.IGNORECASE)
+
+            if close_match is None:
+                break
+
+            close_pos = pos + close_match.start()
+            open_pos = pos + open_match.start() if open_match else float("inf")
+
+            if open_pos < close_pos:
+                # Found opening div first
+                depth += 1
+                pos = open_pos + 4  # Skip past '<div'
+            else:
+                # Found closing div first
+                depth -= 1
+                if depth == 0:
+                    # This is the matching closing tag
+                    end_pos = pos + close_match.end()  # Include </div>
+
+                    # Extract the liveview-root div (WITH wrapper)
+                    liveview_div = html[start_pos:end_pos]
+
+                    # Strip comments and whitespace from this div only
+                    stripped_div = self._strip_comments_and_whitespace(liveview_div)
+
+                    # Replace the original liveview-root div with the stripped version
+                    return html[:start_pos] + stripped_div + html[end_pos:]
+
+                pos = close_pos + 6  # Skip past '</div>'
+
+        # If we get here, couldn't find matching closing tag - return HTML as-is
+        return html
 
     def render_full_template(self, request=None) -> str:
         """

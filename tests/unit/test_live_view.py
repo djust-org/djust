@@ -79,7 +79,7 @@ class TestTemplateInheritance:
 
     @pytest.mark.django_db
     def test_get_template_with_extends(self, tmp_path, settings):
-        """Test get_template with {% extends %} extracts child blocks for VDOM tracking."""
+        """Test get_template with {% extends %} extracts liveview-root from resolved template."""
         # Create temporary template directory
         templates_dir = tmp_path / "templates"
         templates_dir.mkdir()
@@ -87,30 +87,32 @@ class TestTemplateInheritance:
         # Update Django settings to use temp directory
         settings.TEMPLATES[0]['DIRS'] = [str(templates_dir)]
 
-        # Create base template
+        # Create base template with liveview-root in block
         base_template = templates_dir / "base.html"
         base_template.write_text(
             "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>"
         )
 
-        # Create child template with LiveView syntax
+        # Create child template with data-liveview-root div
         child_template = templates_dir / "child.html"
         child_template.write_text(
-            "{% extends 'base.html' %}{% block content %}<div>{$ message $}</div>{% endblock %}"
+            "{% extends 'base.html' %}{% block content %}<div data-liveview-root><div>{$ message $}</div></div>{% endblock %}"
         )
 
-        # Test that get_template() returns ONLY child blocks for VDOM tracking
+        # Test that get_template() extracts liveview-root from resolved template
         class TestView(LiveView):
             template_name = "child.html"
 
         view = TestView()
         result = view.get_template()
 
-        # get_template() should return ONLY the child block content (for VDOM tracking)
+        # get_template() should return ONLY the liveview-root div (for VDOM tracking)
         # NOT the full document (no DOCTYPE, html, body from base template)
         assert "<!DOCTYPE html>" not in result
         assert "<body>" not in result
-        # Should contain the child content
+        assert "<html>" not in result
+        # Should contain the liveview-root div and child content
+        assert "data-liveview-root" in result
         assert "<div>{$ message $}</div>" in result
         # Should NOT contain Django template tags
         assert "{% extends" not in result

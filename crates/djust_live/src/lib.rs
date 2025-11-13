@@ -434,16 +434,13 @@ fn resolve_template_inheritance(
     template_path: String,
     template_dirs: Vec<String>,
 ) -> PyResult<String> {
-    use djust_vdom::template::{resolve_inheritance, TemplateLoader};
+    use djust_templates::inheritance::resolve_template_inheritance as resolve;
 
     // Convert string paths to PathBuf
     let dirs: Vec<PathBuf> = template_dirs.iter().map(PathBuf::from).collect();
 
-    // Create template loader
-    let mut loader = TemplateLoader::new(dirs);
-
-    // Resolve inheritance
-    let resolved = resolve_inheritance(&template_path, &mut loader)
+    // Resolve inheritance using AST-based implementation
+    let resolved = resolve(&template_path, &dirs)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
     Ok(resolved)

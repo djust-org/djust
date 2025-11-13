@@ -175,7 +175,7 @@ class FormMixin:
             if hasattr(self, "form_invalid"):
                 self.form_invalid(form)
 
-    def reset_form(self):
+    def reset_form(self, **kwargs):
         """Reset form to initial state"""
         self.form_data = {}
         self.form_errors = {}

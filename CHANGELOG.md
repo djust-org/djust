@@ -42,6 +42,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 3 new unit tests covering reversed iteration
   - Removed workaround from component demo
 
+- **Template Engine: Template Inheritance** (Issue #60) 🎉
+  - **`{% extends "parent.html" %}`**: Template inheritance with parent template loading
+  - **`{% block name %}...{% endblock %}`**: Define and override template blocks
+  - Multi-level inheritance support (grandparent → parent → child)
+  - Child blocks correctly override parent blocks
+  - Empty block overrides supported
+  - Works with variables, filters, and tags inside blocks
+  - Circular inheritance detection with configurable depth limit
+  - Infrastructure for `{{ block.super }}` (full implementation deferred)
+  - New `TemplateLoader` trait for flexible parent template loading
+  - `InheritanceChain` system for efficient block merging
+  - **Integration with VDOM** (Complete)
+    - AST-to-template-string conversion preserves Django syntax (`{{ var }}`, `{% tags %}`)
+    - Comment and whitespace stripping matches Rust VDOM parser behavior
+    - Server VDOM structure matches client DOM exactly
+    - Fixed regex bugs in liveview-root extraction (4 instances)
+    - WebSocket mount and GET requests send matching HTML structures
+    - VDOM patches generated correctly (no more full HTML updates)
+    - Template size reduction: ~53% after stripping (11,197 → 5,277 chars)
+  - **Testing**: 27 comprehensive unit tests
+    - 14 Rust tests for AST conversion and inheritance chain
+    - 13 Python tests for extraction, stripping, and VDOM integration
+    - Manual testing with forms demo (validation via WebSocket patches)
+  - **Performance**: Sub-millisecond inheritance chain resolution in Rust
+  - **Architecture**: Clean separation between parsing, chain building, block merging, and rendering
+  - **Production Ready**:
+    - `FilesystemTemplateLoader` for production template loading
+    - `resolve_template_inheritance()` uses AST-based approach
+    - Replaces regex-based string manipulation with proper parser integration
+    - Tested and validated with existing demo templates (forms, profile pages)
+    - Old `djust_vdom::template` module removed (replaced with `djust_templates::inheritance`)
+    - Full documentation in `TEMPLATE_INHERITANCE_INTEGRATION.md`
+
 ## [0.6.0] - 2025-11-12
 
 This release delivers Phase 4: Component System, bringing production-ready stateful components with full lifecycle management and parent-child communication to djust.

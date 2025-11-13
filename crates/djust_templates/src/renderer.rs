@@ -188,6 +188,15 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
             render_nodes(nodes, &new_context)
         }
 
+        Node::Extends(_) => {
+            // Extends should be handled at template level, not during node rendering
+            // This is a marker node that triggers inheritance processing
+            Err(DjangoRustError::TemplateError(
+                "{% extends %} must be processed at template level, not during rendering"
+                    .to_string(),
+            ))
+        }
+
         Node::Comment => Ok(String::new()),
     }
 }

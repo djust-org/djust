@@ -22,6 +22,7 @@ pub enum Node {
         name: String,
         nodes: Vec<Node>,
     },
+    Extends(String), // Parent template path
     Include(String),
     Comment,
     CsrfToken,
@@ -144,6 +145,18 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     let (nodes, end_pos) = parse_block(tokens, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::Block { name, nodes }))
+                }
+
+                "extends" => {
+                    // {% extends "parent.html" %}
+                    if args.is_empty() {
+                        return Err(DjangoRustError::TemplateError(
+                            "Extends tag requires a template name".to_string(),
+                        ));
+                    }
+                    // Remove quotes from template name
+                    let template = args[0].trim_matches(|c| c == '"' || c == '\'').to_string();
+                    Ok(Some(Node::Extends(template)))
                 }
 
                 "include" => {
@@ -521,6 +534,47 @@ mod tests {
         match &nodes[0] {
             Node::Comment => (),
             _ => panic!("Expected Comment node for load tag"),
+        }
+    }
+
+    #[test]
+    fn test_extends_tag() {
+        let tokens = tokenize("{% extends \"base.html\" %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        assert_eq!(nodes.len(), 1);
+        match &nodes[0] {
+            Node::Extends(template) => {
+                assert_eq!(template, "base.html");
+            }
+            _ => panic!("Expected Extends node"),
+        }
+    }
+
+    #[test]
+    fn test_extends_tag_single_quotes() {
+        let tokens = tokenize("{% extends 'parent.html' %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        match &nodes[0] {
+            Node::Extends(template) => {
+                assert_eq!(template, "parent.html");
+            }
+            _ => panic!("Expected Extends node"),
+        }
+    }
+
+    #[test]
+    fn test_extends_with_blocks() {
+        let tokens =
+            tokenize("{% extends \"base.html\" %}{% block content %}Hello{% endblock %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        assert_eq!(nodes.len(), 2);
+        match &nodes[0] {
+            Node::Extends(template) => assert_eq!(template, "base.html"),
+            _ => panic!("Expected Extends node"),
+        }
+        match &nodes[1] {
+            Node::Block { name, .. } => assert_eq!(name, "content"),
+            _ => panic!("Expected Block node"),
         }
     }
 }

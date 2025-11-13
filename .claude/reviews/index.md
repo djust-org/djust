@@ -1,7 +1,7 @@
 # Pull Request Reviews Index
 
-**Total Reviews**: 5
-**Last Updated**: 2025-11-13 11:28
+**Total Reviews**: 7
+**Last Updated**: 2025-11-13 17:36
 
 ---
 
@@ -9,6 +9,8 @@
 
 | PR | Title | Date | Status | Reviewer | Link |
 |----|-------|------|--------|----------|------|
+| #65 | feat: Complete AST-based template inheritance integration (Issue #60) | 2025-11-13 17:36 | ❌ Changes Requested | Claude Code | [View](pr-65/latest.md) |
+| #64 | fix: Component JSON serialization bug - add __str__() methods | 2025-11-13 17:22 | ❌ Changes Requested | Claude Code | [View](pr-64/latest.md) |
 | #51 | Phase 1.2 - Redis State Backend with Native Rust Serialization | 2025-11-13 11:28 | ✅ Approved | Claude Code | [View](pr-51/latest.md) |
 | #51 | Phase 1.2 - Redis State Backend with Native Rust Serialization | 2025-11-13 11:05 | ✅ Approved | Claude Code | [View](pr-51/review-2025-11-13-110558.md) |
 | #42 | Phase 3: Optimistic Updates + Phase 2 Critical Fix | 2025-11-12 | ✅ Approved | Claude Code | [View](pr-42/latest.md) |
@@ -42,7 +44,15 @@
   - [Review](pr-40/review-2025-01-12-154530.md)
 
 ### ❌ Changes Requested
-*None*
+- **PR #65** - feat: Complete AST-based template inheritance integration (Issue #60)
+  - Status: Excellent core implementation but has test failures and documentation mismatches
+  - Date: 2025-11-13 17:36
+  - [Review](pr-65/review-2025-11-13-173634.md)
+
+- **PR #64** - fix: Component JSON serialization bug - add __str__() methods
+  - Status: Core fix is excellent but has test failure and scope creep
+  - Date: 2025-11-13 17:22
+  - [Review](pr-64/review-2025-11-13-172229.md)
 
 ### 💬 Commented
 *None*
@@ -50,6 +60,40 @@
 ---
 
 ## Reviews by PR
+
+### PR #65 - feat: Complete AST-based template inheritance integration (Issue #60)
+
+**Reviews**: 1 total
+
+- [2025-11-13 17:36](pr-65/review-2025-11-13-173634.md) - ❌ Changes Requested ⭐ **Latest**
+  - **Summary**: Completes AST-based template inheritance integration with excellent Rust implementation (634 lines) replacing deprecated regex code (399 lines). Adds 27 tests, comprehensive documentation, and sub-millisecond performance. However, 3 Python tests fail due to missing `_strip_liveview_root_in_html()` method and incomplete regex updates.
+  - **Key Points**:
+    - ✅ Excellent Rust implementation (⭐⭐⭐⭐⭐)
+    - ✅ Comprehensive testing (14 Rust + 13 Python tests)
+    - ✅ Outstanding documentation (221-line integration guide)
+    - ✅ Performance: sub-millisecond resolution, 53% size reduction
+    - ✅ Zero breaking changes
+    - ❌ 3 failing Python tests (23% failure rate)
+    - ❌ Missing method implementation (_strip_liveview_root_in_html)
+    - ❌ Incomplete regex updates (1 of 3 methods)
+    - ❌ Documentation claims don't match reality
+  - **Recommendation**: Changes requested - core implementation is excellent but integration incomplete. Fix test failures, implement missing method, update regex patterns. Estimated fix: 1-2 hours.
+
+### PR #64 - fix: Component JSON serialization bug - add __str__() methods
+
+**Reviews**: 1 total
+
+- [2025-11-13 17:22](pr-64/review-2025-11-13-172229.md) - ❌ Changes Requested ⭐ **Latest**
+  - **Summary**: Fixes TypeError when adding NavbarComponent to context by adding `__str__()` methods to component classes. Core fix is elegant but PR includes unrelated template inheritance refactoring causing test failure.
+  - **Key Points**:
+    - ✅ Elegant `__str__()` implementation (⭐⭐⭐⭐)
+    - ✅ Comprehensive test suite (13 tests)
+    - ✅ Excellent PR documentation
+    - ❌ 1 test failure blocking merge
+    - ❌ Unrelated template inheritance refactoring causing regression
+    - ⚠️ Test file in wrong directory
+    - ⚠️ Scope creep (498 additions, only ~12 needed for fix)
+  - **Recommendation**: Changes requested - revert unrelated refactoring, move test file, fix failing test. Core fix ready to merge after cleanup.
 
 ### PR #51 - Phase 1.2 - Redis State Backend with Native Rust Serialization
 
@@ -118,24 +162,24 @@
 ## Statistics
 
 ### Review Metrics
-- **Total PRs Reviewed**: 3
-- **Total Reviews Conducted**: 5
-- **Average Reviews per PR**: 1.67
+- **Total PRs Reviewed**: 5
+- **Total Reviews Conducted**: 7
+- **Average Reviews per PR**: 1.4
 
 ### Status Breakdown
-- **Approved**: 4 (80%)
-- **Approved with Conditions**: 1 (20%)
-- **Changes Requested**: 0 (0%)
+- **Approved**: 4 (57%)
+- **Approved with Conditions**: 1 (14%)
+- **Changes Requested**: 2 (29%)
 - **Commented**: 0 (0%)
 
 ### Reviewer Statistics
-- **Claude Code**: 5 reviews (100%)
+- **Claude Code**: 7 reviews (100%)
 
 ### Review Quality Metrics
-- **Reviews with Follow-up**: 2 (67% of PRs)
+- **Reviews with Follow-up**: 2 (40% of PRs)
 - **Average Time to Address Feedback**: <1 hour (PR #51), <1 day (PR #40)
 - **Feedback Implementation Rate**: 100%
 
 ---
 
-**Last Updated**: 2025-11-13 11:28
+**Last Updated**: 2025-11-13 17:36

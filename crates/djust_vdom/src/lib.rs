@@ -14,7 +14,6 @@ use std::collections::HashMap;
 pub mod diff;
 pub mod parser;
 pub mod patch;
-pub mod template;
 
 /// A virtual DOM node
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
