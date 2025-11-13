@@ -6,7 +6,7 @@ powered by Rust for maximum performance.
 """
 
 from .live_view import LiveView, live_view
-from .component import Component
+from .component import Component, LiveComponent
 from .decorators import (
     reactive,
     event_handler,
@@ -44,6 +44,7 @@ __all__ = [
     "LiveView",
     "live_view",
     "Component",
+    "LiveComponent",
     "reactive",
     "event_handler",
     "event",

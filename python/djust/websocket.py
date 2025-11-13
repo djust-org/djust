@@ -59,6 +59,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.actor_handle.shutdown()
             except Exception as e:
                 import logging
+
                 logging.getLogger(__name__).warning(f"Error shutting down actor: {e}")
 
         # Clean up session state
@@ -308,7 +309,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 result = await self.actor_handle.mount(
                     view_path,
                     context_data,
-                    self.view_instance  # Pass Python view for event handlers!
+                    self.view_instance,  # Pass Python view for event handlers!
                 )
 
                 html = result["html"]
@@ -423,7 +424,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         )
                 else:
                     # No patches - send full HTML update
-                    logger.info(f"No patches from actor, sending full HTML update (length: {len(html) if html else 0})")
+                    logger.info(
+                        f"No patches from actor, sending full HTML update (length: {len(html) if html else 0})"
+                    )
                     await self.send_json(
                         {
                             "type": "html_update",
@@ -462,111 +465,141 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         else:
             # Non-actor mode: Use traditional flow
-            handler = getattr(self.view_instance, event_name, None)
-            if handler and callable(handler):
-                try:
+            # Check if this is a component event (Phase 4)
+            component_id = params.get("component_id")
+            html = None
+            patches = None
+            version = 0
+
+            try:
+                if component_id:
+                    # Component event: route to component's event handler method
+                    # Find the component instance
+                    component = self.view_instance._components.get(component_id)
+                    if not component:
+                        error_msg = f"Component not found: {component_id}"
+                        logger.error(error_msg)
+                        await self.send_json({"type": "error", "error": error_msg})
+                        return
+
+                    # Get component's event handler
+                    handler = getattr(component, event_name, None)
+                    if not handler or not callable(handler):
+                        error_msg = (
+                            f"Component {component.__class__.__name__} has no handler: {event_name}"
+                        )
+                        logger.error(error_msg)
+                        await self.send_json({"type": "error", "error": error_msg})
+                        return
+
+                    # Extract component_id and remove from params
+                    event_data = params.copy()
+                    event_data.pop("component_id", None)
+
+                    # Call component's event handler (needs sync_to_async)
+                    # This may call send_parent() which triggers handle_component_event()
+                    if event_data:
+                        await sync_to_async(handler)(**event_data)
+                    else:
+                        await sync_to_async(handler)()
+                else:
+                    # Regular event: route to handler method
+                    handler = getattr(self.view_instance, event_name, None)
+                    if not handler or not callable(handler):
+                        error_msg = f"No handler found for event: {event_name}"
+                        logger.warning(error_msg)
+                        await self.send_json({"type": "error", "error": error_msg})
+                        return
+
                     # Call handler (needs sync_to_async)
                     if params:
                         await sync_to_async(handler)(**params)
                     else:
                         await sync_to_async(handler)()
 
-                    # Get updated HTML and patches (needs sync_to_async)
-                    html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+                # Get updated HTML and patches (needs sync_to_async) - COMMON PATH
+                html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
 
-                    # For views with dynamic templates (template_string as property),
-                    # patches may be empty because VDOM state is lost on recreation.
-                    # In that case, send full HTML update.
-                    if patches:
-                        if self.use_binary:
-                            # Send as MessagePack
-                            patches_data = msgpack.packb(json.loads(patches))
-                            await self.send(bytes_data=patches_data)
-                        else:
-                            # Send as JSON
-                            await self.send_json(
-                                {
-                                    "type": "patch",
-                                    "patches": json.loads(patches),
-                                    "version": version,
-                                }
-                            )
+                # For component events, send full HTML instead of patches
+                # Component VDOM is separate from parent VDOM, causing path mismatches
+                # TODO Phase 4.1: Implement per-component VDOM tracking
+                if component_id:
+                    patches = None
+
+                # For views with dynamic templates (template_string as property),
+                # patches may be empty because VDOM state is lost on recreation.
+                # In that case, send full HTML update.
+                if patches:
+                    if self.use_binary:
+                        # Send as MessagePack
+                        patches_data = msgpack.packb(json.loads(patches))
+                        await self.send(bytes_data=patches_data)
                     else:
-                        # No patches - send full HTML update for views with dynamic templates
-                        # Strip comments and whitespace to match Rust VDOM parser
-                        html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(
-                            html
-                        )
-                        # Extract innerHTML to avoid nesting <div data-liveview-root> divs
-                        html_content = await sync_to_async(
-                            self.view_instance._extract_liveview_content
-                        )(html)
-                        import sys
-
-                        print(
-                            "[WebSocket] No patches generated, sending full HTML update",
-                            file=sys.stderr,
-                        )
-                        print(
-                            f"[WebSocket] html_content length: {len(html_content)}, starts with: {html_content[:150]}...",
-                            file=sys.stderr,
-                        )
+                        # Send as JSON
                         await self.send_json(
                             {
-                                "type": "html_update",
-                                "html": html_content,
+                                "type": "patch",
+                                "patches": json.loads(patches),
                                 "version": version,
                             }
                         )
-
-                except Exception as e:
-                    view_class = (
-                        self.view_instance.__class__.__name__ if self.view_instance else "Unknown"
+                else:
+                    # No patches - send full HTML update for views with dynamic templates
+                    # Strip comments and whitespace to match Rust VDOM parser
+                    html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(
+                        html
                     )
-                    error_msg = f"Error in {view_class}.{event_name}(): {type(e).__name__}: {str(e)}"
-                    logger.error(error_msg, exc_info=True)
+                    # Extract innerHTML to avoid nesting <div data-liveview-root> divs
+                    html_content = await sync_to_async(
+                        self.view_instance._extract_liveview_content
+                    )(html)
 
-                    # In debug mode, send detailed error
-                    from django.conf import settings
+                    import sys
 
-                    if settings.DEBUG:
-                        await self.send_json(
-                            {
-                                "type": "error",
-                                "error": error_msg,
-                                "traceback": traceback.format_exc(),
-                                "event": event_name,
-                                "params": params,
-                            }
-                        )
-                    else:
-                        await self.send_json(
-                            {
-                                "type": "error",
-                                "error": "An error occurred processing your request.",
-                            }
-                        )
-            else:
-                # Handler not found in non-actor mode
-                error_msg = f"Unknown event handler: {event_name}"
-                if self.view_instance:
-                    view_class = self.view_instance.__class__.__name__
-                    available_handlers = [
-                        m
-                        for m in dir(self.view_instance)
-                        if not m.startswith("_") and callable(getattr(self.view_instance, m))
-                    ]
-                    error_msg += (
-                        f" in {view_class}. Available handlers: {', '.join(available_handlers[:5])}"
+                    print(
+                        "[WebSocket] No patches generated, sending full HTML update",
+                        file=sys.stderr,
+                    )
+                    print(
+                        f"[WebSocket] html_content length: {len(html_content)}, starts with: {html_content[:150]}...",
+                        file=sys.stderr,
+                    )
+                    await self.send_json(
+                        {
+                            "type": "html_update",
+                            "html": html_content,
+                            "version": version,
+                        }
                     )
 
-                logger.warning(error_msg)
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "error": error_msg,
-                    }
+            except Exception as e:
+                view_class = (
+                    self.view_instance.__class__.__name__ if self.view_instance else "Unknown"
                 )
+                event_type = "component event" if component_id else "event"
+                error_msg = f"Error in {view_class}.{event_name}() ({event_type}): {type(e).__name__}: {str(e)}"
+                logger.error(error_msg, exc_info=True)
+
+                # In debug mode, send detailed error
+                from django.conf import settings
+
+                if settings.DEBUG:
+                    await self.send_json(
+                        {
+                            "type": "error",
+                            "error": error_msg,
+                            "traceback": traceback.format_exc(),
+                            "event": event_name,
+                            "params": params,
+                        }
+                    )
+                else:
+                    await self.send_json(
+                        {
+                            "type": "error",
+                            "error": "An error occurred processing your request.",
+                        }
+                    )
 
     async def send_json(self, data: Dict[str, Any]):
         """Send JSON message to client with Django type support"""

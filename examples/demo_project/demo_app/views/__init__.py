@@ -75,6 +75,9 @@ from .throttle_demo import ThrottleScrollView
 from .optimistic_todo_demo import OptimisticTodoView
 from .optimistic_counter_demo import OptimisticCounterView
 
+# Import component system demo (Phase 4)
+from .component_demo import ComponentDemoView
+
 # Import homepage demo views
 from .homepage import (
     HomeCounterDemo,
@@ -122,4 +125,5 @@ __all__ = [
     'ThrottleScrollView',
     'OptimisticTodoView',
     'OptimisticCounterView',
+    'ComponentDemoView',
 ]

@@ -41,7 +41,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
     def default(self, obj):
         # Handle Component and LiveComponent instances (render to HTML)
-        from .components.base import Component, LiveComponent
+        from .component import Component, LiveComponent
 
         if isinstance(obj, (Component, LiveComponent)):
             return str(obj)  # Calls __str__() which calls render()
@@ -219,6 +219,7 @@ class LiveView(View):
         self._session_id: Optional[str] = None
         self._cache_key: Optional[str] = None
         self._handler_metadata: Optional[dict] = None  # Cache for decorator metadata
+        self._components: Dict[str, Any] = {}  # Registry of child components by ID
 
     def get_template(self) -> str:
         """
@@ -322,7 +323,6 @@ class LiveView(View):
                     # CRITICAL: Strip comments and whitespace from template BEFORE Rust VDOM sees it
                     extracted = self._strip_comments_and_whitespace(extracted)
 
-
                     print(
                         f"[LiveView] Extracted and stripped liveview-root: {len(extracted)} chars (from {len(template_source)} chars)",
                         file=sys.stderr,
@@ -340,7 +340,6 @@ class LiveView(View):
             # CRITICAL: Strip comments and whitespace from template BEFORE Rust VDOM sees it
             # This ensures Rust VDOM baseline matches client DOM structure
             extracted = self._strip_comments_and_whitespace(extracted)
-
 
             print(
                 f"[LiveView] No inheritance - extracted and stripped liveview-root: {len(extracted)} chars (from {len(template_source)} chars)",
@@ -360,6 +359,75 @@ class LiveView(View):
         """
         pass
 
+    def handle_component_event(self, component_id: str, event: str, data: Dict[str, Any]):
+        """
+        Handle events sent from child components.
+
+        Override this method to respond to component events sent via send_parent().
+
+        Args:
+            component_id: Unique ID of the component sending the event
+            event: Event name (e.g., "item_selected", "form_submitted")
+            data: Event payload data
+
+        Example:
+            def handle_component_event(self, component_id, event, data):
+                if event == "user_selected":
+                    self.selected_user_id = data['user_id']
+                    # Update child component props
+                    if hasattr(self, 'user_detail'):
+                        self.user_detail.update(user_id=data['user_id'])
+                elif event == "item_added":
+                    self.items.append(data['item'])
+        """
+        pass
+
+    def update_component(self, component_id: str, **props):
+        """
+        Update a child component's props.
+
+        Args:
+            component_id: ID of the component to update
+            **props: New prop values to pass to component
+
+        Example:
+            # Update user detail component with new user
+            self.update_component(
+                self.user_detail.component_id,
+                user_id=selected_id
+            )
+        """
+        from .component import LiveComponent
+
+        component = self._components.get(component_id)
+        if component and isinstance(component, LiveComponent):
+            component.update(**props)
+
+    def _register_component(self, component):
+        """
+        Register a child component for event handling.
+
+        Internal method called during mount() to set up component callbacks.
+
+        Args:
+            component: LiveComponent instance to register
+        """
+        from .component import LiveComponent
+
+        if isinstance(component, LiveComponent):
+            # Register component by ID
+            self._components[component.component_id] = component
+
+            # Set up parent callback for event handling
+            def component_callback(event_data):
+                self.handle_component_event(
+                    event_data["component_id"],
+                    event_data["event"],
+                    event_data["data"],
+                )
+
+            component._set_parent_callback(component_callback)
+
     def get_context_data(self, **kwargs) -> Dict[str, Any]:
         """
         Get the context data for rendering. Override to customize context.
@@ -371,7 +439,7 @@ class LiveView(View):
             - Automatically serializes datetime, UUID, Decimal, and Django models
             - Use DjangoJSONEncoder for custom type handling
         """
-        from .components.base import Component, LiveComponent
+        from .component import Component, LiveComponent
 
         context = {}
 
@@ -385,6 +453,9 @@ class LiveView(View):
                         # Include LiveComponent instances (stateful components)
                         # OR JSON-serializable values (for state storage)
                         if isinstance(value, (Component, LiveComponent)):
+                            # Auto-register LiveComponents for event handling
+                            if isinstance(value, LiveComponent):
+                                self._register_component(value)
                             context[key] = value
                         else:
                             try:
@@ -442,7 +513,6 @@ class LiveView(View):
             # or raw template for non-inheritance
             template_source = self.get_template()
 
-
             print(
                 f"[LiveView] Creating NEW RustLiveView for cache_key={self._cache_key}",
                 file=sys.stderr,
@@ -461,7 +531,7 @@ class LiveView(View):
     def _sync_state_to_rust(self):
         """Sync Python state to Rust backend"""
         if self._rust_view:
-            from .components.base import Component, LiveComponent
+            from .component import Component, LiveComponent
 
             context = self.get_context_data()
 
@@ -520,7 +590,7 @@ class LiveView(View):
         # Iterate all methods
         for name in dir(self):
             # Skip private methods
-            if name.startswith('_'):
+            if name.startswith("_"):
                 continue
 
             try:
@@ -531,7 +601,7 @@ class LiveView(View):
                     continue
 
                 # Check for decorator metadata
-                if hasattr(method, '_djust_decorators'):
+                if hasattr(method, "_djust_decorators"):
                     metadata[name] = method._djust_decorators
                     logger.debug(
                         f"[LiveView]   Found decorated handler: {name} -> "
@@ -596,9 +666,7 @@ class LiveView(View):
             logger.debug("[LiveView] No handler metadata to inject, skipping script injection")
             return html
 
-        logger.debug(
-            f"[LiveView] Injecting handler metadata script for {len(metadata)} handlers"
-        )
+        logger.debug(f"[LiveView] Injecting handler metadata script for {len(metadata)} handlers")
 
         # Build script tag
         script = f"""
@@ -609,12 +677,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 </script>"""
 
         # Try to inject before </body>
-        if '</body>' in html:
-            html = html.replace('</body>', f'{script}\n</body>')
+        if "</body>" in html:
+            html = html.replace("</body>", f"{script}\n</body>")
             logger.debug("[LiveView] Injected metadata script before </body>")
         # Fallback: inject before </html>
-        elif '</html>' in html:
-            html = html.replace('</html>', f'{script}\n</html>')
+        elif "</html>" in html:
+            html = html.replace("</html>", f"{script}\n</html>")
             logger.debug("[LiveView] Injected metadata script before </html>")
         # Fallback: append to end (for template fragments)
         else:
@@ -817,7 +885,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             temp_rust = RustLiveView(self._full_template)
 
             # Sync state to this temporary view
-            from .components.base import Component, LiveComponent
+            from .component import Component, LiveComponent
 
             context = self.get_context_data()
             rendered_context = {}
@@ -985,7 +1053,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         This makes HTTP mode work seamlessly with VDOM diffing, as IDs remain consistent
         across requests without needing session storage.
         """
-        from .components.base import Component, LiveComponent
+        from .component import Component, LiveComponent
 
         for key, value in self.__dict__.items():
             if isinstance(value, (Component, LiveComponent)) and not key.startswith("_"):
@@ -1004,7 +1072,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             request: Django request object
             context: Context dictionary containing components
         """
-        from .components.base import Component, LiveComponent
+        from .component import Component, LiveComponent
 
         view_key = f"liveview_{request.path}"
         component_state = {}
@@ -1038,7 +1106,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         # Store initial state in session (exclude components)
         view_key = f"liveview_{request.path}"
-        from .components.base import LiveComponent
+        from .component import LiveComponent
 
         context = self.get_context_data()
         state = {k: v for k, v in context.items() if not isinstance(v, LiveComponent)}
@@ -1071,7 +1139,6 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # In HTTP-only mode, GET requests represent fresh page loads, so the VDOM
         # should start from a clean state to match the client's newly rendered DOM.
         if self._rust_view:
-
             print(
                 "[LiveView] Resetting VDOM state on GET request (HTTP-only mode)", file=sys.stderr
             )
@@ -1133,7 +1200,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
     def post(self, request, *args, **kwargs):
         """Handle POST requests - event handling"""
-        from .components.base import Component, LiveComponent
+        from .component import Component, LiveComponent
 
         try:
             data = json.loads(request.body)
@@ -1752,6 +1819,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                                 }
                             });
 
+                            // Phase 4: Check if event is from a component (walk up DOM tree)
+                            let currentElement = e.currentTarget;
+                            while (currentElement && currentElement !== document.body) {
+                                if (currentElement.dataset.componentId) {
+                                    params.component_id = currentElement.dataset.componentId;
+                                    break;
+                                }
+                                currentElement = currentElement.parentElement;
+                            }
+
                             // Pass target element for optimistic updates (Phase 3)
                             params._targetElement = e.currentTarget;
 
@@ -1767,6 +1844,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                             e.preventDefault();
                             const formData = new FormData(e.target);
                             const params = Object.fromEntries(formData.entries());
+
+                            // Phase 4: Check if event is from a component (walk up DOM tree)
+                            let currentElement = e.target;
+                            while (currentElement && currentElement !== document.body) {
+                                if (currentElement.dataset.componentId) {
+                                    params.component_id = currentElement.dataset.componentId;
+                                    break;
+                                }
+                                currentElement = currentElement.parentElement;
+                            }
 
                             // Pass target element for optimistic updates (Phase 3)
                             params._targetElement = e.target;
@@ -1823,6 +1910,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                                 params.field_name = fieldName;
                             }
 
+                            // Phase 4: Check if event is from a component (walk up DOM tree)
+                            let currentElement = e.target;
+                            while (currentElement && currentElement !== document.body) {
+                                if (currentElement.dataset.componentId) {
+                                    params.component_id = currentElement.dataset.componentId;
+                                    break;
+                                }
+                                currentElement = currentElement.parentElement;
+                            }
+
                             // Pass target element for optimistic updates (Phase 3)
                             params._targetElement = e.target;
 
@@ -1860,6 +1957,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                             const fieldName = getFieldName(e.target);
                             if (fieldName) {
                                 params.field_name = fieldName;
+                            }
+
+                            // Phase 4: Check if event is from a component (walk up DOM tree)
+                            let currentElement = e.target;
+                            while (currentElement && currentElement !== document.body) {
+                                if (currentElement.dataset.componentId) {
+                                    params.component_id = currentElement.dataset.componentId;
+                                    break;
+                                }
+                                currentElement = currentElement.parentElement;
                             }
 
                             // Pass target element for optimistic updates (Phase 3)
@@ -2039,6 +2146,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                                         params[key] = attr.value;
                                     }
                                 });
+
+                                // Phase 4: Check if event is from a component (walk up DOM tree)
+                                let currentElement = elem;
+                                while (currentElement && currentElement !== document.body) {
+                                    if (currentElement.dataset.componentId) {
+                                        params.component_id = currentElement.dataset.componentId;
+                                        break;
+                                    }
+                                    currentElement = currentElement.parentElement;
+                                }
 
                                 handleEvent(value, params);
                             });

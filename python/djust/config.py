@@ -34,6 +34,7 @@ class LiveViewConfig:
         "use_websocket": True,  # Set to False to use HTTP polling instead of WebSocket
         # Debug settings
         "debug_vdom": False,  # Enable detailed VDOM patching debug logs
+        "debug_components": False,  # Enable component lifecycle debug logs
         # CSS Framework
         "css_framework": "bootstrap5",  # Options: 'bootstrap5', 'tailwind', None
         # Bootstrap 5 classes

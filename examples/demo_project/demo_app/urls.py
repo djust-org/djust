@@ -41,6 +41,9 @@ urlpatterns = [
     path('demos/optimistic-todo/', views.OptimisticTodoView.as_view(), name='demos-optimistic-todo'),
     path('demos/optimistic-counter/', views.OptimisticCounterView.as_view(), name='demos-optimistic-counter'),
 
+    # Component System Demo (Phase 4)
+    path('demos/components/', views.ComponentDemoView.as_view(), name='demos-components'),
+
     # Component Library Kitchen Sink
     path('kitchen-sink/', views.KitchenSinkView.as_view(), name='kitchen-sink'),
 
