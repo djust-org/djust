@@ -19,6 +19,7 @@ use djust_vdom::{diff, parse_html, VNode};
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -56,6 +57,16 @@ fn ensure_supervisor_started() {
     }
 }
 
+/// Serializable representation of RustLiveViewBackend for Redis storage
+#[derive(Serialize, Deserialize)]
+struct SerializableViewState {
+    template_source: String,
+    state: HashMap<String, Value>,
+    last_vdom: Option<VNode>,
+    version: u64,
+    timestamp: f64, // Unix timestamp for session age tracking
+}
+
 /// A LiveView component that manages state and rendering (Rust backend)
 #[pyclass(name = "RustLiveView")]
 pub struct RustLiveViewBackend {
@@ -64,6 +75,8 @@ pub struct RustLiveViewBackend {
     last_vdom: Option<VNode>,
     /// Version number incremented on each render, used for VDOM synchronization
     version: u64,
+    /// Unix timestamp when this view was last serialized (for session age tracking)
+    timestamp: f64,
 }
 
 #[pymethods]
@@ -75,6 +88,7 @@ impl RustLiveViewBackend {
             state: HashMap::new(),
             last_vdom: None,
             version: 0,
+            timestamp: 0.0, // Will be set on first serialization
         }
     }
 
@@ -202,6 +216,72 @@ impl RustLiveViewBackend {
     fn reset(&mut self) {
         self.last_vdom = None;
         self.version = 0;
+    }
+
+    /// Serialize the RustLiveView state to MessagePack bytes
+    ///
+    /// This enables efficient state persistence to Redis or other storage backends.
+    /// Uses MessagePack for compact binary serialization (~30-40% smaller than JSON).
+    /// Includes current timestamp for session age tracking.
+    ///
+    /// Returns: Python bytes object containing the serialized state with timestamp
+    fn serialize_msgpack(&self, py: Python) -> PyResult<PyObject> {
+        // Get current timestamp
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+
+        // Convert to serializable struct
+        let serializable = SerializableViewState {
+            template_source: self.template_source.clone(),
+            state: self.state.clone(),
+            last_vdom: self.last_vdom.clone(),
+            version: self.version,
+            timestamp: ts,
+        };
+
+        // Serialize to MessagePack bytes
+        let bytes = rmp_serde::to_vec(&serializable).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "MessagePack serialization error: {e}"
+            ))
+        })?;
+        Ok(PyBytes::new_bound(py, &bytes).into())
+    }
+
+    /// Deserialize a RustLiveView from MessagePack bytes
+    ///
+    /// Reconstructs a complete RustLiveView instance from bytes previously
+    /// serialized with serialize_msgpack().
+    ///
+    /// Args:
+    ///     bytes: Python bytes object containing MessagePack data
+    ///
+    /// Returns: RustLiveView instance with restored state
+    #[staticmethod]
+    fn deserialize_msgpack(bytes: &[u8]) -> PyResult<Self> {
+        let serializable: SerializableViewState = rmp_serde::from_slice(bytes).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "MessagePack deserialization error: {e}"
+            ))
+        })?;
+
+        // Convert back to RustLiveViewBackend
+        Ok(Self {
+            template_source: serializable.template_source,
+            state: serializable.state,
+            last_vdom: serializable.last_vdom,
+            version: serializable.version,
+            timestamp: serializable.timestamp,
+        })
+    }
+
+    /// Get the timestamp when this view was last serialized
+    ///
+    /// Returns: Unix timestamp (seconds since epoch)
+    fn get_timestamp(&self) -> f64 {
+        self.timestamp
     }
 }
 

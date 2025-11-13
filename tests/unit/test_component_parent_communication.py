@@ -22,17 +22,18 @@ class TodoListComponent(LiveComponent):
 
     def mount(self, items=None):
         """Initialize component state."""
-        self.items = items or []
+        # Make a copy to ensure state isolation from parent
+        self.items = list(items) if items else []
 
     def update(self, items=None, **props):
         """Update props."""
         if items is not None:
-            self.items = items
+            # Make a copy to ensure state isolation from parent
+            self.items = list(items)
 
     def toggle_todo(self, id: str = None, **kwargs):
         """Event handler for checkbox toggle."""
-        item = next(i for i in self.items if i["id"] == int(id))
-        item["completed"] = not item["completed"]
+        # Don't modify state directly - let parent handle it
         self.send_parent("todo_toggled", {"id": int(id)})
 
 

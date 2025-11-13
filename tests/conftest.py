@@ -2,14 +2,27 @@
 Pytest configuration and fixtures for Django Rust Live tests.
 """
 
+import sys
+from pathlib import Path
 import pytest
 from django.test import RequestFactory
 from django.contrib.sessions.middleware import SessionMiddleware
+
+# Add demo_project to Python path for Django settings
+demo_project_path = Path(__file__).parent.parent / "examples" / "demo_project"
+if str(demo_project_path) not in sys.path:
+    sys.path.insert(0, str(demo_project_path))
 
 
 @pytest.fixture
 def request_factory():
     """Provide Django RequestFactory for creating test requests."""
+    return RequestFactory()
+
+
+@pytest.fixture
+def rf():
+    """Alias for request_factory (pytest-django convention)."""
     return RequestFactory()
 
 
@@ -53,8 +66,13 @@ def sample_template():
 @pytest.fixture(autouse=True)
 def cleanup_session_cache():
     """Clean up session cache after each test."""
+    # Setup: Ensure we use in-memory backend for tests
+    from djust.state_backend import set_backend, InMemoryStateBackend
+
+    backend = InMemoryStateBackend()
+    set_backend(backend)
+
     yield
 
-    # Clean up the global cache
-    from djust.live_view import _rust_view_cache
-    _rust_view_cache.clear()
+    # Cleanup: Clear all sessions from backend
+    backend.cleanup_expired(ttl=0)  # TTL=0 expires everything

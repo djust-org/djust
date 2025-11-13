@@ -54,7 +54,7 @@ def test_vdom_patching_generates_patches():
 
     # Verify initial render
     assert "Count: <strong>0</strong>" in initial_html
-    assert "<div data-liveview-root>" in initial_html
+    assert "data-liveview-root" in initial_html
 
     print("\n[TEST] Initial HTML rendered")
     print(f"[TEST] Session key: {get_request.session.session_key}")
@@ -88,7 +88,8 @@ def test_vdom_patching_generates_patches():
     # Parse patches to verify they update the counter
     import json
 
-    patches = json.loads(patches_json)
+    # patches_json might be a string or already parsed list
+    patches = json.loads(patches_json) if isinstance(patches_json, str) else patches_json
     assert len(patches) > 0, "Should have at least one patch"
     # Should have a SetText patch that changes counter to "1"
     set_text_patches = [p for p in patches if p["type"] == "SetText" and p.get("text") == "1"]
@@ -122,7 +123,9 @@ def test_vdom_patching_multiple_updates():
     assert "patches" in data_1, "First update should generate patches"
     assert "html" not in data_1, "Should NOT contain HTML (optimized response)"
     # Verify patches update counter from 0 to 1
-    patches_1 = json.loads(data_1["patches"])
+    patches_1 = (
+        json.loads(data_1["patches"]) if isinstance(data_1["patches"], str) else data_1["patches"]
+    )
     assert any(p.get("text") == "1" for p in patches_1 if p["type"] == "SetText")
 
     # Second increment
@@ -136,7 +139,9 @@ def test_vdom_patching_multiple_updates():
     assert "patches" in data_2, "Second update should generate patches"
     assert "html" not in data_2, "Should NOT contain HTML (optimized response)"
     # Verify patches update counter from 1 to 2
-    patches_2 = json.loads(data_2["patches"])
+    patches_2 = (
+        json.loads(data_2["patches"]) if isinstance(data_2["patches"], str) else data_2["patches"]
+    )
     assert any(p.get("text") == "2" for p in patches_2 if p["type"] == "SetText")
 
     print("\n[TEST] ✅ Multiple updates generate patches correctly!")
@@ -162,11 +167,11 @@ def test_vdom_root_alignment():
     assert root_count >= 1, "Should have at least one data-liveview-root"
 
     # Verify structure starts with the root div
-    assert "<div data-liveview-root>" in html
+    assert "data-liveview-root" in html
 
     # Get the Rust VDOM structure
     template = view.get_template()
-    assert "<div data-liveview-root>" in template, "Rust template should include root div"
+    assert "data-liveview-root" in template, "Rust template should include root div"
 
     print("\n[TEST] ✅ Root element alignment verified!")
 

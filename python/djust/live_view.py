@@ -117,17 +117,13 @@ class DjangoJSONEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-# Global cache for RustLiveView instances
-# Structure: {cache_key: (rust_view, timestamp)}
-_rust_view_cache = {}
-
 # Default TTL for sessions (1 hour)
 DEFAULT_SESSION_TTL = 3600
 
 
 def cleanup_expired_sessions(ttl: Optional[int] = None) -> int:
     """
-    Clean up expired LiveView sessions from cache.
+    Clean up expired LiveView sessions from state backend.
 
     Args:
         ttl: Time to live in seconds. Defaults to DEFAULT_SESSION_TTL.
@@ -135,58 +131,23 @@ def cleanup_expired_sessions(ttl: Optional[int] = None) -> int:
     Returns:
         Number of sessions cleaned up
     """
-    import time
-    import logging
+    from .state_backend import get_backend
 
-    logger = logging.getLogger(__name__)
-
-    if ttl is None:
-        ttl = DEFAULT_SESSION_TTL
-
-    cutoff = time.time() - ttl
-    expired_keys = []
-
-    # Find expired sessions
-    for key, (view, timestamp) in list(_rust_view_cache.items()):
-        if timestamp < cutoff:
-            expired_keys.append(key)
-
-    # Remove expired sessions
-    for key in expired_keys:
-        del _rust_view_cache[key]
-
-    if expired_keys:
-        logger.info(f"Cleaned up {len(expired_keys)} expired LiveView sessions")
-
-    return len(expired_keys)
+    backend = get_backend()
+    return backend.cleanup_expired(ttl)
 
 
 def get_session_stats() -> Dict[str, Any]:
     """
-    Get statistics about cached LiveView sessions.
+    Get statistics about cached LiveView sessions from state backend.
 
     Returns:
         Dictionary with cache statistics
     """
-    import time
+    from .state_backend import get_backend
 
-    if not _rust_view_cache:
-        return {
-            "total_sessions": 0,
-            "oldest_session_age": 0,
-            "newest_session_age": 0,
-            "average_age": 0,
-        }
-
-    current_time = time.time()
-    ages = [current_time - timestamp for _, timestamp in _rust_view_cache.values()]
-
-    return {
-        "total_sessions": len(_rust_view_cache),
-        "oldest_session_age": max(ages) if ages else 0,
-        "newest_session_age": min(ages) if ages else 0,
-        "average_age": sum(ages) / len(ages) if ages else 0,
-    }
+    backend = get_backend()
+    return backend.get_stats()
 
 
 class LiveView(View):
@@ -488,21 +449,21 @@ class LiveView(View):
                     request.session.create()
                     session_key = request.session.session_key
 
+                from .state_backend import get_backend
+
+                backend = get_backend()
                 self._cache_key = f"{session_key}_{view_key}"
                 print(f"[LiveView] Cache lookup: cache_key={self._cache_key}", file=sys.stderr)
-                print(
-                    f"[LiveView] Cache contents: {list(_rust_view_cache.keys())}", file=sys.stderr
-                )
 
-                # Try to get cached RustLiveView
-                if self._cache_key in _rust_view_cache:
-                    cached_view, timestamp = _rust_view_cache[self._cache_key]
+                # Try to get cached RustLiveView from backend
+                cached = backend.get(self._cache_key)
+                if cached:
+                    cached_view, timestamp = cached
                     self._rust_view = cached_view
                     print("[LiveView] Cache HIT! Using cached RustLiveView", file=sys.stderr)
                     # Update timestamp on access
-                    import time
 
-                    _rust_view_cache[self._cache_key] = (cached_view, time.time())
+                    backend.set(self._cache_key, cached_view)
                     return
                 else:
                     print("[LiveView] Cache MISS! Will create new RustLiveView", file=sys.stderr)
@@ -524,9 +485,10 @@ class LiveView(View):
 
             # Cache it if we have a cache key
             if self._cache_key:
-                import time
+                from .state_backend import get_backend
 
-                _rust_view_cache[self._cache_key] = (self._rust_view, time.time())
+                backend = get_backend()
+                backend.set(self._cache_key, self._rust_view)
 
     def _sync_state_to_rust(self):
         """Sync Python state to Rust backend"""

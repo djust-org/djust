@@ -34,6 +34,15 @@ wheels = [
 ]
 
 [[package]]
+name = "async-timeout"
+version = "5.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a5/ae/136395dfbfe00dfc94da3f3e136d0b13f394cba8f4841120e34226265780/async_timeout-5.0.1.tar.gz", hash = "sha256:d9321a7a3d5a6a5e187e824d2fa0793ce379a202935782d555d6e9d2735677d3", size = 9274 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/ba/e2081de779ca30d473f21f5b30e0e737c438205440784c7dfc81efc2b029/async_timeout-5.0.1-py3-none-any.whl", hash = "sha256:39e3809566ff85354557ec2398b55e096c8364bacac9405a7a1fa429e77fe76c", size = 6233 },
+]
+
+[[package]]
 name = "attrs"
 version = "25.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -455,9 +464,13 @@ dev = [
     { name = "pytest", marker = "platform_python_implementation != 'PyPy' or python_full_version >= '3.8'" },
     { name = "pytest-asyncio", marker = "platform_python_implementation != 'PyPy' or python_full_version >= '3.8'" },
     { name = "pytest-django", marker = "platform_python_implementation != 'PyPy' or python_full_version >= '3.8'" },
+    { name = "redis", marker = "platform_python_implementation != 'PyPy' or python_full_version >= '3.8'" },
     { name = "ruff", marker = "platform_python_implementation != 'PyPy' or python_full_version >= '3.8'" },
     { name = "uvicorn", extra = ["standard"], marker = "platform_python_implementation != 'PyPy' or python_full_version >= '3.8'" },
     { name = "whitenoise", marker = "platform_python_implementation != 'PyPy' or python_full_version >= '3.8'" },
+]
+redis = [
+    { name = "redis", marker = "platform_python_implementation != 'PyPy' or python_full_version >= '3.8'" },
 ]
 
 [package.metadata]
@@ -471,6 +484,8 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21" },
     { name = "pytest-django", marker = "extra == 'dev'", specifier = ">=4.5" },
+    { name = "redis", marker = "extra == 'dev'", specifier = ">=5.0.0" },
+    { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'dev'", specifier = ">=0.30.0" },
     { name = "whitenoise", marker = "extra == 'dev'", specifier = ">=6.0.0" },
@@ -946,6 +961,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/dd/62/71c27c94f457cf4418ef8ccc71735324c549f7e3ea9d34aba50874563561/pyyaml-6.0.3-cp39-cp39-musllinux_1_2_x86_64.whl", hash = "sha256:27c0abcb4a5dac13684a37f76e701e054692a9b2d3064b70f5e4eb54810553d7", size = 755677 },
     { url = "https://files.pythonhosted.org/packages/29/3d/6f5e0d58bd924fb0d06c3a6bad00effbdae2de5adb5cda5648006ffbd8d3/pyyaml-6.0.3-cp39-cp39-win32.whl", hash = "sha256:1ebe39cb5fc479422b83de611d14e2c0d3bb2a18bbcb01f229ab3cfbd8fee7a0", size = 142592 },
     { url = "https://files.pythonhosted.org/packages/f0/0c/25113e0b5e103d7f1490c0e947e303fe4a696c10b501dea7a9f49d4e876c/pyyaml-6.0.3-cp39-cp39-win_amd64.whl", hash = "sha256:2e71d11abed7344e42a8849600193d15b6def118602c4c176f748e4583246007", size = 158777 },
+]
+
+[[package]]
+name = "redis"
+version = "6.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "async-timeout", marker = "(python_full_version < '3.11.3' and platform_python_implementation != 'PyPy') or (python_full_version < '3.11.3' and python_full_version >= '3.8')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/07/8b/14ef373ffe71c0d2fde93c204eab78472ea13c021d9aee63b0e11bd65896/redis-6.1.1.tar.gz", hash = "sha256:88c689325b5b41cedcbdbdfd4d937ea86cf6dab2222a83e86d8a466e4b3d2600", size = 4629515 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c2/cd/29503c609186104c363ef1f38d6e752e7d91ef387fc90aa165e96d69f446/redis-6.1.1-py3-none-any.whl", hash = "sha256:ed44d53d065bbe04ac6d76864e331cfe5c5353f86f6deccc095f8794fd15bb2e", size = 273930 },
 ]
 
 [[package]]

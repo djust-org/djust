@@ -130,3 +130,32 @@ LIVEVIEW_ALLOWED_MODULES = [
 LIVEVIEW_CONFIG = {
     'use_websocket': True,  # Use HTTP-only mode (disable WebSocket)
 }
+
+# djust State Backend Configuration
+# Controls where LiveView session state is stored
+DJUST_CONFIG = {
+    # State backend: 'memory' (dev) or 'redis' (production)
+    # - 'memory': Fast, simple, but no horizontal scaling (single server only)
+    # - 'redis': Production-ready with horizontal scaling across multiple servers
+    'STATE_BACKEND': 'memory',  # Change to 'redis' for production
+
+    # Redis connection URL (only used if STATE_BACKEND='redis')
+    # Format: redis://[:password@]host[:port][/database]
+    # Examples:
+    #   'redis://localhost:6379/0'           # Local Redis
+    #   'redis://:password@redis-host:6379/0' # With password
+    #   'redis://redis.example.com:6379/1'   # Remote Redis, DB 1
+    'REDIS_URL': 'redis://localhost:6379/0',
+
+    # Session TTL (Time-To-Live) in seconds
+    # How long inactive sessions are kept before cleanup
+    # Default: 3600 seconds (1 hour)
+    'SESSION_TTL': 3600,
+}
+
+# Production Redis Configuration Example:
+# DJUST_CONFIG = {
+#     'STATE_BACKEND': 'redis',
+#     'REDIS_URL': 'redis://redis.example.com:6379/0',
+#     'SESSION_TTL': 7200,  # 2 hours for production
+# }

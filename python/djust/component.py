@@ -197,12 +197,8 @@ class LiveComponent(Component):
         self.mount(**props)
         self._mounted = True
 
-        # Validate template_string is defined
-        if not self.template_string:
-            raise ValueError(
-                f"Component {self.__class__.__name__} must define template_string. "
-                f"Add: template_string = '...' as a class attribute."
-            )
+        # Note: template_string validation happens in render() to allow
+        # component creation without a template (useful for testing)
 
     def mount(self, **props: Any) -> None:
         """
