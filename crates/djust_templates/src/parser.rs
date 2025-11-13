@@ -192,6 +192,50 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     Ok(None)
                 }
 
+                "verbatim" => {
+                    // {% verbatim %} tag - output content literally without template processing
+                    // Collect all content between {% verbatim %} and {% endverbatim %}
+                    let mut content = String::new();
+                    let mut j = *i + 1;
+
+                    while j < tokens.len() {
+                        match &tokens[j] {
+                            Token::Tag(name, _) if name == "endverbatim" => {
+                                *i = j; // Point to endverbatim tag
+                                return Ok(Some(Node::Text(content)));
+                            }
+                            Token::Text(text) => content.push_str(text),
+                            Token::Variable(var) => {
+                                // Output the raw variable syntax
+                                content.push_str(&format!("{{{{ {} }}}}", var));
+                            }
+                            Token::Tag(name, args) => {
+                                // Output the raw tag syntax
+                                let args_str = if args.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" {}", args.join(" "))
+                                };
+                                content.push_str(&format!("{{% {}{} %}}", name, args_str));
+                            }
+                            Token::Comment => {
+                                // Skip comments
+                            }
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+
+                    Err(DjangoRustError::TemplateError(
+                        "Unclosed verbatim tag".to_string(),
+                    ))
+                }
+
+                "endverbatim" => {
+                    // Handled by verbatim tag
+                    Ok(None)
+                }
+
                 "endif" | "endfor" | "endblock" | "else" => {
                     // These are handled by their opening tags
                     Ok(None)
@@ -336,6 +380,48 @@ mod tests {
         match &nodes[0] {
             Node::If { .. } => (),
             _ => panic!("Expected If node"),
+        }
+    }
+
+    #[test]
+    fn test_verbatim_tag() {
+        let tokens = tokenize("{% verbatim %}{{ name }}{% endverbatim %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        assert_eq!(nodes.len(), 1);
+        match &nodes[0] {
+            Node::Text(text) => assert_eq!(text, "{{ name }}"),
+            _ => panic!("Expected Text node"),
+        }
+    }
+
+    #[test]
+    fn test_verbatim_tag_with_tags() {
+        let tokens =
+            tokenize("{% verbatim %}{% if true %}{{ value }}{% endif %}{% endverbatim %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        assert_eq!(nodes.len(), 1);
+        match &nodes[0] {
+            Node::Text(text) => assert_eq!(text, "{% if true %}{{ value }}{% endif %}"),
+            _ => panic!("Expected Text node"),
+        }
+    }
+
+    #[test]
+    fn test_verbatim_tag_mixed() {
+        let tokens = tokenize("Before{% verbatim %}{{ name }}{% endverbatim %}After").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        assert_eq!(nodes.len(), 3);
+        match &nodes[0] {
+            Node::Text(text) => assert_eq!(text, "Before"),
+            _ => panic!("Expected Text node"),
+        }
+        match &nodes[1] {
+            Node::Text(text) => assert_eq!(text, "{{ name }}"),
+            _ => panic!("Expected Text node from verbatim"),
+        }
+        match &nodes[2] {
+            Node::Text(text) => assert_eq!(text, "After"),
+            _ => panic!("Expected Text node"),
         }
     }
 }

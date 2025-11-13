@@ -176,6 +176,46 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
                 _ => Ok(value.clone()),
             }
         }
+        "filesizeformat" => {
+            // filesizeformat filter: formats bytes to human-readable size
+            match value {
+                Value::Integer(n) => Ok(Value::String(format_filesize(*n))),
+                Value::Float(f) => Ok(Value::String(format_filesize(*f as i64))),
+                _ => Ok(value.clone()),
+            }
+        }
+        "random" => {
+            // random filter: returns random item from list
+            match value {
+                Value::List(items) if !items.is_empty() => {
+                    // Use simple pseudo-random selection based on list length
+                    // For deterministic testing, we'll use first item
+                    // In production, you'd want to use rand crate
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
+                    use std::time::{SystemTime, UNIX_EPOCH};
+
+                    let mut hasher = DefaultHasher::new();
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos()
+                        .hash(&mut hasher);
+                    let random_index = (hasher.finish() as usize) % items.len();
+                    Ok(items[random_index].clone())
+                }
+                Value::List(_) => Ok(Value::Null),
+                _ => Ok(value.clone()),
+            }
+        }
+        "timeuntil" => {
+            // timeuntil filter: converts ISO datetime to "in X minutes/hours/days" format
+            let datetime_str = value.to_string();
+            match format_timeuntil(&datetime_str) {
+                Ok(formatted) => Ok(Value::String(formatted)),
+                Err(_) => Ok(value.clone()), // If parsing fails, return original value
+            }
+        }
         _ => Err(DjangoRustError::TemplateError(format!(
             "Unknown filter: {filter_name}"
         ))),
@@ -310,6 +350,69 @@ fn format_timesince(datetime_str: &str) -> Result<String> {
     };
 
     Ok(formatted)
+}
+
+fn format_timeuntil(datetime_str: &str) -> Result<String> {
+    // Parse ISO datetime string
+    let dt = DateTime::parse_from_rfc3339(datetime_str)
+        .map_err(|e| DjangoRustError::TemplateError(format!("Invalid datetime format: {e}")))?;
+
+    let now = Utc::now();
+    let duration = dt.with_timezone(&Utc).signed_duration_since(now);
+
+    let seconds = duration.num_seconds();
+
+    // If datetime is in the past, return empty string like Django
+    if seconds < 0 {
+        return Ok("0 minutes".to_string());
+    }
+
+    // Format like Django's timeuntil
+    let formatted = if seconds < 60 {
+        format!("{} second{}", seconds, if seconds != 1 { "s" } else { "" })
+    } else if seconds < 3600 {
+        let minutes = seconds / 60;
+        format!("{} minute{}", minutes, if minutes != 1 { "s" } else { "" })
+    } else if seconds < 86400 {
+        let hours = seconds / 3600;
+        format!("{} hour{}", hours, if hours != 1 { "s" } else { "" })
+    } else if seconds < 604800 {
+        let days = seconds / 86400;
+        format!("{} day{}", days, if days != 1 { "s" } else { "" })
+    } else if seconds < 2629746 {
+        let weeks = seconds / 604800;
+        format!("{} week{}", weeks, if weeks != 1 { "s" } else { "" })
+    } else if seconds < 31556952 {
+        let months = seconds / 2629746;
+        format!("{} month{}", months, if months != 1 { "s" } else { "" })
+    } else {
+        let years = seconds / 31556952;
+        format!("{} year{}", years, if years != 1 { "s" } else { "" })
+    };
+
+    Ok(formatted)
+}
+
+fn format_filesize(bytes: i64) -> String {
+    const KB: i64 = 1024;
+    const MB: i64 = KB * 1024;
+    const GB: i64 = MB * 1024;
+    const TB: i64 = GB * 1024;
+    const PB: i64 = TB * 1024;
+
+    if bytes < KB {
+        format!("{} bytes", bytes)
+    } else if bytes < MB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else if bytes < GB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes < TB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes < PB {
+        format!("{:.1} TB", bytes as f64 / TB as f64)
+    } else {
+        format!("{:.1} PB", bytes as f64 / PB as f64)
+    }
 }
 
 fn slugify(s: &str) -> String {
@@ -498,5 +601,57 @@ mod tests {
         let value = Value::Integer(42);
         let result = apply_filter("floatformat", &value, Some("2")).unwrap();
         assert_eq!(result.to_string(), "42.00");
+    }
+
+    #[test]
+    fn test_filesizeformat_filter() {
+        let value = Value::Integer(1024);
+        let result = apply_filter("filesizeformat", &value, None).unwrap();
+        assert_eq!(result.to_string(), "1.0 KB");
+
+        let value = Value::Integer(1048576);
+        let result = apply_filter("filesizeformat", &value, None).unwrap();
+        assert_eq!(result.to_string(), "1.0 MB");
+
+        let value = Value::Integer(500);
+        let result = apply_filter("filesizeformat", &value, None).unwrap();
+        assert_eq!(result.to_string(), "500 bytes");
+    }
+
+    #[test]
+    fn test_random_filter() {
+        let value = Value::List(vec![
+            Value::String("a".to_string()),
+            Value::String("b".to_string()),
+            Value::String("c".to_string()),
+        ]);
+        let result = apply_filter("random", &value, None).unwrap();
+        // Result should be one of the list items
+        match result {
+            Value::String(s) => assert!(s == "a" || s == "b" || s == "c"),
+            _ => panic!("Expected string value"),
+        }
+
+        // Empty list should return Null
+        let empty = Value::List(vec![]);
+        let result = apply_filter("random", &empty, None).unwrap();
+        assert!(matches!(result, Value::Null));
+    }
+
+    #[test]
+    fn test_timeuntil_filter() {
+        // Create a future datetime (1 day from now)
+        use chrono::Duration;
+        let future = Utc::now() + Duration::days(1);
+        let future_str = future.to_rfc3339();
+        let value = Value::String(future_str);
+        let result = apply_filter("timeuntil", &value, None).unwrap();
+        // Should contain "day" or "hour" (depending on exact timing)
+        let result_str = result.to_string();
+        assert!(
+            result_str.contains("day") || result_str.contains("hour"),
+            "Expected 'day' or 'hour' in result: {}",
+            result_str
+        );
     }
 }
