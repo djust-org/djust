@@ -168,6 +168,26 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
             Ok(format!("{}{}", static_url, path))
         }
 
+        Node::With { assignments, nodes } => {
+            // Create new context with assigned variables
+            let mut new_context = context.clone();
+
+            // Process assignments
+            for (var_name, expression) in assignments {
+                // Try to evaluate expression from context
+                // For now, we'll just look up the expression as a variable name
+                // In full Django, this would support complex expressions
+                let value = context
+                    .get(expression)
+                    .cloned()
+                    .unwrap_or_else(|| Value::String(expression.clone()));
+                new_context.set(var_name.clone(), value);
+            }
+
+            // Render children with new context
+            render_nodes(nodes, &new_context)
+        }
+
         Node::Comment => Ok(String::new()),
     }
 }
@@ -921,5 +941,42 @@ mod tests {
         let context = Context::new();
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "BeforeAfter");
+    }
+
+    #[test]
+    fn test_with_tag() {
+        let tokens = tokenize("{% with greeting=message %}{{ greeting }}{% endwith %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "message".to_string(),
+            Value::String("Hello World".to_string()),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "Hello World");
+    }
+
+    #[test]
+    fn test_with_tag_multiple_vars() {
+        let tokens = tokenize("{% with a=x b=y %}{{ a }} and {{ b }}{% endwith %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("x".to_string(), Value::String("foo".to_string()));
+        context.set("y".to_string(), Value::String("bar".to_string()));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "foo and bar");
+    }
+
+    #[test]
+    fn test_with_tag_scoping() {
+        // Test that variables inside with don't affect outer context
+        let tokens =
+            tokenize("{{ name }}{% with name=other %}{{ name }}{% endwith %}{{ name }}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("name".to_string(), Value::String("outer".to_string()));
+        context.set("other".to_string(), Value::String("inner".to_string()));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "outerinnerouter");
     }
 }

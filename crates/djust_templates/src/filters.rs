@@ -1,6 +1,6 @@
 //! Django-compatible template filters
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Timelike, Utc};
 use djust_core::{DjangoRustError, Result, Value};
 
 pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Result<Value> {
@@ -216,6 +216,45 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
                 Err(_) => Ok(value.clone()), // If parsing fails, return original value
             }
         }
+        "date" => {
+            // date filter: formats datetime with format string
+            // Supports common Django/strftime format codes
+            let format_str = arg.unwrap_or("N j, Y"); // Default: "Nov. 13, 2025"
+            let datetime_str = value.to_string();
+            match format_date(&datetime_str, format_str) {
+                Ok(formatted) => Ok(Value::String(formatted)),
+                Err(_) => Ok(value.clone()), // If parsing fails, return original value
+            }
+        }
+        "time" => {
+            // time filter: formats time with format string
+            let format_str = arg.unwrap_or("P"); // Default: "2:30 p.m."
+            let datetime_str = value.to_string();
+            match format_time(&datetime_str, format_str) {
+                Ok(formatted) => Ok(Value::String(formatted)),
+                Err(_) => Ok(value.clone()),
+            }
+        }
+        "dictsort" => {
+            // dictsort filter: sorts list of dicts by key
+            let sort_key = arg.unwrap_or("name");
+            match value {
+                Value::List(items) => Ok(Value::List(sort_dicts_by_key(items, sort_key))),
+                _ => Ok(value.clone()),
+            }
+        }
+        "dictsortreversed" => {
+            // dictsortreversed filter: sorts list of dicts by key in reverse
+            let sort_key = arg.unwrap_or("name");
+            match value {
+                Value::List(items) => {
+                    let mut sorted = sort_dicts_by_key(items, sort_key);
+                    sorted.reverse();
+                    Ok(Value::List(sorted))
+                }
+                _ => Ok(value.clone()),
+            }
+        }
         _ => Err(DjangoRustError::TemplateError(format!(
             "Unknown filter: {filter_name}"
         ))),
@@ -412,6 +451,126 @@ fn format_filesize(bytes: i64) -> String {
         format!("{:.1} TB", bytes as f64 / TB as f64)
     } else {
         format!("{:.1} PB", bytes as f64 / PB as f64)
+    }
+}
+
+fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
+    // Parse ISO datetime string
+    let dt = DateTime::parse_from_rfc3339(datetime_str)
+        .map_err(|e| DjangoRustError::TemplateError(format!("Invalid datetime format: {e}")))?;
+
+    // Convert common Django format codes to output
+    // This is a simplified implementation - Django has many more format codes
+    let mut result = String::new();
+    let mut chars = format_str.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            // Common date format codes
+            'Y' => result.push_str(&dt.year().to_string()), // 2025
+            'y' => result.push_str(&format!("{:02}", dt.year() % 100)), // 25
+            'm' => result.push_str(&format!("{:02}", dt.month())), // 01-12
+            'n' => result.push_str(&dt.month().to_string()), // 1-12
+            'd' => result.push_str(&format!("{:02}", dt.day())), // 01-31
+            'j' => result.push_str(&dt.day().to_string()),  // 1-31
+            'D' => result.push_str(&dt.format("%a").to_string()), // Mon
+            'l' => result.push_str(&dt.format("%A").to_string()), // Monday
+            'F' => result.push_str(&dt.format("%B").to_string()), // January
+            'M' => result.push_str(&dt.format("%b").to_string()), // Jan
+            'N' => {
+                // Django: "Jan.", "Feb.", etc.
+                let month = dt.format("%b").to_string();
+                result.push_str(&format!("{}.", month));
+            }
+            // Time format codes
+            'H' => result.push_str(&format!("{:02}", dt.hour())), // 00-23
+            'i' => result.push_str(&format!("{:02}", dt.minute())), // 00-59
+            's' => result.push_str(&format!("{:02}", dt.second())), // 00-59
+            'A' => {
+                // AM/PM
+                if dt.hour() < 12 {
+                    result.push_str("AM");
+                } else {
+                    result.push_str("PM");
+                }
+            }
+            'a' => {
+                // am/pm
+                if dt.hour() < 12 {
+                    result.push_str("am");
+                } else {
+                    result.push_str("pm");
+                }
+            }
+            'P' => {
+                // Django: "2:30 p.m.", "midnight", "noon"
+                let hour = dt.hour();
+                let minute = dt.minute();
+                if hour == 0 && minute == 0 {
+                    result.push_str("midnight");
+                } else if hour == 12 && minute == 0 {
+                    result.push_str("noon");
+                } else {
+                    let display_hour = if hour == 0 {
+                        12
+                    } else if hour > 12 {
+                        hour - 12
+                    } else {
+                        hour
+                    };
+                    let ampm = if hour < 12 { "a.m." } else { "p.m." };
+                    if minute == 0 {
+                        result.push_str(&format!("{} {}", display_hour, ampm));
+                    } else {
+                        result.push_str(&format!("{}:{:02} {}", display_hour, minute, ampm));
+                    }
+                }
+            }
+            // Literal characters
+            '\\' => {
+                // Escape next character
+                if let Some(next) = chars.next() {
+                    result.push(next);
+                }
+            }
+            _ => result.push(ch),
+        }
+    }
+
+    Ok(result)
+}
+
+fn format_time(datetime_str: &str, format_str: &str) -> Result<String> {
+    // Reuse format_date but focused on time formatting
+    format_date(datetime_str, format_str)
+}
+
+fn sort_dicts_by_key(items: &[Value], sort_key: &str) -> Vec<Value> {
+    let mut sorted_items = items.to_vec();
+
+    sorted_items.sort_by(|a, b| {
+        let a_val = get_dict_value(a, sort_key);
+        let b_val = get_dict_value(b, sort_key);
+
+        // Compare values
+        match (&a_val, &b_val) {
+            (Value::String(a_str), Value::String(b_str)) => a_str.cmp(b_str),
+            (Value::Integer(a_int), Value::Integer(b_int)) => a_int.cmp(b_int),
+            (Value::Float(a_float), Value::Float(b_float)) => a_float
+                .partial_cmp(b_float)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            (Value::Bool(a_bool), Value::Bool(b_bool)) => a_bool.cmp(b_bool),
+            _ => std::cmp::Ordering::Equal,
+        }
+    });
+
+    sorted_items
+}
+
+fn get_dict_value(value: &Value, key: &str) -> Value {
+    match value {
+        Value::Object(map) => map.get(key).cloned().unwrap_or(Value::Null),
+        _ => Value::Null,
     }
 }
 
@@ -653,5 +812,113 @@ mod tests {
             "Expected 'day' or 'hour' in result: {}",
             result_str
         );
+    }
+
+    #[test]
+    fn test_date_filter() {
+        use chrono::TimeZone;
+        // Create a specific datetime for testing
+        let dt = Utc.with_ymd_and_hms(2025, 11, 13, 14, 30, 0).unwrap();
+        let dt_str = dt.to_rfc3339();
+        let value = Value::String(dt_str);
+
+        // Test Y-m-d format
+        let result = apply_filter("date", &value, Some("Y-m-d")).unwrap();
+        assert_eq!(result.to_string(), "2025-11-13");
+
+        // Test Django default format
+        let result = apply_filter("date", &value, Some("N j, Y")).unwrap();
+        assert_eq!(result.to_string(), "Nov. 13, 2025");
+
+        // Test with time
+        let result = apply_filter("date", &value, Some("Y-m-d H:i")).unwrap();
+        assert_eq!(result.to_string(), "2025-11-13 14:30");
+    }
+
+    #[test]
+    fn test_time_filter() {
+        use chrono::TimeZone;
+        // Test afternoon time
+        let dt = Utc.with_ymd_and_hms(2025, 11, 13, 14, 30, 0).unwrap();
+        let dt_str = dt.to_rfc3339();
+        let value = Value::String(dt_str);
+
+        let result = apply_filter("time", &value, Some("H:i")).unwrap();
+        assert_eq!(result.to_string(), "14:30");
+
+        // Test P format (Django time format)
+        let result = apply_filter("time", &value, Some("P")).unwrap();
+        assert_eq!(result.to_string(), "2:30 p.m.");
+
+        // Test midnight
+        let midnight = Utc.with_ymd_and_hms(2025, 11, 13, 0, 0, 0).unwrap();
+        let midnight_str = midnight.to_rfc3339();
+        let value = Value::String(midnight_str);
+        let result = apply_filter("time", &value, Some("P")).unwrap();
+        assert_eq!(result.to_string(), "midnight");
+
+        // Test noon
+        let noon = Utc.with_ymd_and_hms(2025, 11, 13, 12, 0, 0).unwrap();
+        let noon_str = noon.to_rfc3339();
+        let value = Value::String(noon_str);
+        let result = apply_filter("time", &value, Some("P")).unwrap();
+        assert_eq!(result.to_string(), "noon");
+    }
+
+    #[test]
+    fn test_dictsort_filter() {
+        use std::collections::HashMap;
+
+        // Create list of dicts
+        let mut dict1 = HashMap::new();
+        dict1.insert("name".to_string(), Value::String("Charlie".to_string()));
+        dict1.insert("age".to_string(), Value::Integer(30));
+
+        let mut dict2 = HashMap::new();
+        dict2.insert("name".to_string(), Value::String("Alice".to_string()));
+        dict2.insert("age".to_string(), Value::Integer(25));
+
+        let mut dict3 = HashMap::new();
+        dict3.insert("name".to_string(), Value::String("Bob".to_string()));
+        dict3.insert("age".to_string(), Value::Integer(35));
+
+        let value = Value::List(vec![
+            Value::Object(dict1),
+            Value::Object(dict2),
+            Value::Object(dict3),
+        ]);
+
+        // Sort by name
+        let result = apply_filter("dictsort", &value, Some("name")).unwrap();
+        if let Value::List(sorted) = result {
+            assert_eq!(sorted.len(), 3);
+            // First should be Alice
+            if let Value::Object(first) = &sorted[0] {
+                assert_eq!(first.get("name").unwrap().to_string(), "Alice");
+            }
+        } else {
+            panic!("Expected List value");
+        }
+    }
+
+    #[test]
+    fn test_dictsortreversed_filter() {
+        use std::collections::HashMap;
+
+        let mut dict1 = HashMap::new();
+        dict1.insert("name".to_string(), Value::String("Alice".to_string()));
+
+        let mut dict2 = HashMap::new();
+        dict2.insert("name".to_string(), Value::String("Bob".to_string()));
+
+        let value = Value::List(vec![Value::Object(dict1), Value::Object(dict2)]);
+
+        let result = apply_filter("dictsortreversed", &value, Some("name")).unwrap();
+        if let Value::List(sorted) = result {
+            // First should be Bob (reversed)
+            if let Value::Object(first) = &sorted[0] {
+                assert_eq!(first.get("name").unwrap().to_string(), "Bob");
+            }
+        }
     }
 }

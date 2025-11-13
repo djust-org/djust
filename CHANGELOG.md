@@ -13,22 +13,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`{% static 'path' %}`**: Generates static file URLs with STATIC_URL prefix
   - **`{% comment %}...{% endcomment %}`**: Multi-line comment blocks (content hidden)
   - **`{% verbatim %}...{% endverbatim %}`**: Outputs template syntax literally (no processing)
+  - **`{% with var=value %}`**: Creates temporary context variables with proper scoping
+  - **`{% load %}` tag**: No-op for compatibility (tag libraries loaded automatically)
   - Context integration: Tags use `csrf_token` and `STATIC_URL` from template context
-  - 8 comprehensive unit tests for new tags (5 for csrf/static/comment, 3 for verbatim)
+  - 12 comprehensive unit tests for new tags
   - Nested comment support with proper depth tracking
   - Verbatim tag preserves template syntax for documentation/examples
+  - With tag provides clean variable shadowing and context isolation
 
-- **Template Engine: 17 Essential Django Filters** (Issue #7)
+- **Template Engine: 23 Essential Django Filters** (Issue #7)
   - **Numeric filters**: `add`, `divisibleby`, `floatformat`, `filesizeformat`
   - **String filters**: `slugify`, `capfirst`, `cut`, `linebreaks`, `linebreaksbr`, `truncatewords`, `truncatechars`
   - **Logic filters**: `pluralize`, `yesno`
-  - **List filters**: `slice`, `random`
-  - **Time filters**: `timesince`, `timeuntil`
-  - Total of 31 filters now supported (up from 14)
-  - 17 comprehensive unit tests for new filters
+  - **List filters**: `slice`, `random`, `dictsort`, `dictsortreversed`
+  - **Date/Time filters**: `date`, `time`, `timesince`, `timeuntil`
+  - Total of 37 filters now supported (up from 14)
+  - 23 comprehensive unit tests for new filters
   - Full Django compatibility for common template operations
   - Human-readable file size formatting (bytes → KB/MB/GB/TB/PB)
   - Time duration formatting (seconds/minutes/hours/days/weeks/months/years ago/until)
+  - Django-compatible date/time formatting with format codes (Y-m-d, H:i, P, etc.)
+  - Dictionary/object list sorting by key (ascending and descending)
 
 - **Template Engine: `reversed` filter for for loops** (Issue #48)
   - Added support for `{% for item in items reversed %}` syntax

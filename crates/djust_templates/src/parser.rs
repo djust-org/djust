@@ -26,6 +26,10 @@ pub enum Node {
     Comment,
     CsrfToken,
     Static(String), // Path to static file
+    With {
+        assignments: Vec<(String, String)>, // var_name, expression
+        nodes: Vec<Node>,
+    },
     ReactComponent {
         name: String,
         props: Vec<(String, String)>,
@@ -236,6 +240,35 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     Ok(None)
                 }
 
+                "with" => {
+                    // {% with var=value var2=value2 %} ... {% endwith %}
+                    // Parse assignments
+                    let mut assignments = Vec::new();
+                    for arg in args {
+                        if let Some(eq_pos) = arg.find('=') {
+                            let var_name = arg[..eq_pos].trim().to_string();
+                            let expression = arg[eq_pos + 1..].trim().to_string();
+                            assignments.push((var_name, expression));
+                        }
+                    }
+
+                    let (nodes, end_pos) = parse_with_block(tokens, *i + 1)?;
+                    *i = end_pos;
+                    Ok(Some(Node::With { assignments, nodes }))
+                }
+
+                "endwith" => {
+                    // Handled by with tag
+                    Ok(None)
+                }
+
+                "load" => {
+                    // {% load static %} - For now, just treat as a no-op comment
+                    // In full Django, this loads template tag libraries
+                    // Our static files are handled via {% static %} tag
+                    Ok(Some(Node::Comment))
+                }
+
                 "endif" | "endfor" | "endblock" | "else" => {
                     // These are handled by their opening tags
                     Ok(None)
@@ -360,6 +393,28 @@ fn parse_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)> {
     ))
 }
 
+fn parse_with_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)> {
+    let mut nodes = Vec::new();
+    let mut i = start;
+
+    while i < tokens.len() {
+        if let Token::Tag(name, _) = &tokens[i] {
+            if name == "endwith" {
+                return Ok((nodes, i));
+            }
+        }
+
+        if let Some(node) = parse_token(tokens, &mut i)? {
+            nodes.push(node);
+        }
+        i += 1;
+    }
+
+    Err(DjangoRustError::TemplateError(
+        "Unclosed with tag".to_string(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,6 +477,50 @@ mod tests {
         match &nodes[2] {
             Node::Text(text) => assert_eq!(text, "After"),
             _ => panic!("Expected Text node"),
+        }
+    }
+
+    #[test]
+    fn test_with_tag() {
+        let tokens = tokenize("{% with name=user.name %}{{ name }}{% endwith %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        assert_eq!(nodes.len(), 1);
+        match &nodes[0] {
+            Node::With { assignments, nodes } => {
+                assert_eq!(assignments.len(), 1);
+                assert_eq!(assignments[0].0, "name");
+                assert_eq!(assignments[0].1, "user.name");
+                assert_eq!(nodes.len(), 1);
+            }
+            _ => panic!("Expected With node"),
+        }
+    }
+
+    #[test]
+    fn test_with_tag_multiple_assignments() {
+        let tokens = tokenize("{% with a=x b=y %}{{ a }} {{ b }}{% endwith %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        match &nodes[0] {
+            Node::With { assignments, .. } => {
+                assert_eq!(assignments.len(), 2);
+                assert_eq!(assignments[0].0, "a");
+                assert_eq!(assignments[0].1, "x");
+                assert_eq!(assignments[1].0, "b");
+                assert_eq!(assignments[1].1, "y");
+            }
+            _ => panic!("Expected With node"),
+        }
+    }
+
+    #[test]
+    fn test_load_tag() {
+        let tokens = tokenize("{% load static %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        assert_eq!(nodes.len(), 1);
+        // Load is treated as a comment (no-op)
+        match &nodes[0] {
+            Node::Comment => (),
+            _ => panic!("Expected Comment node for load tag"),
         }
     }
 }
