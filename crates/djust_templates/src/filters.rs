@@ -74,6 +74,108 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
                 Err(_) => Ok(value.clone()), // If parsing fails, return original value
             }
         }
+        "add" => {
+            // add filter: adds argument to value (for numbers)
+            let arg_val = arg.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+            match value {
+                Value::Integer(n) => Ok(Value::Integer(n + arg_val)),
+                Value::Float(f) => Ok(Value::Float(f + arg_val as f64)),
+                _ => Ok(value.clone()),
+            }
+        }
+        "pluralize" => {
+            // pluralize filter: returns plural suffix if value != 1
+            let suffix = arg.unwrap_or("s");
+            match value {
+                Value::Integer(n) => {
+                    if *n == 1 {
+                        Ok(Value::String(String::new()))
+                    } else {
+                        Ok(Value::String(suffix.to_string()))
+                    }
+                }
+                Value::List(l) => {
+                    if l.len() == 1 {
+                        Ok(Value::String(String::new()))
+                    } else {
+                        Ok(Value::String(suffix.to_string()))
+                    }
+                }
+                _ => Ok(Value::String(suffix.to_string())),
+            }
+        }
+        "slugify" => {
+            // slugify filter: converts to URL-friendly slug
+            Ok(Value::String(slugify(&value.to_string())))
+        }
+        "capfirst" => {
+            // capfirst filter: capitalizes first character
+            let s = value.to_string();
+            let mut chars = s.chars();
+            match chars.next() {
+                None => Ok(Value::String(String::new())),
+                Some(first) => Ok(Value::String(
+                    first.to_uppercase().collect::<String>() + chars.as_str(),
+                )),
+            }
+        }
+        "yesno" => {
+            // yesno filter: maps true/false/none to custom strings
+            // Argument format: "yes,no,maybe" (maybe is optional)
+            let parts: Vec<&str> = arg.unwrap_or("yes,no,maybe").split(',').collect();
+            let yes_str = parts.first().unwrap_or(&"yes");
+            let no_str = parts.get(1).unwrap_or(&"no");
+            let maybe_str = parts.get(2).unwrap_or(&"maybe");
+
+            let result = match value {
+                Value::Bool(true) => yes_str,
+                Value::Bool(false) => no_str,
+                Value::Null => maybe_str,
+                Value::String(s) if s.is_empty() => maybe_str,
+                _ => {
+                    if value.is_truthy() {
+                        yes_str
+                    } else {
+                        maybe_str
+                    }
+                }
+            };
+            Ok(Value::String(result.to_string()))
+        }
+        "linebreaks" => {
+            // linebreaks filter: converts newlines to <p> and <br> tags
+            Ok(Value::String(linebreaks(&value.to_string())))
+        }
+        "linebreaksbr" => {
+            // linebreaksbr filter: converts newlines to <br> tags
+            Ok(Value::String(linebreaksbr(&value.to_string())))
+        }
+        "cut" => {
+            // cut filter: removes all occurrences of arg from string
+            let remove_str = arg.unwrap_or("");
+            Ok(Value::String(value.to_string().replace(remove_str, "")))
+        }
+        "divisibleby" => {
+            // divisibleby filter: returns true if value is divisible by arg
+            let divisor = arg.and_then(|s| s.parse::<i64>().ok()).unwrap_or(1);
+            match value {
+                Value::Integer(n) => Ok(Value::Bool(divisor != 0 && n % divisor == 0)),
+                _ => Ok(Value::Bool(false)),
+            }
+        }
+        "floatformat" => {
+            // floatformat filter: formats float to specified decimal places
+            let decimals = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
+            match value {
+                Value::Float(f) => Ok(Value::String(format!("{:.prec$}", f, prec = decimals))),
+                Value::Integer(n) => Ok(Value::String(format!(
+                    "{:.prec$}",
+                    *n as f64,
+                    prec = decimals
+                ))),
+                _ => Ok(value.clone()),
+            }
+        }
         _ => Err(DjangoRustError::TemplateError(format!(
             "Unknown filter: {filter_name}"
         ))),
@@ -210,6 +312,49 @@ fn format_timesince(datetime_str: &str) -> Result<String> {
     Ok(formatted)
 }
 
+fn slugify(s: &str) -> String {
+    // Convert to lowercase and replace non-alphanumeric characters with hyphens
+    s.to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c
+            } else if c.is_whitespace() {
+                '-'
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        // Remove consecutive hyphens
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn linebreaks(s: &str) -> String {
+    // Convert double newlines to </p><p> and single newlines to <br>
+    // Similar to Django's linebreaks filter
+    let paragraphs: Vec<&str> = s.split("\n\n").collect();
+
+    let formatted_paragraphs: Vec<String> = paragraphs
+        .iter()
+        .filter(|p| !p.trim().is_empty())
+        .map(|p| {
+            let lines_with_br = p.split('\n').collect::<Vec<_>>().join("<br>");
+            format!("<p>{}</p>", lines_with_br)
+        })
+        .collect();
+
+    formatted_paragraphs.join("\n")
+}
+
+fn linebreaksbr(s: &str) -> String {
+    // Simply replace newlines with <br> tags
+    s.replace('\n', "<br>")
+}
+
 pub mod tags {
     // Placeholder for custom tags
 }
@@ -258,5 +403,100 @@ mod tests {
         let value = Value::String("hello world".to_string());
         let result = apply_filter("slice", &value, Some(":5")).unwrap();
         assert_eq!(result.to_string(), "hello");
+    }
+
+    #[test]
+    fn test_add_filter() {
+        let value = Value::Integer(5);
+        let result = apply_filter("add", &value, Some("3")).unwrap();
+        assert!(matches!(result, Value::Integer(8)));
+    }
+
+    #[test]
+    fn test_pluralize_filter() {
+        let value = Value::Integer(1);
+        let result = apply_filter("pluralize", &value, None).unwrap();
+        assert_eq!(result.to_string(), "");
+
+        let value = Value::Integer(2);
+        let result = apply_filter("pluralize", &value, None).unwrap();
+        assert_eq!(result.to_string(), "s");
+
+        let value = Value::Integer(0);
+        let result = apply_filter("pluralize", &value, Some("es")).unwrap();
+        assert_eq!(result.to_string(), "es");
+    }
+
+    #[test]
+    fn test_slugify_filter() {
+        let value = Value::String("Hello World Test!".to_string());
+        let result = apply_filter("slugify", &value, None).unwrap();
+        assert_eq!(result.to_string(), "hello-world-test");
+    }
+
+    #[test]
+    fn test_capfirst_filter() {
+        let value = Value::String("hello world".to_string());
+        let result = apply_filter("capfirst", &value, None).unwrap();
+        assert_eq!(result.to_string(), "Hello world");
+    }
+
+    #[test]
+    fn test_yesno_filter() {
+        let value = Value::Bool(true);
+        let result = apply_filter("yesno", &value, Some("yeah,nope,dunno")).unwrap();
+        assert_eq!(result.to_string(), "yeah");
+
+        let value = Value::Bool(false);
+        let result = apply_filter("yesno", &value, Some("yeah,nope,dunno")).unwrap();
+        assert_eq!(result.to_string(), "nope");
+
+        let value = Value::Null;
+        let result = apply_filter("yesno", &value, Some("yeah,nope,dunno")).unwrap();
+        assert_eq!(result.to_string(), "dunno");
+    }
+
+    #[test]
+    fn test_linebreaks_filter() {
+        let value = Value::String("Line 1\nLine 2\n\nParagraph 2".to_string());
+        let result = apply_filter("linebreaks", &value, None).unwrap();
+        assert!(result.to_string().contains("<p>"));
+        assert!(result.to_string().contains("<br>"));
+    }
+
+    #[test]
+    fn test_linebreaksbr_filter() {
+        let value = Value::String("Line 1\nLine 2\nLine 3".to_string());
+        let result = apply_filter("linebreaksbr", &value, None).unwrap();
+        assert_eq!(result.to_string(), "Line 1<br>Line 2<br>Line 3");
+    }
+
+    #[test]
+    fn test_cut_filter() {
+        let value = Value::String("hello world".to_string());
+        let result = apply_filter("cut", &value, Some(" ")).unwrap();
+        assert_eq!(result.to_string(), "helloworld");
+    }
+
+    #[test]
+    fn test_divisibleby_filter() {
+        let value = Value::Integer(10);
+        let result = apply_filter("divisibleby", &value, Some("2")).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+
+        let value = Value::Integer(10);
+        let result = apply_filter("divisibleby", &value, Some("3")).unwrap();
+        assert!(matches!(result, Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_floatformat_filter() {
+        let value = Value::Float(3.14159);
+        let result = apply_filter("floatformat", &value, Some("2")).unwrap();
+        assert_eq!(result.to_string(), "3.14");
+
+        let value = Value::Integer(42);
+        let result = apply_filter("floatformat", &value, Some("2")).unwrap();
+        assert_eq!(result.to_string(), "42.00");
     }
 }

@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Template Engine: 10 Essential Django Filters** (Issue #7)
+  - **Numeric filters**: `add`, `divisibleby`, `floatformat`
+  - **String filters**: `slugify`, `capfirst`, `cut`, `linebreaks`, `linebreaksbr`
+  - **Logic filters**: `pluralize`, `yesno`
+  - Total of 24 filters now supported (up from 14)
+  - 10 comprehensive unit tests for new filters
+  - Full Django compatibility for common template operations
+
 - **Template Engine: `reversed` filter for for loops** (Issue #48)
   - Added support for `{% for item in items reversed %}` syntax
   - Matches Django template engine behavior
