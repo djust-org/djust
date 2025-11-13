@@ -482,3 +482,7 @@ class LiveComponent(ABC):
         """
         if self._parent and hasattr(self._parent, "_trigger_update"):
             self._parent._trigger_update()
+
+    def __str__(self):
+        """Allow {{ component }} in templates and JSON serialization"""
+        return self.render()

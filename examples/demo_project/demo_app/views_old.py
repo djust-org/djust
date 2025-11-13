@@ -87,7 +87,7 @@ class IndexView(LiveView):
         context = super().get_context_data(**kwargs)
 
         # Create navbar with notification badge on Demos
-        context['navbar'] = NavbarComponent(
+        navbar = NavbarComponent(
             brand_name="",
             brand_logo="/static/images/djust.png",
             brand_href="/",
@@ -102,6 +102,8 @@ class IndexView(LiveView):
             fixed_top=True,
             logo_height=16,
         )
+        # Render the component to HTML before adding to context
+        context['navbar'] = navbar.render()
 
         # Pass notification count to template
         context['notification_count'] = self.notification_count
@@ -554,7 +556,7 @@ class ProductDataTableView(BaseViewWithNavbar):
                 <div class="header">
                     <h1>Product DataTable</h1>
                     <p class="text-muted">Hybrid LiveView + React DataTable Example</p>
-                    
+
                     <div class="stats">
                         <div class="stat-card">
                             <div class="stat-value" id="stat-total">{{ total_products }}</div>
@@ -966,7 +968,7 @@ class ProductDataTableView(BaseViewWithNavbar):
 
                 async function handleAction(action) {
                     console.log('[Client] Action:', action);
-                    
+
                     try {
                         const response = await fetch(window.location.href, {
                             method: 'POST',
@@ -983,7 +985,7 @@ class ProductDataTableView(BaseViewWithNavbar):
                         if (response.ok) {
                             const data = await response.json();
                             console.log('[Server] Response:', data);
-                            
+
                             // Update stats
                             if (data.stats) {
                                 document.getElementById('stat-total').textContent = data.stats.total_products;
@@ -991,7 +993,7 @@ class ProductDataTableView(BaseViewWithNavbar):
                                 document.getElementById('stat-value').textContent = '$' + data.stats.total_value;
                                 document.getElementById('stat-low-stock').textContent = data.stats.low_stock_count;
                             }
-                            
+
                             // Update React table data
                             if (data.products && reactSetData) {
                                 reactSetData(data.products);
@@ -1093,11 +1095,11 @@ class ProductDataTableView(BaseViewWithNavbar):
     def _generate_sample_products(self, count, start_id=1):
         """Generate sample product data"""
         import random
-        
+
         categories = ['Electronics', 'Clothing', 'Food', 'Books', 'Toys', 'Sports', 'Home & Garden']
         adjectives = ['Premium', 'Deluxe', 'Standard', 'Economy', 'Pro', 'Ultra', 'Mini', 'Max']
         nouns = ['Widget', 'Gadget', 'Device', 'Tool', 'Item', 'Product', 'Kit', 'Set']
-        
+
         products = []
         for i in range(count):
             product_id = start_id + i
@@ -1106,7 +1108,7 @@ class ProductDataTableView(BaseViewWithNavbar):
             price = round(random.uniform(9.99, 499.99), 2)
             stock = random.randint(0, 200)
             is_active = random.choice([True, True, True, False])  # 75% active
-            
+
             products.append({
                 'id': product_id,
                 'name': name,

@@ -60,6 +60,10 @@ class Component:
         self._rust_view.update_state(context)
         return self._rust_view.render()
 
+    def __str__(self) -> str:
+        """Allow {{ component }} in templates and JSON serialization"""
+        return self.render()
+
     def update(self):
         """Trigger a re-render (will notify parent if set)"""
         if self._parent:
@@ -384,6 +388,10 @@ class LiveComponent(Component):
         context = self.get_context_data()
         self._rust_view.update_state(context)
         return self._rust_view.render()
+
+    def __str__(self) -> str:
+        """Allow {{ component }} in templates and JSON serialization"""
+        return self.render()
 
     def __del__(self):
         """Destructor to ensure unmount is called."""
