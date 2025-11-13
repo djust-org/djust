@@ -328,7 +328,5 @@ class ComponentDemoView(LiveView):
     def get_context_data(self):
         """Get context data for template."""
         context = super().get_context_data()
-        # Reverse event_log so newest events appear first
-        if 'event_log' in context and context['event_log']:
-            context['event_log'] = list(reversed(context['event_log']))
+        # Event log is now reversed in the template using {% for entry in event_log reversed %}
         return context

@@ -47,6 +47,7 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
         Node::For {
             var_name,
             iterable,
+            reversed,
             nodes,
         } => {
             let iterable_value = context.get(iterable).cloned().unwrap_or(Value::Null);
@@ -56,7 +57,14 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
                     let mut output = String::new();
                     let mut ctx = context.clone();
 
-                    for item in items {
+                    // Create an iterator, reversing if needed
+                    let iter: Box<dyn Iterator<Item = Value>> = if *reversed {
+                        Box::new(items.into_iter().rev())
+                    } else {
+                        Box::new(items.into_iter())
+                    };
+
+                    for item in iter {
                         ctx.set(var_name.clone(), item);
                         output.push_str(&render_nodes(nodes, &ctx)?);
                     }
@@ -777,5 +785,57 @@ mod tests {
         );
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "abc");
+    }
+
+    #[test]
+    fn test_render_for_reversed() {
+        let tokens = tokenize("{% for item in items reversed %}{{ item }}{% endfor %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "items".to_string(),
+            Value::List(vec![
+                Value::String("a".to_string()),
+                Value::String("b".to_string()),
+                Value::String("c".to_string()),
+            ]),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "cba");
+    }
+
+    #[test]
+    fn test_render_for_reversed_numbers() {
+        let tokens = tokenize("{% for num in numbers reversed %}{{ num }},{% endfor %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "numbers".to_string(),
+            Value::List(vec![
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+            ]),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "3,2,1,");
+    }
+
+    #[test]
+    fn test_render_for_normal_not_affected() {
+        // Ensure normal for loops still work
+        let tokens = tokenize("{% for item in items %}{{ item }}{% endfor %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "items".to_string(),
+            Value::List(vec![
+                Value::String("x".to_string()),
+                Value::String("y".to_string()),
+                Value::String("z".to_string()),
+            ]),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "xyz");
     }
 }

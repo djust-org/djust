@@ -15,6 +15,7 @@ pub enum Node {
     For {
         var_name: String,
         iterable: String,
+        reversed: bool,
         nodes: Vec<Node>,
     },
     Block {
@@ -105,12 +106,24 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                         ));
                     }
                     let var_name = args[0].clone();
-                    let iterable = args[2..].join(" ");
+
+                    // Check if the last argument is "reversed"
+                    let mut iterable_parts: Vec<String> = args[2..].to_vec();
+                    let reversed = if iterable_parts.last().map(|s| s.as_str()) == Some("reversed")
+                    {
+                        iterable_parts.pop(); // Remove "reversed" from iterable
+                        true
+                    } else {
+                        false
+                    };
+
+                    let iterable = iterable_parts.join(" ");
                     let (nodes, end_pos) = parse_for_block(tokens, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::For {
                         var_name,
                         iterable,
+                        reversed,
                         nodes,
                     }))
                 }

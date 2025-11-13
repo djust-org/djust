@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Template Engine: `reversed` filter for for loops** (Issue #48)
+  - Added support for `{% for item in items reversed %}` syntax
+  - Matches Django template engine behavior
+  - Works with lists of any type (strings, numbers, objects)
+  - 3 new unit tests covering reversed iteration
+  - Removed workaround from component demo
+
 ## [0.6.0] - 2025-11-12
 
 This release delivers Phase 4: Component System, bringing production-ready stateful components with full lifecycle management and parent-child communication to djust.

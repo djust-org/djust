@@ -53,7 +53,7 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                {% for entry in event_log %}
+                                {% for entry in event_log reversed %}
                                 <tr>
                                     <td><code>{{ entry.component_id }}...</code></td>
                                     <td><span class="badge bg-info">{{ entry.event }}</span></td>
