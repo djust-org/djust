@@ -219,18 +219,24 @@ impl RustLiveViewBackend {
 
     /// Render the template (Rust API)
     pub fn render_rust(&mut self) -> Result<String, djust_core::DjangoRustError> {
-        self.render().map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))
+        self.render()
+            .map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))
     }
 
     /// Render with diff (Rust API)
     /// Returns (html, patches_json, version)
-    pub fn render_with_diff_rust(&mut self) -> Result<(String, Option<Vec<djust_vdom::Patch>>, u64), djust_core::DjangoRustError> {
-        let (html, patches_json, version) = self.render_with_diff()
+    pub fn render_with_diff_rust(
+        &mut self,
+    ) -> Result<(String, Option<Vec<djust_vdom::Patch>>, u64), djust_core::DjangoRustError> {
+        let (html, patches_json, version) = self
+            .render_with_diff()
             .map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))?;
 
         let patches = if let Some(json) = patches_json {
-            Some(serde_json::from_str(&json)
-                .map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))?)
+            Some(
+                serde_json::from_str(&json)
+                    .map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))?,
+            )
         } else {
             None
         };
@@ -455,8 +461,9 @@ impl SessionActorHandlePy {
 
                 // Add patches if available
                 if let Some(patches) = result.patches {
-                    let patches_json = serde_json::to_string(&patches)
-                        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+                    let patches_json = serde_json::to_string(&patches).map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+                    })?;
                     dict.set_item("patches", patches_json)?;
                 } else {
                     dict.set_item("patches", py.None())?;
@@ -556,7 +563,13 @@ impl SessionActorHandlePy {
 
         future_into_py(py, async move {
             let html = handle
-                .create_component(view_id, component_id, template_string, props_rust, python_component)
+                .create_component(
+                    view_id,
+                    component_id,
+                    template_string,
+                    props_rust,
+                    python_component,
+                )
                 .await
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
@@ -777,9 +790,9 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         return Ok(Value::String(s_str));
     }
 
-    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-        format!("Cannot convert Python type to Value"),
-    ))
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+        "Cannot convert Python type to Value"
+    )))
 }
 
 /// Python module

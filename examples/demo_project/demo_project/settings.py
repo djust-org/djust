@@ -128,5 +128,5 @@ LIVEVIEW_ALLOWED_MODULES = [
 
 # LiveView Configuration
 LIVEVIEW_CONFIG = {
-    'use_websocket': False,  # Use HTTP-only mode (disable WebSocket)
+    'use_websocket': True,  # Use HTTP-only mode (disable WebSocket)
 }

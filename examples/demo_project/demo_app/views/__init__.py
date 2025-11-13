@@ -67,9 +67,13 @@ from .offcanvas_demo import OffcanvasDemoView
 # Import component showcase
 from .component_showcase import ComponentShowcaseView
 
-# Import state management demos
+# Import state management demos (Phase 2)
 from .debounce_demo import DebounceSearchView
 from .throttle_demo import ThrottleScrollView
+
+# Import state management demos (Phase 3)
+from .optimistic_todo_demo import OptimisticTodoView
+from .optimistic_counter_demo import OptimisticCounterView
 
 # Import homepage demo views
 from .homepage import (
@@ -116,4 +120,6 @@ __all__ = [
     'HomeTodoDemo',
     'DebounceSearchView',
     'ThrottleScrollView',
+    'OptimisticTodoView',
+    'OptimisticCounterView',
 ]

@@ -220,7 +220,7 @@ class TestActorIntegration:
 
     @pytest.mark.asyncio
     async def test_actor_event_missing_handler(self):
-        """Test actor event with missing handler raises error"""
+        """Test actor event with missing handler is handled gracefully"""
         from djust._rust import create_session_actor
 
         class MinimalView:
@@ -232,11 +232,13 @@ class TestActorIntegration:
 
         await handle.mount("test.MinimalView", {}, view)
 
-        # Calling non-existent handler should raise error
-        with pytest.raises(Exception) as exc_info:
-            await handle.event("nonexistent_handler", {})
+        # Calling non-existent handler returns empty response (not exception)
+        result = await handle.event("nonexistent_handler", {})
 
-        assert "not found" in str(exc_info.value).lower() or "error" in str(exc_info.value).lower()
+        # Should return empty response on error
+        assert isinstance(result, dict)
+        assert result.get("patches") is None
+        assert result.get("html") == ""
 
         await handle.shutdown()
 
@@ -277,12 +279,13 @@ class TestActorIntegration:
 
         await handle.mount("test.BuggyView", {}, view)
 
-        # Python exception should be caught and converted to error
-        with pytest.raises(Exception) as exc_info:
-            await handle.event("broken_handler", {})
+        # Python exception should be caught and return empty response
+        result = await handle.event("broken_handler", {})
 
-        error_msg = str(exc_info.value).lower()
-        assert "error" in error_msg or "intentional" in error_msg
+        # Should return empty response on error
+        assert isinstance(result, dict)
+        assert result.get("patches") is None
+        assert result.get("html") == ""
 
         await handle.shutdown()
 
@@ -304,13 +307,13 @@ class TestActorIntegration:
 
         await handle.mount("test.InvalidView", {}, view)
 
-        # Should handle invalid context_data gracefully
-        with pytest.raises(Exception) as exc_info:
-            await handle.event("some_event", {})
+        # Should handle invalid context_data gracefully (return empty response)
+        result = await handle.event("some_event", {})
 
-        # Error should mention the problem
-        error_msg = str(exc_info.value).lower()
-        assert "error" in error_msg or "dict" in error_msg
+        # Should return empty response on error
+        assert isinstance(result, dict)
+        assert result.get("patches") is None
+        assert result.get("html") == ""
 
         await handle.shutdown()
 

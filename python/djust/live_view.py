@@ -1154,8 +1154,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                         # Skip read-only properties
                         pass
 
-            # Now call mount() to recreate component instances with restored state
-            self.mount(request, **kwargs)
+            # CRITICAL: Only call mount() if state was not restored from session
+            # If state exists in session, we've already restored it above
+            # Calling mount() would overwrite the restored state with initial values!
+            if not saved_state:
+                # No saved state - this is a new session, initialize with mount()
+                self.mount(request, **kwargs)
+            else:
+                # State restored from session - skip mount() to preserve state
+                # Components will be recreated with _assign_component_ids() below
+                pass
 
             # Automatically assign deterministic IDs to components based on variable names
             self._assign_component_ids()
@@ -1200,14 +1208,14 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 patches = json_module.loads(patches_json)
                 patch_count = len(patches)
 
-                # If patches are reasonable size, send ONLY patches (efficient!)
+                # If patches are reasonable size AND non-empty, send ONLY patches
                 # Otherwise send full HTML for efficiency
-                if patch_count <= PATCH_THRESHOLD:
+                if patch_count > 0 and patch_count <= PATCH_THRESHOLD:
                     # Send only patches - client will apply them
                     # If patches fail on client, it should reload the page
-                    return JsonResponse({"patches": patches_json, "version": version})
+                    return JsonResponse({"patches": patches, "version": version})
                 else:
-                    # Too many patches - send full HTML instead
+                    # Empty patches or too many patches - send full HTML instead
                     # Reset VDOM cache since we're sending full HTML
                     # This ensures next patches are calculated from the browser's normalized DOM
                     self._rust_view.reset()
@@ -1366,6 +1374,32 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     this.ws.onclose = (event) => {
                         console.log('[LiveView] WebSocket disconnected');
                         this.viewMounted = false;
+
+                        // Clear all decorator state on disconnect
+                        // Phase 2: Debounce timers
+                        debounceTimers.forEach(state => {
+                            if (state.timerId) {
+                                clearTimeout(state.timerId);
+                            }
+                        });
+                        debounceTimers.clear();
+
+                        // Phase 2: Throttle timers
+                        throttleState.forEach(state => {
+                            if (state.timeoutId) {
+                                clearTimeout(state.timeoutId);
+                            }
+                        });
+                        throttleState.clear();
+
+                        // Phase 3: Optimistic updates
+                        optimisticUpdates.clear();
+                        pendingEvents.clear();
+
+                        // Remove loading indicators from DOM
+                        document.querySelectorAll('.optimistic-pending').forEach(el => {
+                            el.classList.remove('optimistic-pending');
+                        });
 
                         if (this.reconnectAttempts < this.maxReconnectAttempts) {
                             this.reconnectAttempts++;
@@ -1649,6 +1683,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             // Track VDOM version for synchronization
             let clientVdomVersion = null;
 
+            // State management for decorators
+            const debounceTimers = new Map(); // Map<handlerName, {timerId, firstCallTime}>
+            const throttleState = new Map();  // Map<handlerName, {lastCall, timeoutId, pendingData}>
+            const optimisticUpdates = new Map(); // Map<eventName, {element, originalState}>
+            const pendingEvents = new Set(); // Set<eventName> (for loading indicators)
+
             // Client-side React Counter component (vanilla JS implementation)
             function initReactCounters() {
                 document.querySelectorAll('[data-react-component="Counter"]').forEach(container => {
@@ -1712,6 +1752,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                                 }
                             });
 
+                            // Pass target element for optimistic updates (Phase 3)
+                            params._targetElement = e.currentTarget;
+
                             await handleEvent(clickHandler, params);
                         });
                     }
@@ -1724,6 +1767,10 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                             e.preventDefault();
                             const formData = new FormData(e.target);
                             const params = Object.fromEntries(formData.entries());
+
+                            // Pass target element for optimistic updates (Phase 3)
+                            params._targetElement = e.target;
+
                             await handleEvent(submitHandler, params);
                             e.target.reset();
                         });
@@ -1752,8 +1799,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                         element.addEventListener('change', async (e) => {
                             const params = {};
 
-                            // For checkboxes, send the checked state
-                            if (e.target.type === 'checkbox') {
+                            // For checkboxes/radios, send the checked state
+                            if (e.target.type === 'checkbox' || e.target.type === 'radio') {
+                                params.checked = e.target.checked;
                                 params.value = e.target.checked;
                             } else {
                                 // For other inputs, send the value
@@ -1774,6 +1822,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                             if (fieldName) {
                                 params.field_name = fieldName;
                             }
+
+                            // Pass target element for optimistic updates (Phase 3)
+                            params._targetElement = e.target;
 
                             await handleEvent(changeHandler, params);
                         });
@@ -1810,6 +1861,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                             if (fieldName) {
                                 params.field_name = fieldName;
                             }
+
+                            // Pass target element for optimistic updates (Phase 3)
+                            params._targetElement = e.target;
 
                             await handleEvent(inputHandler, params);
                         };
@@ -2031,14 +2085,14 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             }
 
             function applyPatches(patches) {
-                const parsedPatches = JSON.parse(patches);
+                // patches is already a JavaScript array (parsed by response.json())
                 if (window.DJUST_DEBUG_VDOM) {
-                    console.log('[LiveView] Applying', parsedPatches.length, 'patches');
+                    console.log('[LiveView] Applying', patches.length, 'patches');
                 }
 
                 // Sort patches to ensure RemoveChild operations are applied in descending index order
                 // within the same path. This prevents index invalidation when removing multiple children.
-                parsedPatches.sort((a, b) => {
+                patches.sort((a, b) => {
                     // RemoveChild patches should come before other types at the same path
                     if (a.type === 'RemoveChild' && b.type === 'RemoveChild') {
                         // Same path? Sort by index descending (higher indices first)
@@ -2052,16 +2106,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 });
 
                 // Debug: log patch types for small patch sets
-                if (window.DJUST_DEBUG_VDOM && parsedPatches.length > 0 && parsedPatches.length <= 20) {
-                    console.log('[LiveView] Patch count:', parsedPatches.length);
-                    for (let i = 0; i < Math.min(5, parsedPatches.length); i++) {
-                        console.log('  Patch', i, ':', parsedPatches[i].type, 'at', parsedPatches[i].path);
+                if (window.DJUST_DEBUG_VDOM && patches.length > 0 && patches.length <= 20) {
+                    console.log('[LiveView] Patch count:', patches.length);
+                    for (let i = 0; i < Math.min(5, patches.length); i++) {
+                        console.log('  Patch', i, ':', patches[i].type, 'at', patches[i].path);
                     }
                 }
 
                 let failedCount = 0;
                 let successCount = 0;
-                for (const patch of parsedPatches) {
+                for (const patch of patches) {
                     const node = getNodeByPath(patch.path);
                     if (!node) {
                         failedCount++;
@@ -2309,8 +2363,325 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 }
             }
 
+            // ============================================================================
+            // Decorator Functions (Phase 2: Debounce/Throttle, Phase 3: Optimistic)
+            // ============================================================================
+
+            /**
+             * Debounce an event - delay until user stops triggering events
+             */
+            function debounceEvent(eventName, eventData, config) {
+                const { wait, max_wait } = config;
+                const now = Date.now();
+
+                // Get or create state
+                let state = debounceTimers.get(eventName);
+                if (!state) {
+                    state = { timerId: null, firstCallTime: now };
+                    debounceTimers.set(eventName, state);
+                }
+
+                // Clear existing timer
+                if (state.timerId) {
+                    clearTimeout(state.timerId);
+                }
+
+                // Check if we've exceeded max_wait
+                if (max_wait && (now - state.firstCallTime) >= (max_wait * 1000)) {
+                    // Force execution - max wait exceeded
+                    sendEventImmediate(eventName, eventData);
+                    debounceTimers.delete(eventName);
+                    if (window.djustDebug) {
+                        console.log(`[LiveView:debounce] Force executing ${eventName} (max_wait exceeded)`);
+                    }
+                    return;
+                }
+
+                // Set new timer
+                state.timerId = setTimeout(() => {
+                    sendEventImmediate(eventName, eventData);
+                    debounceTimers.delete(eventName);
+                    if (window.djustDebug) {
+                        console.log(`[LiveView:debounce] Executing ${eventName} after ${wait}s wait`);
+                    }
+                }, wait * 1000);
+
+                if (window.djustDebug) {
+                    console.log(`[LiveView:debounce] Debouncing ${eventName} (wait: ${wait}s, max_wait: ${max_wait || 'none'})`);
+                }
+            }
+
+            /**
+             * Throttle an event - limit execution frequency
+             */
+            function throttleEvent(eventName, eventData, config) {
+                const { interval, leading, trailing } = config;
+                const now = Date.now();
+
+                if (!throttleState.has(eventName)) {
+                    // First call - execute immediately if leading=true
+                    if (leading) {
+                        sendEventImmediate(eventName, eventData);
+                        if (window.djustDebug) {
+                            console.log(`[LiveView:throttle] Executing ${eventName} (leading edge)`);
+                        }
+                    }
+
+                    // Set up state
+                    const state = {
+                        lastCall: leading ? now : 0,
+                        timeoutId: null,
+                        pendingData: null
+                    };
+
+                    throttleState.set(eventName, state);
+
+                    // Schedule trailing call if needed
+                    if (trailing && !leading) {
+                        state.pendingData = eventData;
+                        state.timeoutId = setTimeout(() => {
+                            sendEventImmediate(eventName, state.pendingData);
+                            throttleState.delete(eventName);
+                            if (window.djustDebug) {
+                                console.log(`[LiveView:throttle] Executing ${eventName} (trailing edge - no leading)`);
+                            }
+                        }, interval * 1000);
+                    }
+
+                    return;
+                }
+
+                const state = throttleState.get(eventName);
+                const elapsed = now - state.lastCall;
+
+                if (elapsed >= (interval * 1000)) {
+                    // Enough time has passed - execute now
+                    sendEventImmediate(eventName, eventData);
+                    state.lastCall = now;
+                    state.pendingData = null;
+
+                    // Clear any pending trailing call
+                    if (state.timeoutId) {
+                        clearTimeout(state.timeoutId);
+                        state.timeoutId = null;
+                    }
+
+                    if (window.djustDebug) {
+                        console.log(`[LiveView:throttle] Executing ${eventName} (interval elapsed: ${elapsed}ms)`);
+                    }
+                } else if (trailing) {
+                    // Update pending data and reschedule trailing call
+                    state.pendingData = eventData;
+
+                    if (state.timeoutId) {
+                        clearTimeout(state.timeoutId);
+                    }
+
+                    const remaining = (interval * 1000) - elapsed;
+                    state.timeoutId = setTimeout(() => {
+                        if (state.pendingData) {
+                            sendEventImmediate(eventName, state.pendingData);
+                            if (window.djustDebug) {
+                                console.log(`[LiveView:throttle] Executing ${eventName} (trailing edge)`);
+                            }
+                        }
+                        throttleState.delete(eventName);
+                    }, remaining);
+
+                    if (window.djustDebug) {
+                        console.log(`[LiveView:throttle] Throttled ${eventName} (${remaining}ms until trailing)`);
+                    }
+                } else {
+                    if (window.djustDebug) {
+                        console.log(`[LiveView:throttle] Dropped ${eventName} (within interval, no trailing)`);
+                    }
+                }
+            }
+
+            /**
+             * Send event immediately (bypassing decorators)
+             */
+            async function sendEventImmediate(eventName, params) {
+                // This function delegates to the main handleEvent flow
+                // We mark it as immediate to skip decorator checks
+                params._skipDecorators = true;
+                await handleEvent(eventName, params);
+            }
+
+            /**
+             * Apply optimistic DOM updates before server validation
+             */
+            function applyOptimisticUpdate(eventName, params, targetElement) {
+                if (!targetElement) {
+                    return;
+                }
+
+                // Save original state before update
+                saveOptimisticState(eventName, targetElement);
+
+                // Apply update based on element type
+                if (targetElement.type === 'checkbox' || targetElement.type === 'radio') {
+                    optimisticToggle(targetElement, params);
+                } else if (targetElement.tagName === 'INPUT' || targetElement.tagName === 'TEXTAREA') {
+                    optimisticInputUpdate(targetElement, params);
+                } else if (targetElement.tagName === 'SELECT') {
+                    optimisticSelectUpdate(targetElement, params);
+                } else if (targetElement.tagName === 'BUTTON') {
+                    optimisticButtonUpdate(targetElement, params);
+                }
+
+                // Add loading indicator
+                targetElement.classList.add('optimistic-pending');
+                pendingEvents.add(eventName);
+
+                if (window.djustDebug) {
+                    console.log('[LiveView:optimistic] Applied optimistic update:', eventName);
+                }
+            }
+
+            function saveOptimisticState(eventName, element) {
+                const originalState = {};
+
+                if (element.type === 'checkbox' || element.type === 'radio') {
+                    originalState.checked = element.checked;
+                }
+                if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.tagName === 'SELECT') {
+                    originalState.value = element.value;
+                }
+                if (element.tagName === 'BUTTON') {
+                    originalState.disabled = element.disabled;
+                    originalState.text = element.textContent;
+                }
+
+                optimisticUpdates.set(eventName, {
+                    element: element,
+                    originalState: originalState
+                });
+            }
+
+            function clearOptimisticState(eventName) {
+                if (optimisticUpdates.has(eventName)) {
+                    const { element, originalState } = optimisticUpdates.get(eventName);
+
+                    // Remove loading indicator
+                    element.classList.remove('optimistic-pending');
+
+                    // Restore original button state (if button)
+                    if (element.tagName === 'BUTTON') {
+                        if (originalState.disabled !== undefined) {
+                            element.disabled = originalState.disabled;
+                        }
+                        if (originalState.text !== undefined) {
+                            element.textContent = originalState.text;
+                        }
+                    }
+
+                    optimisticUpdates.delete(eventName);
+                }
+                pendingEvents.delete(eventName);
+            }
+
+            function revertOptimisticUpdate(eventName) {
+                if (!optimisticUpdates.has(eventName)) {
+                    return;
+                }
+
+                const { element, originalState } = optimisticUpdates.get(eventName);
+
+                // Restore original state
+                if (originalState.checked !== undefined) {
+                    element.checked = originalState.checked;
+                }
+                if (originalState.value !== undefined) {
+                    element.value = originalState.value;
+                }
+                if (originalState.disabled !== undefined) {
+                    element.disabled = originalState.disabled;
+                }
+                if (originalState.text !== undefined) {
+                    element.textContent = originalState.text;
+                }
+
+                // Add error indicator
+                element.classList.remove('optimistic-pending');
+                element.classList.add('optimistic-error');
+                setTimeout(() => element.classList.remove('optimistic-error'), 2000);
+
+                clearOptimisticState(eventName);
+
+                if (window.djustDebug) {
+                    console.log('[LiveView:optimistic] Reverted optimistic update:', eventName);
+                }
+            }
+
+            function optimisticToggle(element, params) {
+                if (params.checked !== undefined) {
+                    element.checked = params.checked;
+                } else {
+                    element.checked = !element.checked;
+                }
+            }
+
+            function optimisticInputUpdate(element, params) {
+                if (params.value !== undefined) {
+                    element.value = params.value;
+                }
+            }
+
+            function optimisticSelectUpdate(element, params) {
+                if (params.value !== undefined) {
+                    element.value = params.value;
+                }
+            }
+
+            function optimisticButtonUpdate(element, params) {
+                element.disabled = true;
+                if (element.hasAttribute('data-loading-text')) {
+                    element.textContent = element.getAttribute('data-loading-text');
+                }
+            }
+
+            // ============================================================================
+            // Event Handling
+            // ============================================================================
+
             async function handleEvent(eventName, params) {
                 console.log('[LiveView] Event:', eventName, params);
+
+                // Skip decorator checks if this is an immediate send (from decorator)
+                if (!params._skipDecorators) {
+                    // Check for handler metadata (decorators)
+                    const metadata = window.handlerMetadata?.[eventName];
+
+                    // Warn if multiple decorators present (ambiguous behavior)
+                    if (metadata?.debounce && metadata?.throttle) {
+                        console.warn(
+                            `[LiveView] Handler '${eventName}' has both @debounce and @throttle decorators. ` +
+                            `Applying @debounce only. Use one decorator per handler.`
+                        );
+                    }
+
+                    // Apply optimistic update FIRST (Phase 3)
+                    // This happens immediately, regardless of debounce/throttle
+                    if (metadata?.optimistic && params._targetElement) {
+                        applyOptimisticUpdate(eventName, params, params._targetElement);
+                    }
+
+                    // Apply debounce if configured (Phase 2)
+                    if (metadata?.debounce) {
+                        debounceEvent(eventName, params, metadata.debounce);
+                        return; // Don't send immediately
+                    }
+
+                    // Apply throttle if configured (Phase 2)
+                    if (metadata?.throttle) {
+                        throttleEvent(eventName, params, metadata.throttle);
+                        return; // Don't send immediately
+                    }
+                }
+
+                // Remove internal flags before sending
+                delete params._skipDecorators;
 
                 // Try WebSocket first
                 if (liveViewWS && liveViewWS.sendEvent(eventName, params)) {
@@ -2348,6 +2719,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                                 console.warn(`  Client expected version ${clientVdomVersion + 1}, but server is at ${data.version}`);
                                 console.warn('  Clearing client VDOM cache and using full HTML');
 
+                                // Clear optimistic state before full reload
+                                clearOptimisticState(eventName);
+
                                 // Force full HTML reload to resync
                                 if (data.html) {
                                     const parser = new DOMParser();
@@ -2366,8 +2740,13 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                             clientVdomVersion = data.version;
                         }
 
-                        if (data.patches) {
+                        // Clear optimistic state BEFORE applying patches (Phase 3)
+                        // This restores button state before DOM is modified
+                        clearOptimisticState(eventName);
+
+                        if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
                             // Try to apply DOM patches (efficient!)
+                            console.log('[LiveView] Applying', data.patches.length, 'patches');
                             const success = applyPatches(data.patches);
                             if (success === false) {
                                 // Patches failed - reload the page to get fresh state
@@ -2375,21 +2754,26 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                                 window.location.reload();
                                 return;
                             }
+                            console.log('[LiveView] Patches applied successfully');
                             // Re-bind event handlers to new/modified elements
                             initReactCounters();
                             initTodoItems();
                             bindLiveViewEvents();
                         } else if (data.html) {
                             // Server sent full HTML (no patches available)
+                            console.log('[LiveView] Applying HTML update (length:', data.html.length, 'chars)');
                             const parser = new DOMParser();
                             const doc = parser.parseFromString(data.html, 'text/html');
                             const liveviewRoot = getLiveViewRoot();
                             const newRoot = doc.querySelector('[data-liveview-root]') || doc.body;
                             liveviewRoot.innerHTML = newRoot.innerHTML;
+                            console.log('[LiveView] HTML update applied');
                             // Re-bind event handlers to new elements
                             initReactCounters();
                             initTodoItems();
                             bindLiveViewEvents();
+                        } else {
+                            console.warn('[LiveView] Response has neither patches nor html!', data);
                         }
                     } else {
                         // Handle HTTP errors (500, 404, etc.)
@@ -2401,11 +2785,18 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                             error: errorData
                         });
 
+                        // Revert optimistic update on error (Phase 3)
+                        revertOptimisticUpdate(eventName);
+
                         // Show user-friendly error notification
                         showErrorNotification(errorData, response.status);
                     }
                 } catch (error) {
                     console.error('[LiveView] Network Error:', error);
+
+                    // Revert optimistic update on network error (Phase 3)
+                    revertOptimisticUpdate(eventName);
+
                     showErrorNotification({ error: 'Network error occurred. Please check your connection.' }, 0);
                 }
             }
@@ -2531,8 +2922,57 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 });
             }
 
+            // Inject CSS styles for optimistic updates (Phase 3)
+            function injectOptimisticStyles() {
+                if (document.getElementById('djust-optimistic-styles')) {
+                    return; // Already injected
+                }
+
+                const styles = `
+                    /* Optimistic update loading indicators */
+                    .optimistic-pending {
+                        opacity: 0.6;
+                        cursor: wait !important;
+                        position: relative;
+                    }
+
+                    .optimistic-pending::after {
+                        content: '';
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        background: rgba(255, 255, 255, 0.1);
+                        pointer-events: none;
+                    }
+
+                    .optimistic-error {
+                        animation: djust-shake 0.5s;
+                        border-color: #dc3545 !important;
+                    }
+
+                    @keyframes djust-shake {
+                        0%, 100% { transform: translateX(0); }
+                        25% { transform: translateX(-5px); }
+                        75% { transform: translateX(5px); }
+                    }
+                `;
+
+                const styleElement = document.createElement('style');
+                styleElement.id = 'djust-optimistic-styles';
+                styleElement.textContent = styles;
+                document.head.appendChild(styleElement);
+            }
+
             document.addEventListener('DOMContentLoaded', function() {
                 console.log('[LiveView] Initialized with Rust-powered rendering');
+
+                // Expose handleEvent globally for custom scripts (e.g., throttle/debounce demos)
+                window.djustHandleEvent = handleEvent;
+
+                // Inject optimistic update CSS (Phase 3)
+                injectOptimisticStyles();
 
                 // Check if WebSocket is enabled (can be disabled via config)
                 const useWebSocket = window.DJUST_USE_WEBSOCKET !== false;

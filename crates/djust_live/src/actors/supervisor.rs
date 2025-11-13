@@ -16,7 +16,7 @@ use tracing::{debug, info, warn};
 /// Session metadata tracked by supervisor
 struct SessionInfo {
     handle: SessionActorHandle,
-    created_at: Instant,
+    _created_at: Instant, // Reserved for metrics/monitoring
     last_activity: Instant,
 }
 
@@ -115,7 +115,7 @@ impl ActorSupervisor {
             session_id.clone(),
             SessionInfo {
                 handle: handle.clone(),
-                created_at: now,
+                _created_at: now,
                 last_activity: now,
             },
         );
@@ -223,8 +223,7 @@ impl ActorSupervisor {
                 let handle = entry.value().handle.clone();
 
                 // Ping with timeout
-                let result =
-                    tokio::time::timeout(Duration::from_secs(5), handle.ping()).await;
+                let result = tokio::time::timeout(Duration::from_secs(5), handle.ping()).await;
 
                 if result.is_err() || result.unwrap().is_err() {
                     warn!(

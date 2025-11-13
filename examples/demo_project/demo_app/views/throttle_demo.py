@@ -110,21 +110,24 @@ class ThrottleScrollView(LiveView):
 
         <!-- Scroll Event Handler -->
         <script>
-            // Wait for LiveView to be ready
-            window.addEventListener('load', function() {
-                // Get the LiveView instance
-                const liveView = window.liveView;
+            // Wait for djust to be ready
+            document.addEventListener('DOMContentLoaded', function() {
+                // Wait a tick for djust initialization
+                setTimeout(function() {
+                    // Attach scroll listener
+                    window.addEventListener('scroll', function() {
+                        const scrollY = Math.round(window.scrollY);
+                        // Call djustHandleEvent which is exposed by the embedded JS
+                        if (window.djustHandleEvent) {
+                            window.djustHandleEvent('on_scroll', { scroll_y: scrollY });
+                        } else {
+                            console.warn('[Throttle Demo] window.djustHandleEvent not available yet');
+                        }
+                    });
 
-                // Attach scroll listener
-                window.addEventListener('scroll', function() {
-                    const scrollY = Math.round(window.scrollY);
-                    if (liveView && liveView.sendEvent) {
-                        liveView.sendEvent('on_scroll', { scroll_y: scrollY });
-                    }
-                });
-
-                console.log('[Throttle Demo] Scroll listener attached');
-                console.log('[Throttle Demo] Try: window.djustDebug = true');
+                    console.log('[Throttle Demo] Scroll listener attached');
+                    console.log('[Throttle Demo] Try: window.djustDebug = true');
+                }, 100);
             });
         </script>
     </body>

@@ -6,7 +6,7 @@ event handlers, reactive state, and computed properties.
 """
 
 import functools
-from typing import Callable, Any, TypeVar, cast, Dict, List, Optional, Union
+from typing import Callable, Any, TypeVar, cast, List, Optional
 
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -198,12 +198,12 @@ def debounce(wait: float = 0.3, max_wait: Optional[float] = None) -> Callable[[F
             return func(*args, **kwargs)
 
         # New standardized format
-        if not hasattr(wrapper, '_djust_decorators'):
+        if not hasattr(wrapper, "_djust_decorators"):
             wrapper._djust_decorators = {}  # type: ignore
 
-        wrapper._djust_decorators['debounce'] = {  # type: ignore
-            'wait': wait,
-            'max_wait': max_wait
+        wrapper._djust_decorators["debounce"] = {  # type: ignore
+            "wait": wait,
+            "max_wait": max_wait,
         }
 
         # Backward compatibility (will be removed in future version)
@@ -215,7 +215,9 @@ def debounce(wait: float = 0.3, max_wait: Optional[float] = None) -> Callable[[F
     return decorator
 
 
-def throttle(interval: float = 0.1, leading: bool = True, trailing: bool = True) -> Callable[[F], F]:
+def throttle(
+    interval: float = 0.1, leading: bool = True, trailing: bool = True
+) -> Callable[[F], F]:
     """
     Throttle event handler calls on the client side.
 
@@ -249,13 +251,13 @@ def throttle(interval: float = 0.1, leading: bool = True, trailing: bool = True)
             return func(*args, **kwargs)
 
         # New standardized format
-        if not hasattr(wrapper, '_djust_decorators'):
+        if not hasattr(wrapper, "_djust_decorators"):
             wrapper._djust_decorators = {}  # type: ignore
 
-        wrapper._djust_decorators['throttle'] = {  # type: ignore
-            'interval': interval,
-            'leading': leading,
-            'trailing': trailing
+        wrapper._djust_decorators["throttle"] = {  # type: ignore
+            "interval": interval,
+            "leading": leading,
+            "trailing": trailing,
         }
 
         # Backward compatibility (will be removed in future version)
@@ -293,14 +295,15 @@ def optimistic(func: F) -> F:
     Returns:
         Decorated function with optimistic metadata
     """
+
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         return func(*args, **kwargs)
 
-    if not hasattr(wrapper, '_djust_decorators'):
+    if not hasattr(wrapper, "_djust_decorators"):
         wrapper._djust_decorators = {}  # type: ignore
 
-    wrapper._djust_decorators['optimistic'] = True  # type: ignore
+    wrapper._djust_decorators["optimistic"] = True  # type: ignore
 
     return cast(F, wrapper)
 
@@ -330,17 +333,18 @@ def cache(ttl: int = 60, key_params: Optional[List[str]] = None) -> Callable[[F]
     Returns:
         Decorator function
     """
+
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             return func(*args, **kwargs)
 
-        if not hasattr(wrapper, '_djust_decorators'):
+        if not hasattr(wrapper, "_djust_decorators"):
             wrapper._djust_decorators = {}  # type: ignore
 
-        wrapper._djust_decorators['cache'] = {  # type: ignore
-            'ttl': ttl,
-            'key_params': key_params or []
+        wrapper._djust_decorators["cache"] = {  # type: ignore
+            "ttl": ttl,
+            "key_params": key_params or [],
         }
 
         return cast(F, wrapper)
@@ -382,16 +386,17 @@ def client_state(keys: List[str]) -> Callable[[F], F]:
     Returns:
         Decorator function
     """
+
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             return func(*args, **kwargs)
 
-        if not hasattr(wrapper, '_djust_decorators'):
+        if not hasattr(wrapper, "_djust_decorators"):
             wrapper._djust_decorators = {}  # type: ignore
 
-        wrapper._djust_decorators['client_state'] = {  # type: ignore
-            'keys': keys
+        wrapper._djust_decorators["client_state"] = {  # type: ignore
+            "keys": keys
         }
 
         return cast(F, wrapper)

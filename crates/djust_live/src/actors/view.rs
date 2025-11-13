@@ -77,7 +77,7 @@ impl ViewActor {
             receiver: rx,
             sender: tx.clone(), // Phase 8.2: Store sender for creating child component handles
             backend,
-            python_view: None, // Phase 5: Set via SetPythonView message
+            python_view: None,           // Phase 5: Set via SetPythonView message
             components: IndexMap::new(), // Phase 8: Child components
         };
 
@@ -148,8 +148,14 @@ impl ViewActor {
                         component_id = %component_id,
                         "CreateComponent"
                     );
-                    self.handle_create_component(component_id, template_string, initial_props, python_component, reply)
-                        .await;
+                    self.handle_create_component(
+                        component_id,
+                        template_string,
+                        initial_props,
+                        python_component,
+                        reply,
+                    )
+                    .await;
                 }
 
                 ViewMsg::ComponentEvent {
@@ -421,7 +427,10 @@ impl ViewActor {
                 })?;
 
                 let rust_value = Value::extract_bound(&value).map_err(|e| {
-                    ActorError::Python(format!("Failed to convert value for key '{}': {}", key_str, e))
+                    ActorError::Python(format!(
+                        "Failed to convert value for key '{}': {}",
+                        key_str, e
+                    ))
                 })?;
 
                 state.insert(key_str, rust_value);
@@ -614,11 +623,9 @@ impl ViewActor {
                     }
 
                     // Call handler(component_id, event_name, data)
-                    if let Err(e) = handler.call1((
-                        component_id.clone(),
-                        event_name.clone(),
-                        data_dict,
-                    )) {
+                    if let Err(e) =
+                        handler.call1((component_id.clone(), event_name.clone(), data_dict))
+                    {
                         warn!(
                             view_path = %self.view_path,
                             component_id = %component_id,
@@ -659,17 +666,11 @@ impl ViewActorHandle {
     /// # Errors
     ///
     /// Returns `ActorError::Shutdown` if the actor has been shutdown.
-    pub async fn update_state(
-        &self,
-        updates: HashMap<String, Value>,
-    ) -> Result<(), ActorError> {
+    pub async fn update_state(&self, updates: HashMap<String, Value>) -> Result<(), ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         self.sender
-            .send(ViewMsg::UpdateState {
-                updates,
-                reply: tx,
-            })
+            .send(ViewMsg::UpdateState { updates, reply: tx })
             .await
             .map_err(|_| ActorError::Shutdown)?;
 

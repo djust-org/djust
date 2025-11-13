@@ -60,7 +60,7 @@ pub struct ComponentActor {
     /// Unique identifier for this component
     component_id: String,
     /// Template string for rendering
-    template_string: String,
+    _template_string: String, // Reserved for future use
     /// Parsed template (cached)
     template: Arc<Template>,
     /// Current component state/props
@@ -117,7 +117,7 @@ impl ComponentActor {
 
         let actor = ComponentActor {
             component_id: component_id.clone(),
-            template_string,
+            _template_string: template_string,
             template: Arc::new(template),
             state: initial_props,
             last_vdom: None,
@@ -349,7 +349,10 @@ impl ComponentActor {
                 })?;
 
                 let rust_value = Value::extract_bound(&value).map_err(|e| {
-                    ActorError::Python(format!("Failed to convert value for key '{}': {}", key_str, e))
+                    ActorError::Python(format!(
+                        "Failed to convert value for key '{}': {}",
+                        key_str, e
+                    ))
                 })?;
 
                 state.insert(key_str, rust_value);
@@ -397,10 +400,7 @@ impl ComponentActor {
 
 impl ComponentActorHandle {
     /// Update component props
-    pub async fn update_props(
-        &self,
-        props: HashMap<String, Value>,
-    ) -> Result<String, ActorError> {
+    pub async fn update_props(&self, props: HashMap<String, Value>) -> Result<String, ActorError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         self.sender
@@ -451,7 +451,10 @@ impl ComponentActorHandle {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         self.sender
-            .send(ComponentMsg::SetPythonComponent { component, reply: tx })
+            .send(ComponentMsg::SetPythonComponent {
+                component,
+                reply: tx,
+            })
             .await
             .map_err(|_| ActorError::Shutdown)?;
 
@@ -504,7 +507,8 @@ mod tests {
         let mut props = HashMap::new();
         props.insert("message".to_string(), Value::String("Hello".to_string()));
 
-        let (actor, handle) = ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
+        let (actor, handle) =
+            ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
         tokio::spawn(actor.run());
 
         let html = handle.render().await.unwrap();
@@ -519,7 +523,8 @@ mod tests {
         let mut props = HashMap::new();
         props.insert("message".to_string(), Value::String("Hello".to_string()));
 
-        let (actor, handle) = ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
+        let (actor, handle) =
+            ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
         tokio::spawn(actor.run());
 
         // Initial render
@@ -541,7 +546,8 @@ mod tests {
         let mut props = HashMap::new();
         props.insert("count".to_string(), Value::Integer(0));
 
-        let (actor, handle) = ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
+        let (actor, handle) =
+            ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
         tokio::spawn(actor.run());
 
         // Trigger event (simplified - just updates state)
@@ -558,7 +564,8 @@ mod tests {
         let template = "<div>{{ message }}</div>".to_string();
         let props = HashMap::new();
 
-        let (actor, handle) = ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
+        let (actor, handle) =
+            ComponentActor::new("test-comp".to_string(), template, props, None).unwrap();
         tokio::spawn(actor.run());
 
         // Should not panic or block

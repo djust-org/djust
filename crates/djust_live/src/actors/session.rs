@@ -139,7 +139,13 @@ impl SessionActor {
                         "Handling CreateComponent"
                     );
                     let result = self
-                        .handle_create_component(view_id, component_id, template_string, initial_props, python_component)
+                        .handle_create_component(
+                            view_id,
+                            component_id,
+                            template_string,
+                            initial_props,
+                            python_component,
+                        )
                         .await;
                     let _ = reply.send(result);
                 }
@@ -336,7 +342,12 @@ impl SessionActor {
             .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {}", view_id)))?;
 
         view_handle
-            .create_component(component_id, template_string, initial_props, python_component)
+            .create_component(
+                component_id,
+                template_string,
+                initial_props,
+                python_component,
+            )
             .await
     }
 
@@ -370,7 +381,9 @@ impl SessionActor {
             .get(&view_id)
             .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {}", view_id)))?;
 
-        view_handle.update_component_props(component_id, props).await
+        view_handle
+            .update_component_props(component_id, props)
+            .await
     }
 
     /// Handle remove component request (Phase 8)
@@ -498,10 +511,7 @@ impl SessionActorHandle {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         self.sender
-            .send(SessionMsg::Unmount {
-                view_id,
-                reply: tx,
-            })
+            .send(SessionMsg::Unmount { view_id, reply: tx })
             .await
             .map_err(|_| ActorError::Shutdown)?;
 
@@ -733,13 +743,15 @@ mod tests {
         let (actor, handle) = SessionActor::new("test-session".to_string());
         tokio::spawn(actor.run());
 
-        let result = handle.mount("test.view".to_string(), HashMap::new(), None).await;
+        let result = handle
+            .mount("test.view".to_string(), HashMap::new(), None)
+            .await;
 
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.session_id, "test-session");
         assert!(!response.view_id.is_empty()); // Phase 6: view_id is now returned
-        // HTML will be empty since we have no template loaded
+                                               // HTML will be empty since we have no template loaded
         assert!(response.html.is_empty() || !response.html.is_empty());
 
         handle.shutdown().await;
@@ -751,7 +763,9 @@ mod tests {
         tokio::spawn(actor.run());
 
         // Try to send event before mounting any view
-        let result = handle.event("click".to_string(), HashMap::new(), None).await;
+        let result = handle
+            .event("click".to_string(), HashMap::new(), None)
+            .await;
 
         // Should fail with ViewNotFound error
         assert!(result.is_err());
@@ -776,7 +790,9 @@ mod tests {
             .unwrap();
 
         // Now send event (backward compat: no view_id)
-        let result = handle.event("click".to_string(), HashMap::new(), None).await;
+        let result = handle
+            .event("click".to_string(), HashMap::new(), None)
+            .await;
 
         assert!(result.is_ok());
 
@@ -793,19 +809,25 @@ mod tests {
             .mount("view1".to_string(), HashMap::new(), None)
             .await
             .unwrap();
-        let view2 = handle
+        let _view2 = handle
             .mount("view2".to_string(), HashMap::new(), None)
             .await
             .unwrap();
 
         // Phase 6: Event with explicit view_id routes to specific view
         let result = handle
-            .event("click".to_string(), HashMap::new(), Some(view1.view_id.clone()))
+            .event(
+                "click".to_string(),
+                HashMap::new(),
+                Some(view1.view_id.clone()),
+            )
             .await;
         assert!(result.is_ok());
 
         // Event without view_id routes to first view (backward compat)
-        let result = handle.event("click".to_string(), HashMap::new(), None).await;
+        let result = handle
+            .event("click".to_string(), HashMap::new(), None)
+            .await;
         assert!(result.is_ok());
 
         handle.shutdown().await;
@@ -879,13 +901,21 @@ mod tests {
 
         // Event to view1 should fail
         let result = handle
-            .event("click".to_string(), HashMap::new(), Some(view1.view_id.clone()))
+            .event(
+                "click".to_string(),
+                HashMap::new(),
+                Some(view1.view_id.clone()),
+            )
             .await;
         assert!(result.is_err());
 
         // Event to view2 should still work
         let result = handle
-            .event("click".to_string(), HashMap::new(), Some(view2.view_id.clone()))
+            .event(
+                "click".to_string(),
+                HashMap::new(),
+                Some(view2.view_id.clone()),
+            )
             .await;
         assert!(result.is_ok());
 

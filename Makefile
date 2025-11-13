@@ -122,7 +122,8 @@ test: test-python test-js test-rust ## Run all tests (Python + JavaScript + Rust
 .PHONY: test-rust
 test-rust: ## Run Rust tests
 	@echo "$(GREEN)Running Rust tests...$(NC)"
-	@unset VIRTUAL_ENV && cargo test
+	@echo "$(YELLOW)Note: Excluding djust_live (PyO3 extension module - tested via Python)$(NC)"
+	@PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo test --workspace --exclude djust_live
 
 .PHONY: test-python
 test-python: ## Run Python tests
@@ -148,7 +149,7 @@ test-liveview: ## Run LiveView core tests
 lint: ## Run linters
 	@echo "$(GREEN)Running linters...$(NC)"
 	@uv run ruff check python/
-	@cargo clippy
+	@PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo clippy -- -W clippy::all -D clippy::correctness -D clippy::suspicious
 
 .PHONY: lint-ci
 lint-ci: ## Run linters in CI mode (warnings as errors)

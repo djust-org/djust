@@ -37,6 +37,10 @@ urlpatterns = [
     path('demos/debounce/', views.DebounceSearchView.as_view(), name='demos-debounce'),
     path('demos/throttle/', views.ThrottleScrollView.as_view(), name='demos-throttle'),
 
+    # State Management Demos (Phase 3)
+    path('demos/optimistic-todo/', views.OptimisticTodoView.as_view(), name='demos-optimistic-todo'),
+    path('demos/optimistic-counter/', views.OptimisticCounterView.as_view(), name='demos-optimistic-counter'),
+
     # Component Library Kitchen Sink
     path('kitchen-sink/', views.KitchenSinkView.as_view(), name='kitchen-sink'),
 
