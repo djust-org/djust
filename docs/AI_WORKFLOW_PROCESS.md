@@ -266,6 +266,90 @@ class TestDecoratorMetadata:
 
 ---
 
+### 7. **PR Review & Response Workflow**
+
+**Purpose**: Systematically review PRs and address all feedback with automated issue tracking.
+
+**Review Process** (`/review-save <pr-number>`):
+
+1. **Launch Autonomous Agent**
+   - Agent fetches PR details via `gh` CLI
+   - Performs comprehensive review following same standards as built-in `/review`
+   - Saves review to `.claude/reviews/pr-{number}/review-{timestamp}.md`
+   - Updates review index
+
+2. **Review Quality Standards**
+   - Code quality and correctness
+   - Architecture and design patterns
+   - Test coverage and quality
+   - Security considerations
+   - Performance implications
+   - Documentation completeness
+   - Breaking changes assessment
+   - Clear merge recommendation (APPROVED/APPROVED_WITH_CONDITIONS/CHANGES_REQUESTED)
+
+3. **Review Output**
+   - Structured markdown with ratings (⭐⭐⭐⭐⭐)
+   - Categorized issues (❌ Critical, ⚠️ Minor, 💡 Nice-to-have)
+   - File-by-file review for significant changes
+   - Actionable recommendations
+
+**Response Process** (`/respond <pr-number>`):
+
+1. **Launch Autonomous Agent**
+   - Reads latest review from `.claude/reviews/pr-{number}/latest.md`
+   - Categorizes all feedback items
+
+2. **Feedback Categorization**
+   - **Category A - Address Now**: Quick fixes (<30 min), clear implementation
+     - Make code changes with Edit/Write tools
+     - Verify changes compile/work
+     - Document in response
+
+   - **Category B - Defer to Issue**: Large tasks (>30 min), needs design discussion
+     - Create GitHub issue with `gh issue create`
+     - Include context, acceptance criteria, timeline
+     - Link to PR and review
+
+   - **Category C - Acknowledge**: Questions, suggestions to decline
+     - Answer with thorough explanation
+     - Provide rationale for decisions
+
+3. **Response Output**
+   - Saves to `.claude/responses/pr-{number}/response-{timestamp}.md`
+   - Lists all actions taken (code changes, issues created, questions answered)
+   - Updates response index
+   - Creates GitHub issues for deferred work
+
+**Benefits**:
+- ✅ All feedback systematically addressed
+- ✅ Nothing gets lost or forgotten
+- ✅ Clear audit trail
+- ✅ Deferred work tracked in GitHub
+- ✅ Autonomous operation (no manual tracking)
+
+**Example from PR #42:**
+
+**Review Results**:
+- Status: ✅ APPROVED
+- 0 Critical Issues (❌)
+- 0 Blocking Concerns
+- 4 Nice-to-have Improvements (💡)
+- File: `.claude/reviews/pr-42/review-2025-11-12-215803.md`
+
+**Response Results**:
+- 0 issues addressed with code changes (none needed)
+- 4 issues deferred to GitHub (#44, #45, #46, #47)
+- 4 questions answered with rationale
+- File: `.claude/responses/pr-42/response-2025-11-12-220616.md`
+
+**Workflow Time**:
+- Review: ~5 minutes (autonomous)
+- Response: ~5 minutes (autonomous)
+- Total: ~10 minutes for complete PR review cycle
+
+---
+
 ## Best Practices
 
 ### General Principles
@@ -424,15 +508,36 @@ This is a real example from our Phase 1 state management implementation:
 
 1. **TodoWrite** - Task tracking during sessions
 2. **Pytest** - Python testing
-3. **Git** - Version control
-4. **GitHub CLI** (`gh`) - PR management
+3. **Vitest** - JavaScript testing
+4. **Git** - Version control
+5. **GitHub CLI** (`gh`) - PR management, issue creation
+
+### Custom Commands
+
+1. **`/review-save <pr-number>`** - Launch autonomous agent to review PR and save to markdown
+   - Comprehensive code review
+   - Saves to `.claude/reviews/pr-{number}/`
+   - Updates review index
+   - ~5 minutes autonomous execution
+
+2. **`/respond <pr-number>`** - Launch autonomous agent to address review feedback
+   - Categorizes all feedback (address now / defer / acknowledge)
+   - Makes code changes for quick fixes
+   - Creates GitHub issues for deferred work
+   - Answers questions with rationale
+   - Saves to `.claude/responses/pr-{number}/`
+   - ~5 minutes autonomous execution
 
 ### Automation Scripts
 
-- `make test` - Run all tests
+- `make test` - Run all tests (Python + JavaScript + Rust)
 - `make test-python` - Run Python tests only
+- `make test-js` - Run JavaScript tests only
+- `make test-rust` - Run Rust tests only
 - `make lint` - Run linters
 - `make format` - Format code
+- `make build` - Build Rust extensions (release mode)
+- `make dev-build` - Build Rust extensions (dev mode)
 
 ---
 
@@ -487,5 +592,9 @@ Each PR should consider whether workflow improvements should be documented here.
 
 ---
 
-**Last Updated**: 2025-01-12
-**Version**: 1.0
+**Last Updated**: 2025-11-12
+**Version**: 1.1
+
+**Changelog**:
+- v1.1 (2025-11-12): Added PR Review & Response Workflow section, custom commands documentation
+- v1.0 (2025-01-12): Initial version
