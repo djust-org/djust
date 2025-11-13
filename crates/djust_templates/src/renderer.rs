@@ -143,6 +143,31 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
             render_rust_component(name, props, context)
         }
 
+        Node::CsrfToken => {
+            // Render CSRF token hidden input
+            // Get token from context (should be provided by Django)
+            let token = context
+                .get("csrf_token")
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "CSRF_TOKEN_NOT_PROVIDED".to_string());
+
+            Ok(format!(
+                "<input type=\"hidden\" name=\"csrfmiddlewaretoken\" value=\"{}\">",
+                token
+            ))
+        }
+
+        Node::Static(path) => {
+            // Render static file URL
+            // Get STATIC_URL from context (should be provided by Django)
+            let static_url = context
+                .get("STATIC_URL")
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "/static/".to_string());
+
+            Ok(format!("{}{}", static_url, path))
+        }
+
         Node::Comment => Ok(String::new()),
     }
 }
@@ -837,5 +862,64 @@ mod tests {
         );
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "xyz");
+    }
+
+    #[test]
+    fn test_csrf_token_tag() {
+        let tokens = tokenize("{% csrf_token %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "csrf_token".to_string(),
+            Value::String("test-csrf-token-123".to_string()),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert!(result.contains("<input type=\"hidden\""));
+        assert!(result.contains("name=\"csrfmiddlewaretoken\""));
+        assert!(result.contains("value=\"test-csrf-token-123\""));
+    }
+
+    #[test]
+    fn test_csrf_token_tag_without_token() {
+        let tokens = tokenize("{% csrf_token %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let context = Context::new();
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert!(result.contains("CSRF_TOKEN_NOT_PROVIDED"));
+    }
+
+    #[test]
+    fn test_static_tag() {
+        let tokens = tokenize("{% static 'css/style.css' %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "STATIC_URL".to_string(),
+            Value::String("/static/".to_string()),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "/static/css/style.css");
+    }
+
+    #[test]
+    fn test_static_tag_custom_url() {
+        let tokens = tokenize("{% static \"images/logo.png\" %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "STATIC_URL".to_string(),
+            Value::String("https://cdn.example.com/static/".to_string()),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "https://cdn.example.com/static/images/logo.png");
+    }
+
+    #[test]
+    fn test_comment_tag() {
+        let tokens = tokenize("Before{% comment %}Hidden content{% endcomment %}After").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let context = Context::new();
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "BeforeAfter");
     }
 }

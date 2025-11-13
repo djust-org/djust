@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Template Engine: Essential Django Template Tags** (Issue #8)
+  - **`{% csrf_token %}`**: Renders CSRF protection hidden input (security critical)
+  - **`{% static 'path' %}`**: Generates static file URLs with STATIC_URL prefix
+  - **`{% comment %}...{% endcomment %}`**: Multi-line comment blocks (content hidden)
+  - Context integration: Tags use `csrf_token` and `STATIC_URL` from template context
+  - 5 comprehensive unit tests for new tags
+  - Nested comment support with proper depth tracking
+
 - **Template Engine: 10 Essential Django Filters** (Issue #7)
   - **Numeric filters**: `add`, `divisibleby`, `floatformat`
   - **String filters**: `slugify`, `capfirst`, `cut`, `linebreaks`, `linebreaksbr`

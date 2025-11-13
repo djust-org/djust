@@ -24,6 +24,8 @@ pub enum Node {
     },
     Include(String),
     Comment,
+    CsrfToken,
+    Static(String), // Path to static file
     ReactComponent {
         name: String,
         props: Vec<(String, String)>,
@@ -147,6 +149,47 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                         ));
                     }
                     Ok(Some(Node::Include(args[0].clone())))
+                }
+
+                "csrf_token" => {
+                    // {% csrf_token %} - generates CSRF token hidden input
+                    Ok(Some(Node::CsrfToken))
+                }
+
+                "static" => {
+                    // {% static 'path/to/file' %} - generates static file URL
+                    if args.is_empty() {
+                        return Err(DjangoRustError::TemplateError(
+                            "Static tag requires a file path".to_string(),
+                        ));
+                    }
+                    // Remove quotes from path if present
+                    let path = args[0].trim_matches(|c| c == '"' || c == '\'').to_string();
+                    Ok(Some(Node::Static(path)))
+                }
+
+                "comment" => {
+                    // {% comment %} tag - skip content until {% endcomment %}
+                    // Find and skip to endcomment tag
+                    let mut depth = 1;
+                    let mut j = *i + 1;
+                    while j < tokens.len() && depth > 0 {
+                        if let Token::Tag(tag_name, _) = &tokens[j] {
+                            if tag_name == "comment" {
+                                depth += 1;
+                            } else if tag_name == "endcomment" {
+                                depth -= 1;
+                            }
+                        }
+                        j += 1;
+                    }
+                    *i = j - 1; // Point to endcomment tag
+                    Ok(Some(Node::Comment))
+                }
+
+                "endcomment" => {
+                    // Handled by comment tag
+                    Ok(None)
                 }
 
                 "endif" | "endfor" | "endblock" | "else" => {
