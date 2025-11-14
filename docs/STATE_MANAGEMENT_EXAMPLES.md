@@ -101,13 +101,23 @@ def apply_filters(self, category: str = "", min_price: int = 0, **kwargs):
 
 **5. Form with Auto-Save:**
 ```python
-from djust.mixins import DraftModeMixin
+from djust.drafts import DraftModeMixin
 from djust.forms import FormMixin
 
 class ContactView(DraftModeMixin, FormMixin, LiveView):
     form_class = ContactForm
     draft_key = "contact_form"
-    draft_ttl = 3600  # 1 hour
+```
+
+```html
+<!-- Template needs draft attributes on root -->
+<div data-liveview-root
+     data-draft-enabled="{{ draft_enabled }}"
+     data-draft-key="{{ draft_key }}">
+    <input name="name" data-draft="true" />
+    <input name="email" data-draft="true" />
+    <textarea name="message" data-draft="true"></textarea>
+</div>
 ```
 
 **6. Throttled Scroll Handler:**
@@ -127,7 +137,7 @@ def on_scroll(self, scroll_y: int = 0, **kwargs):
 | `@debounce` | `wait=0.3-0.5` (search)<br>`wait=1.0-2.0` (auto-save) | Reduces requests by 80-95% |
 | `@throttle` | `interval=0.1-0.2` (scroll)<br>`interval=1.0-5.0` (polling) | Limits to 5-10 events/sec or 0.2-1 events/sec |
 | `@cache` | `ttl=60` (autocomplete)<br>`ttl=300` (search)<br>`ttl=3600` (static data) | Reduces server load by 40-80% |
-| `DraftModeMixin` | `draft_ttl=3600` (1 hour)<br>`draft_ttl=86400` (24 hours) | Auto-save every 1 second |
+| `DraftModeMixin` | Auto-saves after 500ms debounce | No server requests (localStorage only) |
 
 ### Decorator Order Rules
 
@@ -155,7 +165,7 @@ def my_handler(self, **kwargs):
 | Debounce not working | Check `wait` is in seconds (not milliseconds): `wait=0.5` not `wait=500` |
 | Optimistic updates flicker | Add `@debounce()` to batch rapid changes |
 | Cache always misses | Ensure `key_params` matches event data keys |
-| Form drafts not restoring | Check `draft_key` is unique and `draft_ttl` hasn't expired |
+| Form drafts not restoring | Check template has `data-draft-enabled` and `data-draft-key` on root element, fields have `data-draft="true"` |
 | Loading indicator stuck | Verify handler doesn't throw exception (causes loading state to persist) |
 
 ---
@@ -488,19 +498,22 @@ class ProductFilterView(LiveView):
 # views.py
 from djust import LiveView
 from djust.decorators import throttle, optimistic
-from djust.mixins import DraftModeMixin
+from djust.drafts import DraftModeMixin
 from chat.models import Message, ChatRoom
 
 class LiveChatView(DraftModeMixin, LiveView):
     template_name = 'chat/live_chat.html'
     draft_key = "chat_message"
-    draft_ttl = 3600
 
     def mount(self, request, room_id, **kwargs):
         self.room = ChatRoom.objects.get(id=room_id)
         self.messages = Message.objects.filter(room=self.room).order_by('-created_at')[:50]
         self.message = ""
         self.typing_users = []
+
+    def get_draft_key(self) -> str:
+        """Include room ID in draft key for per-room drafts"""
+        return f"chat_message_{self.room.id}"
 
     @throttle(interval=2.0, leading=True, trailing=False)
     def typing_indicator(self, **kwargs):
@@ -557,7 +570,11 @@ class LiveChatView(DraftModeMixin, LiveView):
     {% djust_head %}
 </head>
 <body>
-    <div class="chat-container">
+    <div class="chat-container"
+         data-liveview-root
+         data-draft-enabled="{{ draft_enabled }}"
+         data-draft-key="{{ draft_key }}">
+
         <div class="messages">
             {% for msg in messages %}
             <div class="message">
@@ -578,6 +595,7 @@ class LiveChatView(DraftModeMixin, LiveView):
                 type="text"
                 @input="typing_indicator"
                 name="message"
+                data-draft="true"
                 value="{{ message }}"
                 placeholder="Type a message..."
             />
@@ -604,14 +622,13 @@ class LiveChatView(DraftModeMixin, LiveView):
 # views.py
 from djust import LiveView
 from djust.forms import FormMixin
-from djust.mixins import DraftModeMixin
+from djust.drafts import DraftModeMixin
 from messaging.forms import MessageForm
 
 class MessageComposerView(DraftModeMixin, FormMixin, LiveView):
     template_name = 'messaging/composer.html'
     form_class = MessageForm
     draft_key = "message_composer"
-    draft_ttl = 86400  # 24 hours
 
     def mount(self, request, **kwargs):
         self.to = ""
@@ -620,11 +637,13 @@ class MessageComposerView(DraftModeMixin, FormMixin, LiveView):
         self.attachments = []
 
     def form_valid(self, form):
-        """Send message."""
+        """Send message and clear draft."""
         message = form.save(commit=False)
         message.sender = self.request.user
         message.save()
 
+        # Clear draft on successful send
+        self.clear_draft()
         self.success_message = "Message sent!"
         self.to = ""
         self.subject = ""
@@ -845,7 +864,7 @@ class SalesChartView(LiveView):
 # views.py
 from djust import LiveView
 from djust.forms import FormMixin
-from djust.mixins import DraftModeMixin
+from djust.drafts import DraftModeMixin
 from contact.forms import ContactForm
 
 class ContactFormView(DraftModeMixin, FormMixin, LiveView):
@@ -924,7 +943,7 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
 # views.py
 from djust import LiveView
 from djust.forms import FormMixin
-from djust.mixins import DraftModeMixin
+from djust.drafts import DraftModeMixin
 from registration.forms import Step1Form, Step2Form, Step3Form
 
 class MultiStepRegistrationView(DraftModeMixin, FormMixin, LiveView):

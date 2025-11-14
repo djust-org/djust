@@ -1,7 +1,7 @@
 /**
  * djust State Management Decorators (Testable Module)
  *
- * This file contains the decorator logic for @debounce, @throttle, @optimistic, @cache, and @client_state.
+ * This file contains the decorator logic for @debounce, @throttle, @optimistic, @cache, @client_state, and DraftMode.
  *
  * IMPORTANT: This module is used for testing and documentation.
  * The actual implementation runs as embedded JavaScript in live_view.py.
@@ -9,7 +9,7 @@
  *
  * Phase 2: @debounce, @throttle
  * Phase 3: @optimistic
- * Phase 5: @cache, @client_state
+ * Phase 5: @cache, @client_state, DraftMode
  */
 
 // ============================================================================
@@ -640,4 +640,218 @@ export function clientStateEvent(eventName, eventData, config, sendFn) {
 
     // Call server to persist state
     return sendFn(eventName, eventData);
+}
+
+// ============================================================================
+// DraftMode - localStorage Auto-save (Phase 5)
+// ============================================================================
+
+/**
+ * DraftManager provides automatic draft saving to localStorage.
+ *
+ * Features:
+ * - Auto-save every 500ms (debounced)
+ * - Auto-restore on page load
+ * - Clear draft on successful submit
+ * - Works with input/textarea/contenteditable elements
+ */
+export class DraftManager {
+    constructor() {
+        this.saveTimers = new Map(); // Map<draftKey, timerId>
+        this.saveDelay = 500; // 500ms debounce
+    }
+
+    /**
+     * Save draft data to localStorage (debounced)
+     * @param {string} draftKey - Unique key for this draft
+     * @param {object} data - Form data to save
+     */
+    saveDraft(draftKey, data) {
+        // Clear existing timer
+        if (this.saveTimers.has(draftKey)) {
+            clearTimeout(this.saveTimers.get(draftKey));
+        }
+
+        // Set new debounced timer
+        const timerId = setTimeout(() => {
+            try {
+                const draftData = {
+                    data,
+                    timestamp: Date.now()
+                };
+                localStorage.setItem(`djust_draft_${draftKey}`, JSON.stringify(draftData));
+
+                if (globalThis.djustDebug) {
+                    console.log(`[DraftMode] Saved draft: ${draftKey}`, data);
+                }
+            } catch (error) {
+                console.error(`[DraftMode] Failed to save draft ${draftKey}:`, error);
+            }
+            this.saveTimers.delete(draftKey);
+        }, this.saveDelay);
+
+        this.saveTimers.set(draftKey, timerId);
+    }
+
+    /**
+     * Load draft data from localStorage
+     * @param {string} draftKey - Unique key for this draft
+     * @returns {object|null} Draft data or null if not found
+     */
+    loadDraft(draftKey) {
+        try {
+            const stored = localStorage.getItem(`djust_draft_${draftKey}`);
+            if (!stored) {
+                return null;
+            }
+
+            const draftData = JSON.parse(stored);
+
+            if (globalThis.djustDebug) {
+                const age = Math.round((Date.now() - draftData.timestamp) / 1000);
+                console.log(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
+            }
+
+            return draftData.data;
+        } catch (error) {
+            console.error(`[DraftMode] Failed to load draft ${draftKey}:`, error);
+            return null;
+        }
+    }
+
+    /**
+     * Clear draft from localStorage
+     * @param {string} draftKey - Unique key for this draft
+     */
+    clearDraft(draftKey) {
+        // Clear any pending save timer
+        if (this.saveTimers.has(draftKey)) {
+            clearTimeout(this.saveTimers.get(draftKey));
+            this.saveTimers.delete(draftKey);
+        }
+
+        try {
+            localStorage.removeItem(`djust_draft_${draftKey}`);
+
+            if (globalThis.djustDebug) {
+                console.log(`[DraftMode] Cleared draft: ${draftKey}`);
+            }
+        } catch (error) {
+            console.error(`[DraftMode] Failed to clear draft ${draftKey}:`, error);
+        }
+    }
+
+    /**
+     * Get all draft keys from localStorage
+     * @returns {string[]} Array of draft keys
+     */
+    getAllDraftKeys() {
+        const keys = [];
+        try {
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('djust_draft_')) {
+                    keys.push(key.replace('djust_draft_', ''));
+                }
+            }
+        } catch (error) {
+            console.error('[DraftMode] Failed to get draft keys:', error);
+        }
+        return keys;
+    }
+
+    /**
+     * Clear all drafts from localStorage
+     */
+    clearAllDrafts() {
+        const keys = this.getAllDraftKeys();
+        keys.forEach(key => this.clearDraft(key));
+
+        if (globalThis.djustDebug) {
+            console.log(`[DraftMode] Cleared all ${keys.length} drafts`);
+        }
+    }
+}
+
+// Global DraftManager instance
+export const globalDraftManager = new DraftManager();
+
+/**
+ * Collect form data from a container element
+ * @param {HTMLElement} container - Container with form fields
+ * @returns {object} Form data as key-value pairs
+ */
+export function collectFormData(container) {
+    const data = {};
+
+    // Collect from input/textarea elements
+    const fields = container.querySelectorAll('input, textarea, select');
+    fields.forEach(field => {
+        if (field.name) {
+            if (field.type === 'checkbox') {
+                data[field.name] = field.checked;
+            } else if (field.type === 'radio') {
+                if (field.checked) {
+                    data[field.name] = field.value;
+                }
+            } else {
+                data[field.name] = field.value;
+            }
+        }
+    });
+
+    // Collect from contenteditable elements
+    const editables = container.querySelectorAll('[contenteditable="true"]');
+    editables.forEach(editable => {
+        const name = editable.getAttribute('name') || editable.id;
+        if (name) {
+            data[name] = editable.innerHTML;
+        }
+    });
+
+    return data;
+}
+
+/**
+ * Restore form data to a container element
+ * @param {HTMLElement} container - Container with form fields
+ * @param {object} data - Form data to restore
+ */
+export function restoreFormData(container, data) {
+    if (!data) return;
+
+    Object.entries(data).forEach(([name, value]) => {
+        // Try to find field by name
+        let field = container.querySelector(`[name="${name}"]`);
+
+        // Try to find by ID if name didn't work
+        if (!field) {
+            field = container.querySelector(`#${name}`);
+        }
+
+        if (!field) return;
+
+        // Restore based on field type
+        if (field.tagName === 'INPUT') {
+            if (field.type === 'checkbox') {
+                field.checked = value;
+            } else if (field.type === 'radio') {
+                if (field.value === value) {
+                    field.checked = true;
+                }
+            } else {
+                field.value = value;
+            }
+        } else if (field.tagName === 'TEXTAREA') {
+            field.value = value;
+        } else if (field.tagName === 'SELECT') {
+            field.value = value;
+        } else if (field.getAttribute('contenteditable') === 'true') {
+            field.innerHTML = value;
+        }
+    });
+
+    if (globalThis.djustDebug) {
+        console.log('[DraftMode] Restored form data:', data);
+    }
 }

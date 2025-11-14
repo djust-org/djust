@@ -1882,6 +1882,228 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
             const globalStateBus = new StateBus();
 
+            // DraftManager for localStorage-based draft saving
+            class DraftManager {
+                constructor() {
+                    this.saveTimers = new Map();
+                    this.saveDelay = 500;
+                }
+
+                saveDraft(draftKey, data) {
+                    if (this.saveTimers.has(draftKey)) {
+                        clearTimeout(this.saveTimers.get(draftKey));
+                    }
+
+                    const timerId = setTimeout(() => {
+                        try {
+                            const draftData = {
+                                data,
+                                timestamp: Date.now()
+                            };
+                            localStorage.setItem(`djust_draft_${draftKey}`, JSON.stringify(draftData));
+
+                            if (globalThis.djustDebug) {
+                                console.log(`[DraftMode] Saved draft: ${draftKey}`, data);
+                            }
+                        } catch (error) {
+                            console.error(`[DraftMode] Failed to save draft ${draftKey}:`, error);
+                        }
+                        this.saveTimers.delete(draftKey);
+                    }, this.saveDelay);
+
+                    this.saveTimers.set(draftKey, timerId);
+                }
+
+                loadDraft(draftKey) {
+                    try {
+                        const stored = localStorage.getItem(`djust_draft_${draftKey}`);
+                        if (!stored) {
+                            return null;
+                        }
+
+                        const draftData = JSON.parse(stored);
+
+                        if (globalThis.djustDebug) {
+                            const age = Math.round((Date.now() - draftData.timestamp) / 1000);
+                            console.log(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
+                        }
+
+                        return draftData.data;
+                    } catch (error) {
+                        console.error(`[DraftMode] Failed to load draft ${draftKey}:`, error);
+                        return null;
+                    }
+                }
+
+                clearDraft(draftKey) {
+                    if (this.saveTimers.has(draftKey)) {
+                        clearTimeout(this.saveTimers.get(draftKey));
+                        this.saveTimers.delete(draftKey);
+                    }
+
+                    try {
+                        localStorage.removeItem(`djust_draft_${draftKey}`);
+
+                        if (globalThis.djustDebug) {
+                            console.log(`[DraftMode] Cleared draft: ${draftKey}`);
+                        }
+                    } catch (error) {
+                        console.error(`[DraftMode] Failed to clear draft ${draftKey}:`, error);
+                    }
+                }
+
+                getAllDraftKeys() {
+                    const keys = [];
+                    try {
+                        for (let i = 0; i < localStorage.length; i++) {
+                            const key = localStorage.key(i);
+                            if (key && key.startsWith('djust_draft_')) {
+                                keys.push(key.replace('djust_draft_', ''));
+                            }
+                        }
+                    } catch (error) {
+                        console.error('[DraftMode] Failed to get draft keys:', error);
+                    }
+                    return keys;
+                }
+
+                clearAllDrafts() {
+                    const keys = this.getAllDraftKeys();
+                    keys.forEach(key => this.clearDraft(key));
+
+                    if (globalThis.djustDebug) {
+                        console.log(`[DraftMode] Cleared all ${keys.length} drafts`);
+                    }
+                }
+            }
+
+            const globalDraftManager = new DraftManager();
+
+            function initDraftMode() {
+                // Check if draft mode is enabled on this page
+                const draftRoot = document.querySelector('[data-draft-enabled]');
+                if (!draftRoot) return;
+
+                const draftKey = draftRoot.getAttribute('data-draft-key');
+                if (!draftKey) {
+                    console.warn('[DraftMode] Draft enabled but no draft-key found');
+                    return;
+                }
+
+                console.log(`[DraftMode] Initializing draft mode with key: ${draftKey}`);
+
+                // Load existing draft on page load
+                const savedDraft = globalDraftManager.loadDraft(draftKey);
+                if (savedDraft) {
+                    // Restore field values from draft
+                    Object.keys(savedDraft).forEach(fieldName => {
+                        const field = document.querySelector(`[name="${fieldName}"]`);
+                        if (field) {
+                            if (field.type === 'checkbox') {
+                                field.checked = savedDraft[fieldName];
+                            } else {
+                                field.value = savedDraft[fieldName];
+                            }
+                        }
+                    });
+                }
+
+                // Monitor all fields with data-draft="true" for changes
+                const draftFields = document.querySelectorAll('[data-draft="true"]');
+                draftFields.forEach(field => {
+                    const saveDraft = () => {
+                        // Collect all draft field values
+                        const draftData = {};
+                        draftFields.forEach(f => {
+                            if (f.name) {
+                                if (f.type === 'checkbox') {
+                                    draftData[f.name] = f.checked;
+                                } else {
+                                    draftData[f.name] = f.value;
+                                }
+                            }
+                        });
+                        globalDraftManager.saveDraft(draftKey, draftData);
+                    };
+
+                    // Attach input listeners with debouncing built into DraftManager
+                    field.addEventListener('input', saveDraft);
+                    field.addEventListener('change', saveDraft);
+                });
+
+                // Check for draft clear flag
+                if (draftRoot.hasAttribute('data-draft-clear')) {
+                    console.log('[DraftMode] Draft clear flag detected, clearing draft...');
+                    globalDraftManager.clearDraft(draftKey);
+                    draftRoot.removeAttribute('data-draft-clear');
+                }
+            }
+
+            function collectFormData(container) {
+                const data = {};
+
+                const fields = container.querySelectorAll('input, textarea, select');
+                fields.forEach(field => {
+                    if (field.name) {
+                        if (field.type === 'checkbox') {
+                            data[field.name] = field.checked;
+                        } else if (field.type === 'radio') {
+                            if (field.checked) {
+                                data[field.name] = field.value;
+                            }
+                        } else {
+                            data[field.name] = field.value;
+                        }
+                    }
+                });
+
+                const editables = container.querySelectorAll('[contenteditable="true"]');
+                editables.forEach(editable => {
+                    const name = editable.getAttribute('name') || editable.id;
+                    if (name) {
+                        data[name] = editable.innerHTML;
+                    }
+                });
+
+                return data;
+            }
+
+            function restoreFormData(container, data) {
+                if (!data) return;
+
+                Object.entries(data).forEach(([name, value]) => {
+                    let field = container.querySelector(`[name="${name}"]`);
+
+                    if (!field) {
+                        field = container.querySelector(`#${name}`);
+                    }
+
+                    if (!field) return;
+
+                    if (field.tagName === 'INPUT') {
+                        if (field.type === 'checkbox') {
+                            field.checked = value;
+                        } else if (field.type === 'radio') {
+                            if (field.value === value) {
+                                field.checked = true;
+                            }
+                        } else {
+                            field.value = value;
+                        }
+                    } else if (field.tagName === 'TEXTAREA') {
+                        field.value = value;
+                    } else if (field.tagName === 'SELECT') {
+                        field.value = value;
+                    } else if (field.getAttribute('contenteditable') === 'true') {
+                        field.innerHTML = value;
+                    }
+                });
+
+                if (globalThis.djustDebug) {
+                    console.log('[DraftMode] Restored form data:', data);
+                }
+            }
+
             // Client-side React Counter component (vanilla JS implementation)
             function initReactCounters() {
                 document.querySelectorAll('[data-react-component="Counter"]').forEach(container => {
@@ -3391,6 +3613,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 initReactCounters();  // Initialize client-side React components
                 initTodoItems();      // Initialize todo item checkboxes
                 bindLiveViewEvents();
+                initDraftMode();      // Initialize DraftModeMixin (Phase 5)
 
                 // Expose sendEvent globally for manual event handling (e.g., optimistic updates)
                 window.sendEvent = handleEvent;

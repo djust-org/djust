@@ -255,7 +255,7 @@ def increment(self, **kwargs):
 
 ```python
 from djust import LiveView
-from djust.mixins import DraftModeMixin
+from djust.drafts import DraftModeMixin
 
 class BlogPostEditor(DraftModeMixin, LiveView):
     # Configure draft auto-save

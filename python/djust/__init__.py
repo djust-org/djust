@@ -18,6 +18,7 @@ from .decorators import (
 )
 from .react import react_components, register_react_component, ReactMixin
 from .forms import FormMixin, LiveViewForm, form_field
+from .drafts import DraftModeMixin
 
 # Import Rust functions
 try:
@@ -60,4 +61,5 @@ __all__ = [
     "FormMixin",
     "LiveViewForm",
     "form_field",
+    "DraftModeMixin",
 ]

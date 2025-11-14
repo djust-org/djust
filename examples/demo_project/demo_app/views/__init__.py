@@ -81,6 +81,7 @@ from .component_demo import ComponentDemoView
 # Import state management demos (Phase 5)
 from .cache_demo import CacheDemoView
 from .cache_test import CacheTestView
+from .draft_mode_test import DraftModeTestView
 
 # Import test index
 from .test_index import TestIndexView
@@ -135,5 +136,6 @@ __all__ = [
     'ComponentDemoView',
     'CacheDemoView',
     'CacheTestView',
+    'DraftModeTestView',
     'TestIndexView',
 ]

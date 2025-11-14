@@ -43,6 +43,20 @@ class TestIndexView(TemplateView):
                     'Cache key generation works with key_params',
                 ],
             },
+            {
+                'name': 'DraftModeMixin',
+                'description': 'Automated testing for localStorage-based draft auto-save with 500ms debounce',
+                'url_name': 'tests-draft-mode',
+                'feature': 'Draft Mode',
+                'phase': 'Phase 5',
+                'status': 'passing',
+                'tests': [
+                    'localStorage API available',
+                    'Draft key configuration',
+                    'Draft persistence check',
+                    'Auto-save functionality (500ms debounce)',
+                ],
+            },
             # Add more tests here as they're created
             # Example:
             # {

@@ -1,6 +1,6 @@
 # State Management API Reference
 
-**Status:** 🚧 Partially Implemented (@cache, @client_state ✅ | @debounce, @throttle, @optimistic, DraftModeMixin, @loading 🚧)
+**Status:** 🚧 Partially Implemented (@cache, @client_state, DraftModeMixin ✅ | @debounce, @throttle, @optimistic, @loading 🚧)
 
 **Last Updated:** 2025-11-14
 
@@ -693,7 +693,7 @@ Example autocomplete performance:
 
 ### DraftModeMixin
 
-**Status:** 🚧 Proposed (Not Yet Implemented)
+**Status:** ✅ Implemented
 
 Automatically saves form field values to localStorage and restores on page reload. Perfect for long forms, comment boxes, and any input where losing data would be frustrating.
 
@@ -705,140 +705,224 @@ class DraftModeMixin:
     Mixin for automatic localStorage-based draft saving.
 
     Class attributes:
-        draft_fields: List of field names to auto-save
-        draft_restore: Whether to restore drafts on mount (default: True)
-        draft_namespace: Custom namespace for localStorage keys (optional)
+        draft_enabled: Enable/disable draft mode (default: True)
+        draft_key: Custom localStorage key (optional, auto-generated from class name)
     """
-    draft_fields: list[str] = []
-    draft_restore: bool = True
-    draft_namespace: str | None = None
+    draft_enabled: bool = True
+    draft_key: str | None = None
+
+    def get_draft_key(self) -> str:
+        """Get the draft key for localStorage (can be overridden)"""
+
+    def clear_draft(self) -> None:
+        """Clear the draft from localStorage"""
 ```
 
 #### Class Attributes
 
-- **draft_fields** (`list[str]`): Field names to automatically save to localStorage
-- **draft_restore** (`bool`, optional): Restore drafts on page load. Default: `True`
-- **draft_namespace** (`str`, optional): Custom localStorage namespace. Default: view class name
+- **draft_enabled** (`bool`, optional): Enable/disable draft mode. Default: `True`
+- **draft_key** (`str`, optional): Custom localStorage key. Default: auto-generated from class name (e.g., `commentformview_draft`)
+
+#### Methods
+
+- **get_draft_key()** → `str`: Returns the draft key for localStorage. Override to customize based on view state (e.g., include record ID)
+- **clear_draft()**: Clears the draft from localStorage. Call after successful form submission
 
 #### Example
 
 ```python
 from djust import LiveView
-from djust.mixins import DraftModeMixin
+from djust.drafts import DraftModeMixin
 
 class CommentFormView(DraftModeMixin, LiveView):
-    # Configure draft mode
-    draft_fields = ["comment_text", "author_name"]
-    draft_restore = True
+    template_name = 'comment_form.html'
+    draft_enabled = True
+    draft_key = 'comment_form'  # Optional: defaults to 'commentformview_draft'
 
-    template_string = """
+    def mount(self, request):
+        self.comment_text = ""
+        self.author_name = ""
+
+    def save_comment(self, comment_text: str = "", author_name: str = "", **kwargs):
+        """Save comment and clear draft"""
+        Comment.objects.create(
+            text=comment_text,
+            author=author_name
+        )
+        # Clear draft on successful save
+        self.clear_draft()
+        self.comment_text = ""
+        self.author_name = ""
+```
+
+**Template** (`comment_form.html`):
+
+```html
+<!-- Root element needs draft attributes -->
+<div data-liveview-root
+     data-draft-enabled="{{ draft_enabled }}"
+     data-draft-key="{{ draft_key }}">
+
     <form @submit="save_comment">
+        <!-- Fields with data-draft="true" are auto-saved -->
         <textarea name="comment_text"
                   placeholder="Write your comment..."
+                  data-draft="true"
                   rows="5">{{ comment_text }}</textarea>
 
         <input type="text"
                name="author_name"
                placeholder="Your name"
+               data-draft="true"
                value="{{ author_name }}" />
 
-        <button type="submit">
-            Post Comment
-            <span @loading>Posting...</span>
-        </button>
-
-        <span id="draft-status">Draft auto-saved</span>
+        <button type="submit">Post Comment</button>
+        <button @click="discard_draft">Discard Draft</button>
     </form>
-    """
-
-    def mount(self, request):
-        if not hasattr(self, 'comment_text'):
-            self.comment_text = ""
-            self.author_name = ""
-
-    def save_comment(self, comment_text: str = "", author_name: str = "", **kwargs):
-        """
-        On successful save, draft is automatically cleared from localStorage.
-        """
-        Comment.objects.create(
-            text=comment_text,
-            author=author_name
-        )
-        self.comment_text = ""  # Clear form
-        self.author_name = ""
+</div>
 ```
 
 #### Behavior
 
-1. **User types in field** → Automatically saved to localStorage **every keystroke**
-2. **User refreshes page** → Draft restored from localStorage **on mount**
-3. **User submits form** → Draft cleared from localStorage **automatically**
+1. **User types in field** → Automatically saved to localStorage after **500ms debounce**
+2. **User refreshes page** → Draft **automatically restored** from localStorage on mount (no confirmation prompt)
+3. **User submits form** → Call `self.clear_draft()` to remove from localStorage
 4. **User navigates away** → Draft persists in localStorage **for next visit**
+
+**Auto-Restore Behavior:**
+- Drafts are automatically restored without user confirmation
+- This is the most seamless user experience (similar to Google Docs auto-save)
+- No "Resume draft?" prompt is shown (future enhancement)
+- Developer can check for draft existence and show custom UI if needed
 
 #### Draft Storage
 
-Drafts are stored in localStorage with namespaced keys:
+Drafts are stored in localStorage with the format:
 
 ```javascript
-// Storage format
+// Storage key: djust_draft_{draft_key}
+// Storage value: {data: {...}, timestamp: ...}
 localStorage.setItem(
-    'djust:draft:CommentFormView:comment_text',
-    'User typed text...'
+    'djust_draft_comment_form',
+    JSON.stringify({
+        data: {
+            comment_text: 'User typed text...',
+            author_name: 'John Doe'
+        },
+        timestamp: 1763138790943
+    })
 );
 ```
 
-#### Custom Namespace
+#### Custom Draft Key
+
+Override `get_draft_key()` to customize based on view state:
 
 ```python
-class BlogPostEditor(DraftModeMixin, LiveView):
-    draft_fields = ["title", "body", "tags"]
-    draft_namespace = "blog_editor_v2"  # Custom namespace
-```
+class ArticleEditorView(DraftModeMixin, LiveView):
+    template_name = 'article_editor.html'
 
-Stored as:
+    def mount(self, request, article_id=None):
+        self.article_id = article_id
+        self.title = ""
+        self.content = ""
 
-```javascript
-localStorage.getItem('djust:draft:blog_editor_v2:title');
-localStorage.getItem('djust:draft:blog_editor_v2:body');
-localStorage.getItem('djust:draft:blog_editor_v2:tags');
+    def get_draft_key(self) -> str:
+        """Include article ID in draft key"""
+        if self.article_id:
+            return f"article_editor_{self.article_id}"
+        return "article_editor_new"
+
+    def save_article(self, title: str = "", content: str = "", **kwargs):
+        """Save and clear draft"""
+        article = Article.objects.update_or_create(
+            id=self.article_id,
+            defaults={'title': title, 'content': content}
+        )
+        self.clear_draft()  # Clear draft on success
 ```
 
 #### Manual Draft Control
 
 ```python
 class AdvancedFormView(DraftModeMixin, LiveView):
-    draft_fields = ["content"]
-    draft_restore = True
+    template_name = 'advanced_form.html'
 
-    template_string = """
-    <textarea name="content">{{ content }}</textarea>
+    def discard_draft(self, **kwargs):
+        """Manually clear draft - useful for 'Discard' button"""
+        self.clear_draft()
+```
 
-    <button @click="clear_draft">Clear Draft</button>
-    <button @click="restore_draft">Restore Last Draft</button>
-    """
+**Template:**
 
-    def clear_draft(self, **kwargs):
-        """
-        Manually clear draft from localStorage.
-        Useful for "Discard" button.
-        """
-        # Client receives special command to clear draft
-        self.draft_action = "clear"
+```html
+<div data-liveview-root
+     data-draft-enabled="{{ draft_enabled }}"
+     data-draft-key="{{ draft_key }}"
+     {% if draft_clear %}data-draft-clear="true"{% endif %}>
 
-    def restore_draft(self, **kwargs):
-        """
-        Manually restore draft.
-        Useful if user dismissed restored draft.
-        """
-        self.draft_action = "restore"
+    <textarea name="content" data-draft="true">{{ content }}</textarea>
+
+    <button @click="save_content">Save</button>
+    <button @click="discard_draft">Discard Draft</button>
+</div>
+```
+
+#### Displaying Draft Age
+
+The draft timestamp is stored in localStorage and can be displayed using JavaScript:
+
+```html
+<div data-liveview-root
+     data-draft-enabled="{{ draft_enabled }}"
+     data-draft-key="{{ draft_key }}">
+
+    <div id="draft-status"></div>
+
+    <textarea name="content" data-draft="true">{{ content }}</textarea>
+</div>
+
+<script>
+// Display draft age
+function updateDraftStatus() {
+    const draft = localStorage.getItem('djust_draft_{{ draft_key }}');
+    const statusEl = document.getElementById('draft-status');
+
+    if (draft && statusEl) {
+        try {
+            const draftData = JSON.parse(draft);
+            const ageMs = Date.now() - draftData.timestamp;
+            const ageMinutes = Math.floor(ageMs / 60000);
+
+            if (ageMinutes < 1) {
+                statusEl.textContent = 'Draft saved just now';
+            } else if (ageMinutes < 60) {
+                statusEl.textContent = `Draft saved ${ageMinutes} minute${ageMinutes > 1 ? 's' : ''} ago`;
+            } else {
+                const ageHours = Math.floor(ageMinutes / 60);
+                statusEl.textContent = `Draft saved ${ageHours} hour${ageHours > 1 ? 's' : ''} ago`;
+            }
+        } catch (e) {
+            console.error('Error reading draft timestamp:', e);
+        }
+    }
+}
+
+// Update on page load
+updateDraftStatus();
+
+// Update every minute
+setInterval(updateDraftStatus, 60000);
+</script>
 ```
 
 #### Benefits
 
 - **No data loss:** User never loses typed content
-- **Auto-save:** Saves on every keystroke (debounced internally)
-- **Zero config:** Just list field names
-- **No JavaScript:** Mixin handles all localStorage logic
+- **Auto-save:** Saves after 500ms of inactivity (debounced)
+- **Zero JavaScript:** No custom JS code needed
+- **Selective fields:** Only fields with `data-draft="true"` are tracked
+- **Automatic restore:** Drafts restored on page load
 
 #### Common Use Cases
 
@@ -861,9 +945,31 @@ User submits → localStorage.removeItem() (clear draft)
 
 #### Limitations
 
-- **localStorage limits:** ~5-10MB depending on browser
-- **Session-scoped:** Drafts persist across tabs/windows (same domain)
+**Current Implementation:**
+- **Client-side only:** Drafts stored in localStorage (not synced to server)
+- **No multi-device support:** Drafts don't sync across devices
+- **localStorage limits:** ~5-10MB per domain (browser dependent)
 - **No encryption:** Don't use for sensitive data (passwords, credit cards)
+- **Auto-restore:** Automatically restores drafts without user confirmation
+- **Same-domain only:** Drafts persist across tabs/windows on same domain
+
+**Storage Limitations:**
+- Browser localStorage typically provides 5-10MB per domain
+- Large drafts (e.g., pasting huge text/images) may fail silently
+- No warning when approaching storage limits
+- Clearing browser data removes all drafts
+
+**Namespace Collision Protection:**
+- ✅ Auto-generated keys include view class name (`commentformview_draft`)
+- ✅ Custom keys can be set per view via `draft_key` attribute
+- ✅ Override `get_draft_key()` for dynamic keys (e.g., include record ID)
+
+**Future Enhancements:**
+- User confirmation prompt: "Resume draft from X minutes ago?"
+- Server-side storage option for multi-device sync
+- Draft age display in template context
+- Draft size warnings before localStorage limit
+- Encrypted storage for sensitive form data
 
 #### See Also
 

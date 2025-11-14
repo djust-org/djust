@@ -49,10 +49,10 @@ Phase 5 completes the state management vision by implementing the remaining deco
 - [ ] `cacheEvent()` - Client-side caching with TTL
 - [ ] `clientStateEvent()` - StateBus integration for multi-component state
 - [ ] `loadingAttributes()` - @loading and @loading-text support
-- [ ] `draftMode()` - Draft mode JavaScript logic
+- [x] `initDraftMode()` - Draft mode JavaScript logic (DraftManager + field monitoring) ✅
 
 **Python Components**
-- [ ] `DraftModeMixin` - Draft mode for forms/editors (Python)
+- [x] `DraftModeMixin` - Draft mode for forms/editors (Python) ✅
 
 **Testing**
 - [ ] cache.test.js - Unit tests for caching
@@ -300,13 +300,13 @@ export function clientStateEvent(eventName, eventData, config, sendEvent) {
 **Location**: `python/djust/mixins.py` (new file)
 
 **Subtasks**:
-- [ ] Create `DraftModeMixin` Python class
-- [ ] localStorage integration (JavaScript)
-- [ ] Auto-save with debouncing
-- [ ] Restore draft on mount
-- [ ] User prompt for draft restoration
-- [ ] Server-side draft storage (optional)
-- [ ] Add to embedded version in `live_view.py`
+- [x] Create `DraftModeMixin` Python class ✅
+- [x] localStorage integration (JavaScript) ✅
+- [x] Auto-save with debouncing (500ms) ✅
+- [x] Restore draft on mount ✅
+- [ ] User prompt for draft restoration (auto-restores currently)
+- [ ] Server-side draft storage (optional - not implemented)
+- [x] Add to embedded version in `live_view.py` ✅
 
 **Success Criteria**:
 - Drafts saved to localStorage automatically
@@ -620,7 +620,7 @@ class AutocompleteView(LiveView):
 |------|---------------|--------|
 | 1. @cache JavaScript | 3 hours | ⏳ Not Started |
 | 2. @client_state JavaScript | 4 hours | ⏳ Not Started |
-| 3. DraftModeMixin | 5 hours | ⏳ Not Started |
+| 3. DraftModeMixin | 5 hours | ✅ Complete |
 | 4. @loading Attributes | 2 hours | ⏳ Not Started |
 | 5. JavaScript Unit Tests | 4 hours | ⏳ Not Started |
 | 6. E2E Integration Tests | 4 hours | ⏳ Not Started |
@@ -640,7 +640,7 @@ class AutocompleteView(LiveView):
 ### Functional Metrics
 - [ ] @cache reduces server calls by >80% for repeated queries
 - [ ] @client_state enables <100ms cross-component updates
-- [ ] DraftModeMixin prevents data loss on accidental navigation
+- [x] DraftModeMixin prevents data loss on accidental navigation ✅
 - [ ] @loading provides instant user feedback
 
 ### Performance Benchmarks
