@@ -44,6 +44,10 @@ urlpatterns = [
     # Component System Demo (Phase 4)
     path('demos/components/', views.ComponentDemoView.as_view(), name='demos-components'),
 
+    # State Management Demos (Phase 5)
+    path('demos/cache/', views.CacheDemoView.as_view(), name='demos-cache'),
+    path('demos/cache-test/', views.CacheTestView.as_view(), name='demos-cache-test'),
+
     # Component Library Kitchen Sink
     path('kitchen-sink/', views.KitchenSinkView.as_view(), name='kitchen-sink'),
 

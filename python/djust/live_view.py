@@ -1786,6 +1786,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             const throttleState = new Map();  // Map<handlerName, {lastCall, timeoutId, pendingData}>
             const optimisticUpdates = new Map(); // Map<eventName, {element, originalState}>
             const pendingEvents = new Set(); // Set<eventName> (for loading indicators)
+            const resultCache = new Map(); // Map<cacheKey, {result, expiresAt}>
 
             // Client-side React Counter component (vanilla JS implementation)
             function initReactCounters() {
@@ -2790,6 +2791,106 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             }
 
             // ============================================================================
+            // Cache Decorator (Phase 5)
+            // ============================================================================
+
+            function cacheEvent(eventName, eventData, config, sendFn) {
+                const { ttl = 60, key_params = [] } = config;
+
+                // Generate cache key from handler + params
+                const cacheKey = generateCacheKey(eventName, eventData, key_params);
+
+                // Check cache
+                const cached = resultCache.get(cacheKey);
+                if (cached && Date.now() < cached.expiresAt) {
+                    // Cache hit - no server call
+                    if (globalThis.djustDebug) {
+                        const remainingTtl = Math.round((cached.expiresAt - Date.now()) / 1000);
+                        console.log(`[LiveView:cache] Cache hit: ${cacheKey} (TTL: ${remainingTtl}s remaining)`);
+                    }
+                    return Promise.resolve(cached.result);
+                }
+
+                // Cache miss - call server
+                if (globalThis.djustDebug) {
+                    console.log(`[LiveView:cache] Cache miss: ${cacheKey} (calling server)`);
+                }
+
+                return sendFn(eventName, eventData).then(result => {
+                    // Store in cache
+                    const expiresAt = Date.now() + (ttl * 1000);
+                    resultCache.set(cacheKey, {
+                        result,
+                        expiresAt
+                    });
+
+                    if (globalThis.djustDebug) {
+                        console.log(`[LiveView:cache] Cached result: ${cacheKey} (TTL: ${ttl}s)`);
+                    }
+
+                    return result;
+                });
+            }
+
+            function generateCacheKey(eventName, eventData, keyParams) {
+                if (keyParams.length === 0) {
+                    return eventName;
+                }
+
+                const paramValues = keyParams.map(param => {
+                    const value = eventData[param];
+                    if (value === undefined || value === null) {
+                        return '';
+                    }
+                    return String(value);
+                }).join(':');
+
+                return `${eventName}:${paramValues}`;
+            }
+
+            function clearCache(eventName) {
+                if (!eventName) {
+                    // Clear all cache
+                    resultCache.clear();
+                    if (globalThis.djustDebug) {
+                        console.log('[LiveView:cache] Cleared all cache entries');
+                    }
+                    return;
+                }
+
+                // Clear specific event (all keys starting with eventName)
+                let cleared = 0;
+                for (const key of resultCache.keys()) {
+                    if (key === eventName || key.startsWith(eventName + ':')) {
+                        resultCache.delete(key);
+                        cleared++;
+                    }
+                }
+
+                if (globalThis.djustDebug) {
+                    console.log(`[LiveView:cache] Cleared ${cleared} cache entries for ${eventName}`);
+                }
+            }
+
+            function cleanupExpiredCache() {
+                const now = Date.now();
+                let cleaned = 0;
+
+                for (const [key, entry] of resultCache.entries()) {
+                    if (now >= entry.expiresAt) {
+                        resultCache.delete(key);
+                        cleaned++;
+                    }
+                }
+
+                if (globalThis.djustDebug && cleaned > 0) {
+                    console.log(`[LiveView:cache] Cleaned up ${cleaned} expired cache entries`);
+                }
+
+                return cleaned;
+            }
+
+            // ============================================================================
             // Event Handling
             // ============================================================================
 
@@ -2825,6 +2926,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     if (metadata?.throttle) {
                         throttleEvent(eventName, params, metadata.throttle);
                         return; // Don't send immediately
+                    }
+
+                    // Apply cache if configured (Phase 5)
+                    if (metadata?.cache) {
+                        // Cache wraps the actual send - check cache first, call server on miss
+                        await cacheEvent(eventName, params, metadata.cache, async (evName, evParams) => {
+                            evParams._skipDecorators = true;
+                            await handleEvent(evName, evParams);
+                        });
+                        return; // Cache handled it
                     }
                 }
 

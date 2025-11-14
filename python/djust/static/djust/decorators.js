@@ -1,7 +1,7 @@
 /**
  * djust State Management Decorators (Testable Module)
  *
- * This file contains the decorator logic for @debounce, @throttle, and @optimistic.
+ * This file contains the decorator logic for @debounce, @throttle, @optimistic, and @cache.
  *
  * IMPORTANT: This module is used for testing and documentation.
  * The actual implementation runs as embedded JavaScript in live_view.py.
@@ -9,6 +9,7 @@
  *
  * Phase 2: @debounce, @throttle
  * Phase 3: @optimistic
+ * Phase 5: @cache
  */
 
 // ============================================================================
@@ -19,6 +20,7 @@ export const debounceTimers = new Map(); // Map<handlerName, {timerId, firstCall
 export const throttleState = new Map();  // Map<handlerName, {lastCall, timeoutId, pendingData}>
 export const optimisticUpdates = new Map(); // Map<eventName, {element, originalState}>
 export const pendingEvents = new Set(); // Set<eventName> (for loading indicators)
+export const resultCache = new Map(); // Map<cacheKey, {result, expiresAt}>
 
 /**
  * Clear all decorator state (useful for cleanup and testing)
@@ -36,6 +38,7 @@ export function clearAllState() {
 
     optimisticUpdates.clear();
     pendingEvents.clear();
+    resultCache.clear();
 }
 
 // ============================================================================
@@ -352,4 +355,131 @@ export function optimisticButtonUpdate(element, params) {
     if (element.hasAttribute('data-loading-text')) {
         element.textContent = element.getAttribute('data-loading-text');
     }
+}
+
+// ============================================================================
+// Cache Decorator (Phase 5)
+// ============================================================================
+
+/**
+ * Cache event results with TTL-based expiration
+ *
+ * @param {string} eventName - The event handler name
+ * @param {object} eventData - Event parameters
+ * @param {object} config - Cache configuration
+ * @param {number} [config.ttl=60] - Time-to-live in seconds (default: 60)
+ * @param {string[]} [config.key_params=[]] - Parameters to include in cache key
+ * @param {function} sendFn - Function to call on cache miss
+ * @returns {Promise} Promise that resolves with cached or fresh result
+ */
+export function cacheEvent(eventName, eventData, config, sendFn) {
+    const { ttl = 60, key_params = [] } = config;
+
+    // Generate cache key from handler + params
+    const cacheKey = generateCacheKey(eventName, eventData, key_params);
+
+    // Check cache
+    const cached = resultCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) {
+        // Cache hit - no server call
+        if (globalThis.djustDebug) {
+            const remainingTtl = Math.round((cached.expiresAt - Date.now()) / 1000);
+            console.log(`[LiveView:cache] Cache hit: ${cacheKey} (TTL: ${remainingTtl}s remaining)`);
+        }
+        return Promise.resolve(cached.result);
+    }
+
+    // Cache miss - call server
+    if (globalThis.djustDebug) {
+        console.log(`[LiveView:cache] Cache miss: ${cacheKey} (calling server)`);
+    }
+
+    return sendFn(eventName, eventData).then(result => {
+        // Store in cache
+        const expiresAt = Date.now() + (ttl * 1000);
+        resultCache.set(cacheKey, {
+            result,
+            expiresAt
+        });
+
+        if (globalThis.djustDebug) {
+            console.log(`[LiveView:cache] Cached result: ${cacheKey} (TTL: ${ttl}s)`);
+        }
+
+        return result;
+    });
+}
+
+/**
+ * Generate cache key from event name and parameters
+ *
+ * @param {string} eventName - The event handler name
+ * @param {object} eventData - Event parameters
+ * @param {string[]} keyParams - Parameters to include in cache key
+ * @returns {string} Cache key
+ */
+export function generateCacheKey(eventName, eventData, keyParams) {
+    if (keyParams.length === 0) {
+        return eventName;
+    }
+
+    const paramValues = keyParams.map(param => {
+        const value = eventData[param];
+        if (value === undefined || value === null) {
+            return '';
+        }
+        return String(value);
+    }).join(':');
+
+    return `${eventName}:${paramValues}`;
+}
+
+/**
+ * Clear cache entries (useful for testing or invalidation)
+ *
+ * @param {string} [eventName] - If provided, clear only entries for this event
+ */
+export function clearCache(eventName) {
+    if (!eventName) {
+        // Clear all cache
+        resultCache.clear();
+        if (globalThis.djustDebug) {
+            console.log('[LiveView:cache] Cleared all cache entries');
+        }
+        return;
+    }
+
+    // Clear specific event (all keys starting with eventName)
+    let cleared = 0;
+    for (const key of resultCache.keys()) {
+        if (key === eventName || key.startsWith(eventName + ':')) {
+            resultCache.delete(key);
+            cleared++;
+        }
+    }
+
+    if (globalThis.djustDebug) {
+        console.log(`[LiveView:cache] Cleared ${cleared} cache entries for ${eventName}`);
+    }
+}
+
+/**
+ * Clean up expired cache entries
+ */
+export function cleanupExpiredCache() {
+    const now = Date.now();
+    let cleaned = 0;
+
+    for (const [key, entry] of resultCache.entries()) {
+        if (now >= entry.expiresAt) {
+            resultCache.delete(key);
+            cleaned++;
+        }
+    }
+
+    if (globalThis.djustDebug && cleaned > 0) {
+        console.log(`[LiveView:cache] Cleaned up ${cleaned} expired cache entries`);
+    }
+
+    return cleaned;
 }

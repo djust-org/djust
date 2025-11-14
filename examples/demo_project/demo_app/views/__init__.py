@@ -78,6 +78,10 @@ from .optimistic_counter_demo import OptimisticCounterView
 # Import component system demo (Phase 4)
 from .component_demo import ComponentDemoView
 
+# Import state management demos (Phase 5)
+from .cache_demo import CacheDemoView
+from .cache_test import CacheTestView
+
 # Import homepage demo views
 from .homepage import (
     HomeCounterDemo,
@@ -126,4 +130,6 @@ __all__ = [
     'OptimisticTodoView',
     'OptimisticCounterView',
     'ComponentDemoView',
+    'CacheDemoView',
+    'CacheTestView',
 ]

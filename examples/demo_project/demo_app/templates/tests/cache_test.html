@@ -1,0 +1,224 @@
+{% extends "tests/base_test.html" %}
+
+{% block title %}@cache Decorator Test{% endblock %}
+
+{% block status_icon %}
+{% if all_tests_passed %}
+<i class="bi bi-check-circle-fill text-success"></i>
+{% else %}
+<i class="bi bi-x-circle-fill text-danger"></i>
+{% endif %}
+{% endblock %}
+
+{% block page_title %}@cache Decorator Automated Test{% endblock %}
+{% block page_description %}Testing @debounce + @cache interaction with automated scenarios{% endblock %}
+
+{% block content %}
+<div data-liveview-root>
+    <!-- Test Status Summary -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="alert alert-test {% if all_tests_passed %}alert-success{% else %}alert-danger{% endif %}">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="alert-heading mb-2">
+                            {% if all_tests_passed %}
+                                ✅ All Tests Passed!
+                            {% else %}
+                                ❌ Tests Failed
+                            {% endif %}
+                        </h5>
+                        <p class="mb-0">{{ tests_run }} tests run, {{ tests_passed }} passed, {{ tests_failed }} failed</p>
+                    </div>
+                    <div>
+                        <span class="badge badge-test bg-{% if all_tests_passed %}success{% else %}danger{% endif %}">
+                            {{ tests_passed }}/{{ tests_run }}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="row g-4 mb-4">
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Server Calls</div>
+                <div class="stat-value text-primary">{{ server_calls }}</div>
+                <small class="text-muted">Database queries</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Total Searches</div>
+                <div class="stat-value">{{ total_searches }}</div>
+                <small class="text-muted">Events triggered</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Cache Efficiency</div>
+                <div class="stat-value text-success">{{ cache_efficiency }}%</div>
+                <small class="text-muted">Requests saved</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Expected Calls</div>
+                <div class="stat-value text-info">3</div>
+                <small class="text-muted">Should be exactly 3</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- Test Results -->
+    <div class="test-card mb-4">
+        <div class="test-card-header">
+            <h5 class="mb-0">
+                <i class="bi bi-list-check me-2"></i>
+                Test Results
+            </h5>
+        </div>
+        <div class="card-body">
+            {% if test_results %}
+                {% for test in test_results %}
+                <div class="test-result-item p-3 {% if test.passed %}test-result-passed{% else %}test-result-failed{% endif %}">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div class="flex-grow-1">
+                            <h6 class="mb-1">
+                                {% if test.passed %}
+                                    <span class="text-success">✅</span>
+                                {% else %}
+                                    <span class="text-danger">❌</span>
+                                {% endif %}
+                                {{ test.name }}
+                            </h6>
+                            <p class="mb-1 text-muted small">{{ test.description }}</p>
+                            {% if test.details %}
+                            <div class="mt-2">
+                                <code class="small">{{ test.details }}</code>
+                            </div>
+                            {% endif %}
+                        </div>
+                        <span class="badge bg-{% if test.passed %}success{% else %}danger{% endif %} ms-3">
+                            {{ test.duration_ms }}ms
+                        </span>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="alert alert-test alert-info mb-0">
+                    <i class="bi bi-info-circle me-2"></i>
+                    <strong>Waiting for tests to run...</strong> Tests will start automatically in 2 seconds.
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Manual Test Section -->
+    <div class="test-card">
+        <div class="test-card-header">
+            <h5 class="mb-0">
+                <i class="bi bi-keyboard me-2"></i>
+                Manual Test
+            </h5>
+        </div>
+        <div class="card-body">
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Search Query</label>
+                <input
+                    type="text"
+                    class="form-control form-control-lg"
+                    @input="search"
+                    placeholder="Type to test manually..."
+                    value="{{ query }}"
+                    autocomplete="off"
+                >
+                <small class="text-muted">
+                    <i class="bi bi-lightbulb me-1"></i>
+                    Try searching for "test" twice - second search should be instant
+                </small>
+            </div>
+
+            <div class="alert alert-test alert-info">
+                <h6 class="alert-heading">
+                    <i class="bi bi-terminal me-2"></i>
+                    How to verify cache is working:
+                </h6>
+                <ol class="mb-0 small">
+                    <li>Open browser console and run: <code class="code-block d-inline">window.djustDebug = true</code></li>
+                    <li>Type "test" in the search box above</li>
+                    <li>Wait 500ms (debounce delay)</li>
+                    <li>Clear and type "test" again</li>
+                    <li>Check console for: <code class="code-block d-inline">[LiveView:cache] Cache hit: search:test</code></li>
+                    <li>Notice "Server Calls" does NOT increment (cache hit!)</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    // Enable debug mode automatically
+    window.djustDebug = true;
+
+    console.log('[CacheTest] Automated cache tests will run in 2 seconds...');
+    console.log('[CacheTest] Watch for [LiveView:cache] messages in console');
+
+    // Run tests after page loads
+    setTimeout(function() {
+        runCacheTests();
+    }, 2000);
+
+    function runCacheTests() {
+        console.log('\n=== Starting @cache Decorator Tests ===\n');
+
+        const input = document.querySelector('input[type="text"]');
+        if (!input) {
+            console.error('[CacheTest] Search input not found!');
+            return;
+        }
+
+        // Test sequence with delays to allow debounce
+        console.log('[Test 1] Searching for "laptop" (should call server)...');
+        input.value = 'laptop';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+
+        setTimeout(function() {
+            console.log('[Test 2] Clearing search (should call server)...');
+            input.value = '';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+
+            setTimeout(function() {
+                console.log('[Test 3] Searching for "laptop" again (should be CACHED)...');
+                input.value = 'laptop';
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+
+                setTimeout(function() {
+                    console.log('[Test 4] Searching for "mouse" (should call server)...');
+                    input.value = 'mouse';
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+                    setTimeout(function() {
+                        console.log('[Test 5] Searching for "mouse" again (should be CACHED)...');
+                        input.value = 'mouse';
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+
+                        setTimeout(function() {
+                            console.log('\n=== Tests Complete ===');
+                            console.log('Expected: 3 server calls (laptop, empty, mouse)');
+                            console.log('Expected: 2 cache hits (laptop repeat, mouse repeat)');
+                            console.log('Check stats above to verify!');
+                        }, 1000);
+                    }, 1000);
+                }, 1000);
+            }, 1000);
+        }, 1000);
+    }
+})();
+</script>
+{% endblock %}
