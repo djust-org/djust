@@ -247,10 +247,18 @@ impl FilesystemTemplateLoader {
                 return Ok(path);
             }
         }
+
+        // Build list of searched directories for error message
+        let searched_paths: Vec<String> = self
+            .template_dirs
+            .iter()
+            .map(|dir| format!("  - {}", dir.display()))
+            .collect();
+
         Err(DjangoRustError::TemplateError(format!(
-            "Template not found: {} (searched in {} directories)",
+            "Template not found: {}\nSearched in:\n{}",
             name,
-            self.template_dirs.len()
+            searched_paths.join("\n")
         )))
     }
 }
@@ -621,5 +629,53 @@ mod tests {
         assert!(result.contains("{% endfor %}"));
         assert!(result.contains("{% endif %}"));
         assert!(result.contains("{% endblock %}"));
+    }
+
+    #[test]
+    fn test_template_not_found_error_lists_directories() {
+        use std::path::PathBuf;
+        use tempfile::TempDir;
+
+        // Create temporary directories
+        let temp_dir1 = TempDir::new().unwrap();
+        let temp_dir2 = TempDir::new().unwrap();
+        let temp_dir3 = TempDir::new().unwrap();
+
+        let dirs = vec![
+            temp_dir1.path().to_path_buf(),
+            temp_dir2.path().to_path_buf(),
+            temp_dir3.path().to_path_buf(),
+        ];
+
+        let loader = FilesystemTemplateLoader::new(dirs.clone());
+
+        // Try to find a template that doesn't exist
+        let result = loader.find_template("nonexistent.html");
+
+        // Should be an error
+        assert!(result.is_err());
+
+        // Extract error message
+        let error_message = result.unwrap_err().to_string();
+
+        // Should contain the template name
+        assert!(error_message.contains("nonexistent.html"));
+
+        // Should contain "Searched in:" header
+        assert!(error_message.contains("Searched in:"));
+
+        // Should list all three directories
+        for dir in &dirs {
+            let dir_str = dir.display().to_string();
+            assert!(
+                error_message.contains(&dir_str),
+                "Error message should contain directory: {}\nActual message: {}",
+                dir_str,
+                error_message
+            );
+        }
+
+        // Should have proper formatting with bullet points
+        assert!(error_message.contains("  - "));
     }
 }
