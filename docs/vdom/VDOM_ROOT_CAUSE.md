@@ -119,21 +119,21 @@ But this is wasteful (renders twice).
 def get(self, request, *args, **kwargs):
     """Handle GET requests - initial page load"""
     self.mount(request, **kwargs)
-    
+
     # ... session setup ...
-    
+
     # Initialize and render with diff (establishes baseline VDOM)
     self._initialize_rust_view(request)
     self._sync_state_to_rust()
     html, _, _ = self.render_with_diff(request)  # Ignore patches_json, version
-    
+
     # Wrap in Django template if needed
     if hasattr(self, 'wrapper_template') and self.wrapper_template:
         # ... wrapper logic ...
         liveview_content = html
     else:
         liveview_content = html
-    
+
     # ... rest of GET handler ...
 ```
 

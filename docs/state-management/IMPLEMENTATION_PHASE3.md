@@ -987,7 +987,7 @@ console.log(`Optimistic update took ${elapsed}ms`);
 
 **Optimistic Updates:**
 - Checkboxes toggle instantly
-- Form inputs update instantly  
+- Form inputs update instantly
 - Buttons show loading states
 - Server errors revert with shake animation
 - Works seamlessly with Phase 2 decorators
@@ -1025,7 +1025,7 @@ def toggle(self, checked: bool):
     self.completed = checked
 
 # ❌ Counter display not optimistic (button loading state only)
-@optimistic  
+@optimistic
 def increment(self):
     self.count += 1  # Button shows loading, display waits for server
 ```
@@ -1085,4 +1085,3 @@ def increment(self):
 ---
 
 **Phase 3 is production-ready! 🚀**
-
