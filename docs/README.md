@@ -88,6 +88,11 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[Framework Comparison](marketing/FRAMEWORK_COMPARISON.md)** - vs alternatives
 - **[Why Not Alternatives](marketing/WHY_NOT_ALTERNATIVES.md)** - Why djust over X
 
+### 🌐 Example Site
+- **[Phase 5 Showcase Plan](example-site/EXAMPLE_SITE_PHASE5_PLAN.md)** - Plan to showcase Phase 5 features on example site
+- **[Current Site Structure](example-site/CURRENT_SITE_STRUCTURE.md)** - Comprehensive inventory of existing site
+- **[Progress Tracker](example-site/PROGRESS_TRACKER.md)** - Implementation progress tracking
+
 ### 📦 Archive
 Historical documents preserved for reference:
 - [Phase 3 Complete](archive/PHASE3_COMPLETE.md)
@@ -123,6 +128,7 @@ docs/
 ├── archive/          # Historical documents
 ├── components/       # Component system & library
 ├── development/      # Development process & CI/CD
+├── example-site/     # Example site updates & tracking
 ├── forms/           # Django Forms integration
 ├── guides/          # User guides
 ├── ide-setup/       # IDE configuration
