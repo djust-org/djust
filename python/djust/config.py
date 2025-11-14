@@ -87,6 +87,14 @@ class LiveViewConfig:
         # Component defaults
         "component_wrapper_class": "",
         "component_loading_class": "loading",
+        # @loading attribute configuration (Phase 5)
+        "loading_grouping_classes": [
+            "d-flex",  # Bootstrap flex container
+            "btn-group",  # Bootstrap button group
+            "input-group",  # Bootstrap input group
+            "form-group",  # Bootstrap form group
+            "btn-toolbar",  # Bootstrap button toolbar
+        ],
     }
 
     def __init__(self):

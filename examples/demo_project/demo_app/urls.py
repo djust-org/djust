@@ -48,6 +48,7 @@ urlpatterns = [
     path('demos/cache/', views.CacheDemoView.as_view(), name='demos-cache'),
     path('demos/cache-test/', views.CacheTestView.as_view(), name='demos-cache-test'),
     path('tests/draft-mode/', views.DraftModeTestView.as_view(), name='tests-draft-mode'),
+    path('tests/loading/', views.LoadingTestView.as_view(), name='tests-loading'),
 
     # Test Suite
     path('tests/', views.TestIndexView.as_view(), name='tests-index'),

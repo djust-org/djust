@@ -199,20 +199,24 @@ class TestRedisBackend:
     """Test RedisStateBackend (requires Redis server)."""
 
     @pytest.fixture
-    def redis_backend(self):
-        """Create Redis backend for testing."""
+    def redis_backend(self, request):
+        """Create Redis backend for testing (parallel-safe)."""
         try:
+            # Get worker ID for parallel test isolation
+            worker_id = getattr(request.config, 'workerinput', {}).get('workerid', 'master')
+            key_prefix = f"djust:test:{worker_id}:"
+
             backend = RedisStateBackend(
                 redis_url="redis://localhost:6379/15",  # Use DB 15 for testing
                 default_ttl=60,
-                key_prefix="djust:test:",
+                key_prefix=key_prefix,
             )
             yield backend
-            # Cleanup: delete all test keys
+            # Cleanup: delete all test keys for this worker
             import redis
 
             client = redis.from_url("redis://localhost:6379/15")
-            for key in client.scan_iter(match="djust:test:*"):
+            for key in client.scan_iter(match=f"{key_prefix}*"):
                 client.delete(key)
         except Exception as e:
             pytest.skip(f"Redis not available: {e}")
@@ -264,8 +268,9 @@ class TestRedisBackend:
         # Key should exist immediately
         assert redis_backend.get("ttl_key") is not None
 
-        # Check Redis TTL
-        ttl = client.ttl("djust:test:ttl_key")
+        # Check Redis TTL (use worker-specific key prefix for parallel safety)
+        redis_key = f"{redis_backend.key_prefix}ttl_key"
+        ttl = client.ttl(redis_key)
         assert ttl > 0 and ttl <= 1
 
         # Wait for expiration
@@ -307,9 +312,10 @@ class TestRedisBackend:
         redis_backend.set("persist_key", view)
 
         # Create new backend instance (simulating server restart)
+        # Use same key_prefix as first backend for parallel-safe testing
         backend2 = RedisStateBackend(
             redis_url="redis://localhost:6379/15",
-            key_prefix="djust:test:",
+            key_prefix=redis_backend.key_prefix,
         )
 
         # Retrieve from new instance

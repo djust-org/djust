@@ -1413,16 +1413,26 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # Get WebSocket setting from config
         use_websocket = config.get("use_websocket", True)
         debug_vdom = config.get("debug_vdom", False)
+        loading_grouping_classes = config.get(
+            "loading_grouping_classes",
+            ["d-flex", "btn-group", "input-group", "form-group", "btn-toolbar"],
+        )
+
+        # Convert Python list to JavaScript array
+        import json
+
+        loading_classes_js = json.dumps(loading_grouping_classes)
 
         config_script = f"""
         <script>
             // djust configuration
             window.DJUST_USE_WEBSOCKET = {str(use_websocket).lower()};
             window.DJUST_DEBUG_VDOM = {str(debug_vdom).lower()};
+            window.DJUST_LOADING_GROUPING_CLASSES = {loading_classes_js};
         </script>
         """
 
-        script = """
+        script = r"""
         <script>
             // djust - WebSocket + HTTP Fallback Client
 
@@ -1436,6 +1446,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     this.reconnectDelay = 1000;
                     this.viewMounted = false;
                     this.enabled = true;  // Can be disabled to use HTTP fallback
+                    this.lastEventName = null;  // Phase 5: Track last event for loading state
+                    this.lastTriggerElement = null;  // Phase 5: Track trigger element for scoped loading
                 }
 
                 connect(url = null) {
@@ -1570,6 +1582,13 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                                     form.reset();
                                 }
                             }
+
+                            // Phase 5: Stop loading state after patches applied
+                            if (this.lastEventName) {
+                                globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                                this.lastEventName = null;
+                                this.lastTriggerElement = null;
+                            }
                             break;
 
                         case 'html_update':
@@ -1588,12 +1607,26 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                                     form.reset();
                                 }
                             }
+
+                            // Phase 5: Stop loading state after HTML update
+                            if (this.lastEventName) {
+                                globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                                this.lastEventName = null;
+                                this.lastTriggerElement = null;
+                            }
                             break;
 
                         case 'error':
                             console.error('[LiveView] Server error:', data.error);
                             if (data.traceback) {
                                 console.error('Traceback:', data.traceback);
+                            }
+
+                            // Phase 5: Stop loading state on error
+                            if (this.lastEventName) {
+                                globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                                this.lastEventName = null;
+                                this.lastTriggerElement = null;
                             }
                             break;
 
@@ -1646,6 +1679,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                         console.warn('[LiveView] View not mounted. Event ignored:', eventName);
                         return false;
                     }
+
+                    // Phase 5: Track event name for loading state
+                    this.lastEventName = eventName;
 
                     this.ws.send(JSON.stringify({
                         type: 'event',
@@ -2372,6 +2408,66 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                         };
 
                         element.addEventListener('input', optimisticHandler);
+                    }
+
+                    // Phase 5: Register elements with @loading attributes
+                    // This enables Phoenix LiveView-style loading indicators (disable, show, hide, class)
+                    const hasLoadingAttr = Array.from(element.attributes).some(attr =>
+                        attr.name.startsWith('@loading.')
+                    );
+
+                    if (hasLoadingAttr && !element.dataset.loadingRegistered) {
+                        element.dataset.loadingRegistered = 'true';
+
+                        // ============================================================
+                        // Event Name Discovery: Two Strategies
+                        // ============================================================
+                        // We need to associate this @loading element with an event name
+                        // so we know when to apply/remove loading state.
+                        //
+                        // Strategy 1: Element has its own event handler
+                        //   Example: <button @click="save" @loading.disable>
+                        //   → Register for "save" event
+                        //
+                        // Strategy 2: Sibling has event handler (for spinners/indicators)
+                        //   Example:
+                        //     <div class="d-flex">
+                        //       <button @click="save">Save</button>
+                        //       <div @loading.show>Spinner</div>
+                        //     </div>
+                        //   → Spinner registers for "save" event from sibling button
+                        //
+                        // This allows flexible UI patterns without requiring the event
+                        // handler to be on the loading element itself.
+                        // ============================================================
+
+                        let eventName = element.getAttribute('@click') ||
+                                       element.getAttribute('@submit') ||
+                                       element.getAttribute('@change') ||
+                                       element.getAttribute('@input');
+
+                        // Strategy 2: Sibling event detection
+                        if (!eventName && element.parentElement) {
+                            const siblings = Array.from(element.parentElement.children);
+                            for (const sibling of siblings) {
+                                const siblingEvent = sibling.getAttribute('@click') ||
+                                                   sibling.getAttribute('@submit') ||
+                                                   sibling.getAttribute('@change') ||
+                                                   sibling.getAttribute('@input');
+                                if (siblingEvent) {
+                                    eventName = siblingEvent;
+                                    break; // Use first event found in siblings
+                                }
+                            }
+                        }
+
+                        if (eventName) {
+                            globalLoadingManager.register(element, eventName);
+
+                            if (globalThis.djustDebug) {
+                                console.log(`[Loading] Registered element for "${eventName}"`, element);
+                            }
+                        }
                     }
                 });
             }
@@ -3254,6 +3350,228 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             }
 
             // ============================================================================
+            // Loading Attribute Support (Phase 5)
+            // ============================================================================
+
+            class LoadingManager {
+                constructor() {
+                    this.loadingElements = new Map();
+                    this.pendingEvents = new Set();
+                }
+
+                register(element, eventName) {
+                    // Check if element is already registered - preserve original state if so
+                    const existingConfig = this.loadingElements.get(element);
+                    const preservedOriginalState = existingConfig?.originalState || {};
+
+                    const attributes = element.attributes;
+                    const loadingConfig = {
+                        eventName,
+                        modifiers: [],
+                        originalState: {}
+                    };
+
+                    for (let i = 0; i < attributes.length; i++) {
+                        const attr = attributes[i];
+                        const match = attr.name.match(/^@loading\.(.+)$/);
+                        if (match) {
+                            const modifier = match[1];
+
+                            if (modifier === 'disable') {
+                                loadingConfig.modifiers.push({ type: 'disable' });
+                                // Preserve original state if already registered, otherwise capture current
+                                loadingConfig.originalState.disabled = preservedOriginalState.disabled !== undefined
+                                    ? preservedOriginalState.disabled
+                                    : element.disabled;
+                            } else if (modifier === 'show') {
+                                loadingConfig.modifiers.push({ type: 'show' });
+                                loadingConfig.originalState.display = preservedOriginalState.display !== undefined
+                                    ? preservedOriginalState.display
+                                    : element.style.display;
+                            } else if (modifier === 'hide') {
+                                loadingConfig.modifiers.push({ type: 'hide' });
+                                loadingConfig.originalState.display = preservedOriginalState.display !== undefined
+                                    ? preservedOriginalState.display
+                                    : element.style.display;
+                            } else if (modifier === 'class') {
+                                const className = attr.value;
+                                if (className) {
+                                    loadingConfig.modifiers.push({ type: 'class', value: className });
+                                }
+                            }
+                        }
+                    }
+
+                    if (loadingConfig.modifiers.length > 0) {
+                        this.loadingElements.set(element, loadingConfig);
+
+                        if (globalThis.djustDebug) {
+                            console.log(`[Loading] Registered modifiers for "${eventName}":`,
+                                loadingConfig.modifiers, element);
+                        }
+                    }
+                }
+
+                startLoading(eventName, triggerElement = null) {
+                    this.pendingEvents.add(eventName);
+
+                    if (globalThis.djustDebug) {
+                        console.log(`[Loading] Started: ${eventName}`, triggerElement);
+                    }
+
+                    this.loadingElements.forEach((config, element) => {
+                        if (config.eventName === eventName) {
+                            // Only apply loading state if element is related to the trigger
+                            if (this.isRelatedElement(element, triggerElement)) {
+                                this.applyLoadingState(element, config);
+                            }
+                        }
+                    });
+                }
+
+                stopLoading(eventName, triggerElement = null) {
+                    this.pendingEvents.delete(eventName);
+
+                    if (globalThis.djustDebug) {
+                        console.log(`[Loading] Stopped: ${eventName}`, triggerElement);
+                    }
+
+                    this.loadingElements.forEach((config, element) => {
+                        if (config.eventName === eventName) {
+                            // Only remove loading state if element is related to the trigger
+                            if (this.isRelatedElement(element, triggerElement)) {
+                                this.removeLoadingState(element, config);
+                            }
+                        }
+                    });
+                }
+                /**
+                 * Check if an element is related to the trigger element.
+                 *
+                 * This method implements scoped loading state to prevent cross-button
+                 * contamination when multiple buttons share the same event handler.
+                 *
+                 * Scoping Rules:
+                 * 1. The trigger element itself is ALWAYS affected
+                 * 2. Siblings are ONLY affected if they're in an explicit grouping container
+                 *
+                 * Grouping Containers (Bootstrap-oriented):
+                 * - d-flex: Flexbox layouts (common for button + spinner)
+                 * - btn-group: Button groups
+                 * - input-group: Input groups with buttons
+                 * - form-group: Form field groups
+                 * - btn-toolbar: Button toolbars
+                 *
+                 * Why these specific classes?
+                 * - They indicate intentional UI grouping in Bootstrap (most common framework)
+                 * - They're semantically meaningful (not just styling classes)
+                 * - They provide a clear developer signal that elements should coordinate
+                 *
+                 * Examples:
+                 *
+                 * ✅ INDEPENDENT (no grouping):
+                 *   <div class="card-body">
+                 *     <button @click="save" @loading.disable>Save A</button>
+                 *     <button @click="save" @loading.disable>Save B</button>
+                 *   </div>
+                 *   → Clicking Save A only affects Save A
+                 *
+                 * ✅ GROUPED (d-flex):
+                 *   <div class="d-flex gap-2">
+                 *     <button @click="save">Save</button>
+                 *     <div @loading.show>Spinner</div>
+                 *   </div>
+                 *   → Clicking Save affects both button and spinner
+                 *
+                 * Note: This list is hardcoded for Bootstrap compatibility.
+                 * Future enhancement: Make configurable via config.
+                 *
+                 * @param {HTMLElement} element - Element with @loading attribute
+                 * @param {HTMLElement} triggerElement - Element that triggered the event
+                 * @returns {boolean} True if element should receive loading state
+                 */
+                isRelatedElement(element, triggerElement) {
+                    if (!triggerElement) {
+                        // No trigger specified, apply to all (legacy behavior)
+                        return true;
+                    }
+
+                    // Always match the trigger element itself
+                    if (element === triggerElement) {
+                        return true;
+                    }
+
+                    // Only match siblings if they're in an explicit grouping container
+                    if (element.parentElement && triggerElement.parentElement &&
+                        element.parentElement === triggerElement.parentElement) {
+
+
+                        // Check if parent has a grouping class (configurable via LIVEVIEW_CONFIG)
+                        const groupingClasses = window.DJUST_LOADING_GROUPING_CLASSES || ['d-flex', 'btn-group', 'input-group', 'form-group', 'btn-toolbar'];
+                        const parentClasses = element.parentElement.className || '';
+
+                        // Allow sibling matching only for explicitly grouped containers
+                        return groupingClasses.some(cls => parentClasses.includes(cls));
+                    }
+
+                    return false;
+                }
+
+                applyLoadingState(element, config) {
+                    if (globalThis.djustDebug) {
+                        console.log(`[Loading] Applying state to element:`, element, 'modifiers:', config.modifiers);
+                    }
+
+                    config.modifiers.forEach(modifier => {
+                        if (modifier.type === 'disable') {
+                            element.disabled = true;
+                            if (globalThis.djustDebug) {
+                                console.log(`[Loading] Applied disable to element`);
+                            }
+                        } else if (modifier.type === 'show') {
+                            element.style.display = element.getAttribute('data-loading-display') || 'block';
+                            if (globalThis.djustDebug) {
+                                console.log(`[Loading] Applied show to element`);
+                            }
+                        } else if (modifier.type === 'hide') {
+                            element.style.display = 'none';
+                            if (globalThis.djustDebug) {
+                                console.log(`[Loading] Applied hide to element`);
+                            }
+                        } else if (modifier.type === 'class') {
+                            element.classList.add(modifier.value);
+                            if (globalThis.djustDebug) {
+                                console.log(`[Loading] Applied class "${modifier.value}" to element`);
+                            }
+                        }
+                    });
+                }
+
+                removeLoadingState(element, config) {
+                    config.modifiers.forEach(modifier => {
+                        if (modifier.type === 'disable') {
+                            element.disabled = config.originalState.disabled || false;
+                        } else if (modifier.type === 'show' || modifier.type === 'hide') {
+                            element.style.display = config.originalState.display || '';
+                        } else if (modifier.type === 'class') {
+                            element.classList.remove(modifier.value);
+                        }
+                    });
+                }
+
+                isLoading(eventName) {
+                    return this.pendingEvents.has(eventName);
+                }
+
+                clear() {
+                    this.loadingElements.clear();
+                    this.pendingEvents.clear();
+                }
+            }
+
+            const globalLoadingManager = new LoadingManager();
+
+            // ============================================================================
             // Event Handling
             // ============================================================================
 
@@ -3302,8 +3620,18 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     }
                 }
 
+                // Phase 5: Start loading state (pass trigger element for scoping)
+                const triggerElement = params._targetElement;
+                globalLoadingManager.startLoading(eventName, triggerElement);
+
+                // Store trigger element for WebSocket flow (stopLoading will need it)
+                if (liveViewWS) {
+                    liveViewWS.lastTriggerElement = triggerElement;
+                }
+
                 // Remove internal flags before sending
                 delete params._skipDecorators;
+                delete params._targetElement;
 
                 // Try WebSocket first
                 if (liveViewWS && liveViewWS.sendEvent(eventName, params)) {
@@ -3356,6 +3684,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                                     initTodoItems();
                                     bindLiveViewEvents();
                                 }
+                                // Phase 5: Stop loading state after version mismatch recovery
+                                globalLoadingManager.stopLoading(eventName, triggerElement);
                                 return;
                             }
                             // Update client version
@@ -3373,6 +3703,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                             if (success === false) {
                                 // Patches failed - reload the page to get fresh state
                                 console.error('[LiveView] Patches failed to apply, reloading page...');
+                                // Phase 5: Stop loading state before reload
+                                globalLoadingManager.stopLoading(eventName, triggerElement);
                                 window.location.reload();
                                 return;
                             }
@@ -3397,6 +3729,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                         } else {
                             console.warn('[LiveView] Response has neither patches nor html!', data);
                         }
+
+                        // Phase 5: Stop loading state after successful update
+                        globalLoadingManager.stopLoading(eventName, triggerElement);
                     } else {
                         // Handle HTTP errors (500, 404, etc.)
                         const errorData = await response.json().catch(() => ({}));
@@ -3410,6 +3745,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                         // Revert optimistic update on error (Phase 3)
                         revertOptimisticUpdate(eventName);
 
+                        // Phase 5: Stop loading state on error
+                        globalLoadingManager.stopLoading(eventName, triggerElement);
+
                         // Show user-friendly error notification
                         showErrorNotification(errorData, response.status);
                     }
@@ -3418,6 +3756,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
                     // Revert optimistic update on network error (Phase 3)
                     revertOptimisticUpdate(eventName);
+
+                    // Phase 5: Stop loading state on network error
+                    globalLoadingManager.stopLoading(eventName, triggerElement);
 
                     showErrorNotification({ error: 'Network error occurred. Please check your connection.' }, 0);
                 }

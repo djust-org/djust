@@ -1,6 +1,6 @@
 # State Management API Reference
 
-**Status:** 🚧 Partially Implemented (@cache, @client_state, DraftModeMixin ✅ | @debounce, @throttle, @optimistic, @loading 🚧)
+**Status:** ✅ Implemented (Phase 5 Complete: @cache, @client_state, DraftModeMixin, @loading)
 
 **Last Updated:** 2025-11-14
 
@@ -52,6 +52,125 @@ djust's State Management API provides Python-only abstractions for common client
 
 ---
 
+## Decorator Cheat Sheet
+
+**Quick decision guide for choosing the right decorator**
+
+### At a Glance
+
+| Decorator | When to Use | Typical Wait/Interval | Bundle Impact |
+|-----------|-------------|----------------------|---------------|
+| `@debounce(wait)` | User is typing, dragging | 0.3-0.5s | +0.8 KB |
+| `@throttle(interval)` | Scroll, resize, mouse move | 0.1-0.2s | +0.8 KB |
+| `@optimistic` | Need instant feedback | N/A | +0.5 KB |
+| `@cache(ttl)` | Same query repeated | 60-300s | +0.7 KB |
+| `@client_state(keys)` | Multi-component coordination | N/A | +0.6 KB |
+| `DraftModeMixin` | Long forms, text editors | Auto-save | +0.9 KB |
+
+**Total bundle size: 7.1 KB** (vs Phoenix ~30 KB, Livewire ~50 KB)
+
+### Quick Decision Matrix
+
+```
+❓ User is typing in search/input?
+   → @debounce(wait=0.5)
+
+❓ Handling scroll, resize, or mousemove?
+   → @throttle(interval=0.1)
+
+❓ Need instant UI update before server responds?
+   → @optimistic
+
+❓ Same query gets called multiple times?
+   → @cache(ttl=60, key_params=["query"])
+
+❓ Multiple components need to share state?
+   → @client_state(keys=["filter", "sort"])
+
+❓ Auto-save form drafts to localStorage?
+   → DraftModeMixin
+
+❓ Show loading spinner/disable button?
+   → @loading.disable, @loading.show HTML attributes
+```
+
+### Common Combinations
+
+**Pattern 1: Debounced Search with Cache**
+```python
+@debounce(wait=0.5)     # Wait for user to stop typing
+@cache(ttl=300, key_params=["query"])  # Cache responses for 5 minutes
+def search(self, query: str = "", **kwargs):
+    self.results = Product.objects.filter(name__icontains=query)[:20]
+```
+**Result**: Server only queries after 500ms of silence, cached for 5 min
+
+---
+
+**Pattern 2: Instant Feedback with Server Validation**
+```python
+@debounce(wait=0.5)     # Debounce server calls
+@optimistic              # Update UI instantly
+def update_value(self, value: int = 0, **kwargs):
+    self.value = max(0, min(100, value))  # Server validates range
+```
+**Result**: UI updates instantly, server validates/corrects after 500ms
+
+---
+
+**Pattern 3: Multi-Component Dashboard**
+```python
+# Component A: Filter selector
+@client_state(keys=["filter"])
+def update_filter(self, filter: str = "", **kwargs):
+    self.filter = filter  # Published to StateBus
+
+# Component B: Results list (auto-subscribes)
+@client_state(keys=["filter"])
+@debounce(wait=0.3)
+def on_filter_change(self, filter: str = "", **kwargs):
+    self.results = self.apply_filter(filter)
+```
+**Result**: Components automatically coordinate via client-side StateBus
+
+---
+
+**Pattern 4: Auto-Save Form**
+```python
+class ContactFormView(DraftModeMixin, FormMixin, LiveView):
+    form_class = ContactForm
+    draft_fields = ["name", "email", "message"]  # Auto-saved
+    draft_ttl = 3600  # 1 hour
+
+    @debounce(wait=1.0)
+    @optimistic
+    def auto_save(self, **kwargs):
+        # Optional server-side auto-save
+        pass
+```
+**Result**: Drafts saved to localStorage every 1s, restored on page load
+
+---
+
+### Performance Characteristics
+
+| Decorator | Client Overhead | Server Impact | Network Impact |
+|-----------|----------------|---------------|----------------|
+| `@debounce` | ~1ms | ⬇️ Reduces calls | ⬇️ Fewer requests |
+| `@throttle` | ~1ms | ⬇️ Reduces calls | ⬇️ Fewer requests |
+| `@optimistic` | ~2ms | ➡️ Same calls | ➡️ Same requests |
+| `@cache` | ~1ms lookup | ⬇️⬇️ Eliminates repeat calls | ⬇️⬇️ Zero for cache hits |
+| `@client_state` | ~2ms | ➡️ Same calls | ➡️ Same requests |
+| `DraftModeMixin` | ~3ms | ⬆️ Adds save calls (optional) | ➡️ Small localStorage writes |
+
+**Legend:**
+- ⬇️ Reduces - Fewer calls/requests
+- ⬇️⬇️ Eliminates - Zero calls for cached responses
+- ➡️ Same - No change
+- ⬆️ Adds - Increases calls/requests
+
+---
+
 ## Quick Reference
 
 | Feature | Use Case | Python | HTML |
@@ -59,8 +178,8 @@ djust's State Management API provides Python-only abstractions for common client
 | **Debouncing** | Search input, text fields | `@debounce(0.5)` | - |
 | **Throttling** | Scroll, resize, mouse move | `@throttle(0.1)` | - |
 | **Optimistic Updates** | Counters, toggles, sliders | `@optimistic` | - |
-| **Loading States** | Button clicks, form submits | - | `@loading` |
-| **Loading Text** | Button text replacement | - | `@loading-text="Saving..."` |
+| **Loading States** | Button disable, spinners, overlays | - | `@loading.disable`, `@loading.show`, `@loading.hide`, `@loading.class` |
+| **Loading Text** | Button text replacement | - | `@loading-text="Saving..."` (deprecated) |
 | **Client State** | Multi-component coordination | `@client_state(keys=["temp"])` | - |
 | **Caching** | Autocomplete, API calls | `@cache(ttl=300)` | - |
 | **Draft Mode** | Forms, text editors | `DraftModeMixin` | - |
@@ -71,7 +190,7 @@ djust's State Management API provides Python-only abstractions for common client
 
 ### @debounce
 
-**Status:** 🚧 Proposed (Decorator exists, client support needed)
+**Status:** ✅ Implemented (Phase 2)
 
 Delays handler execution until user stops typing/interacting for specified duration. Perfect for search inputs, text fields, and any high-frequency input events.
 
@@ -155,7 +274,7 @@ class SearchView(LiveView):
 
 ### @throttle
 
-**Status:** 🚧 Proposed (Decorator exists, client support needed)
+**Status:** ✅ Implemented (Phase 2)
 
 Limits handler execution to once per time interval, regardless of event frequency. Perfect for scroll handlers, mouse movement, and window resize events.
 
@@ -236,7 +355,7 @@ class ScrollTrackerView(LiveView):
 
 ### @optimistic
 
-**Status:** 🚧 Proposed (Not Yet Implemented)
+**Status:** ✅ Implemented (Phase 3)
 
 Enables optimistic UI updates - client updates DOM immediately while server validates asynchronously. Perfect for counters, toggles, sliders, and any interaction where immediate feedback improves UX.
 
@@ -372,7 +491,7 @@ def on_search(self, query: str = "", **kwargs):
 
 ### @client_state
 
-**Status:** ✅ Implemented
+**Status:** ✅ Implemented (PR #81)
 
 Enables client-side state sharing between multiple components without server round trips. Perfect for dashboards, coordinated UI updates, and multi-component communication.
 
@@ -522,7 +641,7 @@ Template:
 
 ### @cache
 
-**Status:** ✅ Implemented
+**Status:** ✅ Implemented (PR #80)
 
 Enables automatic client-side response caching with TTL and LRU eviction. Perfect for autocomplete, repeated API calls, and any idempotent read operations.
 
@@ -693,7 +812,7 @@ Example autocomplete performance:
 
 ### DraftModeMixin
 
-**Status:** ✅ Implemented
+**Status:** ✅ Implemented (PR #82)
 
 Automatically saves form field values to localStorage and restores on page reload. Perfect for long forms, comment boxes, and any input where losing data would be frustrating.
 
@@ -982,16 +1101,36 @@ User submits → localStorage.removeItem() (clear draft)
 
 ### @loading
 
-**Status:** 🚧 Proposed (Not Yet Implemented)
+**Status:** ✅ Implemented (PR #83)
 
-Automatically shows/hides elements during event processing. Perfect for loading spinners, status messages, and "Saving..." indicators.
+Phoenix LiveView-style loading attributes for showing/hiding elements and adding classes during async operations. Perfect for loading spinners, status messages, and "Saving..." indicators.
+
+#### Supported Modifiers
+
+- `@loading.disable` - Disable element during loading
+- `@loading.class="class-name"` - Add class during loading
+- `@loading.show` - Show element during loading (display: block)
+- `@loading.hide` - Hide element during loading (display: none)
+
+Multiple modifiers can be combined on the same element.
 
 #### Syntax
 
 ```html
-<element @loading>
-    Content shown only during event processing
-</element>
+<!-- Disable button during event -->
+<button @loading.disable>Button Text</button>
+
+<!-- Add loading class -->
+<button @loading.class="opacity-50">Button Text</button>
+
+<!-- Show element during loading -->
+<div @loading.show style="display: none;">Loading...</div>
+
+<!-- Hide element during loading -->
+<div @loading.hide>Content</div>
+
+<!-- Combine multiple modifiers -->
+<button @loading.disable @loading.class="loading">Save</button>
 ```
 
 #### Example
@@ -1002,122 +1141,207 @@ class SaveFormView(LiveView):
     <form @submit="save_data">
         <input type="text" name="title" />
 
-        <button type="submit">
-            Save
-            <span @loading> <!-- Hidden by default -->
-                <i class="spinner"></i> Saving...
-            </span>
+        <!-- Disable and add class during save -->
+        <button type="submit" @loading.disable @loading.class="opacity-50">
+            Save Article
         </button>
 
-        <!-- Status messages -->
-        <div @loading class="alert alert-info">
-            Processing your request...
+        <!-- Show spinner during save -->
+        <div @loading.show style="display: none;">
+            <i class="fas fa-spinner fa-spin"></i> Saving...
         </div>
+
+        <!-- Hide form content during save -->
+        <div @loading.hide>
+            <textarea name="content"></textarea>
+        </div>
+
+        <!-- Hide cancel button during save -->
+        <button type="button" @loading.hide>Cancel</button>
     </form>
     """
 
-    def save_data(self, title: str = "", **kwargs):
+    def save_data(self, title: str = "", content: str = "", **kwargs):
         """
         While this handler runs:
-        - Elements with @loading are shown
-        - CSS class 'loading' added to parent
+        - Submit button is disabled and has opacity-50 class
+        - Spinner is visible
+        - Form content and cancel button are hidden
 
         When handler completes:
-        - @loading elements hidden
-        - 'loading' class removed
+        - All states restore automatically
         """
         time.sleep(2)  # Simulate slow operation
-        MyModel.objects.create(title=title)
+        MyModel.objects.create(title=title, content=content)
 ```
 
 #### Behavior
 
 1. **User submits form** → Event sent to server
-2. **Loading starts** → Elements with `@loading` become **visible**
+2. **Loading starts** → `globalLoadingManager.startLoading(eventName, triggerElement)`
+   - Elements with `@loading.disable` become disabled
+   - Elements with `@loading.class` get the class added
+   - Elements with `@loading.show` become visible
+   - Elements with `@loading.hide` become hidden
 3. **Handler executes** → Processing on server
-4. **Response received** → Elements with `@loading` become **hidden**
+4. **Response received** → `globalLoadingManager.stopLoading(eventName, triggerElement)`
+   - All original states restored automatically
 
-#### CSS Classes
+#### Scoping Rules
 
-Elements receive automatic CSS classes:
+Loading states are scoped to prevent cross-button contamination when multiple buttons trigger the same event handler:
 
+**Rule 1: Trigger Element Always Affected**
+- The button/element that triggered the event always gets the loading state
+
+**Rule 2: Siblings Only in Grouping Containers**
+- Sibling elements are affected ONLY if they share a parent with an explicit grouping class:
+  - `d-flex` (Bootstrap flex container)
+  - `btn-group` (Bootstrap button group)
+  - `input-group` (Bootstrap input group)
+  - `form-group` (Bootstrap form group)
+  - `btn-toolbar` (Bootstrap button toolbar)
+
+**Example: Independent Buttons**
 ```html
-<button @click="save">
-    <!-- Before click -->
-    <span @loading style="display: none;">Saving...</span>
-
-    <!-- During event (automatic) -->
-    <span @loading style="display: inline;">Saving...</span>
-</button>
-```
-
-Parent elements receive `.loading` class:
-
-```css
-/* Auto-applied during event processing */
-button.loading {
-    opacity: 0.6;
-    cursor: wait;
-}
-```
-
-#### Multiple Loading States
-
-```html
-<div>
-    <!-- Show during ANY event -->
-    <div @loading>Processing...</div>
-
-    <!-- Show only during specific event -->
-    <div @loading="save_data">Saving data...</div>
-
-    <!-- Show during multiple events -->
-    <div @loading="save_data,upload_file">Working...</div>
+<div class="card-body">
+    <!-- These buttons operate INDEPENDENTLY even with same event -->
+    <button @click="save" @loading.disable>Save A</button>
+    <button @click="save" @loading.class="opacity-25">Save B</button>
+    <button @click="save" @loading.disable @loading.class="opacity-25">Save C</button>
 </div>
 ```
+✅ Clicking "Save A" only affects "Save A" (no grouping container)
 
-#### Combining with Icons
-
+**Example: Grouped Elements (Button + Spinner)**
 ```html
-<button @click="process">
-    Process
-    <span @loading>
-        <i class="fas fa-spinner fa-spin"></i>
-        Processing...
-    </span>
-</button>
+<div class="d-flex align-items-center gap-3">
+    <!-- These are grouped together because of d-flex parent -->
+    <button @click="save">Save</button>
+    <div @loading.show style="display: none;">Saving...</div>
+</div>
+```
+✅ Clicking "Save" affects both button and spinner (d-flex grouping)
+
+**Example: Wrong - No Grouping**
+```html
+<!-- ❌ Spinner won't show - no grouping container -->
+<button @click="save">Save</button>
+<div @loading.show style="display: none;">Saving...</div>
 ```
 
-#### Loading Delays
+**Visual Effects:**
+- **@loading.disable**: Bootstrap applies `opacity: 0.65` automatically to disabled buttons
+- **@loading.class="opacity-25"**: Much more transparent (0.25), button stays enabled
+- **Combined**: Button disabled (cursor: not-allowed) AND very transparent
 
-Show loading indicator only for slow operations:
+#### Custom Display Value
+
+Use `data-loading-display` to customize the display value for `@loading.show`:
 
 ```html
-<!-- Show after 200ms delay (avoid flash for fast operations) -->
-<div @loading.delay>Loading...</div>
-
-<!-- Custom delay -->
-<div @loading.delay.1000>Still loading...</div>
+<!-- Show as inline-block instead of block -->
+<span @loading.show data-loading-display="inline-block" style="display: none;">
+    Loading...
+</span>
 ```
+
+#### Complete Form Example
+
+```html
+<form @submit="save_article">
+    <!-- Form fields -->
+    <input type="text" name="title" />
+    <textarea name="content"></textarea>
+
+    <!-- Multi-state loading UX -->
+    <div class="form-actions">
+        <!-- Disable and dim save button -->
+        <button type="submit" @loading.disable @loading.class="opacity-50">
+            Save Article
+        </button>
+
+        <!-- Hide cancel during save -->
+        <button type="button" @loading.hide>
+            Cancel
+        </button>
+
+        <!-- Show inline spinner -->
+        <span @loading.show style="display: none;" data-loading-display="inline">
+            <i class="spinner"></i> Saving...
+        </span>
+    </div>
+
+    <!-- Show overlay during save -->
+    <div @loading.show @loading.class="overlay" style="display: none;">
+        Processing your request...
+    </div>
+</form>
+```
+
+#### Implementation
+
+The LoadingManager class handles all @loading attribute logic:
+
+```javascript
+// Global instance available in client.js
+const globalLoadingManager = new LoadingManager();
+
+// Register elements during page load
+globalLoadingManager.register(element, eventName);
+
+// Automatic state management
+globalLoadingManager.startLoading('save_article', triggerElement);
+globalLoadingManager.stopLoading('save_article', triggerElement);
+```
+
+#### Debug Mode
+
+Enable detailed logging for troubleshooting @loading behavior:
+
+```html
+<script>
+    // Enable debug logging (shows registration, modifiers, and state changes)
+    window.djustDebug = true;
+</script>
+<script src="{% static 'djust/client.js' %}"></script>
+```
+
+**Debug Output:**
+```javascript
+[Loading] Registered modifiers for "save": [{type: 'disable'}, {type: 'class', value: 'opacity-25'}]
+[Loading] Started: save <button>
+[Loading] Applying state to element: <button> modifiers: [{type: 'disable'}, {type: 'class', value: 'opacity-25'}]
+[Loading] Applied disable to element
+[Loading] Applied class "opacity-25" to element
+[Loading] Stopped: save <button>
+```
+
+**Production:** Set `window.djustDebug = false` to disable logging.
 
 #### Common Use Cases
 
 - Submit button spinners
 - Form processing indicators
-- AJAX loading states
-- File upload progress
-- Data fetching indicators
+- Loading overlays
+- Progress indicators
+- Status messages during async operations
+
+#### Testing
+
+See `tests/js/loading.test.js` for 30 comprehensive unit tests covering all modifiers, state management, and edge cases.
 
 #### See Also
 
 - [@loading-text](#loading-text) - Button text replacement
+- [LoadingManager API](#loadingmanager-api) - Client-side API
 - [STATE_MANAGEMENT_PATTERNS.md](STATE_MANAGEMENT_PATTERNS.md) - Loading state patterns
 
 ---
 
 ### @loading-text
 
-**Status:** 🚧 Proposed (Not Yet Implemented)
+**Status:** 🚧 Not Yet Implemented (use @loading.class instead)
 
 Temporarily replaces button text during event processing. Simpler alternative to `@loading` for basic button text changes.
 

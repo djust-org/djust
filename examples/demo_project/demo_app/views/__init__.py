@@ -82,6 +82,7 @@ from .component_demo import ComponentDemoView
 from .cache_demo import CacheDemoView
 from .cache_test import CacheTestView
 from .draft_mode_test import DraftModeTestView
+from .loading_test import LoadingTestView
 
 # Import test index
 from .test_index import TestIndexView
@@ -137,5 +138,6 @@ __all__ = [
     'CacheDemoView',
     'CacheTestView',
     'DraftModeTestView',
+    'LoadingTestView',
     'TestIndexView',
 ]

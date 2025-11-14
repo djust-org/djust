@@ -47,6 +47,7 @@ dev = [
     "pytest>=7.0",
     "pytest-django>=4.5",
     "pytest-asyncio>=0.21",
+    "pytest-xdist>=3.0",  # Parallel test execution
     "black>=23.0",
     "ruff>=0.1",
     "mypy>=1.0",
@@ -72,13 +73,15 @@ manifest-path = "crates/djust_live/Cargo.toml"
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-testpaths = ["python/tests", "tests/unit"]
+testpaths = ["python/tests", "tests/unit", "tests/e2e", "tests/integration"]
 pythonpath = [".", "examples/demo_project"]
 DJANGO_SETTINGS_MODULE = "demo_project.settings"
 addopts = [
     "--verbose",
     "--strict-markers",
     "--tb=short",
+    "--ignore=tests/playwright",  # Manual tests, not for CI
+    "--ignore=tests/js",  # JavaScript tests run with npm test
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",

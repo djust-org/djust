@@ -1,0 +1,409 @@
+{% extends "tests/base_test.html" %}
+
+{% block title %}@loading Test{% endblock %}
+
+{% block status_icon %}
+<i class="bi bi-hourglass-split text-primary" id="status-icon"></i>
+{% endblock %}
+
+{% block page_title %}@loading Attribute Automated Test{% endblock %}
+
+{% block page_description %}
+Testing @loading.disable, @loading.class, @loading.show, @loading.hide HTML attributes
+{% endblock %}
+
+{% block content %}
+<div data-liveview-root>
+    <!-- Test Status Summary -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div id="test-status-alert" class="alert alert-test alert-info">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="alert-heading mb-2" id="test-status-heading">
+                            🧪 Running Tests...
+                        </h5>
+                        <p class="mb-0" id="test-status-summary">
+                            Tests will run automatically. Click buttons below to trigger loading states.
+                        </p>
+                    </div>
+                    <div>
+                        <span id="test-status-badge" class="badge badge-test bg-primary">
+                            Pending
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="row g-4 mb-4">
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Slow Operations</div>
+                <div class="stat-value text-primary">{{ slow_call_count }}</div>
+                <small class="text-muted">1 second each</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Fast Operations</div>
+                <div class="stat-value text-success">{{ fast_call_count }}</div>
+                <small class="text-muted">100ms each</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Total Operations</div>
+                <div class="stat-value text-info">{{ total_operations }}</div>
+                <small class="text-muted">All handlers</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Tests Passed</div>
+                <div class="stat-value text-success" id="tests-passed-count">0</div>
+                <small class="text-muted">Out of total tests</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- Interactive Test Buttons -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">
+                <i class="bi bi-hand-index me-2"></i>
+                Interactive Loading Tests
+            </h5>
+        </div>
+        <div class="card-body">
+            <div class="alert alert-info">
+                <i class="bi bi-info-circle me-2"></i>
+                <strong>Instructions:</strong> Click the buttons below to test different @loading modifiers.
+                Watch for visual feedback (disabled state, opacity changes, spinner visibility).
+            </div>
+
+            <h6 class="mt-4 mb-3">Test 1: @loading.disable</h6>
+            <p class="text-muted">Button should be disabled during 1-second operation</p>
+            <button
+                class="btn btn-primary btn-lg"
+                @click="slow_operation"
+                @loading.disable>
+                <i class="bi bi-clock me-2"></i>
+                Slow Operation (1s)
+            </button>
+
+            <h6 class="mt-4 mb-3">Test 2: @loading.class="opacity-25"</h6>
+            <p class="text-muted">Button should become very transparent during operation (NOT disabled)</p>
+            <button
+                class="btn btn-success btn-lg"
+                @click="slow_operation"
+                @loading.class="opacity-25">
+                <i class="bi bi-lightning me-2"></i>
+                Opacity Effect (stays enabled)
+            </button>
+
+            <h6 class="mt-4 mb-3">Test 3: @loading.disable + @loading.class="opacity-25"</h6>
+            <p class="text-muted">Button should be disabled AND very transparent</p>
+            <button
+                class="btn btn-warning btn-lg"
+                @click="slow_operation"
+                @loading.disable
+                @loading.class="opacity-25">
+                <i class="bi bi-cpu me-2"></i>
+                Combined: disabled + opacity
+            </button>
+
+            <h6 class="mt-4 mb-3">Test 4: @loading.show (spinner)</h6>
+            <p class="text-muted">Spinner should appear during operation</p>
+            <div class="d-flex align-items-center gap-3">
+                <button
+                    class="btn btn-info btn-lg"
+                    @click="fast_operation">
+                    <i class="bi bi-play me-2"></i>
+                    Fast Operation (100ms)
+                </button>
+                <div
+                    @loading.show
+                    style="display: none;"
+                    class="spinner-border text-primary"
+                    role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <span @loading.show style="display: none;" class="text-primary">
+                    Processing...
+                </span>
+            </div>
+
+            <h6 class="mt-4 mb-3">Test 5: @loading.hide (content)</h6>
+            <p class="text-muted">Content should hide during operation</p>
+            <div class="d-flex align-items-center gap-3">
+                <button
+                    class="btn btn-secondary btn-lg"
+                    @click="fast_operation">
+                    <i class="bi bi-eye-slash me-2"></i>
+                    Hide Content Test
+                </button>
+                <div @loading.hide class="alert alert-success mb-0 py-2">
+                    This content will disappear during loading
+                </div>
+            </div>
+
+            {% if result_message %}
+            <div class="alert alert-success mt-4">
+                <i class="bi bi-check-circle-fill me-2"></i>
+                <strong>Result:</strong> {{ result_message }}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Server-Side Test Results -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Server-Side Tests</h5>
+        </div>
+        <div class="card-body">
+            {% if test_results %}
+            <div class="list-group">
+                {% for test in test_results %}
+                <div class="list-group-item test-result-item {% if test.passed %}test-result-passed{% else %}test-result-failed{% endif %}">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div class="flex-grow-1">
+                            <h6 class="mb-1">
+                                {% if test.passed %}✅{% else %}❌{% endif %}
+                                {{ test.name }}
+                            </h6>
+                            <p class="mb-1"><strong>Expected:</strong> {{ test.expected }}</p>
+                            <p class="mb-0"><strong>Actual:</strong> {{ test.actual }}</p>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-muted mb-0">
+                Server-side tests will appear here after you click buttons above.
+            </p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Client-Side Test Results -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Client-Side Tests (JavaScript)</h5>
+        </div>
+        <div class="card-body">
+            <div id="client-test-results">
+                <p class="text-muted">Tests will run automatically...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- How It Works -->
+    <div class="card">
+        <div class="card-header bg-light">
+            <h5 class="mb-0">How @loading Attributes Work</h5>
+        </div>
+        <div class="card-body">
+            <h6>Available Modifiers:</h6>
+            <ul>
+                <li><code class="code-block d-inline">@loading.disable</code> - Disables button/input during loading (also gets Bootstrap's default opacity: 0.65)</li>
+                <li><code class="code-block d-inline">@loading.class="class-name"</code> - Adds CSS class during loading (e.g., opacity-25, border-danger)</li>
+                <li><code class="code-block d-inline">@loading.show</code> - Shows element (display: block) during loading</li>
+                <li><code class="code-block d-inline">@loading.hide</code> - Hides element (display: none) during loading</li>
+            </ul>
+
+            <h6 class="mt-3">Visual Differences:</h6>
+            <ul>
+                <li><strong>Test 1</strong>: Button disabled (cursor: not-allowed, opacity: 0.65 from Bootstrap)</li>
+                <li><strong>Test 2</strong>: Button stays enabled, becomes very transparent (opacity: 0.25)</li>
+                <li><strong>Test 3</strong>: Button disabled AND very transparent (both effects combined)</li>
+            </ul>
+
+            <h6 class="mt-3">Loading Flow:</h6>
+            <ol>
+                <li>User clicks button with @click event</li>
+                <li>LoadingManager detects event start</li>
+                <li>All elements with @loading for that event are updated</li>
+                <li>Server processes event (1 second delay in slow operation)</li>
+                <li>LoadingManager restores original state when complete</li>
+            </ol>
+
+            <h6 class="mt-3">Console Output:</h6>
+            <p class="mb-0 text-muted">
+                Open browser console (F12) to see:
+            </p>
+            <ul class="text-muted">
+                <li><code class="code-block d-inline">[Loading] Registered element for "slow_operation"</code></li>
+                <li><code class="code-block d-inline">[Loading] Started: slow_operation</code></li>
+                <li><code class="code-block d-inline">[Loading] Applied to element</code></li>
+                <li><code class="code-block d-inline">[Loading] Stopped: slow_operation</code></li>
+                <li><code class="code-block d-inline">[Loading] Removed from element</code></li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Enable debug logging
+window.djustDebug = true;
+
+// Track client-side test state
+let clientTestResults = [];
+let allTestsPassed = false;
+
+// Auto-run tests after page loads
+setTimeout(function() {
+    console.log('[Test] Starting @loading automated tests...');
+    runLoadingTests();
+}, 2000);
+
+function runLoadingTests() {
+    console.log('[Test] Running client-side tests...');
+
+    // Test 1: LoadingManager exists
+    const hasLoadingManager = typeof globalLoadingManager !== 'undefined';
+    addClientTest(
+        'LoadingManager Available',
+        'globalLoadingManager should be defined',
+        hasLoadingManager ? 'LoadingManager found' : 'LoadingManager not found',
+        hasLoadingManager
+    );
+
+    // Test 2: Check for @loading attributes in DOM
+    const loadingElements = document.querySelectorAll('[\\@loading\\.disable], [\\@loading\\.class], [\\@loading\\.show], [\\@loading\\.hide]');
+    addClientTest(
+        '@loading Attributes Present',
+        'Should find elements with @loading attributes',
+        `Found ${loadingElements.length} elements with @loading attributes`,
+        loadingElements.length > 0
+    );
+
+    // Test 3: Simulate button click and check disabled state
+    setTimeout(() => {
+        console.log('[Test] Simulating slow operation click...');
+        const slowButton = document.querySelector('button[\\@loading\\.disable]');
+
+        if (slowButton) {
+            const wasDisabled = slowButton.disabled;
+            slowButton.click();
+
+            // Check if button becomes disabled immediately
+            setTimeout(() => {
+                const isDisabledDuringLoad = slowButton.disabled;
+                addClientTest(
+                    'Button Disabled During Loading',
+                    'Button should be disabled during operation',
+                    isDisabledDuringLoad ? 'Button is disabled' : 'Button is NOT disabled',
+                    isDisabledDuringLoad
+                );
+
+                updateTestStatus();
+
+                // Test 4: After slow operation completes, test fast operation
+                setTimeout(() => {
+                    console.log('[Test] Simulating fast operation click...');
+                    // Find button that has @click="fast_operation"
+                    const fastButton = document.querySelector('button[\\@click="fast_operation"]');
+                    if (fastButton) {
+                        fastButton.click();
+                        // Wait for fast operation to complete (100ms + buffer)
+                        setTimeout(() => {
+                            console.log('[Test] Fast operation should be complete');
+                            updateTestStatus();
+                        }, 300);
+                    }
+                }, 1200); // Wait for slow operation to complete (1000ms + 200ms buffer)
+            }, 100);
+        } else {
+            addClientTest(
+                'Button Disabled During Loading',
+                'Should find button with @loading.disable',
+                'Button not found',
+                false
+            );
+            updateTestStatus();
+        }
+    }, 500);
+
+    // Initial update
+    updateTestStatus();
+}
+
+function addClientTest(name, expected, actual, passed) {
+    clientTestResults.push({ name, expected, actual, passed });
+    renderClientTests();
+}
+
+function renderClientTests() {
+    const container = document.getElementById('client-test-results');
+    if (!container) return;
+
+    let html = '<div class="list-group">';
+    clientTestResults.forEach(test => {
+        const statusClass = test.passed ? 'test-result-passed' : 'test-result-failed';
+        const icon = test.passed ? '✅' : '❌';
+
+        html += `
+            <div class="list-group-item test-result-item ${statusClass}">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div class="flex-grow-1">
+                        <h6 class="mb-1">${icon} ${test.name}</h6>
+                        <p class="mb-1"><strong>Expected:</strong> ${test.expected}</p>
+                        <p class="mb-0"><strong>Actual:</strong> ${test.actual}</p>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    html += '</div>';
+
+    container.innerHTML = html;
+}
+
+function updateTestStatus() {
+    const passedTests = clientTestResults.filter(t => t.passed).length;
+    const totalTests = clientTestResults.length;
+    allTestsPassed = totalTests > 0 && passedTests === totalTests;
+
+    // Update stat card
+    const testsPassedEl = document.getElementById('tests-passed-count');
+    if (testsPassedEl) {
+        testsPassedEl.textContent = `${passedTests}/${totalTests}`;
+    }
+
+    // Update alert box
+    const alertBox = document.getElementById('test-status-alert');
+    const heading = document.getElementById('test-status-heading');
+    const summary = document.getElementById('test-status-summary');
+    const badge = document.getElementById('test-status-badge');
+    const icon = document.getElementById('status-icon');
+
+    if (allTestsPassed && totalTests >= 3) {
+        if (alertBox) alertBox.className = 'alert alert-test alert-success';
+        if (heading) heading.textContent = '✅ All Tests Passed!';
+        if (summary) summary.textContent = `${totalTests} tests run, ${passedTests} passed, 0 failed`;
+        if (badge) {
+            badge.className = 'badge badge-test bg-success';
+            badge.textContent = `${passedTests}/${totalTests}`;
+        }
+        if (icon) icon.className = 'bi bi-check-circle-fill text-success';
+    } else if (totalTests > 0) {
+        const failed = totalTests - passedTests;
+        if (alertBox) alertBox.className = failed > 0 ? 'alert alert-test alert-danger' : 'alert alert-test alert-warning';
+        if (heading) heading.textContent = failed > 0 ? '❌ Some Tests Failed' : '⏳ Tests Running...';
+        if (summary) summary.textContent = `${totalTests} tests run, ${passedTests} passed, ${failed} failed`;
+        if (badge) {
+            badge.className = `badge badge-test bg-${failed > 0 ? 'danger' : 'warning'}`;
+            badge.textContent = `${passedTests}/${totalTests}`;
+        }
+        if (icon && failed > 0) icon.className = 'bi bi-x-circle-fill text-danger';
+    }
+}
+</script>
+{% endblock %}

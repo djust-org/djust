@@ -57,6 +57,22 @@ class TestIndexView(TemplateView):
                     'Auto-save functionality (500ms debounce)',
                 ],
             },
+            {
+                'name': '@loading Attribute',
+                'description': 'Automated testing for @loading.disable, @loading.class, @loading.show, @loading.hide HTML attributes with scoped loading state',
+                'url_name': 'tests-loading',
+                'feature': 'Loading Attributes',
+                'phase': 'Phase 5',
+                'status': 'passing',
+                'tests': [
+                    'LoadingManager available',
+                    '@loading attributes present in DOM',
+                    'Button disabled during loading',
+                    'Independent button behavior (no cross-contamination)',
+                    'Grouped elements (button + spinner)',
+                    'Multiple modifiers work together',
+                ],
+            },
             # Add more tests here as they're created
             # Example:
             # {

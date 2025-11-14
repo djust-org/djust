@@ -12,6 +12,23 @@ from typing import Callable, Any, TypeVar, cast, List, Optional
 F = TypeVar("F", bound=Callable[..., Any])
 
 
+def _add_decorator_metadata(func: Callable, key: str, value: Any) -> None:
+    """
+    Add decorator metadata to function.
+
+    Internal helper for @debounce, @throttle, @optimistic, @cache, @client_state.
+    Ensures consistent metadata structure across all decorators.
+
+    Args:
+        func: Function to add metadata to
+        key: Decorator name (e.g., 'debounce', 'cache')
+        value: Decorator configuration (dict, bool, etc.)
+    """
+    if not hasattr(func, "_djust_decorators"):
+        func._djust_decorators = {}  # type: ignore
+    func._djust_decorators[key] = value  # type: ignore
+
+
 def event_handler(func: F) -> F:
     """
     Mark a method as an event handler.
@@ -197,14 +214,15 @@ def debounce(wait: float = 0.3, max_wait: Optional[float] = None) -> Callable[[F
         def wrapper(*args, **kwargs):
             return func(*args, **kwargs)
 
-        # New standardized format
-        if not hasattr(wrapper, "_djust_decorators"):
-            wrapper._djust_decorators = {}  # type: ignore
-
-        wrapper._djust_decorators["debounce"] = {  # type: ignore
-            "wait": wait,
-            "max_wait": max_wait,
-        }
+        # Add standardized metadata using helper
+        _add_decorator_metadata(
+            wrapper,
+            "debounce",
+            {
+                "wait": wait,
+                "max_wait": max_wait,
+            },
+        )
 
         # Backward compatibility (will be removed in future version)
         wrapper._debounce_seconds = wait  # type: ignore
@@ -250,15 +268,16 @@ def throttle(
         def wrapper(*args, **kwargs):
             return func(*args, **kwargs)
 
-        # New standardized format
-        if not hasattr(wrapper, "_djust_decorators"):
-            wrapper._djust_decorators = {}  # type: ignore
-
-        wrapper._djust_decorators["throttle"] = {  # type: ignore
-            "interval": interval,
-            "leading": leading,
-            "trailing": trailing,
-        }
+        # Add standardized metadata using helper
+        _add_decorator_metadata(
+            wrapper,
+            "throttle",
+            {
+                "interval": interval,
+                "leading": leading,
+                "trailing": trailing,
+            },
+        )
 
         # Backward compatibility (will be removed in future version)
         wrapper._throttle_seconds = interval  # type: ignore
@@ -300,10 +319,8 @@ def optimistic(func: F) -> F:
     def wrapper(*args, **kwargs):
         return func(*args, **kwargs)
 
-    if not hasattr(wrapper, "_djust_decorators"):
-        wrapper._djust_decorators = {}  # type: ignore
-
-    wrapper._djust_decorators["optimistic"] = True  # type: ignore
+    # Add standardized metadata using helper
+    _add_decorator_metadata(wrapper, "optimistic", True)
 
     return cast(F, wrapper)
 
@@ -339,13 +356,15 @@ def cache(ttl: int = 60, key_params: Optional[List[str]] = None) -> Callable[[F]
         def wrapper(*args, **kwargs):
             return func(*args, **kwargs)
 
-        if not hasattr(wrapper, "_djust_decorators"):
-            wrapper._djust_decorators = {}  # type: ignore
-
-        wrapper._djust_decorators["cache"] = {  # type: ignore
-            "ttl": ttl,
-            "key_params": key_params or [],
-        }
+        # Add standardized metadata using helper
+        _add_decorator_metadata(
+            wrapper,
+            "cache",
+            {
+                "ttl": ttl,
+                "key_params": key_params or [],
+            },
+        )
 
         return cast(F, wrapper)
 
@@ -385,19 +404,20 @@ def client_state(keys: List[str]) -> Callable[[F], F]:
 
     Returns:
         Decorator function
+
+    Raises:
+        ValueError: If keys list is empty
     """
+    if not keys:
+        raise ValueError("At least one key must be specified for @client_state decorator")
 
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             return func(*args, **kwargs)
 
-        if not hasattr(wrapper, "_djust_decorators"):
-            wrapper._djust_decorators = {}  # type: ignore
-
-        wrapper._djust_decorators["client_state"] = {  # type: ignore
-            "keys": keys
-        }
+        # Add standardized metadata using helper
+        _add_decorator_metadata(wrapper, "client_state", {"keys": keys})
 
         return cast(F, wrapper)
 

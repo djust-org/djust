@@ -51,8 +51,8 @@ Use this guide when:
 | Dropdown with many options | `@cache(ttl=600)` | Avoid re-fetching static data |
 | Multi-widget dashboard | `@client_state` | Coordinate component updates |
 | Long form (comment, article) | `DraftModeMixin` | Prevent data loss |
-| Submit button | `@loading-text` | Show "Saving..." state |
-| AJAX loading spinner | `@loading` | Show/hide during requests |
+| Submit button | `@loading.disable + @loading.class` | Disable button + visual feedback |
+| AJAX loading spinner | `@loading.show` | Show/hide spinner during requests |
 
 ### Flow Chart
 
@@ -588,14 +588,16 @@ class FormSubmitView(LiveView):
     <form @submit="save_data">
         <input type="text" name="title" />
 
-        <button type="submit" @loading-text="Saving..." @loading-disabled>
-            Save
-        </button>
+        <div class="d-flex align-items-center gap-3">
+            <!-- Button becomes disabled and semi-transparent -->
+            <button type="submit" @loading.disable @loading.class="opacity-25">
+                Save
+            </button>
 
-        <!-- Alternative: Custom loading element -->
-        <div @loading class="spinner">
-            <i class="fas fa-spinner fa-spin"></i>
-            Processing...
+            <!-- Spinner shows during loading -->
+            <div @loading.show style="display: none;" class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Saving...</span>
+            </div>
         </div>
     </form>
     """
@@ -603,13 +605,11 @@ class FormSubmitView(LiveView):
     def save_data(self, title: str = "", **kwargs):
         """
         During execution:
-        - Button text: "Saving..."
-        - Button disabled
+        - Button disabled and very transparent (opacity: 0.25)
         - Spinner visible
 
         After completion:
-        - Button text: "Save"
-        - Button enabled
+        - Button enabled and normal opacity
         - Spinner hidden
         """
         time.sleep(2)  # Simulate slow operation
@@ -663,14 +663,19 @@ All patterns work with keyboard:
 Ensure loading states are announced:
 
 ```html
-<button @loading-text="Saving..." aria-live="polite">
-    Save
-</button>
+<div class="d-flex gap-2">
+    <button @loading.disable aria-busy="false">
+        Save
+    </button>
 
-<div @loading aria-live="polite" role="status">
-    Loading results...
+    <!-- Screen reader will announce this when it appears -->
+    <div @loading.show style="display: none;" aria-live="polite" role="status">
+        Saving...
+    </div>
 </div>
 ```
+
+**Note:** Use `aria-live="polite"` on elements with `@loading.show` to announce state changes to screen reader users.
 
 ---
 

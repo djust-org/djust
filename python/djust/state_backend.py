@@ -291,6 +291,11 @@ class RedisStateBackend(StateBackend):
             logger.error(f"Failed to connect to Redis: {e}")
             raise
 
+    @property
+    def key_prefix(self) -> str:
+        """Return the Redis key prefix for this backend instance."""
+        return self._key_prefix
+
     def _make_key(self, key: str) -> str:
         """Add prefix to key."""
         return f"{self._key_prefix}{key}"

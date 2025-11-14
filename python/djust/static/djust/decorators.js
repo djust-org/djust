@@ -158,6 +158,7 @@ export function clearAllState() {
     pendingEvents.clear();
     resultCache.clear();
     globalStateBus.clear();
+    globalLoadingManager.clear();
 }
 
 // ============================================================================
@@ -775,6 +776,187 @@ export class DraftManager {
 
 // Global DraftManager instance
 export const globalDraftManager = new DraftManager();
+
+// ============================================================================
+// Loading Attribute Support (Phase 5)
+// ============================================================================
+
+/**
+ * LoadingManager handles @loading HTML attributes for showing/hiding elements
+ * and adding/removing classes during async operations.
+ *
+ * Supported modifiers:
+ * - @loading.disable: Disable element during loading
+ * - @loading.class="class-name": Add class during loading
+ * - @loading.show: Show element during loading (display: block/inline)
+ * - @loading.hide: Hide element during loading (display: none)
+ *
+ * Example:
+ *   <button @click="save" @loading.disable>Save</button>
+ *   <button @click="save" @loading.class="opacity-50">Save</button>
+ *   <div @loading.show>Saving...</div>
+ *   <div @loading.hide>Form content</div>
+ */
+export class LoadingManager {
+    constructor() {
+        this.loadingElements = new Map(); // Map<element, LoadingState>
+        this.pendingEvents = new Set();   // Set<eventName>
+    }
+
+    /**
+     * Register an element with @loading attributes
+     * @param {HTMLElement} element - Element with @loading attribute
+     * @param {string} eventName - Event name that triggers loading
+     */
+    register(element, eventName) {
+        const attributes = element.attributes;
+        const loadingConfig = {
+            eventName,
+            modifiers: [],
+            originalState: {}
+        };
+
+        // Parse @loading.* attributes
+        for (let i = 0; i < attributes.length; i++) {
+            const attr = attributes[i];
+            const match = attr.name.match(/^@loading\.(.+)$/);
+            if (match) {
+                const modifier = match[1];
+
+                if (modifier === 'disable') {
+                    loadingConfig.modifiers.push({ type: 'disable' });
+                    loadingConfig.originalState.disabled = element.disabled;
+                } else if (modifier === 'show') {
+                    loadingConfig.modifiers.push({ type: 'show' });
+                    loadingConfig.originalState.display = element.style.display;
+                } else if (modifier === 'hide') {
+                    loadingConfig.modifiers.push({ type: 'hide' });
+                    loadingConfig.originalState.display = element.style.display;
+                } else if (modifier === 'class') {
+                    // For @loading.class="className", value is in attr.value
+                    const className = attr.value;
+                    if (className) {
+                        loadingConfig.modifiers.push({ type: 'class', value: className });
+                    }
+                }
+            }
+        }
+
+        if (loadingConfig.modifiers.length > 0) {
+            this.loadingElements.set(element, loadingConfig);
+
+            if (globalThis.djustDebug) {
+                console.log(`[Loading] Registered element for "${eventName}":`, loadingConfig);
+            }
+        }
+    }
+
+    /**
+     * Mark an event as pending (start loading)
+     * @param {string} eventName - Event name
+     */
+    startLoading(eventName) {
+        this.pendingEvents.add(eventName);
+
+        if (globalThis.djustDebug) {
+            console.log(`[Loading] Started: ${eventName}`);
+        }
+
+        // Apply loading state to all elements watching this event
+        this.loadingElements.forEach((config, element) => {
+            if (config.eventName === eventName) {
+                this.applyLoadingState(element, config);
+            }
+        });
+    }
+
+    /**
+     * Mark an event as complete (stop loading)
+     * @param {string} eventName - Event name
+     */
+    stopLoading(eventName) {
+        this.pendingEvents.delete(eventName);
+
+        if (globalThis.djustDebug) {
+            console.log(`[Loading] Stopped: ${eventName}`);
+        }
+
+        // Remove loading state from all elements watching this event
+        this.loadingElements.forEach((config, element) => {
+            if (config.eventName === eventName) {
+                this.removeLoadingState(element, config);
+            }
+        });
+    }
+
+    /**
+     * Apply loading state to an element
+     * @param {HTMLElement} element - Target element
+     * @param {Object} config - Loading configuration
+     */
+    applyLoadingState(element, config) {
+        config.modifiers.forEach(modifier => {
+            if (modifier.type === 'disable') {
+                element.disabled = true;
+            } else if (modifier.type === 'show') {
+                element.style.display = element.getAttribute('data-loading-display') || 'block';
+            } else if (modifier.type === 'hide') {
+                element.style.display = 'none';
+            } else if (modifier.type === 'class') {
+                element.classList.add(modifier.value);
+            }
+        });
+
+        if (globalThis.djustDebug) {
+            console.log(`[Loading] Applied to element:`, element, config);
+        }
+    }
+
+    /**
+     * Remove loading state from an element
+     * @param {HTMLElement} element - Target element
+     * @param {Object} config - Loading configuration
+     */
+    removeLoadingState(element, config) {
+        config.modifiers.forEach(modifier => {
+            if (modifier.type === 'disable') {
+                element.disabled = config.originalState.disabled || false;
+            } else if (modifier.type === 'show' || modifier.type === 'hide') {
+                element.style.display = config.originalState.display || '';
+            } else if (modifier.type === 'class') {
+                element.classList.remove(modifier.value);
+            }
+        });
+
+        if (globalThis.djustDebug) {
+            console.log(`[Loading] Removed from element:`, element);
+        }
+    }
+
+    /**
+     * Check if an event is currently loading
+     * @param {string} eventName - Event name
+     * @returns {boolean}
+     */
+    isLoading(eventName) {
+        return this.pendingEvents.has(eventName);
+    }
+
+    /**
+     * Clear all loading elements and state
+     */
+    clear() {
+        this.loadingElements.clear();
+        this.pendingEvents.clear();
+
+        if (globalThis.djustDebug) {
+            console.log('[Loading] Cleared all state');
+        }
+    }
+}
+
+// Global LoadingManager instance
+export const globalLoadingManager = new LoadingManager();
 
 /**
  * Collect form data from a container element

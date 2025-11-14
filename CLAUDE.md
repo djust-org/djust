@@ -260,7 +260,13 @@ application = ProtocolTypeRouter({
 
 ## State Management Decorators
 
-djust provides Python-only state management decorators that eliminate the need for custom JavaScript in most use cases. For full API documentation, see `docs/STATE_MANAGEMENT_API.md`.
+djust provides Python-only state management decorators that eliminate the need for custom JavaScript in most use cases.
+
+**Quick Resources:**
+- 🚀 **NEW: [5-Minute Quick Start](docs/STATE_MANAGEMENT_QUICKSTART.md)** - Fastest path to productive
+- 📖 **[API Reference with Cheat Sheet](docs/STATE_MANAGEMENT_API.md)** - Complete decorator documentation
+- 📚 **[Full Tutorial](docs/STATE_MANAGEMENT_TUTORIAL.md)** - Step-by-step Product Search (20 min)
+- 🎯 **[Examples](docs/STATE_MANAGEMENT_EXAMPLES.md)** - Copy-paste ready code
 
 ### Using @cache for Client-Side Caching
 

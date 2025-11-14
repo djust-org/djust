@@ -422,40 +422,70 @@ This will log:
 
 ### State Management
 
-djust provides Python-only state management decorators that eliminate the need for manual JavaScript:
+djust provides Python-only state management decorators that eliminate the need for manual JavaScript.
+
+#### 🚀 Quick Start (5 minutes)
+
+Build a debounced search in **8 lines of Python** (no JavaScript):
 
 ```python
 from djust import LiveView
-from djust.decorators import debounce, optimistic, cache
+from djust.decorators import debounce
 
 class ProductSearchView(LiveView):
-    @debounce(wait=0.5)       # Wait 500ms after typing stops
-    @optimistic                # Update UI instantly
-    @cache(ttl=60)            # Cache responses for 60 seconds
+    template_string = """
+    <input @input="search" placeholder="Search products..." />
+    <div>{% for p in results %}<div>{{ p.name }}</div>{% endfor %}</div>
+    """
+
+    def mount(self, request):
+        self.results = []
+
+    @debounce(wait=0.5)  # Wait 500ms after typing stops
     def search(self, query: str = "", **kwargs):
-        self.results = Product.objects.filter(name__icontains=query)
+        self.results = Product.objects.filter(name__icontains=query)[:10]
 ```
 
-**Key Features:**
+**That's it!** Server only queries after you stop typing. Add `@optimistic` for instant UI updates, `@cache(ttl=300)` to cache responses for 5 minutes.
+
+**👉 [Full Quick Start Guide (5 min)](docs/STATE_MANAGEMENT_QUICKSTART.md)**
+
+---
+
+#### Key Features
+
 - ✅ **Zero JavaScript Required** - Common patterns work without writing any JS
 - ✅ **87% Code Reduction** - Decorators replace hundreds of lines of manual JavaScript
 - ✅ **Smallest Bundle** - 7.1 KB client.js (vs Phoenix ~30KB, Livewire ~50KB)
 - ✅ **Competitive DX** - Matches Phoenix LiveView and Laravel Livewire developer experience
 
-**Available Decorators:**
-- `@debounce(wait)` - Delay handler execution until user stops interacting
-- `@throttle(interval)` - Limit handler execution frequency
-- `@optimistic` - Instant UI updates with server validation
-- `@client_state(keys)` - Client-side state bus for component coordination
-- `@cache(ttl, key_params)` - Client-side response caching
-- `DraftModeMixin` - Auto-save form drafts to localStorage
+#### Available Decorators
 
-**Learn More:**
-- 📚 [State Management Tutorial](docs/STATE_MANAGEMENT_TUTORIAL.md) - Step-by-step guide
-- 📖 [API Reference](docs/STATE_MANAGEMENT_API.md) - Complete decorator documentation
-- 🎯 [Examples](docs/STATE_MANAGEMENT_EXAMPLES.md) - Copy-paste ready code
-- 🔄 [Migration Guide](docs/STATE_MANAGEMENT_MIGRATION.md) - Convert JavaScript to Python
-- ⚖️ [Framework Comparison](docs/STATE_MANAGEMENT_COMPARISON.md) - vs Phoenix LiveView & Laravel Livewire
+| Decorator | Use When | Example |
+|-----------|----------|---------|
+| `@debounce(wait)` | User is typing | Search, autosave |
+| `@throttle(interval)` | Rapid events | Scroll, resize |
+| `@optimistic` | Instant feedback | Counter, toggle |
+| `@cache(ttl, key_params)` | Repeated queries | Autocomplete |
+| `@client_state(keys)` | Multi-component | Dashboard filters |
+| `DraftModeMixin` | Auto-save forms | Contact form |
+
+**Quick Decision Matrix:**
+- Typing in input? → `@debounce(0.5)`
+- Scrolling/resizing? → `@throttle(0.1)`
+- Need instant UI update? → `@optimistic`
+- Same query multiple times? → `@cache(ttl)`
+- Multiple components? → `@client_state([keys])`
+- Auto-save forms? → `DraftModeMixin`
+
+#### Learn More
+
+- 🚀 **[Quick Start (5 min)](docs/STATE_MANAGEMENT_QUICKSTART.md)** - Get productive fast
+- 📚 **[Full Tutorial (20 min)](docs/STATE_MANAGEMENT_TUTORIAL.md)** - Step-by-step Product Search
+- 📖 **[API Reference](docs/STATE_MANAGEMENT_API.md)** - Complete decorator docs + cheat sheet
+- 🎯 **[Examples](docs/STATE_MANAGEMENT_EXAMPLES.md)** - Copy-paste ready code
+- 🔄 **[Migration Guide](docs/STATE_MANAGEMENT_MIGRATION.md)** - Convert JavaScript to Python
+- ⚖️ **[Framework Comparison](docs/STATE_MANAGEMENT_COMPARISON.md)** - vs Phoenix LiveView & Laravel Livewire
 
 ## 🏗️ Architecture
 

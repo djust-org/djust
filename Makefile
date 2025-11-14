@@ -130,6 +130,11 @@ test-python: ## Run Python tests
 	@echo "$(GREEN)Running Python tests...$(NC)"
 	@PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/
 
+.PHONY: test-python-parallel
+test-python-parallel: ## Run Python tests in parallel (requires pytest-xdist)
+	@echo "$(GREEN)Running Python tests in parallel...$(NC)"
+	@PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ -n auto
+
 .PHONY: test-js
 test-js: ## Run JavaScript tests
 	@echo "$(GREEN)Running JavaScript tests...$(NC)"
@@ -144,6 +149,15 @@ test-vdom: ## Run VDOM patching tests
 test-liveview: ## Run LiveView core tests
 	@echo "$(GREEN)Running LiveView tests...$(NC)"
 	@PYTHONPATH=. .venv/bin/python -m pytest tests/unit/test_live_view.py -v
+
+.PHONY: test-playwright
+test-playwright: ## Run Playwright browser automation tests (manual, requires server running)
+	@echo "$(YELLOW)Running Playwright tests (requires 'make start' in another terminal)...$(NC)"
+	@echo "$(YELLOW)Note: These are manual tests not included in CI$(NC)"
+	@.venv/bin/python tests/playwright/test_loading_attribute.py
+	@.venv/bin/python tests/playwright/test_cache_decorator.py
+	@.venv/bin/python tests/playwright/test_draft_mode.py
+	@echo "$(GREEN)Playwright tests completed$(NC)"
 
 .PHONY: lint
 lint: ## Run linters
