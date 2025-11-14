@@ -1,0 +1,363 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Suite - djust Automated Testing</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+
+    <style>
+        :root {
+            --test-passing: #28a745;
+            --test-failing: #dc3545;
+            --test-pending: #ffc107;
+        }
+
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 2rem 0;
+        }
+
+        .test-suite-header {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .test-suite-header h1 {
+            color: #667eea;
+            margin-bottom: 0.5rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 8px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.12);
+        }
+
+        .stat-card .stat-icon {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-card .stat-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            line-height: 1;
+            margin-bottom: 0.25rem;
+        }
+
+        .stat-card .stat-label {
+            font-size: 0.875rem;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-card.passing .stat-value { color: var(--test-passing); }
+        .stat-card.failing .stat-value { color: var(--test-failing); }
+        .stat-card.pending .stat-value { color: var(--test-pending); }
+
+        .test-list {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .test-item {
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            transition: all 0.2s ease;
+            background: white;
+        }
+
+        .test-item:hover {
+            border-color: #667eea;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+            transform: translateY(-2px);
+        }
+
+        .test-item.status-passing {
+            border-left: 4px solid var(--test-passing);
+        }
+
+        .test-item.status-failing {
+            border-left: 4px solid var(--test-failing);
+        }
+
+        .test-item.status-pending {
+            border-left: 4px solid var(--test-pending);
+        }
+
+        .test-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 1rem;
+        }
+
+        .test-name {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #212529;
+            margin-bottom: 0.25rem;
+        }
+
+        .test-meta {
+            display: flex;
+            gap: 1rem;
+            font-size: 0.875rem;
+            color: #6c757d;
+            margin-bottom: 1rem;
+        }
+
+        .test-meta .badge {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+        }
+
+        .test-description {
+            color: #495057;
+            margin-bottom: 1rem;
+            line-height: 1.6;
+        }
+
+        .test-checks {
+            background: #f8f9fa;
+            border-radius: 6px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .test-checks h6 {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: #6c757d;
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+        }
+
+        .test-checks ul {
+            margin: 0;
+            padding-left: 1.25rem;
+            font-size: 0.875rem;
+        }
+
+        .test-checks li {
+            margin-bottom: 0.25rem;
+            color: #495057;
+        }
+
+        .test-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+
+        .status-badge.passing {
+            background: rgba(40, 167, 69, 0.1);
+            color: var(--test-passing);
+        }
+
+        .status-badge.failing {
+            background: rgba(220, 53, 69, 0.1);
+            color: var(--test-failing);
+        }
+
+        .status-badge.pending {
+            background: rgba(255, 193, 7, 0.1);
+            color: var(--test-pending);
+        }
+
+        .btn-run-test {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            color: white;
+            font-weight: 600;
+            padding: 0.5rem 1.5rem;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .btn-run-test:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+            color: white;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #6c757d;
+        }
+
+        .empty-state i {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+            opacity: 0.3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="test-suite-header">
+            <div class="d-flex align-items-center justify-content-between">
+                <div>
+                    <h1><i class="bi bi-flask me-2"></i>djust Test Suite</h1>
+                    <p class="text-muted mb-0">
+                        Automated testing for djust features and decorators
+                    </p>
+                </div>
+                <div>
+                    <a href="{% url 'index' %}" class="btn btn-outline-secondary">
+                        <i class="bi bi-house-door"></i> Home
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon"><i class="bi bi-list-check"></i></div>
+                <div class="stat-value">{{ total_tests }}</div>
+                <div class="stat-label">Total Tests</div>
+            </div>
+
+            <div class="stat-card passing">
+                <div class="stat-icon"><i class="bi bi-check-circle-fill"></i></div>
+                <div class="stat-value">{{ passing_tests }}</div>
+                <div class="stat-label">Passing</div>
+            </div>
+
+            <div class="stat-card failing">
+                <div class="stat-icon"><i class="bi bi-x-circle-fill"></i></div>
+                <div class="stat-value">{{ failing_tests }}</div>
+                <div class="stat-label">Failing</div>
+            </div>
+
+            <div class="stat-card pending">
+                <div class="stat-icon"><i class="bi bi-hourglass-split"></i></div>
+                <div class="stat-value">{{ pending_tests }}</div>
+                <div class="stat-label">Pending</div>
+            </div>
+        </div>
+
+        <!-- Test List -->
+        <div class="test-list">
+            <h2 class="mb-4">Available Tests</h2>
+
+            {% if tests %}
+                {% for test in tests %}
+                <div class="test-item status-{{ test.status }}">
+                    <div class="test-header">
+                        <div class="flex-grow-1">
+                            <div class="test-name">{{ test.name }}</div>
+                            <div class="test-meta">
+                                <span>
+                                    <i class="bi bi-tag"></i>
+                                    {{ test.feature }}
+                                </span>
+                                <span>
+                                    <i class="bi bi-layers"></i>
+                                    {{ test.phase }}
+                                </span>
+                            </div>
+                        </div>
+                        <div>
+                            <span class="status-badge {{ test.status }}">
+                                {% if test.status == 'passing' %}
+                                    <i class="bi bi-check-circle-fill"></i> Passing
+                                {% elif test.status == 'failing' %}
+                                    <i class="bi bi-x-circle-fill"></i> Failing
+                                {% else %}
+                                    <i class="bi bi-hourglass-split"></i> Pending
+                                {% endif %}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="test-description">
+                        {{ test.description }}
+                    </div>
+
+                    <div class="test-checks">
+                        <h6>Test Coverage</h6>
+                        <ul>
+                            {% for check in test.tests %}
+                            <li>{{ check }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+
+                    <div class="test-actions">
+                        <a href="{% url test.url_name %}" class="btn btn-run-test">
+                            <i class="bi bi-play-circle"></i> Run Test
+                        </a>
+                        <a href="{% url test.url_name %}" target="_blank" class="btn btn-outline-secondary">
+                            <i class="bi bi-box-arrow-up-right"></i> Open in New Tab
+                        </a>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="empty-state">
+                    <i class="bi bi-inbox"></i>
+                    <h4>No Tests Available</h4>
+                    <p class="text-muted">
+                        No automated tests have been created yet.
+                        See <a href="https://github.com/johnrtipton/djust/blob/main/docs/TESTING_PAGES.md">TESTING_PAGES.md</a> for how to create test pages.
+                    </p>
+                </div>
+            {% endif %}
+        </div>
+
+        <!-- Documentation Link -->
+        <div class="test-suite-header mt-4">
+            <div class="d-flex align-items-center">
+                <i class="bi bi-book text-primary me-3" style="font-size: 2rem;"></i>
+                <div>
+                    <h5 class="mb-1">Creating Test Pages</h5>
+                    <p class="text-muted mb-0">
+                        Learn how to create automated test pages for your features.
+                        See <a href="https://github.com/johnrtipton/djust/blob/main/docs/TESTING_PAGES.md" target="_blank">TESTING_PAGES.md</a> for documentation.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

@@ -375,6 +375,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         event_name = data.get("event")
         params = data.get("params", {})
 
+        # Extract cache request ID if present (for @cache decorator)
+        cache_request_id = params.get("_cacheRequestId")
+
         print(
             f"[WebSocket] handle_event called: {event_name} with params: {params}", file=sys.stderr
         )
@@ -415,25 +418,29 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         await self.send(bytes_data=patches_data)
                     else:
                         # Send as JSON
-                        await self.send_json(
-                            {
-                                "type": "patch",
-                                "patches": patches,
-                                "version": version,
-                            }
-                        )
+                        response = {
+                            "type": "patch",
+                            "patches": patches,
+                            "version": version,
+                        }
+                        # Include cache request ID if present (for @cache decorator)
+                        if cache_request_id:
+                            response["cache_request_id"] = cache_request_id
+                        await self.send_json(response)
                 else:
                     # No patches - send full HTML update
                     logger.info(
                         f"No patches from actor, sending full HTML update (length: {len(html) if html else 0})"
                     )
-                    await self.send_json(
-                        {
-                            "type": "html_update",
-                            "html": html,
-                            "version": version,
-                        }
-                    )
+                    response = {
+                        "type": "html_update",
+                        "html": html,
+                        "version": version,
+                    }
+                    # Include cache request ID if present (for @cache decorator)
+                    if cache_request_id:
+                        response["cache_request_id"] = cache_request_id
+                    await self.send_json(response)
 
             except Exception as e:
                 view_class = (
@@ -550,6 +557,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # Include reset_form flag if set
                         if should_reset_form:
                             response["reset_form"] = True
+                        # Include cache request ID if present (for @cache decorator)
+                        if cache_request_id:
+                            response["cache_request_id"] = cache_request_id
                         await self.send_json(response)
                 else:
                     # No patches - send full HTML update for views with dynamic templates
@@ -580,6 +590,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # Include reset_form flag if set
                     if should_reset_form:
                         response["reset_form"] = True
+                    # Include cache request ID if present (for @cache decorator)
+                    if cache_request_id:
+                        response["cache_request_id"] = cache_request_id
                     await self.send_json(response)
 
             except Exception as e:

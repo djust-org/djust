@@ -1,8 +1,8 @@
 # State Management API Reference
 
-**Status:** 🚧 Proposed API - Not Yet Implemented
+**Status:** 🚧 Partially Implemented (@cache, @client_state ✅ | @debounce, @throttle, @optimistic, DraftModeMixin, @loading 🚧)
 
-**Last Updated:** 2025-01-12
+**Last Updated:** 2025-11-14
 
 ---
 
@@ -372,7 +372,7 @@ def on_search(self, query: str = "", **kwargs):
 
 ### @client_state
 
-**Status:** 🚧 Proposed (Not Yet Implemented)
+**Status:** ✅ Implemented
 
 Enables client-side state sharing between multiple components without server round trips. Perfect for dashboards, coordinated UI updates, and multi-component communication.
 
@@ -522,7 +522,7 @@ Template:
 
 ### @cache
 
-**Status:** 🚧 Proposed (Not Yet Implemented)
+**Status:** ✅ Implemented
 
 Enables automatic client-side response caching with TTL and LRU eviction. Perfect for autocomplete, repeated API calls, and any idempotent read operations.
 
@@ -624,6 +624,18 @@ def search(self, query: str = "", page: int = 1, **kwargs):
     """
     ...
 ```
+
+**⚠️ Important:** When using `key_params`, ensure your HTML inputs have matching `name` attributes:
+
+```html
+<!-- ✅ Correct: name="query" matches key_params=["query"] -->
+<input type="text" name="query" @input="search" />
+
+<!-- ❌ Wrong: Missing name attribute -->
+<input type="text" @input="search" />
+```
+
+The `name` attribute is used to extract parameter values for cache key generation. Without it, the cache key will be incomplete (e.g., `"search:"` instead of `"search:python"`), causing all searches to share the same cache entry.
 
 #### Cache Invalidation
 
@@ -1586,6 +1598,6 @@ class SearchView(LiveView):
 
 ---
 
-**Last Updated:** 2025-01-12
-**Status:** 🚧 Proposed API - Implementation pending
+**Last Updated:** 2025-11-14
+**Status:** 🚧 Partially Implemented (@cache, @client_state ✅)
 **Feedback:** https://github.com/johnrtipton/djust/discussions

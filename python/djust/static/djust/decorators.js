@@ -1,7 +1,7 @@
 /**
  * djust State Management Decorators (Testable Module)
  *
- * This file contains the decorator logic for @debounce, @throttle, @optimistic, and @cache.
+ * This file contains the decorator logic for @debounce, @throttle, @optimistic, @cache, and @client_state.
  *
  * IMPORTANT: This module is used for testing and documentation.
  * The actual implementation runs as embedded JavaScript in live_view.py.
@@ -9,7 +9,7 @@
  *
  * Phase 2: @debounce, @throttle
  * Phase 3: @optimistic
- * Phase 5: @cache
+ * Phase 5: @cache, @client_state
  */
 
 // ============================================================================
@@ -21,6 +21,124 @@ export const throttleState = new Map();  // Map<handlerName, {lastCall, timeoutI
 export const optimisticUpdates = new Map(); // Map<eventName, {element, originalState}>
 export const pendingEvents = new Set(); // Set<eventName> (for loading indicators)
 export const resultCache = new Map(); // Map<cacheKey, {result, expiresAt}>
+
+// ============================================================================
+// StateBus - Client-side State Coordination (Phase 5)
+// ============================================================================
+
+/**
+ * StateBus provides client-side state coordination across multiple components.
+ *
+ * Use cases:
+ * - Multi-component dashboards where components react to shared state
+ * - Search filters that affect multiple result lists
+ * - Shopping cart count displayed in header and sidebar
+ * - User preferences synced across UI elements
+ */
+export class StateBus {
+    constructor() {
+        this.state = new Map(); // Map<key, value>
+        this.subscribers = new Map(); // Map<key, Set<callback>>
+    }
+
+    /**
+     * Set state value and notify all subscribers
+     * @param {string} key - State key
+     * @param {any} value - State value
+     */
+    set(key, value) {
+        const oldValue = this.state.get(key);
+        this.state.set(key, value);
+
+        if (globalThis.djustDebug) {
+            console.log(`[StateBus] Set: ${key} =`, value, `(was:`, oldValue, `)`);
+        }
+
+        this.notify(key, value, oldValue);
+    }
+
+    /**
+     * Get current state value
+     * @param {string} key - State key
+     * @returns {any} Current value or undefined
+     */
+    get(key) {
+        return this.state.get(key);
+    }
+
+    /**
+     * Subscribe to state changes
+     * @param {string} key - State key to watch
+     * @param {function} callback - Callback(newValue, oldValue)
+     * @returns {function} Unsubscribe function
+     */
+    subscribe(key, callback) {
+        if (!this.subscribers.has(key)) {
+            this.subscribers.set(key, new Set());
+        }
+        this.subscribers.get(key).add(callback);
+
+        if (globalThis.djustDebug) {
+            console.log(`[StateBus] Subscribed to: ${key} (${this.subscribers.get(key).size} subscribers)`);
+        }
+
+        // Return unsubscribe function
+        return () => {
+            const subs = this.subscribers.get(key);
+            if (subs) {
+                subs.delete(callback);
+                if (globalThis.djustDebug) {
+                    console.log(`[StateBus] Unsubscribed from: ${key} (${subs.size} remaining)`);
+                }
+            }
+        };
+    }
+
+    /**
+     * Notify all subscribers of a state change
+     * @param {string} key - State key
+     * @param {any} newValue - New value
+     * @param {any} oldValue - Old value
+     */
+    notify(key, newValue, oldValue) {
+        const callbacks = this.subscribers.get(key) || new Set();
+
+        if (callbacks.size > 0 && globalThis.djustDebug) {
+            console.log(`[StateBus] Notifying ${callbacks.size} subscribers of: ${key}`);
+        }
+
+        callbacks.forEach(callback => {
+            try {
+                callback(newValue, oldValue);
+            } catch (error) {
+                console.error(`[StateBus] Subscriber error for ${key}:`, error);
+            }
+        });
+    }
+
+    /**
+     * Clear all state and subscribers
+     */
+    clear() {
+        this.state.clear();
+        this.subscribers.clear();
+
+        if (globalThis.djustDebug) {
+            console.log('[StateBus] Cleared all state');
+        }
+    }
+
+    /**
+     * Get all current state (for debugging)
+     * @returns {Object} Current state as plain object
+     */
+    getAll() {
+        return Object.fromEntries(this.state.entries());
+    }
+}
+
+// Global StateBus instance
+export const globalStateBus = new StateBus();
 
 /**
  * Clear all decorator state (useful for cleanup and testing)
@@ -39,6 +157,7 @@ export function clearAllState() {
     optimisticUpdates.clear();
     pendingEvents.clear();
     resultCache.clear();
+    globalStateBus.clear();
 }
 
 // ============================================================================
@@ -482,4 +601,43 @@ export function cleanupExpiredCache() {
     }
 
     return cleaned;
+}
+
+// ============================================================================
+// Client State Decorator (Phase 5)
+// ============================================================================
+
+/**
+ * Coordinate state across multiple components via StateBus
+ *
+ * @param {string} eventName - The event handler name
+ * @param {object} eventData - Event parameters
+ * @param {object} config - Client state configuration
+ * @param {string} config.state_key - State key to coordinate (required)
+ * @param {function} sendFn - Function to call after updating state
+ * @returns {Promise} Promise that resolves when server responds
+ */
+export function clientStateEvent(eventName, eventData, config, sendFn) {
+    const { state_key } = config;
+
+    if (!state_key) {
+        console.error('[LiveView:client_state] Missing state_key in config');
+        return sendFn(eventName, eventData);
+    }
+
+    // Extract state value from event data
+    // Common patterns: {value: ...}, {checked: ...}, or direct value
+    const stateValue = eventData.value !== undefined ? eventData.value :
+                       eventData.checked !== undefined ? eventData.checked :
+                       eventData;
+
+    if (globalThis.djustDebug) {
+        console.log(`[LiveView:client_state] Setting ${state_key} =`, stateValue);
+    }
+
+    // Update StateBus (this will notify all subscribers)
+    globalStateBus.set(state_key, stateValue);
+
+    // Call server to persist state
+    return sendFn(eventName, eventData);
 }

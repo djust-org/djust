@@ -243,6 +243,7 @@ class ProductSearchView(LiveView):
     <div class="container" @loading>
         <input
             type="text"
+            name="query"
             @input="search"
             value="{{ query }}"
             placeholder="Search products..."

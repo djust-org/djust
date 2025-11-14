@@ -82,6 +82,9 @@ from .component_demo import ComponentDemoView
 from .cache_demo import CacheDemoView
 from .cache_test import CacheTestView
 
+# Import test index
+from .test_index import TestIndexView
+
 # Import homepage demo views
 from .homepage import (
     HomeCounterDemo,
@@ -132,4 +135,5 @@ __all__ = [
     'ComponentDemoView',
     'CacheDemoView',
     'CacheTestView',
+    'TestIndexView',
 ]

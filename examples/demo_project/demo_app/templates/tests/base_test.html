@@ -10,8 +10,7 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
 
-    <!-- djust LiveView client -->
-    <script src="{% static 'djust/client.js' %}"></script>
+    <!-- djust LiveView client is automatically injected by LiveView.get() -->
 
     <style>
         :root {
@@ -117,6 +116,13 @@
             font-size: 0.875rem;
             line-height: 1.6;
             overflow-x: auto;
+        }
+
+        .code-block.d-inline {
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            line-height: 1;
         }
 
         .alert-test {

@@ -635,6 +635,48 @@ from djust.config import config
 config.set('debug_vdom', True)
 ```
 
+**Client-Side Debug Mode (State Management):**
+
+The client-side JavaScript supports debug logging for state management decorators (@cache, @client_state, etc.). This is controlled by the `djustDebug` global variable:
+
+```javascript
+// Enable debug logging (development)
+window.djustDebug = true;  // Logs cache hits/misses, state bus events, decorator execution
+
+// Disable debug logging (production - recommended)
+window.djustDebug = false;
+```
+
+**Production Configuration:**
+
+For production deployments, ensure client-side debug logging is disabled:
+
+```html
+<!-- In your base template, before loading djust client.js -->
+<script>
+    // Disable debug logging in production
+    window.djustDebug = false;
+</script>
+<script src="{% static 'djust/client.js' %}"></script>
+```
+
+Or conditionally based on Django settings:
+
+```html
+<script>
+    window.djustDebug = {% if DEBUG %}true{% else %}false{% endif %};
+</script>
+<script src="{% static 'djust/client.js' %}"></script>
+```
+
+**Debug Output Examples:**
+
+When `djustDebug = true`, you'll see console logs like:
+- `[djust:cache] Cache hit for search(query=python) - age: 45s / TTL: 300s`
+- `[djust:cache] Cache miss for search(query=django) - fetching from server`
+- `[djust:state] Published to bus: temperature=72`
+- `[djust:state] Subscriber received update: temperature=72`
+
 ### State Backend Configuration
 
 djust provides pluggable state backends for LiveView session storage, enabling horizontal scaling in production:
@@ -753,6 +795,16 @@ When reviewing or writing code:
 - `README.md`: User-facing documentation
 - `CONTRIBUTING.md`: Contribution guidelines
 - `QUICKSTART.md`: Quick setup guide
+
+### IDE Setup Documentation
+- `docs/IDE_SETUP_RUST.md`: ⭐ **Recommended setup for Rust + Python development**
+  - IntelliJ IDEA Ultimate recommended (best Rust support + full Python/Django support)
+  - Rust plugin installation and configuration
+  - Dual IDE setup option (IntelliJ IDEA for Rust, PyCharm for Python)
+  - Complete feature comparison and workflow recommendations
+- `docs/PYCHARM_SETUP.md`: Complete PyCharm/IntelliJ IDEA configuration guide
+- `docs/PYCHARM_QUICK_START.md`: 10-minute essential setup
+- **Quick start**: Run `./scripts/open_intellij.sh` to open project in IntelliJ IDEA
 
 ### Component System Documentation
 - `COMPONENT_UNIFIED_DESIGN.md`: ⭐ Unified design with automatic Rust optimization (read this first!)

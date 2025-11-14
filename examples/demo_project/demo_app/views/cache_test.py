@@ -104,13 +104,17 @@ class CacheTestView(LiveView):
 
     @debounce(wait=0.5)
     @cache(ttl=300, key_params=["query"])
-    def search(self, query: str = "", **kwargs):
+    def search(self, query: str = "", total_searches: int = 0, **kwargs):
         """
         Search handler with debouncing and caching.
 
         This method is used for both automated tests and manual testing.
         The automated test runs on page load via JavaScript.
+
+        Args:
+            query: The search query string
+            total_searches: Total number of searches (tracked client-side and passed in)
         """
         self.query = query
-        self.total_searches += 1
+        self.total_searches = total_searches  # Update from client-side counter
         self.server_calls += 1

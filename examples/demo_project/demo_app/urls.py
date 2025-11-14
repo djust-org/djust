@@ -48,6 +48,9 @@ urlpatterns = [
     path('demos/cache/', views.CacheDemoView.as_view(), name='demos-cache'),
     path('demos/cache-test/', views.CacheTestView.as_view(), name='demos-cache-test'),
 
+    # Test Suite
+    path('tests/', views.TestIndexView.as_view(), name='tests-index'),
+
     # Component Library Kitchen Sink
     path('kitchen-sink/', views.KitchenSinkView.as_view(), name='kitchen-sink'),
 

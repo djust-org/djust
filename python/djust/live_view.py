@@ -909,7 +909,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
             temp_rust.update_state(rendered_context)
             html = temp_rust.render()
-            return self._hydrate_react_components(html)
+            html = self._hydrate_react_components(html)
+
+            # Inject handler metadata for client-side decorators
+            html = self._inject_handler_metadata(html)
+
+            return html
         else:
             # No full template - use regular render
             return self.render(request)
@@ -1534,6 +1539,26 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                         case 'patch':
                             if (data.patches && data.patches.length > 0) {
                                 console.log('[LiveView] Applying', data.patches.length, 'patches');
+
+                                // Check if this response should be cached
+                                if (data.cache_request_id && pendingCacheRequests.has(data.cache_request_id)) {
+                                    const { cacheKey, ttl } = pendingCacheRequests.get(data.cache_request_id);
+
+                                    // Store patches in cache
+                                    const expiresAt = Date.now() + (ttl * 1000);
+                                    resultCache.set(cacheKey, {
+                                        patches: data.patches,
+                                        expiresAt
+                                    });
+
+                                    if (globalThis.djustDebug) {
+                                        console.log(`[LiveView:cache] Cached patches: ${cacheKey} (TTL: ${ttl}s)`);
+                                    }
+
+                                    // Remove from pending
+                                    pendingCacheRequests.delete(data.cache_request_id);
+                                }
+
                                 this.applyPatches(data.patches);
                                 bindLiveViewEvents();
                             }
@@ -1786,7 +1811,76 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             const throttleState = new Map();  // Map<handlerName, {lastCall, timeoutId, pendingData}>
             const optimisticUpdates = new Map(); // Map<eventName, {element, originalState}>
             const pendingEvents = new Set(); // Set<eventName> (for loading indicators)
-            const resultCache = new Map(); // Map<cacheKey, {result, expiresAt}>
+            const resultCache = new Map(); // Map<cacheKey, {patches, expiresAt}>
+            const pendingCacheRequests = new Map(); // Map<requestId, {cacheKey, ttl}>
+
+            // StateBus - Client-side State Coordination (Phase 5)
+            class StateBus {
+                constructor() {
+                    this.state = new Map();
+                    this.subscribers = new Map();
+                }
+
+                set(key, value) {
+                    const oldValue = this.state.get(key);
+                    this.state.set(key, value);
+                    if (globalThis.djustDebug) {
+                        console.log(`[StateBus] Set: ${key} =`, value, `(was:`, oldValue, `)`);
+                    }
+                    this.notify(key, value, oldValue);
+                }
+
+                get(key) {
+                    return this.state.get(key);
+                }
+
+                subscribe(key, callback) {
+                    if (!this.subscribers.has(key)) {
+                        this.subscribers.set(key, new Set());
+                    }
+                    this.subscribers.get(key).add(callback);
+                    if (globalThis.djustDebug) {
+                        console.log(`[StateBus] Subscribed to: ${key} (${this.subscribers.get(key).size} subscribers)`);
+                    }
+                    return () => {
+                        const subs = this.subscribers.get(key);
+                        if (subs) {
+                            subs.delete(callback);
+                            if (globalThis.djustDebug) {
+                                console.log(`[StateBus] Unsubscribed from: ${key} (${subs.size} remaining)`);
+                            }
+                        }
+                    };
+                }
+
+                notify(key, newValue, oldValue) {
+                    const callbacks = this.subscribers.get(key) || new Set();
+                    if (callbacks.size > 0 && globalThis.djustDebug) {
+                        console.log(`[StateBus] Notifying ${callbacks.size} subscribers of: ${key}`);
+                    }
+                    callbacks.forEach(callback => {
+                        try {
+                            callback(newValue, oldValue);
+                        } catch (error) {
+                            console.error(`[StateBus] Subscriber error for ${key}:`, error);
+                        }
+                    });
+                }
+
+                clear() {
+                    this.state.clear();
+                    this.subscribers.clear();
+                    if (globalThis.djustDebug) {
+                        console.log('[StateBus] Cleared all state');
+                    }
+                }
+
+                getAll() {
+                    return Object.fromEntries(this.state.entries());
+                }
+            }
+
+            const globalStateBus = new StateBus();
 
             // Client-side React Counter component (vanilla JS implementation)
             function initReactCounters() {
@@ -1940,6 +2034,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                             const fieldName = getFieldName(e.target);
                             if (fieldName) {
                                 params.field_name = fieldName;
+                                // Also set the parameter with the field name for cache key generation
+                                // This allows @cache(key_params=["query"]) to work correctly
+                                params[fieldName] = params.value;
                             }
 
                             // Phase 4: Check if event is from a component (walk up DOM tree)
@@ -1989,6 +2086,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                             const fieldName = getFieldName(e.target);
                             if (fieldName) {
                                 params.field_name = fieldName;
+                                // Also set the parameter with the field name for cache key generation
+                                // This allows @cache(key_params=["query"]) to work correctly
+                                params[fieldName] = params.value;
                             }
 
                             // Phase 4: Check if event is from a component (walk up DOM tree)
@@ -2652,7 +2752,21 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
              */
             async function sendEventImmediate(eventName, params) {
                 // This function delegates to the main handleEvent flow
-                // We mark it as immediate to skip decorator checks
+                // Called after debounce/throttle timers fire
+
+                // Check for cache decorator before sending
+                // Cache should work even with debounce/throttle
+                const metadata = window.handlerMetadata?.[eventName];
+                if (metadata?.cache) {
+                    // Apply cache - it will handle sending if needed
+                    await cacheEvent(eventName, params, metadata.cache, async (evName, evParams) => {
+                        evParams._skipDecorators = true;
+                        await handleEvent(evName, evParams);
+                    });
+                    return;
+                }
+
+                // No cache - send immediately
                 params._skipDecorators = true;
                 await handleEvent(eventName, params);
             }
@@ -2794,7 +2908,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             // Cache Decorator (Phase 5)
             // ============================================================================
 
-            function cacheEvent(eventName, eventData, config, sendFn) {
+            async function cacheEvent(eventName, eventData, config, sendFn) {
                 const { ttl = 60, key_params = [] } = config;
 
                 // Generate cache key from handler + params
@@ -2803,33 +2917,32 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 // Check cache
                 const cached = resultCache.get(cacheKey);
                 if (cached && Date.now() < cached.expiresAt) {
-                    // Cache hit - no server call
+                    // Cache hit - apply cached patches without server call
                     if (globalThis.djustDebug) {
                         const remainingTtl = Math.round((cached.expiresAt - Date.now()) / 1000);
                         console.log(`[LiveView:cache] Cache hit: ${cacheKey} (TTL: ${remainingTtl}s remaining)`);
                     }
-                    return Promise.resolve(cached.result);
+                    // Apply cached patches directly
+                    applyPatches(cached.patches);
+                    return;
                 }
 
-                // Cache miss - call server
+                // Cache miss - send event to server and cache the patches
                 if (globalThis.djustDebug) {
                     console.log(`[LiveView:cache] Cache miss: ${cacheKey} (calling server)`);
                 }
 
-                return sendFn(eventName, eventData).then(result => {
-                    // Store in cache
-                    const expiresAt = Date.now() + (ttl * 1000);
-                    resultCache.set(cacheKey, {
-                        result,
-                        expiresAt
-                    });
+                // Generate unique request ID to track this cache request
+                const requestId = `${eventName}_${Date.now()}_${Math.random()}`;
 
-                    if (globalThis.djustDebug) {
-                        console.log(`[LiveView:cache] Cached result: ${cacheKey} (TTL: ${ttl}s)`);
-                    }
+                // Mark this request as pending cache
+                pendingCacheRequests.set(requestId, { cacheKey, ttl });
 
-                    return result;
-                });
+                // Add request ID to event data so we can match patches to this request
+                eventData._cacheRequestId = requestId;
+
+                // Send event to server
+                await sendFn(eventName, eventData);
             }
 
             function generateCacheKey(eventName, eventData, keyParams) {
@@ -2888,6 +3001,34 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 }
 
                 return cleaned;
+            }
+
+            // ============================================================================
+            // Client State Decorator (Phase 5)
+            // ============================================================================
+
+            function clientStateEvent(eventName, eventData, config, sendFn) {
+                const { state_key } = config;
+
+                if (!state_key) {
+                    console.error('[LiveView:client_state] Missing state_key in config');
+                    return sendFn(eventName, eventData);
+                }
+
+                // Extract state value from event data
+                const stateValue = eventData.value !== undefined ? eventData.value :
+                                   eventData.checked !== undefined ? eventData.checked :
+                                   eventData;
+
+                if (globalThis.djustDebug) {
+                    console.log(`[LiveView:client_state] Setting ${state_key} =`, stateValue);
+                }
+
+                // Update StateBus (this will notify all subscribers)
+                globalStateBus.set(state_key, stateValue);
+
+                // Call server to persist state
+                return sendFn(eventName, eventData);
             }
 
             // ============================================================================
