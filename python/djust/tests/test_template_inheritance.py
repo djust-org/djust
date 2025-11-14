@@ -10,7 +10,6 @@ These tests verify that:
 
 import pytest
 import tempfile
-import os
 from pathlib import Path
 from django.conf import settings
 from django.test import RequestFactory
@@ -65,11 +64,11 @@ class TestTemplateInheritanceExtraction:
 
         # Should extract the full div including wrapper
         assert extracted.startswith('<div class="container" data-liveview-root>')
-        assert extracted.endswith('</div>')
-        assert '<p>Content</p>' in extracted
+        assert extracted.endswith("</div>")
+        assert "<p>Content</p>" in extracted
         # Should NOT include html/body tags
-        assert '<html>' not in extracted
-        assert '<body>' not in extracted
+        assert "<html>" not in extracted
+        assert "<body>" not in extracted
 
     def test_extract_liveview_root_with_data_attr_first(self):
         """Test extracting liveview-root when data-liveview-root comes first."""
@@ -78,7 +77,7 @@ class TestTemplateInheritanceExtraction:
         extracted = self.view._extract_liveview_root_with_wrapper(html)
 
         assert extracted.startswith('<div data-liveview-root class="container">')
-        assert '<p>Content</p>' in extracted
+        assert "<p>Content</p>" in extracted
 
     def test_extract_liveview_root_with_multiple_attrs(self):
         """Test extracting with multiple attributes before data-liveview-root."""
@@ -86,10 +85,10 @@ class TestTemplateInheritanceExtraction:
 
         extracted = self.view._extract_liveview_root_with_wrapper(html)
 
-        assert 'data-liveview-root' in extracted
+        assert "data-liveview-root" in extracted
         assert 'id="app"' in extracted
         assert 'class="container"' in extracted
-        assert '<p>Content</p>' in extracted
+        assert "<p>Content</p>" in extracted
 
     def test_extract_liveview_root_nested_divs(self):
         """Test extracting with nested divs inside liveview-root."""
@@ -112,20 +111,22 @@ class TestTemplateInheritanceExtraction:
         # Should include all nested divs
         assert '<div class="outer">' in extracted
         assert '<div class="inner">' in extracted
-        assert '<p>Nested content</p>' in extracted
+        assert "<p>Nested content</p>" in extracted
         # Should be properly balanced
-        assert extracted.count('<div') == extracted.count('</div>')
+        assert extracted.count("<div") == extracted.count("</div>")
 
     def test_extract_liveview_content_inner_html(self):
         """Test extracting just the innerHTML of liveview-root."""
-        html = '<div class="container" data-liveview-root><div class="row"><p>Content</p></div></div>'
+        html = (
+            '<div class="container" data-liveview-root><div class="row"><p>Content</p></div></div>'
+        )
 
         inner = self.view._extract_liveview_content(html)
 
         # Should extract ONLY innerHTML (no wrapper div)
         assert not inner.startswith('<div class="container"')
         assert inner.startswith('<div class="row">')
-        assert '<p>Content</p>' in inner
+        assert "<p>Content</p>" in inner
 
     def test_strip_liveview_root_in_full_html(self):
         """Test stripping comments/whitespace from liveview-root in full page."""
@@ -147,13 +148,13 @@ class TestTemplateInheritanceExtraction:
         stripped = self.view._strip_liveview_root_in_html(html)
 
         # DOCTYPE, html, head should be preserved as-is
-        assert '<!DOCTYPE html>' in stripped
-        assert '<title>Test</title>' in stripped
+        assert "<!DOCTYPE html>" in stripped
+        assert "<title>Test</title>" in stripped
 
         # But liveview-root div should be stripped
-        assert '<!-- Comment -->' not in stripped
+        assert "<!-- Comment -->" not in stripped
         # The div should be on fewer lines
-        assert stripped.count('\n') < html.count('\n')
+        assert stripped.count("\n") < html.count("\n")
 
 
 class TestTemplateInheritanceIntegration:
@@ -222,9 +223,9 @@ class TestTemplateInheritanceIntegration:
             template_name = "child.html"
 
         # Temporarily override template dirs
-        original_dirs = settings.TEMPLATES[0]['DIRS']
+        original_dirs = settings.TEMPLATES[0]["DIRS"]
         try:
-            settings.TEMPLATES[0]['DIRS'] = template_dirs
+            settings.TEMPLATES[0]["DIRS"] = template_dirs
             view = ChildView()
 
             # Get template should return stripped version for VDOM
@@ -237,7 +238,7 @@ class TestTemplateInheritanceIntegration:
             assert "<form>" in template or "<form" in template
 
         finally:
-            settings.TEMPLATES[0]['DIRS'] = original_dirs
+            settings.TEMPLATES[0]["DIRS"] = original_dirs
 
     def test_websocket_mount_and_get_html_match(self, template_dirs):
         """Test that WebSocket mount HTML matches initial GET HTML structure."""
@@ -249,9 +250,9 @@ class TestTemplateInheritanceIntegration:
             def mount(self, request, **kwargs):
                 self.name = "John"
 
-        original_dirs = settings.TEMPLATES[0]['DIRS']
+        original_dirs = settings.TEMPLATES[0]["DIRS"]
         try:
-            settings.TEMPLATES[0]['DIRS'] = template_dirs
+            settings.TEMPLATES[0]["DIRS"] = template_dirs
             view = ChildView()
 
             # Simulate WebSocket mount
@@ -283,7 +284,7 @@ class TestTemplateInheritanceIntegration:
             assert "<!--" not in get_liveview_inner
 
         finally:
-            settings.TEMPLATES[0]['DIRS'] = original_dirs
+            settings.TEMPLATES[0]["DIRS"] = original_dirs
 
 
 class TestVDOMStructureMatching:
@@ -295,7 +296,9 @@ class TestVDOMStructureMatching:
 
         class TestView(LiveView):
             # Use simple template without comments to avoid stripping complexity
-            template_string = """<div data-liveview-root><div class="row"><p>Hello {{ name }}</p></div></div>"""
+            template_string = (
+                """<div data-liveview-root><div class="row"><p>Hello {{ name }}</p></div></div>"""
+            )
 
             def mount(self, request, **kwargs):
                 self.name = "World"
@@ -328,7 +331,7 @@ class TestVDOMStructureMatching:
         from djust.live_view import LiveView
 
         class TestView(LiveView):
-            template_string = '<div data-liveview-root><p>{{ text }}</p></div>'
+            template_string = "<div data-liveview-root><p>{{ text }}</p></div>"
 
             def mount(self, request, **kwargs):
                 self.text = "Hello"
@@ -352,7 +355,7 @@ class TestVDOMStructureMatching:
         from djust.live_view import LiveView
 
         class TestView(LiveView):
-            template_string = '<div data-liveview-root><p>{{ text }}</p></div>'
+            template_string = "<div data-liveview-root><p>{{ text }}</p></div>"
 
             def mount(self, request, **kwargs):
                 self.text = "Hello"

@@ -215,7 +215,7 @@ class RedisStateBackend(StateBackend):
             import redis
         except ImportError:
             raise ImportError(
-                "redis-py is required for RedisStateBackend. " "Install with: pip install redis"
+                "redis-py is required for RedisStateBackend. Install with: pip install redis"
             )
 
         self._client = redis.from_url(redis_url)

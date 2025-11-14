@@ -520,6 +520,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Get updated HTML and patches (needs sync_to_async) - COMMON PATH
                 html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
 
+                # Check if form reset is requested (FormMixin sets this flag)
+                should_reset_form = getattr(self.view_instance, "_should_reset_form", False)
+                if should_reset_form:
+                    # Clear the flag
+                    self.view_instance._should_reset_form = False
+
                 # For component events, send full HTML instead of patches
                 # Component VDOM is separate from parent VDOM, causing path mismatches
                 # TODO Phase 4.1: Implement per-component VDOM tracking
@@ -536,13 +542,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         await self.send(bytes_data=patches_data)
                     else:
                         # Send as JSON
-                        await self.send_json(
-                            {
-                                "type": "patch",
-                                "patches": json.loads(patches),
-                                "version": version,
-                            }
-                        )
+                        response = {
+                            "type": "patch",
+                            "patches": json.loads(patches),
+                            "version": version,
+                        }
+                        # Include reset_form flag if set
+                        if should_reset_form:
+                            response["reset_form"] = True
+                        await self.send_json(response)
                 else:
                     # No patches - send full HTML update for views with dynamic templates
                     # Strip comments and whitespace to match Rust VDOM parser
@@ -564,13 +572,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         f"[WebSocket] html_content length: {len(html_content)}, starts with: {html_content[:150]}...",
                         file=sys.stderr,
                     )
-                    await self.send_json(
-                        {
-                            "type": "html_update",
-                            "html": html_content,
-                            "version": version,
-                        }
-                    )
+                    response = {
+                        "type": "html_update",
+                        "html": html_content,
+                        "version": version,
+                    }
+                    # Include reset_form flag if set
+                    if should_reset_form:
+                        response["reset_form"] = True
+                    await self.send_json(response)
 
             except Exception as e:
                 view_class = (

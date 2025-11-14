@@ -55,8 +55,8 @@ class TestActorIntegration:
 
         # Initially should have no active sessions
         stats = get_actor_stats()
-        assert hasattr(stats, 'active_sessions')
-        assert hasattr(stats, 'ttl_secs')
+        assert hasattr(stats, "active_sessions")
+        assert hasattr(stats, "ttl_secs")
         assert stats.ttl_secs == 3600  # Default 1-hour TTL
         initial_count = stats.active_sessions
 
@@ -122,7 +122,7 @@ class TestActorIntegration:
         result = await handle.mount(
             "test.MockView",
             {"count": 0},
-            view  # Pass Python view instance!
+            view,  # Pass Python view instance!
         )
 
         assert result is not None
@@ -158,11 +158,7 @@ class TestActorIntegration:
         view = CounterView()
 
         # Mount with Python view
-        await handle.mount(
-            "test.CounterView",
-            {"count": 0},
-            view
-        )
+        await handle.mount("test.CounterView", {"count": 0}, view)
 
         # Trigger event
         result = await handle.event("increment", {})
@@ -253,7 +249,7 @@ class TestActorIntegration:
         result = await handle.mount(
             "test.SomeView",
             {"initial": "data"},
-            None  # No Python view
+            None,  # No Python view
         )
 
         assert result is not None
@@ -697,9 +693,7 @@ class TestActorIntegration:
 
         # Create multiple components
         for i in range(5):
-            await handle.create_component(
-                view_id, f"comp-{i}", "<div>{{ x }}</div>", {"x": i}
-            )
+            await handle.create_component(view_id, f"comp-{i}", "<div>{{ x }}</div>", {"x": i})
 
         # Unmount view - should shut down all components
         await handle.unmount(view_id)
@@ -762,18 +756,14 @@ class TestActorIntegration:
         assert "Count: 0" in html
 
         # Send event that calls Python handler
-        html = await handle.component_event(
-            view_id, "counter-comp", "increment", {"amount": 5}
-        )
+        html = await handle.component_event(view_id, "counter-comp", "increment", {"amount": 5})
 
         # Verify Python handler was called and state updated
         assert py_component.count == 5
         assert "Count: 5" in html
 
         # Send another event
-        html = await handle.component_event(
-            view_id, "counter-comp", "decrement", {"amount": 2}
-        )
+        html = await handle.component_event(view_id, "counter-comp", "decrement", {"amount": 2})
 
         assert py_component.count == 3
         assert "Count: 3" in html
@@ -830,21 +820,15 @@ class TestActorIntegration:
         assert "Completed: 0" in html
 
         # Add items via event handlers
-        await handle.component_event(
-            view_id, "todo-comp", "add_item", {"text": "Buy milk"}
-        )
-        html = await handle.component_event(
-            view_id, "todo-comp", "add_item", {"text": "Walk dog"}
-        )
+        await handle.component_event(view_id, "todo-comp", "add_item", {"text": "Buy milk"})
+        html = await handle.component_event(view_id, "todo-comp", "add_item", {"text": "Walk dog"})
 
         # State should sync from get_context_data()
         assert "Total: 2" in html
         assert "Completed: 0" in html
 
         # Toggle first item
-        html = await handle.component_event(
-            view_id, "todo-comp", "toggle_item", {"id": 1}
-        )
+        html = await handle.component_event(view_id, "todo-comp", "toggle_item", {"id": 1})
 
         assert "Total: 2" in html
         assert "Completed: 1" in html
@@ -863,7 +847,11 @@ class TestActorIntegration:
         # Create component WITHOUT Python instance
         template = "<div>{{ message }}</div>"
         html = await handle.create_component(
-            view_id, "simple-comp", template, {"message": "Hello"}, None  # No Python component
+            view_id,
+            "simple-comp",
+            template,
+            {"message": "Hello"},
+            None,  # No Python component
         )
 
         assert "Hello" in html
@@ -893,14 +881,10 @@ class TestActorIntegration:
         py_component = SimpleComponent()
 
         template = "<div>{{ value }}</div>"
-        await handle.create_component(
-            view_id, "comp", template, {"value": 42}, py_component
-        )
+        await handle.create_component(view_id, "comp", template, {"value": 42}, py_component)
 
         # Call handler that doesn't exist - should fall back to state update
-        html = await handle.component_event(
-            view_id, "comp", "nonexistent_handler", {"value": 99}
-        )
+        html = await handle.component_event(view_id, "comp", "nonexistent_handler", {"value": 99})
 
         # Should use fallback and update state
         assert "99" in html
@@ -948,4 +932,3 @@ class TestActorIntegration:
         assert counter2.value == 101
 
         await handle.shutdown()
-

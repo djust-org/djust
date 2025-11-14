@@ -177,7 +177,18 @@ class FormMixin:
 
     def reset_form(self, **kwargs):
         """Reset form to initial state"""
+        # Reset form_data with all field keys initialized (matching mount() behavior)
+        # This ensures consistent VDOM state and prevents alternating patches/html_update
         self.form_data = {}
+        if self.form_class:
+            form = self.form_class()
+            # Initialize all fields with their initial values or empty string
+            for field_name, field in form.fields.items():
+                initial = field.initial
+                if initial is None:
+                    initial = ""
+                self.form_data[field_name] = initial
+
         self.form_errors = {}
         self.field_errors = {}
         self.is_valid = False
@@ -186,6 +197,10 @@ class FormMixin:
 
         if self.form_class:
             self.form_instance = self._create_form()
+
+        # Signal to WebSocket handler that we need to reset the form on client-side
+        # This bypasses VDOM form value preservation
+        self._should_reset_form = True
 
     def get_field_value(self, field_name: str, default: Any = "") -> Any:
         """Get current value for a field"""

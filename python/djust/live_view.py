@@ -1537,6 +1537,14 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                                 this.applyPatches(data.patches);
                                 bindLiveViewEvents();
                             }
+                            // Check if form reset is requested
+                            if (data.reset_form) {
+                                console.log('[LiveView] Resetting form');
+                                const form = document.querySelector('[data-liveview-root] form');
+                                if (form) {
+                                    form.reset();
+                                }
+                            }
                             break;
 
                         case 'html_update':
@@ -1546,6 +1554,14 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                             if (container) {
                                 container.innerHTML = data.html;
                                 bindLiveViewEvents();
+                            }
+                            // Check if form reset is requested
+                            if (data.reset_form) {
+                                console.log('[LiveView] Resetting form');
+                                const form = document.querySelector('[data-liveview-root] form');
+                                if (form) {
+                                    form.reset();
+                                }
                             }
                             break;
 
@@ -1677,7 +1693,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 }
 
                 patchSetAttr(element, key, value) {
-                    if (element.nodeType === Node.ELEMENT_NODE) {
+                    // Skip LiveView directives (@click, @submit, etc.)
+                    if (element.nodeType === Node.ELEMENT_NODE && !key.startsWith('@')) {
                         element.setAttribute(key, value);
                     }
                 }
@@ -1732,9 +1749,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
                     const element = document.createElement(vnode.tag);
 
-                    // Set attributes
+                    // Set attributes (skip LiveView directives like @click, @submit, etc.)
                     for (const [key, value] of Object.entries(vnode.attrs || {})) {
-                        element.setAttribute(key, value);
+                        if (!key.startsWith('@')) {
+                            element.setAttribute(key, value);
+                        }
                     }
 
                     // Add children
