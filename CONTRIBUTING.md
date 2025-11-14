@@ -352,6 +352,28 @@ When modifying code with dual implementations:
 - Redis session backend
 - TypeScript definitions
 
+## Supporting the Project
+
+Beyond code contributions, there are many ways to support djust:
+
+### Financial Support
+- 💜 [GitHub Sponsors](https://github.com/sponsors/johnrtipton) - Monthly support from $5/month
+- 🚀 Premium offerings (coming soon) - Help fund development by using our SaaS kits, components, or managed hosting
+- 🏢 Enterprise support - Priority support contracts help sustain the project
+
+For details on how revenue supports development, see [MONETIZATION.md](MONETIZATION.md).
+
+### Non-Financial Support
+- ⭐ Star the repository on GitHub
+- 📢 Share djust on social media and with your network
+- 📝 Write blog posts or tutorials about djust
+- 🎤 Give talks about djust at conferences or meetups
+- 💬 Help answer questions in Discord and GitHub Discussions
+- 📚 Improve documentation
+- 🐛 Report bugs and suggest features
+
+Every contribution, big or small, helps make djust better for everyone!
+
 ## Questions?
 
 - Open a discussion on GitHub

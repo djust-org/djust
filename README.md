@@ -574,6 +574,16 @@ python manage.py test
 cargo doc --open
 ```
 
+## 💰 Supporting djust
+
+djust is open source (MIT licensed) and free forever. If you're using djust in production or want to support development, check out our [Monetization Strategy](MONETIZATION.md) for ways to contribute:
+
+- 💜 [GitHub Sponsors](https://github.com/sponsors/johnrtipton) - Monthly support from $5/month
+- 🚀 Premium offerings (coming soon) - SaaS starter kits, components, managed hosting
+- 🏢 Enterprise support - Priority support and custom development
+
+Your support helps us maintain and improve djust for everyone!
+
 ## 🤝 Contributing
 
 Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
