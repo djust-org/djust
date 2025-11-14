@@ -15,31 +15,15 @@ class BaseViewWithNavbar(LiveView):
     """
     Base view that provides a navbar to all child views.
 
-    This is the recommended pattern - create a base view with common components
-    like navbar, then inherit from it in your views.
+    NOTE: Navbar is now provided globally via context_processors.navbar.
+    This class is kept for backward compatibility but no longer sets navbar.
+    Views can safely inherit from LiveView directly instead.
     """
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-
-        # Create navbar component
-        navbar = NavbarComponent(
-            brand_name=None,
-            brand_logo="/static/images/djust.png",
-            brand_href="/",
-            items=[
-                NavItem("Home", "/", active=self.is_active("/")),
-                NavItem("Demos", "/demos/", active=self.is_active("/demos/")),
-                NavItem("Components", "/kitchen-sink/", active=self.is_active("/kitchen-sink/")),
-                NavItem("Forms", "/forms/", active=self.is_active("/forms/")),
-                NavItem("Docs", "/docs/", active=self.is_active("/docs/")),
-                NavItem("Hosting ↗", "https://djustlive.com", external=True),
-            ],
-            fixed_top=True,
-            logo_height=28,
-        )
-
-        context['navbar'] = navbar
+        # Navbar is now provided globally via context processor
+        # No need to set it here anymore
         return context
 
     def is_active(self, path: str) -> bool:
