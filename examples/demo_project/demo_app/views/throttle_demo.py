@@ -16,7 +16,7 @@ class ThrottleScrollView(LiveView):
     - Demonstrates leading + trailing execution
     """
 
-    template_string = """
+    template = """
     <!DOCTYPE html>
     <html>
     <head>

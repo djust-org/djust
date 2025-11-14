@@ -98,7 +98,7 @@ class Table(Component):
     # Link to Rust implementation if available
     _rust_impl_class = RustTable if _RUST_AVAILABLE else None
 
-    # Note: Not using template_string because nested loops are needed
+    # Note: Not using template because nested loops are needed
     # Using Python _render_custom() which is still fast (~50-200μs)
 
     def __init__(

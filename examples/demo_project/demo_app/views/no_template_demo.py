@@ -35,7 +35,7 @@ class NoTemplateDemo(LiveView):
     template_name = None
 
     # Static template string for efficient VDOM patching
-    template_string = """
+    template = """
     {{ navbar.render }}
 
     <div class="container" style="margin-top: 80px;">
@@ -291,7 +291,7 @@ class NoTemplateDemo(LiveView):
                             <h5>Implementation</h5>
                             <pre><code class="language-python">class NoTemplateDemo(LiveView):
     # Static template for efficient VDOM patching
-    template_string = '''
+    template = '''
         &lt;div&gt;
             {{ navbar.render }}
             &lt;h1&gt;Counter: {{ counter }}&lt;/h1&gt;

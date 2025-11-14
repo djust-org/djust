@@ -59,7 +59,7 @@ class Offcanvas(Component):
 
     _rust_impl_class = RustOffcanvas if _RUST_AVAILABLE else None
 
-    template_string = """<div class="offcanvas offcanvas-{{ placement }}{% if show %} show{% endif %}" tabindex="-1" id="{{ id }}" aria-labelledby="{{ id }}Label"{% if not backdrop %} data-bs-backdrop="false"{% endif %}>{% if title %}
+    template = """<div class="offcanvas offcanvas-{{ placement }}{% if show %} show{% endif %}" tabindex="-1" id="{{ id }}" aria-labelledby="{{ id }}Label"{% if not backdrop %} data-bs-backdrop="false"{% endif %}>{% if title %}
     <div class="offcanvas-header">
         <h5 class="offcanvas-title" id="{{ id }}Label">{{ title }}</h5>{% if dismissable %}
         <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>{% endif %}

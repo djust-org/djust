@@ -123,7 +123,7 @@ class ReactMixin:
 
     Example:
         class MyView(ReactMixin, LiveView):
-            template_string = '''
+            template = '''
                 <div>
                     <Button onClick="handleClick">Click me!</Button>
                 </div>

@@ -12,7 +12,7 @@ from djust import LiveView
 class TestLiveView(LiveView):
     """Test LiveView class"""
 
-    template_string = "<div>Test</div>"
+    template = "<div>Test</div>"
 
     def mount(self, request):
         pass

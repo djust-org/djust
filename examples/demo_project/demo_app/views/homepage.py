@@ -14,7 +14,7 @@ class HomeCounterDemo(LiveView):
     """
     Simple counter demo for homepage - showcases instant reactivity
     """
-    template_string = """
+    template = """
     <div class="text-center">
         <div class="display-1 fw-bold mb-3" style="color: #667eea;">{{ count }}</div>
         <div class="d-flex gap-2 justify-content-center">
@@ -51,7 +51,7 @@ class HomeSearchDemo(LiveView):
     """
     Live search/filter demo - showcases real-time filtering
     """
-    template_string = """
+    template = """
     <div>
         <input
             @input="filter_items"
@@ -106,7 +106,7 @@ class HomeLiveDataDemo(LiveView):
     """
     Live updating data table - showcases real-time data updates
     """
-    template_string = """
+    template = """
     <div>
         <div class="d-flex justify-content-between align-items-center mb-3">
             <h5 class="mb-0">Live Performance Metrics</h5>
@@ -193,7 +193,7 @@ class HomeTodoDemo(LiveView):
     """
     Simple todo list demo - showcases list manipulation
     """
-    template_string = """
+    template = """
     <div>
         <form @submit="add_todo" class="mb-3">
             <div class="input-group input-group-lg">

@@ -67,7 +67,7 @@ class DemoOldComponent(OldComponent):
 class DemoOldLiveComponent(OldLiveComponent):
     """Demo component using old LiveComponent base class"""
 
-    template_string = '<div class="old-live">{{ count }}</div>'
+    template = '<div class="old-live">{{ count }}</div>'
 
     def mount(self, count=0):
         self.count = count
@@ -76,7 +76,7 @@ class DemoOldLiveComponent(OldLiveComponent):
 class DemoNewComponent(NewComponent):
     """Demo component using new Component base class"""
 
-    template_string = '<span class="new-component">{{ text }}</span>'
+    template = '<span class="new-component">{{ text }}</span>'
 
     def __init__(self, text="Hello"):
         super().__init__(text=text)
@@ -110,7 +110,7 @@ class DemoNewLiveComponent(NewLiveComponent):
 class ComponentRenderingView(LiveView):
     """Test view that uses components in context"""
 
-    template_string = """
+    template = """
     <div data-liveview-root>
         {{ old_component }}
         {{ old_live }}

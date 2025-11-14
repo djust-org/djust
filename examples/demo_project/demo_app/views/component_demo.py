@@ -14,7 +14,7 @@ from djust import LiveView, LiveComponent
 class UserListComponent(LiveComponent):
     """Component that displays a list of users and handles selection."""
 
-    template_string = """
+    template = """
         <div class="user-list card">
             <div class="card-header">
                 <h5>Users ({{ users|length }})</h5>
@@ -59,7 +59,7 @@ class UserListComponent(LiveComponent):
 class UserDetailComponent(LiveComponent):
     """Component that displays details of the selected user."""
 
-    template_string = """
+    template = """
         <div class="user-detail card">
             <div class="card-header">
                 <h5>User Details</h5>
@@ -114,7 +114,7 @@ class UserDetailComponent(LiveComponent):
 class TodoComponent(LiveComponent):
     """Component for managing a todo list."""
 
-    template_string = """
+    template = """
         <div class="todo-component card">
             <div class="card-header">
                 <h5>Tasks for {{ user_name }} ({{ completed_count }}/{{ items|length }})</h5>

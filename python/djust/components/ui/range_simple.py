@@ -55,7 +55,7 @@ class Range(Component):
 
     _rust_impl_class = RustRange if _RUST_AVAILABLE else None
 
-    template_string = """<div class="mb-3">{% if label %}
+    template = """<div class="mb-3">{% if label %}
     <label for="{{ range_id }}" class="form-label">{{ label }}{% if show_value %} <span class="badge bg-secondary">{{ value }}</span>{% endif %}</label>{% endif %}
     <input type="range"
            class="form-range"

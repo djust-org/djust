@@ -69,11 +69,11 @@ class Badge(Component):
     # Link to Rust implementation if available
     _rust_impl_class = RustBadge if _RUST_AVAILABLE else None
 
-    # Fallback: Hybrid rendering with template_string
+    # Fallback: Hybrid rendering with template
     # Note: This will use Rust template engine if available, Django templates otherwise
     # Avoiding elif due to Rust template engine bug - using separate if blocks instead
     # Bootstrap default badge is 0.75em, so: sm=default, md=fs-6 (1rem), lg=fs-5 (1.25rem)
-    template_string = '<span class="badge bg-{{ variant }}{% if size == "md" %} fs-6{% endif %}{% if size == "lg" %} fs-5{% endif %}{% if pill %} rounded-pill{% endif %}">{{ text }}</span>'
+    template = '<span class="badge bg-{{ variant }}{% if size == "md" %} fs-6{% endif %}{% if size == "lg" %} fs-5{% endif %}{% if pill %} rounded-pill{% endif %}">{{ text }}</span>'
 
     def __init__(self, text: str, variant: str = "primary", size: str = "md", pill: bool = False):
         """

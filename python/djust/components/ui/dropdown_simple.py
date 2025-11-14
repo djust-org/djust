@@ -89,7 +89,7 @@ class Dropdown(Component):
     # Link to Rust implementation if available
     _rust_impl_class = RustDropdown if _RUST_AVAILABLE else None
 
-    # Note: Not using template_string because loops are needed for items
+    # Note: Not using template because loops are needed for items
     # Using Python _render_custom() which is still fast (~50-100μs)
 
     def __init__(

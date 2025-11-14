@@ -394,7 +394,7 @@ class TestIntegration:
         set_backend(InMemoryStateBackend())
 
         class TestView(LiveView):
-            template_string = "<div>{{ message }}</div>"
+            template = "<div>{{ message }}</div>"
 
             def mount(self, request):
                 self.message = "Hello Backend"

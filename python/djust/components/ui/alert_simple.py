@@ -59,7 +59,7 @@ class Alert(Component):
 
     # Template for hybrid rendering
     # Note: Using separate if blocks instead of elif (Rust template engine bug)
-    template_string = """<div class="alert alert-{{ variant }}{% if dismissable %} alert-dismissible fade show{% endif %}" role="alert">
+    template = """<div class="alert alert-{{ variant }}{% if dismissable %} alert-dismissible fade show{% endif %}" role="alert">
     {{ text }}{% if dismissable %}
     <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>{% endif %}
 </div>"""

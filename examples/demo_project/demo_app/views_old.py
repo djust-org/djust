@@ -124,7 +124,7 @@ class NavbarBadgeDemo(LiveView):
     This is embedded in the homepage to demonstrate how navbar badges
     update in real-time when state changes.
     """
-    template_string = """
+    template = """
     <div class="p-4 bg-white rounded-lg border border-gray-200">
         <!-- Navbar with badge -->
         {{ navbar.render }}
@@ -1134,7 +1134,7 @@ class RegistrationFormView(FormMixin, LiveView):
 
     form_class = RegistrationForm
 
-    template_string = """
+    template = """
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; background: #f5f5f5; }
@@ -1332,7 +1332,7 @@ class ContactFormView(FormMixin, LiveView):
 
     form_class = ContactForm
 
-    template_string = """
+    template = """
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -1550,7 +1550,7 @@ class ProfileFormView(FormMixin, LiveView):
 
     form_class = ProfileForm
 
-    template_string = """
+    template = """
     <!DOCTYPE html>
     <html lang="en">
     <head>

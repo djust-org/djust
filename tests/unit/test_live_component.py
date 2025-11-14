@@ -9,7 +9,7 @@ from djust.component import LiveComponent
 class TodoListComponent(LiveComponent):
     """Test component for todo list."""
 
-    template_string = """
+    template = """
         <div class="todo-list">
             {% for item in items %}
             <div @click="toggle_todo" data-id="{{ item.id }}">
@@ -47,7 +47,7 @@ class TodoListComponent(LiveComponent):
 class CounterComponent(LiveComponent):
     """Simple counter component."""
 
-    template_string = """
+    template = """
         <div>
             <span>{{ count }}</span>
             <button @click="increment">+</button>
@@ -255,7 +255,7 @@ class TestLiveComponentRendering:
             component.render()
 
     def test_component_requires_template_string(self):
-        """Test component raises error if no template_string defined."""
+        """Test component raises error if no template defined."""
 
         class NoTemplateComponent(LiveComponent):
             def mount(self):
@@ -263,7 +263,7 @@ class TestLiveComponentRendering:
 
         component = NoTemplateComponent()
 
-        with pytest.raises(ValueError, match="must define template_string"):
+        with pytest.raises(ValueError, match="must define 'template' attribute"):
             component.render()
 
 

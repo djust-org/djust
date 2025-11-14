@@ -10,7 +10,7 @@ from unittest.mock import Mock
 class TodoListComponent(LiveComponent):
     """Test component for todo list."""
 
-    template_string = """
+    template = """
         <div class="todo-list">
             {% for item in items %}
             <div @click="toggle_todo" data-id="{{ item.id }}">
@@ -40,7 +40,7 @@ class TodoListComponent(LiveComponent):
 class UserListComponent(LiveComponent):
     """Test component for user list."""
 
-    template_string = """
+    template = """
         <div>
             {% for user in users %}
             <div @click="select_user" data-id="{{ user.id }}">
@@ -60,7 +60,7 @@ class UserListComponent(LiveComponent):
 class TodoDashboardView(LiveView):
     """Test view with child components."""
 
-    template_string = """
+    template = """
         <div>
             <h1>Dashboard</h1>
             {{ todo_list.render }}
@@ -89,7 +89,7 @@ class TodoDashboardView(LiveView):
 class MultiComponentView(LiveView):
     """Test view with multiple child components."""
 
-    template_string = """
+    template = """
         <div>
             {{ user_list.render }}
             {{ todo_list.render }}
@@ -225,7 +225,7 @@ class TestComponentAutoRegistration:
             template = "<div>Hello</div>"
 
         class SimpleView(LiveView):
-            template_string = "{{ simple.render }}"
+            template = "{{ simple.render }}"
 
             def mount(self, request, **kwargs):
                 self.simple = SimpleComponent()
@@ -302,7 +302,7 @@ class TestComponentPropUpdates:
         """Test updating component with partial props."""
 
         class ConfigComponent(LiveComponent):
-            template_string = "<div>{{ title }} - {{ count }}</div>"
+            template = "<div>{{ title }} - {{ count }}</div>"
 
             def mount(self, title="Default", count=0):
                 self.title = title
@@ -315,7 +315,7 @@ class TestComponentPropUpdates:
                     self.count = count
 
         class ConfigView(LiveView):
-            template_string = "{{ config.render }}"
+            template = "{{ config.render }}"
 
             def mount(self, request, **kwargs):
                 self.config = ConfigComponent(title="Test", count=5)
@@ -340,7 +340,7 @@ class TestDefaultHandleComponentEvent:
         """Test default handle_component_event() does nothing."""
 
         class MinimalView(LiveView):
-            template_string = "{{ comp.render }}"
+            template = "{{ comp.render }}"
 
             def mount(self, request, **kwargs):
                 self.comp = TodoListComponent(items=[])

@@ -18,7 +18,7 @@ class Component(ABC):
     the fastest available rendering method:
 
     1. Pure Rust implementation (if available) → ~1μs per render (fastest)
-    2. template_string with Rust rendering → ~5-10μs per render (fast)
+    2. template with Rust rendering → ~5-10μs per render (fast)
     3. _render_custom() Python method → ~50-100μs per render (flexible)
 
     This unified design allows components to start simple (Python) and be optimized
@@ -27,7 +27,7 @@ class Component(ABC):
     Usage - Hybrid (Recommended):
         class Badge(Component):
             # Use Rust template rendering (10x faster than Python)
-            template_string = '<span class="badge bg-{{ variant }}">{{ text }}</span>'
+            template = '<span class="badge bg-{{ variant }}">{{ text }}</span>'
 
             def __init__(self, text: str, variant: str = "primary"):
                 super().__init__(text=text, variant=variant)
@@ -61,7 +61,7 @@ class Component(ABC):
             _rust_impl_class = RustBadge
 
             # Fallback to hybrid
-            template_string = '<span class="badge bg-{{ variant }}">{{ text }}</span>'
+            template = '<span class="badge bg-{{ variant }}">{{ text }}</span>'
 
             def __init__(self, text: str, variant: str = "primary"):
                 super().__init__(text=text, variant=variant)
@@ -77,14 +77,14 @@ class Component(ABC):
 
     Attributes:
         _rust_impl_class: Optional Rust implementation class
-        template_string: Optional template for hybrid rendering
+        template: Optional template for hybrid rendering
     """
 
     # Class attribute: Optional Rust implementation
     _rust_impl_class: Optional[Type] = None
 
     # Class attribute: Optional template string for hybrid rendering
-    template_string: Optional[str] = None
+    template: Optional[str] = None
 
     # Class-level counter for auto-generating component keys
     _component_counter = 0
@@ -240,7 +240,7 @@ class Component(ABC):
 
         Performance waterfall:
         1. Rust implementation (fastest: ~1μs)
-        2. template_string with Rust rendering (fast: ~5-10μs)
+        2. template with Rust rendering (fast: ~5-10μs)
         3. _render_custom() override (flexible: ~50-100μs)
 
         Returns:
@@ -250,27 +250,27 @@ class Component(ABC):
             NotImplementedError: If no rendering method is available
 
         Note:
-            When writing template_string, avoid using {% elif %} due to a known bug
+            When writing template, avoid using {% elif %} due to a known bug
             in the Rust template engine. Use separate {% if %} blocks instead.
         """
         # 1. Try pure Rust implementation (fastest)
         if self._rust_instance is not None:
             return mark_safe(self._rust_instance.render())
 
-        # 2. Try hybrid: template_string with Rust rendering (fast)
-        if self.template_string is not None:
+        # 2. Try hybrid: template with Rust rendering (fast)
+        if self.template is not None:
             try:
                 from djust._rust import render_template
 
                 # Get context and inject component key
                 context = self.get_context_data()
                 context["_component_key"] = self._component_key
-                return mark_safe(render_template(self.template_string, context))
+                return mark_safe(render_template(self.template, context))
             except (ImportError, AttributeError):
                 # Rust not available, fall back to Django template rendering
                 from django.template import Context, Template
 
-                template = Template(self.template_string)
+                template = Template(self.template)
                 # Get context and inject component key
                 context_data = self.get_context_data()
                 context_data["_component_key"] = self._component_key
@@ -305,7 +305,7 @@ class Component(ABC):
         """
         Override for custom Python rendering.
 
-        Only called if no Rust implementation and no template_string.
+        Only called if no Rust implementation and no template.
 
         Returns:
             HTML string
@@ -324,7 +324,7 @@ class Component(ABC):
         raise NotImplementedError(
             f"{self.__class__.__name__} must define either:\n"
             f"  - _rust_impl_class (for pure Rust)\n"
-            f"  - template_string (for hybrid rendering)\n"
+            f"  - template (for hybrid rendering)\n"
             f"  - _render_custom() method (for custom Python)"
         )
 

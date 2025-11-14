@@ -69,9 +69,9 @@ class Icon(Component):
     # Link to Rust implementation if available
     _rust_impl_class = RustIcon if _RUST_AVAILABLE else None
 
-    # Fallback: Hybrid rendering with template_string
+    # Fallback: Hybrid rendering with template
     # Note: Using separate if blocks to avoid elif bug in Rust template engine
-    template_string = """<i class="{% if library == "bootstrap" %}bi bi-{{ name }}{% endif %}{% if library == "fontawesome" %}{{ name }}{% endif %}{% if library == "custom" %}{{ name }}{% endif %}{% if size == "xs" %} icon-xs{% endif %}{% if size == "sm" %} icon-sm{% endif %}{% if size == "lg" %} icon-lg{% endif %}{% if size == "xl" %} icon-xl{% endif %}{% if color %} text-{{ color }}{% endif %}"{% if label %} aria-label="{{ label }}" role="img"{% endif %}></i>"""
+    template = """<i class="{% if library == "bootstrap" %}bi bi-{{ name }}{% endif %}{% if library == "fontawesome" %}{{ name }}{% endif %}{% if library == "custom" %}{{ name }}{% endif %}{% if size == "xs" %} icon-xs{% endif %}{% if size == "sm" %} icon-sm{% endif %}{% if size == "lg" %} icon-lg{% endif %}{% if size == "xl" %} icon-xl{% endif %}{% if color %} text-{{ color }}{% endif %}"{% if label %} aria-label="{{ label }}" role="img"{% endif %}></i>"""
 
     def __init__(
         self,

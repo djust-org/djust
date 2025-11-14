@@ -55,7 +55,7 @@ class Input(Component):
 
     _rust_impl_class = RustInput if _RUST_AVAILABLE else None
 
-    template_string = """<div class="mb-3">{% if label %}
+    template = """<div class="mb-3">{% if label %}
     <label for="{{ input_id }}" class="form-label">{{ label }}{% if required %} <span class="text-danger">*</span>{% endif %}</label>{% endif %}
     <input type="{{ input_type }}"
            class="form-control{% if size != "md" %} form-control-{{ size }}{% endif %}{% if validation_state == "valid" %} is-valid{% endif %}{% if validation_state == "invalid" %} is-invalid{% endif %}"

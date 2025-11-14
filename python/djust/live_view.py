@@ -170,7 +170,7 @@ class LiveView(View):
     """
 
     template_name: Optional[str] = None
-    template_string: Optional[str] = None
+    template: Optional[str] = None
     use_actors: bool = False  # Enable Tokio actor-based state management (Phase 5+)
 
     def __init__(self, **kwargs):
@@ -192,8 +192,8 @@ class LiveView(View):
         For templates with inheritance, extracts only [data-liveview-root] content
         for VDOM tracking to avoid tracking the entire document.
         """
-        if self.template_string:
-            return self.template_string
+        if self.template:
+            return self.template
         elif self.template_name:
             # Load the raw template source
             from django.template import loader
@@ -288,7 +288,7 @@ class LiveView(View):
             )
             return extracted
         else:
-            raise ValueError("Either template_name or template_string must be set")
+            raise ValueError("Either template_name or template must be set")
 
     def mount(self, request, **kwargs):
         """
@@ -938,12 +938,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # Initialize Rust view if not already done
         self._initialize_rust_view(request)
 
-        # If template_string is a property (dynamic), update the template
+        # If template is a property (dynamic), update the template
         # while preserving VDOM state for efficient patching
-        if hasattr(self.__class__, "template_string") and isinstance(
-            getattr(self.__class__, "template_string"), property
+        if hasattr(self.__class__, "template") and isinstance(
+            getattr(self.__class__, "template"), property
         ):
-            print("[LiveView] template_string is a property - updating template", file=sys.stderr)
+            print("[LiveView] template is a property - updating template", file=sys.stderr)
             new_template = self.get_template()
             self._rust_view.update_template(new_template)
 
@@ -3157,7 +3157,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         return html
 
 
-def live_view(template_name: Optional[str] = None, template_string: Optional[str] = None):
+def live_view(template_name: Optional[str] = None, template: Optional[str] = None):
     """
     Decorator to convert a function-based view into a LiveView.
 
@@ -3178,7 +3178,7 @@ def live_view(template_name: Optional[str] = None, template_string: Optional[str
 
     Args:
         template_name: Path to Django template
-        template_string: Inline template string
+        template: Inline template string
 
     Returns:
         View function
@@ -3192,8 +3192,8 @@ def live_view(template_name: Optional[str] = None, template_string: Optional[str
 
             if template_name:
                 DynamicLiveView.template_name = template_name
-            if template_string:
-                DynamicLiveView.template_string = template_string
+            if template:
+                DynamicLiveView.template = template
 
             view = DynamicLiveView()
 

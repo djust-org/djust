@@ -14,7 +14,7 @@ from django.contrib.sessions.middleware import SessionMiddleware
 class SimpleCounterView(LiveView):
     """Simple counter view for testing VDOM patching"""
 
-    template_string = """<div data-liveview-root>
+    template = """<div data-liveview-root>
     <div class="container">
         <h1>Counter Demo</h1>
         <p>Count: <strong>{{ count }}</strong></p>

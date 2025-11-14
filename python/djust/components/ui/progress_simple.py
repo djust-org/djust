@@ -43,7 +43,7 @@ class Progress(Component):
 
     _rust_impl_class = RustProgress if _RUST_AVAILABLE else None
 
-    template_string = """<div class="progress"{% if height %} style="height: {{ height }}"{% endif %}>
+    template = """<div class="progress"{% if height %} style="height: {{ height }}"{% endif %}>
     <div class="progress-bar{% if striped %} progress-bar-striped{% endif %}{% if animated %} progress-bar-animated{% endif %} bg-{{ variant }}"
          role="progressbar"
          style="width: {{ percentage }}%"
@@ -135,11 +135,11 @@ class Progress(Component):
         # Build label
         label_html = self.label_text if (self.show_label or self.label) else ""
 
-        return f'''<div class="progress"{outer_style}>
+        return f"""<div class="progress"{outer_style}>
     <div class="{" ".join(classes)}"
          role="progressbar"
          style="width: {self.percentage:.1f}%"
          aria-valuenow="{self.value}"
          aria-valuemin="{self.min_value}"
          aria-valuemax="{self.max_value}">{label_html}</div>
-</div>'''
+</div>"""

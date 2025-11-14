@@ -63,10 +63,10 @@ class Divider(Component):
     # Link to Rust implementation if available
     _rust_impl_class = RustDivider if _RUST_AVAILABLE else None
 
-    # Fallback: Hybrid rendering with template_string
+    # Fallback: Hybrid rendering with template
     # Note: This will use Rust template engine if available, Django templates otherwise
     # Django templates auto-escape by default, Rust template engine does not
-    template_string = """{% if text %}<div class="divider-container my-{{ margin_class }}"><hr class="divider-line divider-{{ style }}"><span class="divider-text">{{ text|escape }}</span><hr class="divider-line divider-{{ style }}"></div>{% else %}<hr class="my-{{ margin_class }} divider-{{ style }}">{% endif %}"""
+    template = """{% if text %}<div class="divider-container my-{{ margin_class }}"><hr class="divider-line divider-{{ style }}"><span class="divider-text">{{ text|escape }}</span><hr class="divider-line divider-{{ style }}"></div>{% else %}<hr class="my-{{ margin_class }} divider-{{ style }}">{% endif %}"""
 
     def __init__(self, text: Optional[str] = None, style: str = "solid", margin: str = "md"):
         """

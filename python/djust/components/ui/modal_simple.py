@@ -46,7 +46,7 @@ class Modal(Component):
 
     _rust_impl_class = RustModal if _RUST_AVAILABLE else None
 
-    template_string = """<div class="modal fade{% if show %} show{% endif %}" id="{{ id }}" tabindex="-1" aria-labelledby="{{ id }}Label" aria-hidden="true">
+    template = """<div class="modal fade{% if show %} show{% endif %}" id="{{ id }}" tabindex="-1" aria-labelledby="{{ id }}Label" aria-hidden="true">
     <div class="modal-dialog{% if size != "md" %} modal-{{ size }}{% endif %}{% if centered %} modal-dialog-centered{% endif %}">
         <div class="modal-content">{% if title %}
             <div class="modal-header">

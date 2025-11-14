@@ -36,7 +36,7 @@ class Tabs(Component):
         '<nav><div class="nav nav-tabs">...'
     """
 
-    # Note: Not using template_string because Rust template engine doesn't support forloop.counter0
+    # Note: Not using template because Rust template engine doesn't support forloop.counter0
     # Using Python fallback which is still fast (~50-100μs)
 
     def __init__(
@@ -78,7 +78,7 @@ class Tabs(Component):
             active = " active" if i == self.active_index else ""
             aria_selected = "true" if i == self.active_index else "false"
 
-            button = f'''        <button class="nav-link{active}"
+            button = f"""        <button class="nav-link{active}"
                 id="{self.id}-tab-{i}"
                 data-bs-toggle="tab"
                 data-bs-target="#{self.id}-pane-{i}"
@@ -87,7 +87,7 @@ class Tabs(Component):
                 aria-controls="{self.id}-pane-{i}"
                 aria-selected="{aria_selected}">
             {tab["title"]}
-        </button>'''
+        </button>"""
             buttons.append(button)
 
         # Build tab panes
@@ -95,20 +95,20 @@ class Tabs(Component):
         for i, tab in enumerate(self.tabs):
             active_class = " show active" if i == self.active_index else ""
 
-            pane = f'''    <div class="tab-pane fade{active_class}"
+            pane = f"""    <div class="tab-pane fade{active_class}"
          id="{self.id}-pane-{i}"
          role="tabpanel"
          aria-labelledby="{self.id}-tab-{i}"
          tabindex="0">
         {tab["content"]}
-    </div>'''
+    </div>"""
             panes.append(pane)
 
-        return f'''<nav>
+        return f"""<nav>
     <div class="{nav_class}" id="{self.id}" role="tablist">
 {chr(10).join(buttons)}
     </div>
 </nav>
 <div class="tab-content" id="{self.id}-content">
 {chr(10).join(panes)}
-</div>'''
+</div>"""

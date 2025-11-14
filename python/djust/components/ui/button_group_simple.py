@@ -92,9 +92,9 @@ class ButtonGroup(Component):
     # Link to Rust implementation if available
     _rust_impl_class = RustButtonGroup if _RUST_AVAILABLE else None
 
-    # Fallback: Hybrid rendering with template_string
+    # Fallback: Hybrid rendering with template
     # Note: Avoiding elif due to Rust template engine bug - using separate if blocks instead
-    template_string = """<div class="btn-group{% if vertical %}-vertical{% endif %}{% if size == "sm" %} btn-group-sm{% endif %}{% if size == "lg" %} btn-group-lg{% endif %}" role="{{ role }}" aria-label="Button group">
+    template = """<div class="btn-group{% if vertical %}-vertical{% endif %}{% if size == "sm" %} btn-group-sm{% endif %}{% if size == "lg" %} btn-group-lg{% endif %}" role="{{ role }}" aria-label="Button group">
 {% for button in buttons %}<button type="button" class="btn btn-{{ button.variant }}{% if button.active %} active{% endif %}"{% if button.disabled %} disabled{% endif %}>{{ button.label }}</button>
 {% endfor %}</div>"""
 

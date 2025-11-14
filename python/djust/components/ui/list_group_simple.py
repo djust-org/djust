@@ -108,7 +108,7 @@ class ListGroup(Component):
     # Link to Rust implementation if available
     _rust_impl_class = RustListGroup if _RUST_AVAILABLE else None
 
-    # Note: Not using template_string because list rendering with loops
+    # Note: Not using template because list rendering with loops
     # is more reliable in Python, especially with complex item attributes
 
     def __init__(self, items: List[Dict[str, any]], flush: bool = False, numbered: bool = False):
@@ -216,9 +216,9 @@ class ListGroup(Component):
 
         list_html = "\n".join(list_items)
 
-        return f'''<{tag} class="{list_class}">
+        return f"""<{tag} class="{list_class}">
 {list_html}
-</{tag}>'''
+</{tag}>"""
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS list group"""
@@ -285,12 +285,12 @@ class ListGroup(Component):
                     "info": "bg-cyan-100 text-cyan-800",
                 }
                 badge_colors = badge_color_map.get(badge_variant, badge_color_map["primary"])
-                content = f'''<div class="{content_wrapper}">
+                content = f"""<div class="{content_wrapper}">
       <span>{label}</span>
       <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {badge_colors}">
         {badge_text}
       </span>
-    </div>'''
+    </div>"""
 
             # Add number prefix if numbered
             if self.numbered:
@@ -312,9 +312,9 @@ class ListGroup(Component):
         list_html = "\n".join(list_items)
         container_class_str = " ".join(container_classes)
 
-        return f'''<{tag} class="{container_class_str}">
+        return f"""<{tag} class="{container_class_str}">
 {list_html}
-</{tag}>'''
+</{tag}>"""
 
     def _render_plain(self) -> str:
         """Render plain HTML list group"""
@@ -373,6 +373,6 @@ class ListGroup(Component):
 
         list_html = "\n".join(list_items)
 
-        return f'''<{tag} class="{list_class}">
+        return f"""<{tag} class="{list_class}">
 {list_html}
-</{tag}>'''
+</{tag}>"""

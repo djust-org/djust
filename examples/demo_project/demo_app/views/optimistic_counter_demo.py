@@ -18,7 +18,7 @@ class OptimisticCounterView(LiveView):
     - Shake animation on error
     """
 
-    template_string = """
+    template = """
     <!DOCTYPE html>
     <html>
     <head>

@@ -12,16 +12,16 @@ class TestLiveViewBasics:
     def test_liveview_initialization(self):
         """Test LiveView can be instantiated."""
         class SimpleView(LiveView):
-            template_string = "<div>{{ message }}</div>"
+            template = "<div>{{ message }}</div>"
 
         view = SimpleView()
         assert view is not None
-        assert view.template_string == "<div>{{ message }}</div>"
+        assert view.template == "<div>{{ message }}</div>"
 
     def test_get_template_with_string(self):
         """Test get_template returns template string."""
         class SimpleView(LiveView):
-            template_string = "<div>Hello</div>"
+            template = "<div>Hello</div>"
 
         view = SimpleView()
         template = view.get_template()
@@ -31,7 +31,7 @@ class TestLiveViewBasics:
     def test_mount_called(self, get_request):
         """Test mount method is called on GET request."""
         class CounterView(LiveView):
-            template_string = "<div>{{ count }}</div>"
+            template = "<div>{{ count }}</div>"
             mount_called = False
 
             def mount(self, request, **kwargs):
@@ -65,7 +65,7 @@ class TestSessionCleanup:
         """Test stats with active sessions."""
         # Create a LiveView to populate cache
         class SimpleView(LiveView):
-            template_string = "<div>Test</div>"
+            template = "<div>Test</div>"
 
         view = SimpleView()
         view.get(get_request)
@@ -127,7 +127,7 @@ class TestTemplateInheritance:
     def test_get_template_without_extends_unchanged(self):
         """Test get_template without {% extends %} returns raw source."""
         class SimpleView(LiveView):
-            template_string = "<div>{{ message }}</div>"
+            template = "<div>{{ message }}</div>"
 
         view = SimpleView()
         result = view.get_template()
@@ -177,7 +177,7 @@ class TestTemplateInheritance:
         """Test standalone templates still use {{ }} syntax."""
         class StandaloneView(LiveView):
             template_name = None
-            template_string = "<div>{{ count }}</div>"
+            template = "<div>{{ count }}</div>"
 
         view = StandaloneView()
         result = view.get_template()
@@ -195,7 +195,7 @@ class TestErrorHandling:
         import json
 
         class SimpleView(LiveView):
-            template_string = "<div>{{ count }}</div>"
+            template = "<div>{{ count }}</div>"
 
             def mount(self, request, **kwargs):
                 self.count = 0

@@ -73,9 +73,9 @@ class Tooltip(Component):
     # Link to Rust implementation if available
     _rust_impl_class = RustTooltip if _RUST_AVAILABLE else None
 
-    # Fallback: Hybrid rendering with template_string
+    # Fallback: Hybrid rendering with template
     # Using Bootstrap 5 tooltip structure with data attributes
-    template_string = """<span class="d-inline-block" tabindex="0" data-bs-toggle="tooltip" data-bs-placement="{{ placement }}" data-bs-trigger="{{ trigger }}"{% if arrow %} data-bs-arrow="true"{% endif %} title="{{ text }}">{{ content }}</span>"""
+    template = """<span class="d-inline-block" tabindex="0" data-bs-toggle="tooltip" data-bs-placement="{{ placement }}" data-bs-trigger="{{ trigger }}"{% if arrow %} data-bs-arrow="true"{% endif %} title="{{ text }}">{{ content }}</span>"""
 
     def __init__(
         self,

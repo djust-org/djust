@@ -80,9 +80,9 @@ class Button(Component):
     # Link to Rust implementation if available
     _rust_impl_class = RustButton if _RUST_AVAILABLE else None
 
-    # Fallback: Hybrid rendering with template_string
+    # Fallback: Hybrid rendering with template
     # Note: Avoiding elif due to Rust template engine bug - using separate if blocks instead
-    template_string = '<button type="button" class="btn {% if outline %}btn-outline-{{ variant }}{% else %}btn-{{ variant }}{% endif %}{% if size == "sm" %} btn-sm{% endif %}{% if size == "lg" %} btn-lg{% endif %}"{% if disabled %} disabled{% endif %}>{{ text }}</button>'
+    template = '<button type="button" class="btn {% if outline %}btn-outline-{{ variant }}{% else %}btn-{{ variant }}{% endif %}{% if size == "sm" %} btn-sm{% endif %}{% if size == "lg" %} btn-lg{% endif %}"{% if disabled %} disabled{% endif %}>{{ text }}</button>'
 
     def __init__(
         self,

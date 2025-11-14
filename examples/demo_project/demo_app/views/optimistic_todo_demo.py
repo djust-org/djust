@@ -18,7 +18,7 @@ class OptimisticTodoView(LiveView):
     - Simulated network delay to show optimistic behavior
     """
 
-    template_string = """
+    template = """
     <!DOCTYPE html>
     <html>
     <head>

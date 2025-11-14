@@ -58,7 +58,7 @@ class Card(Component):
     _rust_impl_class = RustCard if _RUST_AVAILABLE else None
 
     # Template for hybrid rendering
-    template_string = """<div class="card{% if variant == "outlined" %} border{% endif %}{% if variant == "elevated" %} shadow{% endif %}">{% if header %}
+    template = """<div class="card{% if variant == "outlined" %} border{% endif %}{% if variant == "elevated" %} shadow{% endif %}">{% if header %}
     <div class="card-header">{{ header }}</div>{% endif %}
     <div class="card-body">{{ body }}</div>{% if footer %}
     <div class="card-footer">{{ footer }}</div>{% endif %}

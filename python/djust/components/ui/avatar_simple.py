@@ -62,7 +62,7 @@ class Avatar(Component):
     _rust_impl_class = RustAvatar if _RUST_AVAILABLE else None
 
     # Template for hybrid rendering
-    template_string = """<div class="avatar avatar-{{ size }}{% if shape == "square" %} avatar-square{% endif %}{% if status %} avatar-{{ status }}{% endif %}">{% if src %}
+    template = """<div class="avatar avatar-{{ size }}{% if shape == "square" %} avatar-square{% endif %}{% if status %} avatar-{{ status }}{% endif %}">{% if src %}
     <img src="{{ src }}" alt="{{ alt }}" class="avatar-img">{% endif %}{% if initials %}
     <span class="avatar-initials">{{ initials }}</span>{% endif %}{% if status %}
     <span class="avatar-status"></span>{% endif %}

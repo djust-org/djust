@@ -180,7 +180,7 @@ class TestMetadataExtraction:
         """Test _extract_handler_metadata() method."""
 
         class TestView(LiveView):
-            template_string = "<div>Test</div>"
+            template = "<div>Test</div>"
 
             @debounce(wait=0.5)
             def search(self, query: str = "", **kwargs):
@@ -203,7 +203,7 @@ class TestMetadataExtraction:
         """Test extraction of handlers with multiple decorators."""
 
         class TestView(LiveView):
-            template_string = "<div>Test</div>"
+            template = "<div>Test</div>"
 
             @debounce(wait=0.5)
             @optimistic
@@ -223,7 +223,7 @@ class TestMetadataExtraction:
         """Test extraction when no decorators present."""
 
         class TestView(LiveView):
-            template_string = "<div>Test</div>"
+            template = "<div>Test</div>"
 
             def plain_handler(self, **kwargs):
                 pass
@@ -238,7 +238,7 @@ class TestMetadataExtraction:
         """Test extraction ignores private methods."""
 
         class TestView(LiveView):
-            template_string = "<div>Test</div>"
+            template = "<div>Test</div>"
 
             @debounce(wait=0.5)
             def _private_method(self, **kwargs):
@@ -254,7 +254,7 @@ class TestMetadataExtraction:
         """Test extraction with mix of decorated and undecorated handlers."""
 
         class TestView(LiveView):
-            template_string = "<div>Test</div>"
+            template = "<div>Test</div>"
 
             @debounce(wait=0.5)
             def search(self, **kwargs):
@@ -279,7 +279,7 @@ class TestMetadataExtraction:
         """Test extraction from view with no handlers."""
 
         class TestView(LiveView):
-            template_string = "<div>Test</div>"
+            template = "<div>Test</div>"
 
         view = TestView()
         metadata = view._extract_handler_metadata()
@@ -291,7 +291,7 @@ class TestMetadataExtraction:
         """Test that metadata extraction is cached."""
 
         class TestView(LiveView):
-            template_string = "<div>Test</div>"
+            template = "<div>Test</div>"
 
             @debounce(wait=0.5)
             def search(self, **kwargs):
@@ -319,7 +319,7 @@ class TestMetadataInjection:
         """Test _inject_handler_metadata() injects script tag."""
 
         class TestView(LiveView):
-            template_string = "<html><body><div>Test</div></body></html>"
+            template = "<html><body><div>Test</div></body></html>"
 
             @debounce(wait=0.5)
             def search(self, **kwargs):
@@ -342,7 +342,7 @@ class TestMetadataInjection:
         """Test injection when no metadata exists."""
 
         class TestView(LiveView):
-            template_string = "<html><body><div>Test</div></body></html>"
+            template = "<html><body><div>Test</div></body></html>"
 
             def plain_handler(self, **kwargs):
                 pass
@@ -359,7 +359,7 @@ class TestMetadataInjection:
         """Test injection before </body> tag."""
 
         class TestView(LiveView):
-            template_string = "<html><body>Content</body></html>"
+            template = "<html><body>Content</body></html>"
 
             @optimistic
             def handler(self, **kwargs):
@@ -377,7 +377,7 @@ class TestMetadataInjection:
         """Test injection before </html> if no </body>."""
 
         class TestView(LiveView):
-            template_string = "<html><div>Content</div></html>"
+            template = "<html><div>Content</div></html>"
 
             @optimistic
             def handler(self, **kwargs):
@@ -394,7 +394,7 @@ class TestMetadataInjection:
         """Test injection appends to end if no closing tags."""
 
         class TestView(LiveView):
-            template_string = "<div>Content</div>"
+            template = "<div>Content</div>"
 
             @optimistic
             def handler(self, **kwargs):
@@ -411,7 +411,7 @@ class TestMetadataInjection:
         """Test injected JSON is valid."""
 
         class TestView(LiveView):
-            template_string = "<html><body>Test</body></html>"
+            template = "<html><body>Test</body></html>"
 
             @debounce(wait=0.5, max_wait=2.0)
             @optimistic

@@ -140,7 +140,7 @@ from djust import LiveView
 from djust.components.ui import Range
 
 class VolumeControlView(LiveView):
-    template_string = '''
+    template = '''
     <div class="container">
         <h2>Audio Settings</h2>
         {{ volume_slider.render|safe }}

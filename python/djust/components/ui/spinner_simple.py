@@ -59,7 +59,7 @@ class Spinner(Component):
     _rust_impl_class = RustSpinner if _RUST_AVAILABLE else None
 
     # Template for hybrid rendering
-    template_string = """<div class="spinner-{{ animation }} text-{{ variant }}{% if size == "sm" %} spinner-{{ animation }}-sm{% endif %}" role="status">
+    template = """<div class="spinner-{{ animation }} text-{{ variant }}{% if size == "sm" %} spinner-{{ animation }}-sm{% endif %}" role="status">
     <span class="visually-hidden">{{ sr_text }}</span>
 </div>"""
 
@@ -136,14 +136,14 @@ class Spinner(Component):
 
         if self.animation == "grow":
             # Pulse animation for grow
-            return f'''<div class="{size_class} rounded-full bg-current {color_class} animate-pulse" role="status">
+            return f"""<div class="{size_class} rounded-full bg-current {color_class} animate-pulse" role="status">
     <span class="sr-only">{self.sr_text}</span>
-</div>'''
+</div>"""
         else:
             # Spin animation for border
-            return f'''<div class="{size_class} border-4 border-t-transparent {color_class} rounded-full animate-spin" role="status">
+            return f"""<div class="{size_class} border-4 border-t-transparent {color_class} rounded-full animate-spin" role="status">
     <span class="sr-only">{self.sr_text}</span>
-</div>'''
+</div>"""
 
     def _render_plain(self) -> str:
         """Render plain HTML spinner"""

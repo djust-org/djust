@@ -23,7 +23,7 @@ class ComponentsDemoView(LiveView):
     - Automatic Rust optimization if available
     """
 
-    template_string = """
+    template = """
     <!DOCTYPE html>
     <html lang="en">
     <head>

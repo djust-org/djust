@@ -15,7 +15,7 @@ except ImportError:
 class LiveView(View):
     """Simple LiveView using Rust backend"""
 
-    template_string = None
+    template = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -30,16 +30,16 @@ class LiveView(View):
         context = {}
         for key in dir(self):
             if not key.startswith("_") and not callable(getattr(self, key)):
-                if key not in ["template_string"]:
+                if key not in ["template"]:
                     context[key] = getattr(self, key)
         return context
 
     def render_template(self):
         """Render using Rust backend"""
-        if RustLiveView and render_template and self.template_string:
+        if RustLiveView and render_template and self.template:
             try:
                 context = self.get_context_data()
-                return render_template(self.template_string, context)
+                return render_template(self.template, context)
             except Exception as e:
                 return f"<div>Error: {e}</div>"
         return "<div>Rust backend not available</div>"

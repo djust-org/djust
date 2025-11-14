@@ -16,7 +16,7 @@ class DebounceSearchView(LiveView):
     - Demonstrates max_wait forcing execution after 2 seconds
     """
 
-    template_string = """
+    template = """
     <div data-liveview-root class="container mt-5">
         <div class="row">
             <div class="col-md-8 offset-md-2">

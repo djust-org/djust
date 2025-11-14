@@ -532,7 +532,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if component_id:
                     patches = None
 
-                # For views with dynamic templates (template_string as property),
+                # For views with dynamic templates (template as property),
                 # patches may be empty because VDOM state is lost on recreation.
                 # In that case, send full HTML update.
                 if patches:

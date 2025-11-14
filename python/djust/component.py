@@ -15,7 +15,7 @@ class Component:
     maintain state or handle events. Use `template` attribute for the template.
 
     For stateful components with lifecycle and event handling, use `LiveComponent`
-    instead (which uses `template_string` attribute).
+    instead (which also uses `template` attribute).
 
     Usage:
         class Button(Component):
@@ -27,10 +27,6 @@ class Component:
 
             def on_click(self):
                 print(f"Button {self.label} clicked!")
-
-    Note:
-        Component uses `template` attribute, while LiveComponent uses
-        `template_string` for historical reasons. Both serve the same purpose.
     """
 
     template: str = ""
@@ -119,9 +115,7 @@ class LiveComponent(Component):
     with parent views through events.
 
     Attributes:
-        template_string (str): The Django template for this component.
-            Note: Uses `template_string` (not `template` like Component)
-            for historical reasons. Both serve the same purpose.
+        template (str): The Django template for this component.
 
     Lifecycle:
         1. mount(**props) - Called when component is created
@@ -134,7 +128,7 @@ class LiveComponent(Component):
 
     Usage:
         class TodoListComponent(LiveComponent):
-            template_string = '''
+            template = '''
                 <div class="todo-list">
                     {% for item in items %}
                     <div @click="toggle_todo" data-id="{{ item.id }}">
@@ -168,7 +162,7 @@ class LiveComponent(Component):
                 pass
     """
 
-    template_string: str = ""
+    template: str = ""
 
     def __init__(self, **props: Any) -> None:
         """
@@ -201,7 +195,7 @@ class LiveComponent(Component):
         self.mount(**props)
         self._mounted = True
 
-        # Note: template_string validation happens in render() to allow
+        # Note: Template validation happens in render() to allow
         # component creation without a template (useful for testing)
 
     def mount(self, **props: Any) -> None:
@@ -369,13 +363,16 @@ class LiveComponent(Component):
         # Inject data-component-id into template BEFORE rendering
         # This ensures it's part of VDOM, keeping client and server in sync
         if self._rust_view is None:
-            if not self.template_string:
-                raise ValueError(f"Component {self.__class__.__name__} must define template_string")
+            if not self.template:
+                raise ValueError(
+                    f"Component {self.__class__.__name__} must define 'template' attribute. "
+                    f"Add: template = '...' as a class attribute."
+                )
 
             # Inject component_id into template's root element
             import re
 
-            template = self.template_string
+            template = self.template
             match = re.search(r"(<[a-zA-Z][a-zA-Z0-9]*)([\s>])", template)
             if match:
                 end = match.end(1)

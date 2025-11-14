@@ -83,7 +83,7 @@ class Breadcrumb(Component):
     # Link to Rust implementation if available
     _rust_impl_class = RustBreadcrumb if _RUST_AVAILABLE else None
 
-    # Note: Not using template_string because Rust template engine doesn't support
+    # Note: Not using template because Rust template engine doesn't support
     # forloop.counter0 and forloop.last reliably
     # Using Python fallback which is still fast (~50-100μs)
 

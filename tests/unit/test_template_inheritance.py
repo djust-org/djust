@@ -23,7 +23,7 @@ class TestTemplateInheritanceExtraction:
         from djust.live_view import LiveView
 
         class TestView(LiveView):
-            template_string = """
+            template = """
             <div class="container" data-liveview-root data-live-view="test">
                 <!-- This is a comment -->
                 <div class="row">
@@ -296,7 +296,7 @@ class TestVDOMStructureMatching:
 
         class TestView(LiveView):
             # Use simple template without comments to avoid stripping complexity
-            template_string = (
+            template = (
                 """<div data-liveview-root><div class="row"><p>Hello {{ name }}</p></div></div>"""
             )
 
@@ -331,7 +331,7 @@ class TestVDOMStructureMatching:
         from djust.live_view import LiveView
 
         class TestView(LiveView):
-            template_string = "<div data-liveview-root><p>{{ text }}</p></div>"
+            template = "<div data-liveview-root><p>{{ text }}</p></div>"
 
             def mount(self, request, **kwargs):
                 self.text = "Hello"
@@ -355,7 +355,7 @@ class TestVDOMStructureMatching:
         from djust.live_view import LiveView
 
         class TestView(LiveView):
-            template_string = "<div data-liveview-root><p>{{ text }}</p></div>"
+            template = "<div data-liveview-root><p>{{ text }}</p></div>"
 
             def mount(self, request, **kwargs):
                 self.text = "Hello"

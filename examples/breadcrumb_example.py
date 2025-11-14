@@ -137,7 +137,7 @@ from djust import LiveView
 from djust.components.ui import Breadcrumb
 
 class ProductDetailView(LiveView):
-    template_string = """
+    template = """
     <div class="container">
         {{ breadcrumb.render|safe }}
 

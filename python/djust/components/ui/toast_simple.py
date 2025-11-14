@@ -71,9 +71,9 @@ class Toast(Component):
     # Link to Rust implementation if available
     _rust_impl_class = RustToast if _RUST_AVAILABLE else None
 
-    # Fallback: Hybrid rendering with template_string
+    # Fallback: Hybrid rendering with template
     # Bootstrap 5 toast structure
-    template_string = """<div class="toast align-items-center text-bg-{{ variant }} border-0" role="alert" aria-live="assertive" aria-atomic="true"{% if auto_hide %} data-bs-autohide="true"{% endif %}>
+    template = """<div class="toast align-items-center text-bg-{{ variant }} border-0" role="alert" aria-live="assertive" aria-atomic="true"{% if auto_hide %} data-bs-autohide="true"{% endif %}>
     <div class="d-flex">
         <div class="toast-body">
             {% if title %}<strong>{{ title }}</strong>{% endif %}

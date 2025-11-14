@@ -21,7 +21,7 @@ class TestForm(forms.Form):
 class TestFormView(FormMixin, LiveView):
     """Test view with FormMixin."""
     form_class = TestForm
-    template_string = """
+    template = """
     <div data-liveview-root>
         <form @submit="submit_form">
             <input type="text" name="first_name" value="{{ form_data.first_name }}" />
@@ -327,7 +327,7 @@ class TestFormWithInitialValues:
 
         class ViewWithInitial(FormMixin, LiveView):
             form_class = FormWithInitial
-            template_string = '<div data-liveview-root>{{ form_data.name }}</div>'
+            template = '<div data-liveview-root>{{ form_data.name }}</div>'
 
         view = ViewWithInitial()
         view.get(get_request)
@@ -345,7 +345,7 @@ class TestFormWithInitialValues:
 
         class ViewWithInitial(FormMixin, LiveView):
             form_class = FormWithInitial
-            template_string = '<div data-liveview-root>{{ form_data.name }}</div>'
+            template = '<div data-liveview-root>{{ form_data.name }}</div>'
 
         view = ViewWithInitial()
         view.get(get_request)

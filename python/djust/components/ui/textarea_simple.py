@@ -55,7 +55,7 @@ class TextArea(Component):
 
     _rust_impl_class = RustTextArea if _RUST_AVAILABLE else None
 
-    template_string = """<div class="mb-3">{% if label %}
+    template = """<div class="mb-3">{% if label %}
     <label for="{{ textarea_id }}" class="form-label">{{ label }}{% if required %} <span class="text-danger">*</span>{% endif %}</label>{% endif %}
     <textarea class="form-control{% if validation_state == "valid" %} is-valid{% endif %}{% if validation_state == "invalid" %} is-invalid{% endif %}"
               id="{{ textarea_id }}"

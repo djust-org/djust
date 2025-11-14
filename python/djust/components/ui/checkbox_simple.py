@@ -49,7 +49,7 @@ class Checkbox(Component):
 
     _rust_impl_class = RustCheckbox if _RUST_AVAILABLE else None
 
-    template_string = """<div class="mb-3">
+    template = """<div class="mb-3">
     <div class="form-check{% if switch %} form-check-switch{% endif %}{% if inline %} form-check-inline{% endif %}">
         <input class="form-check-input"
                type="checkbox"
