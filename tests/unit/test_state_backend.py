@@ -9,6 +9,7 @@ Tests cover:
 - Error handling
 """
 
+import os
 import time
 import pytest
 from djust.state_backend import (
@@ -449,3 +450,136 @@ class TestIntegration:
 
         # Cleanup
         set_backend(None)
+
+
+class TestHealthCheck:
+    """Test health check functionality for state backends."""
+
+    def test_inmemory_health_check_healthy(self):
+        """Test InMemory backend reports healthy status."""
+        backend = InMemoryStateBackend()
+
+        result = backend.health_check()
+
+        assert result["status"] == "healthy"
+        assert result["backend"] == "memory"
+        assert "latency_ms" in result
+        assert result["latency_ms"] >= 0
+        assert "total_sessions" in result
+
+    def test_inmemory_health_check_with_sessions(self):
+        """Test InMemory health check includes session count."""
+        backend = InMemoryStateBackend()
+
+        # Add some sessions
+        view1 = RustLiveView("<div>1</div>")
+        view2 = RustLiveView("<div>2</div>")
+        backend.set("key1", view1)
+        backend.set("key2", view2)
+
+        result = backend.health_check()
+
+        assert result["status"] == "healthy"
+        assert result["total_sessions"] == 2
+
+    def test_inmemory_health_check_handles_failure(self):
+        """Test InMemory health check reports unhealthy on cache failure."""
+        backend = InMemoryStateBackend()
+
+        # Create a mock cache that raises an exception on write
+        class FailingCache(dict):
+            def __setitem__(self, key, value):
+                if key == "__health_check__":
+                    raise RuntimeError("Cache write failed")
+                super().__setitem__(key, value)
+
+        # Replace the cache with the failing mock
+        backend._cache = FailingCache()
+
+        result = backend.health_check()
+
+        # Should report unhealthy with error message
+        assert result["status"] == "unhealthy"
+        assert result["backend"] == "memory"
+        assert "error" in result
+        assert "Cache write failed" in result["error"]
+        assert "latency_ms" in result
+        assert result["latency_ms"] >= 0
+
+        # Verify test key was cleaned up (should not exist in cache)
+        assert "__health_check__" not in backend._cache
+
+    @pytest.mark.skipif(
+        os.environ.get("REDIS_URL") is None, reason="Redis not available"
+    )
+    def test_redis_health_check_healthy(self):
+        """Test Redis backend reports healthy status."""
+        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/15")
+
+        try:
+            backend = RedisStateBackend(redis_url=redis_url, default_ttl=3600)
+        except Exception:
+            pytest.skip("Redis not available")
+
+        result = backend.health_check()
+
+        assert result["status"] == "healthy"
+        assert result["backend"] == "redis"
+        assert "latency_ms" in result
+        assert result["latency_ms"] >= 0
+        assert "details" in result
+
+        # Verify Redis info is included
+        details = result["details"]
+        assert "redis_version" in details or len(details) == 0
+
+    @pytest.mark.skipif(
+        os.environ.get("REDIS_URL") is None, reason="Redis not available"
+    )
+    def test_redis_health_check_measures_latency(self):
+        """Test Redis health check measures latency."""
+        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/15")
+
+        try:
+            backend = RedisStateBackend(redis_url=redis_url, default_ttl=3600)
+        except Exception:
+            pytest.skip("Redis not available")
+
+        result = backend.health_check()
+
+        # Latency should be measurable (not zero, but reasonable)
+        assert result["latency_ms"] > 0
+        assert result["latency_ms"] < 1000  # Should be under 1 second
+
+    def test_redis_health_check_connection_error(self):
+        """Test Redis health check reports unhealthy on connection error."""
+        try:
+            # Try to connect to non-existent Redis server
+            # This will fail in __init__'s ping() call
+            backend = RedisStateBackend(
+                redis_url="redis://localhost:9999/0", default_ttl=3600
+            )
+            pytest.fail("Expected ConnectionError but initialization succeeded")
+        except Exception:
+            # Expected - can't create backend without valid connection
+            pass
+
+        # Instead, create a backend with a valid connection, then override the client
+        try:
+            backend = RedisStateBackend(redis_url="redis://localhost:6379/15", default_ttl=3600)
+        except Exception:
+            pytest.skip("Redis not available for testing")
+
+        # Override the client to simulate connection failure
+        class FailingRedisClient:
+            def ping(self):
+                raise ConnectionError("Connection refused")
+
+        backend._client = FailingRedisClient()
+
+        result = backend.health_check()
+
+        assert result["status"] == "unhealthy"
+        assert result["backend"] == "redis"
+        assert "error" in result
+        assert "Connection refused" in result["error"]

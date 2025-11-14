@@ -95,6 +95,23 @@ class StateBackend(ABC):
         """
         pass
 
+    @abstractmethod
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Check backend health and availability.
+
+        Performs basic connectivity and operational tests to verify the backend
+        is functioning correctly. Useful for monitoring and readiness probes.
+
+        Returns:
+            Dictionary with health status:
+            - status (str): 'healthy' or 'unhealthy'
+            - latency_ms (float): Response time in milliseconds
+            - error (str, optional): Error message if unhealthy
+            - details (dict, optional): Additional backend-specific info
+        """
+        pass
+
 
 class InMemoryStateBackend(StateBackend):
     """
@@ -179,6 +196,50 @@ class InMemoryStateBackend(StateBackend):
             "newest_session_age": min(ages) if ages else 0,
             "average_age": sum(ages) / len(ages) if ages else 0,
         }
+
+    def health_check(self) -> Dict[str, Any]:
+        """Check in-memory backend health."""
+        start_time = time.time()
+        test_key = "__health_check__"
+
+        try:
+            # Test basic operations: check cache is accessible and operational
+            # Test write
+            self._cache[test_key] = (None, time.time())
+
+            # Test read
+            _ = self._cache.get(test_key)
+
+            latency_ms = (time.time() - start_time) * 1000
+
+            # Count sessions excluding test key
+            total_sessions = len([k for k in self._cache.keys() if k != test_key])
+
+            return {
+                "status": "healthy",
+                "backend": "memory",
+                "latency_ms": round(latency_ms, 2),
+                "total_sessions": total_sessions,
+            }
+
+        except Exception as e:
+            latency_ms = (time.time() - start_time) * 1000
+            logger.error(f"InMemory health check failed: {e}")
+
+            # Count sessions excluding test key (in case it was partially written)
+            total_sessions = len([k for k in self._cache.keys() if k != test_key])
+
+            return {
+                "status": "unhealthy",
+                "backend": "memory",
+                "latency_ms": round(latency_ms, 2),
+                "error": str(e),
+                "total_sessions": total_sessions,
+            }
+
+        finally:
+            # Ensure test key is cleaned up even if operations fail
+            self._cache.pop(test_key, None)
 
 
 class RedisStateBackend(StateBackend):
@@ -359,6 +420,73 @@ class RedisStateBackend(StateBackend):
             logger.error(f"Failed to get Redis stats: {e}")
             return {
                 "backend": "redis",
+                "error": str(e),
+            }
+
+    def health_check(self) -> Dict[str, Any]:
+        """Check Redis backend health and connectivity."""
+        start_time = time.time()
+
+        try:
+            # Test Redis connectivity with PING command
+            ping_result = self._client.ping()
+
+            if not ping_result:
+                return {
+                    "status": "unhealthy",
+                    "backend": "redis",
+                    "error": "Redis PING returned False",
+                }
+
+            # Test basic read/write operations
+            test_key = self._make_key("__health_check__")
+
+            # Test SETEX (write with TTL) - 1 second TTL since key is deleted immediately
+            self._client.setex(test_key, 1, b"health_check")
+
+            # Test GET (read)
+            value = self._client.get(test_key)
+
+            if value != b"health_check":
+                return {
+                    "status": "unhealthy",
+                    "backend": "redis",
+                    "error": "Redis read/write test failed",
+                }
+
+            # Test DELETE
+            self._client.delete(test_key)
+
+            latency_ms = (time.time() - start_time) * 1000
+
+            # Get additional connection info
+            info = {}
+            try:
+                server_info = self._client.info("server")
+                info["redis_version"] = server_info.get("redis_version", "unknown")
+                info["uptime_seconds"] = server_info.get("uptime_in_seconds", 0)
+
+                memory_info = self._client.info("memory")
+                info["used_memory_human"] = memory_info.get("used_memory_human", "N/A")
+            except Exception:
+                # Info is optional, continue if it fails
+                pass
+
+            return {
+                "status": "healthy",
+                "backend": "redis",
+                "latency_ms": round(latency_ms, 2),
+                "details": info,
+            }
+
+        except Exception as e:
+            latency_ms = (time.time() - start_time) * 1000
+            logger.error(f"Redis health check failed: {e}")
+
+            return {
+                "status": "unhealthy",
+                "backend": "redis",
+                "latency_ms": round(latency_ms, 2),
                 "error": str(e),
             }
 
