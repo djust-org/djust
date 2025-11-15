@@ -3,128 +3,63 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}djust{% endblock %}</title>
+    <title>{% block title %}djust - Blazing Fast Reactive Django{% endblock %}</title>
 
     <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 
-    <!-- Common Styles -->
-    <style>
-        .navbar-custom {
-            background: #ffffff !important;
-            border-bottom: 1px solid #e1e4e8 !important;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
-            min-height: 60px !important;
-        }
-        .navbar-brand strong {
-            color: #667eea;
-        }
-        .nav-link {
-            color: #24292e !important;
-            font-weight: 500;
-            transition: color 0.2s;
-            font-size: 15px;
-        }
-        .nav-link:hover, .nav-link.active {
-            color: #0969da !important;
-        }
-        .navbar-nav {
-            display: flex !important;
-            flex-direction: row !important;
-            gap: 0.5rem;
-        }
-        .navbar-collapse {
-            display: flex !important;
-            justify-content: flex-end;
-            flex-grow: 1;
-        }
-        .navbar-brand img {
-            max-height: 16px;
-        }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-            padding-top: 60px;
-            background-color: #ffffff;
-        }
-        /* Global demo card styles */
-        .demo-card {
-            background: white;
-            border-radius: 12px;
-            padding: 2rem;
-            margin-bottom: 2rem;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            border: 1px solid #e9ecef;
-            transition: all 0.3s;
-            height: 100%;
-        }
-        .demo-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-        }
-        .demo-card h3 {
-            color: #2c3e50;
-            font-weight: 600;
-            margin-bottom: 1rem;
-            font-size: 1.25rem;
-        }
-        .demo-card .badge {
-            margin-right: 0.5rem;
-        }
-        .demo-card ul {
-            color: #666;
-            margin: 1rem 0 1.5rem 0;
-        }
-        .demo-card ul li {
-            margin-bottom: 0.5rem;
-        }
-        {% block extra_styles %}{% endblock %}
-    </style>
+    <!-- Shared Theme System -->
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/utilities.css">
+
+    <!-- Component dependencies (override in child template) -->
+    {% block dependencies_css %}{% endblock %}
+
     {% block extra_css %}{% endblock %}
+
+    <!-- Tailwind for utility classes -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Syntax highlighting (optional per page) -->
+    {% block syntax_highlighting %}{% endblock %}
+
+    {% block extra_head %}{% endblock %}
 </head>
 <body>
-    <!-- Navigation - Using NavbarComponent -->
-    {% if navbar %}
+    {% block body_start %}{% endblock %}
+
+    <!-- Navbar Component -->
+    {% block navbar %}
+    {% if navbar_html %}
+        {{ navbar_html|safe }}
+    {% elif navbar %}
         {{ navbar.render }}
-    {% else %}
-        <!-- Fallback for views that don't provide navbar -->
-        <nav class="navbar navbar-expand-lg navbar-custom fixed-top">
-            <div class="container{% block nav_container_class %}{% endblock %}">
-                <a class="navbar-brand d-flex align-items-center" href="/">
-                    <img src="/static/images/djust.png" alt="djust" height="16" style="width: auto; margin-right: 0.5rem;">
-                </a>
-                <div class="navbar-collapse" id="navbarNav" style="display: flex !important;">
-                    <ul class="navbar-nav ms-auto">
-                        <li class="nav-item">
-                            <a class="nav-link {% block nav_home_active %}{% endblock %}" href="/">Home</a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link {% block nav_demos_active %}{% endblock %}" href="/demos/">Demos</a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link {% block nav_components_active %}{% endblock %}" href="/kitchen-sink/">Components</a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link {% block nav_forms_active %}{% endblock %}" href="/forms/">Forms</a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link {% block nav_docs_active %}{% endblock %}" href="/docs/">Docs</a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link" href="https://djustlive.com" target="_blank" style="color: #667eea !important; font-weight: 600;">
-                                Hosting ↗
-                            </a>
-                        </li>
-                    </ul>
-                </div>
-            </div>
-        </nav>
     {% endif %}
+    {% endblock %}
+
+    <!-- Theme Toggle -->
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+        <svg class="theme-icon-dark" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+        <svg class="theme-icon-light" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="display: none;">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+    </button>
 
     <!-- Main Content -->
     {% block content %}{% endblock %}
 
-    <!-- Bootstrap JS -->
+    <!-- Bootstrap JS Bundle -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    {% block extra_scripts %}{% endblock %}
+
+    <!-- Theme Switcher -->
+    <script src="/static/js/theme-switcher.js"></script>
+
+    <!-- Component dependencies (override in child template) -->
+    {% block dependencies_js %}{% endblock %}
+
+    {% block extra_js %}{% endblock %}
 </body>
 </html>
