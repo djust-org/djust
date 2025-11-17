@@ -278,7 +278,7 @@ impl SessionActor {
             // Explicit view_id provided - route to specific view
             self.views
                 .get(&id)
-                .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {}", id)))?
+                .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {id}")))?
         } else {
             // No view_id - backward compatibility: route to first view
             // This maintains Phase 5 behavior for existing code
@@ -317,8 +317,7 @@ impl SessionActor {
             Ok(())
         } else {
             Err(ActorError::ViewNotFound(format!(
-                "View not found: {}",
-                view_id
+                "View not found: {view_id}"
             )))
         }
     }
@@ -339,7 +338,7 @@ impl SessionActor {
         let view_handle = self
             .views
             .get(&view_id)
-            .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {}", view_id)))?;
+            .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {view_id}")))?;
 
         view_handle
             .create_component(
@@ -362,7 +361,7 @@ impl SessionActor {
         let view_handle = self
             .views
             .get(&view_id)
-            .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {}", view_id)))?;
+            .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {view_id}")))?;
 
         view_handle
             .component_event(component_id, event_name, params)
@@ -379,7 +378,7 @@ impl SessionActor {
         let view_handle = self
             .views
             .get(&view_id)
-            .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {}", view_id)))?;
+            .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {view_id}")))?;
 
         view_handle
             .update_component_props(component_id, props)
@@ -395,7 +394,7 @@ impl SessionActor {
         let view_handle = self
             .views
             .get(&view_id)
-            .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {}", view_id)))?;
+            .ok_or_else(|| ActorError::ViewNotFound(format!("View not found: {view_id}")))?;
 
         view_handle.remove_component(component_id).await
     }

@@ -106,7 +106,7 @@ impl ComponentActor {
     ) -> Result<(Self, ComponentActorHandle), ActorError> {
         // Parse template once
         let template = Template::new(&template_string)
-            .map_err(|e| ActorError::Template(format!("Failed to parse template: {}", e)))?;
+            .map_err(|e| ActorError::Template(format!("Failed to parse template: {e}")))?;
 
         let (tx, rx) = mpsc::channel(20); // Smaller capacity for components
 
@@ -294,7 +294,7 @@ impl ComponentActor {
                 params_dict
                     .set_item(key, value.to_object(py))
                     .map_err(|e| {
-                        ActorError::Python(format!("Failed to convert param '{}': {}", key, e))
+                        ActorError::Python(format!("Failed to convert param '{key}': {e}"))
                     })?;
             }
 
@@ -334,25 +334,22 @@ impl ComponentActor {
             })?;
 
             let context_dict = context_method.call0().map_err(|e| {
-                ActorError::Python(format!("Error calling get_context_data(): {}", e))
+                ActorError::Python(format!("Error calling get_context_data(): {e}"))
             })?;
 
             let context_dict = context_dict.downcast::<PyDict>().map_err(|e| {
-                ActorError::Python(format!("get_context_data() did not return dict: {}", e))
+                ActorError::Python(format!("get_context_data() did not return dict: {e}"))
             })?;
 
             // Convert to HashMap and update state
             let mut state = HashMap::new();
             for (key, value) in context_dict.iter() {
                 let key_str: String = key.extract().map_err(|e| {
-                    ActorError::Python(format!("Failed to extract key as string: {}", e))
+                    ActorError::Python(format!("Failed to extract key as string: {e}"))
                 })?;
 
                 let rust_value = Value::extract_bound(&value).map_err(|e| {
-                    ActorError::Python(format!(
-                        "Failed to convert value for key '{}': {}",
-                        key_str, e
-                    ))
+                    ActorError::Python(format!("Failed to convert value for key '{key_str}': {e}"))
                 })?;
 
                 state.insert(key_str, rust_value);
@@ -372,11 +369,11 @@ impl ComponentActor {
         let html = self
             .template
             .render(&context)
-            .map_err(|e| ActorError::Template(format!("Render failed: {}", e)))?;
+            .map_err(|e| ActorError::Template(format!("Render failed: {e}")))?;
 
         // Parse to VDOM
         let new_vdom = parse_html(&html)
-            .map_err(|e| ActorError::Vdom(format!("Failed to parse HTML: {}", e)))?;
+            .map_err(|e| ActorError::Vdom(format!("Failed to parse HTML: {e}")))?;
 
         // Phase 8.2: Compute VDOM diff if we have a previous render
         if let Some(ref old_vdom) = self.last_vdom {

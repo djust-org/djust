@@ -24,6 +24,9 @@ use inheritance::{build_inheritance_chain, TemplateLoader};
 use parser::Node;
 use renderer::render_nodes;
 
+// Re-export for JIT auto-serialization
+pub use parser::extract_template_variables;
+
 // These regexes may be used in future template parsing improvements
 #[allow(dead_code)]
 static VAR_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{\{([^}]+)\}\}").unwrap());
@@ -88,8 +91,7 @@ struct NoOpTemplateLoader;
 impl TemplateLoader for NoOpTemplateLoader {
     fn load_template(&self, name: &str) -> Result<Vec<Node>> {
         Err(DjangoRustError::TemplateError(format!(
-            "Template loader not configured. Cannot load parent template: {}",
-            name
+            "Template loader not configured. Cannot load parent template: {name}"
         )))
     }
 }
@@ -175,8 +177,7 @@ mod tests {
                 parser::parse(&tokens)
             } else {
                 Err(DjangoRustError::TemplateError(format!(
-                    "Template not found: {}",
-                    name
+                    "Template not found: {name}"
                 )))
             }
         }

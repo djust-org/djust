@@ -31,10 +31,8 @@ static TEMPLATE_CACHE: Lazy<DashMap<String, Arc<Template>>> = Lazy::new(DashMap:
 
 /// Global supervisor for managing actor lifecycle
 /// Created once with 1-hour TTL
-static SUPERVISOR: Lazy<Arc<ActorSupervisor>> = Lazy::new(|| {
-    let supervisor = Arc::new(ActorSupervisor::new(Duration::from_secs(3600)));
-    supervisor
-});
+static SUPERVISOR: Lazy<Arc<ActorSupervisor>> =
+    Lazy::new(|| Arc::new(ActorSupervisor::new(Duration::from_secs(3600))));
 
 /// Flag to track if supervisor background tasks have been started
 static SUPERVISOR_STARTED: Lazy<std::sync::atomic::AtomicBool> =
@@ -867,12 +865,106 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         return Ok(Value::String(s_str));
     }
 
-    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
-        "Cannot convert Python type to Value"
-    )))
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+        "Cannot convert Python type to Value".to_string(),
+    ))
 }
 
-/// Python module
+/// Extract template variables for JIT auto-serialization.
+///
+/// Parses a Django template and returns a dictionary mapping variable names
+/// to lists of their access paths. This enables automatic serialization of
+/// only the required Django ORM fields for efficient Rust template rendering.
+///
+/// # Arguments
+///
+/// * `template` - Template source string
+///
+/// # Returns
+///
+/// Dictionary mapping variable names to lists of attribute paths:
+/// - Root variables map to empty lists
+/// - Nested variables map to their access paths
+/// - Paths are deduplicated and sorted alphabetically
+///
+/// # Raises
+///
+/// * `ValueError` - If template cannot be parsed (malformed syntax)
+///
+/// # Behavior
+///
+/// - **Empty templates**: Returns empty dict `{}`
+/// - **Malformed templates**: Raises `ValueError` with parsing error details
+/// - **Duplicate paths**: Automatically deduplicated
+/// - **Template tags**: Extracts from for/if/with/block tags
+/// - **Filters**: Ignores filters but preserves variable paths
+///
+/// # Example
+///
+/// ```python
+/// from djust._rust import extract_template_variables
+///
+/// # Basic usage
+/// template = "{{ lease.property.name }} {{ lease.tenant.user.email }}"
+/// vars = extract_template_variables(template)
+/// # Returns: {"lease": ["property.name", "tenant.user.email"]}
+///
+/// # Empty template
+/// vars = extract_template_variables("")
+/// # Returns: {}
+///
+/// # Root variable (no path)
+/// vars = extract_template_variables("{{ count }}")
+/// # Returns: {"count": []}
+///
+/// # Malformed template
+/// try:
+///     vars = extract_template_variables("{% if x")
+/// except ValueError as e:
+///     print(f"Parse error: {e}")
+/// ```
+///
+/// # Use Case
+///
+/// ```python
+/// class LeaseView(LiveView):
+///     template_string = '''
+///         {% for lease in expiring_soon %}
+///             {{ lease.property.name }}
+///             {{ lease.tenant.user.email }}
+///         {% endfor %}
+///     '''
+///
+///     def mount(self, request):
+///         # Extract required fields
+///         vars = extract_template_variables(self.template_string)
+///         # vars = {
+///         #   'lease': ['property.name', 'tenant.user.email'],
+///         #   'expiring_soon': []
+///         # }
+///
+///         # Generate optimized query
+///         self.expiring_soon = Lease.objects.select_related(
+///             'property', 'tenant__user'
+///         ).filter(end_date__lte=timezone.now() + timedelta(days=30))
+/// ```
+#[pyfunction(name = "extract_template_variables")]
+fn extract_template_variables_py(py: Python, template: String) -> PyResult<PyObject> {
+    // Call Rust template parser
+    let vars_map = djust_templates::extract_template_variables(&template).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Template parsing error: {e}"))
+    })?;
+
+    // Convert Rust HashMap to Python dict
+    let py_dict = PyDict::new_bound(py);
+    for (key, paths) in vars_map {
+        let py_list = PyList::new_bound(py, paths.iter().map(|s| s.as_str()));
+        py_dict.set_item(key, py_list)?;
+    }
+
+    Ok(py_dict.into())
+}
+
 #[pymodule]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustLiveViewBackend>()?;
@@ -903,6 +995,9 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<djust_components::RustTextArea>()?;
     m.add_class::<djust_components::RustToast>()?;
     m.add_class::<djust_components::RustTooltip>()?;
+
+    // JIT auto-serialization
+    m.add_function(wrap_pyfunction!(extract_template_variables_py, m)?)?;
 
     Ok(())
 }

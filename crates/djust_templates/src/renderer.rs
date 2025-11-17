@@ -152,8 +152,7 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
                 .unwrap_or_else(|| "CSRF_TOKEN_NOT_PROVIDED".to_string());
 
             Ok(format!(
-                "<input type=\"hidden\" name=\"csrfmiddlewaretoken\" value=\"{}\">",
-                token
+                "<input type=\"hidden\" name=\"csrfmiddlewaretoken\" value=\"{token}\">"
             ))
         }
 
@@ -165,7 +164,7 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "/static/".to_string());
 
-            Ok(format!("{}{}", static_url, path))
+            Ok(format!("{static_url}{path}"))
         }
 
         Node::With { assignments, nodes } => {

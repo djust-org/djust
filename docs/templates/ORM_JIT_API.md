@@ -50,6 +50,134 @@ class DashboardView(LiveView):
 {% endfor %}
 ```
 
+---
+
+## Phase 1: Template Variable Extraction (✅ Available Now)
+
+Phase 1 provides the `extract_template_variables` function for analyzing templates and extracting variable access patterns. This is useful for debugging, manual optimization, and understanding what data your templates need.
+
+### Python API
+
+```python
+from djust._rust import extract_template_variables
+
+# Analyze a template
+template = """
+{% for lease in expiring_soon %}
+  <td>{{ lease.property.name }}</td>
+  <td>{{ lease.tenant.user.email }}</td>
+  <td>{{ lease.end_date|date:"M d, Y" }}</td>
+{% endfor %}
+"""
+
+result = extract_template_variables(template)
+# Returns: {
+#   'lease': ['property.name', 'tenant.user.email', 'end_date'],
+#   'expiring_soon': []
+# }
+```
+
+### Manual Query Optimization
+
+Use extracted variables to optimize Django queries:
+
+```python
+from djust._rust import extract_template_variables
+
+class DashboardView(LiveView):
+    template_name = 'dashboard.html'
+
+    def mount(self, request):
+        # Extract template variables
+        with open(self.get_template_path()) as f:
+            template_content = f.read()
+
+        vars = extract_template_variables(template_content)
+        # vars['lease'] = ['property.name', 'tenant.user.email', 'end_date']
+
+        # Manually optimize query based on extracted paths
+        self.expiring_soon = Lease.objects.select_related(
+            'property',      # for lease.property.name
+            'tenant__user'   # for lease.tenant.user.email
+        ).filter(
+            status='active',
+            end_date__lte=sixty_days_from_now
+        ).order_by('end_date')[:5]
+```
+
+### Debugging Templates
+
+Discover what data a template actually uses:
+
+```python
+# In Django shell
+>>> from djust._rust import extract_template_variables
+>>>
+>>> template = """
+... {{ user.profile.avatar }}
+... {{ user.profile.bio }}
+... {{ user.settings.theme }}
+... {{ user.settings.notifications.email }}
+... """
+>>>
+>>> extract_template_variables(template)
+{'user': ['profile.avatar', 'profile.bio', 'settings.theme', 'settings.notifications.email']}
+```
+
+This helps identify:
+- **Missing select_related()**: If you see deep paths, add select_related
+- **Over-fetching**: If template uses fewer fields than you thought
+- **N+1 queries**: Nested paths in loops indicate select_related needs
+
+### Performance Characteristics
+
+- **Speed**: <5ms for typical templates, sub-microsecond for simple variables
+- **Handles**: Variables, filters, for/if/with/block tags, nested paths
+- **Deduplication**: Automatically removes duplicates and sorts results
+
+```python
+# Benchmark results (from criterion)
+# single_var:      257ns
+# nested_3_levels: 447ns
+# for_loop:        1.7µs
+# 10_vars:         2.7µs
+# 200_iterations:  ~80µs
+```
+
+### Error Handling
+
+```python
+# Empty template
+>>> extract_template_variables("")
+{}
+
+# Malformed template
+>>> extract_template_variables("{% if x")
+ValueError: Template parsing error: Unexpected end of input
+
+# Handle errors gracefully
+try:
+    vars = extract_template_variables(template_content)
+except ValueError as e:
+    logger.error(f"Failed to parse template: {e}")
+    vars = {}  # Fallback to empty
+```
+
+### Known Limitations (Phase 1)
+
+1. **String literals with dots**: String literals in conditionals may be incorrectly extracted as variable paths
+   ```python
+   # Template: {% if url == "https://example.com" %}
+   # Extracts: {'url': [], 'example': ['com"']}  # False positive
+   ```
+   **Impact**: Low - extra variables won't break functionality
+   **Fix**: Phase 2 will implement full expression grammar parsing
+
+2. **elif conditions**: Only first `if` condition is parsed, not `elif` clauses
+3. **Tag arguments**: Arguments to tags (like `{% react props=x.y %}`) not fully extracted
+
+---
+
 ### Step 3: It Just Works ✨
 
 **What djust does automatically**:
@@ -447,6 +575,126 @@ DJUST_CONFIG = {
 
 ## Debug Mode
 
+### Phase 1: Debugging Template Variable Extraction
+
+Use `extract_template_variables` to debug what your templates actually access:
+
+**Example 1: Identify Missing select_related()**
+
+```python
+# In Django shell or view
+from djust._rust import extract_template_variables
+
+template = open('templates/dashboard.html').read()
+vars = extract_template_variables(template)
+
+print("Template variables:")
+for var_name, paths in vars.items():
+    print(f"  {var_name}:")
+    for path in paths:
+        depth = path.count('.')
+        print(f"    {'  ' * depth}└─ {path}")
+        if depth >= 2:
+            print(f"      ⚠️  HINT: Consider select_related('{path.replace('.', '__')}')")
+```
+
+**Output:**
+```
+Template variables:
+  lease:
+    └─ property.name
+      ⚠️  HINT: Consider select_related('property__name')
+    └─ tenant.user.email
+        ⚠️  HINT: Consider select_related('tenant__user__email')
+    └─ end_date
+  expiring_soon:
+```
+
+**Example 2: Compare Template Needs vs Actual Query**
+
+```python
+from djust._rust import extract_template_variables
+from django.db import connection, reset_queries
+
+# Enable query logging
+from django.conf import settings
+settings.DEBUG = True
+
+# Your view code
+template = open('templates/dashboard.html').read()
+expected_vars = extract_template_variables(template)
+
+# Run the query
+reset_queries()
+queryset = Lease.objects.filter(status='active')[:5]
+list(queryset)  # Force evaluation
+
+print(f"Expected variables: {expected_vars}")
+print(f"Actual queries executed: {len(connection.queries)}")
+
+# Identify N+1 queries
+if len(connection.queries) > 1:
+    print("\n⚠️  WARNING: N+1 Query Detected!")
+    print(f"  Expected: 1 query")
+    print(f"  Actual: {len(connection.queries)} queries")
+    print(f"  Missing select_related for: {expected_vars.get('lease', [])}")
+```
+
+**Example 3: Dry-Run Mode**
+
+Test variable extraction without executing queries:
+
+```python
+import json
+from djust._rust import extract_template_variables
+
+def analyze_template(template_path):
+    """Analyze a template without executing any queries."""
+    with open(template_path) as f:
+        template_content = f.read()
+
+    vars = extract_template_variables(template_content)
+
+    print(f"Template: {template_path}")
+    print(f"Variables found: {len(vars)}")
+    print(json.dumps(vars, indent=2))
+
+    # Calculate recommended select_related
+    recommendations = []
+    for var_name, paths in vars.items():
+        for path in paths:
+            if '.' in path:
+                # Convert dot notation to Django's __ notation
+                select_related_path = path.replace('.', '__')
+                recommendations.append(select_related_path)
+
+    if recommendations:
+        print("\nRecommended optimizations:")
+        print(f".select_related({', '.join(repr(r) for r in recommendations)})")
+
+# Usage
+analyze_template('templates/dashboard.html')
+```
+
+**Output:**
+```
+Template: templates/dashboard.html
+Variables found: 2
+{
+  "lease": [
+    "property.name",
+    "tenant.user.email",
+    "end_date"
+  ],
+  "expiring_soon": []
+}
+
+Recommended optimizations:
+.select_related('property__name', 'tenant__user__email')
+```
+
+### Phase 2+: JIT Compilation Debug Mode (Coming Soon)
+
 Enable debug logging to see what JIT is doing:
 
 ```python
@@ -456,7 +704,7 @@ DJUST_CONFIG = {
 }
 ```
 
-### Console Output
+### Console Output (Phase 2+)
 
 **First request (cache miss)**:
 ```

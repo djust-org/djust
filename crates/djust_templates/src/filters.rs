@@ -167,7 +167,7 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
             // floatformat filter: formats float to specified decimal places
             let decimals = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
             match value {
-                Value::Float(f) => Ok(Value::String(format!("{:.prec$}", f, prec = decimals))),
+                Value::Float(f) => Ok(Value::String(format!("{f:.decimals$}"))),
                 Value::Integer(n) => Ok(Value::String(format!(
                     "{:.prec$}",
                     *n as f64,
@@ -440,7 +440,7 @@ fn format_filesize(bytes: i64) -> String {
     const PB: i64 = TB * 1024;
 
     if bytes < KB {
-        format!("{} bytes", bytes)
+        format!("{bytes} bytes")
     } else if bytes < MB {
         format!("{:.1} KB", bytes as f64 / KB as f64)
     } else if bytes < GB {
@@ -480,7 +480,7 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
             'N' => {
                 // Django: "Jan.", "Feb.", etc.
                 let month = dt.format("%b").to_string();
-                result.push_str(&format!("{}.", month));
+                result.push_str(&format!("{month}."));
             }
             // Time format codes
             'H' => result.push_str(&format!("{:02}", dt.hour())), // 00-23
@@ -520,9 +520,9 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
                     };
                     let ampm = if hour < 12 { "a.m." } else { "p.m." };
                     if minute == 0 {
-                        result.push_str(&format!("{} {}", display_hour, ampm));
+                        result.push_str(&format!("{display_hour} {ampm}"));
                     } else {
-                        result.push_str(&format!("{}:{:02} {}", display_hour, minute, ampm));
+                        result.push_str(&format!("{display_hour}:{minute:02} {ampm}"));
                     }
                 }
             }
@@ -578,15 +578,7 @@ fn slugify(s: &str) -> String {
     // Convert to lowercase and replace non-alphanumeric characters with hyphens
     s.to_lowercase()
         .chars()
-        .map(|c| {
-            if c.is_alphanumeric() {
-                c
-            } else if c.is_whitespace() {
-                '-'
-            } else {
-                '-'
-            }
-        })
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect::<String>()
         // Remove consecutive hyphens
         .split('-')
@@ -605,7 +597,7 @@ fn linebreaks(s: &str) -> String {
         .filter(|p| !p.trim().is_empty())
         .map(|p| {
             let lines_with_br = p.split('\n').collect::<Vec<_>>().join("<br>");
-            format!("<p>{}</p>", lines_with_br)
+            format!("<p>{lines_with_br}</p>")
         })
         .collect();
 
@@ -753,7 +745,7 @@ mod tests {
 
     #[test]
     fn test_floatformat_filter() {
-        let value = Value::Float(3.14159);
+        let value = Value::Float(std::f64::consts::PI);
         let result = apply_filter("floatformat", &value, Some("2")).unwrap();
         assert_eq!(result.to_string(), "3.14");
 
@@ -809,8 +801,7 @@ mod tests {
         let result_str = result.to_string();
         assert!(
             result_str.contains("day") || result_str.contains("hour"),
-            "Expected 'day' or 'hour' in result: {}",
-            result_str
+            "Expected 'day' or 'hour' in result: {result_str}"
         );
     }
 

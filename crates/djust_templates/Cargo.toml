@@ -24,3 +24,7 @@ djust_components = { path = "../djust_components" }
 [dev-dependencies]
 criterion = "0.5"
 tempfile = "3.8"
+
+[[bench]]
+name = "variable_extraction"
+harness = false

@@ -224,7 +224,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             Token::Text(text) => content.push_str(text),
                             Token::Variable(var) => {
                                 // Output the raw variable syntax
-                                content.push_str(&format!("{{{{ {} }}}}", var));
+                                content.push_str(&format!("{{{{ {var} }}}}"));
                             }
                             Token::Tag(name, args) => {
                                 // Output the raw tag syntax
@@ -233,7 +233,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                                 } else {
                                     format!(" {}", args.join(" "))
                                 };
-                                content.push_str(&format!("{{% {}{} %}}", name, args_str));
+                                content.push_str(&format!("{{% {name}{args_str} %}}"));
                             }
                             Token::Comment => {
                                 // Skip comments
@@ -428,6 +428,221 @@ fn parse_with_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)
     ))
 }
 
+/// Extract all variable paths from a Django template for JIT serialization.
+///
+/// Parses the template and returns a mapping of root variable names to their access paths.
+/// This function is used to analyze which Django ORM fields need to be serialized for
+/// efficient template rendering in Rust.
+///
+/// # Behavior
+///
+/// - **Empty templates**: Returns an empty HashMap
+/// - **Malformed templates**: Returns an error if template cannot be parsed
+/// - **Duplicate paths**: Automatically deduplicated and sorted
+/// - **Nested variables**: Extracts full attribute chains (e.g., `user.profile.name`)
+/// - **Template tags**: Extracts variables from for/if/with/block tags
+/// - **Filters**: Ignores filters but preserves variable paths
+///
+/// # Performance
+///
+/// Typically completes in <5ms for standard templates. See benchmarks for details.
+///
+/// # Example
+///
+/// ```rust
+/// use std::collections::HashMap;
+/// use djust_templates::extract_template_variables;
+///
+/// let template = "{{ lease.property.name }} {{ lease.tenant.user.email }}";
+/// let vars = extract_template_variables(template).unwrap();
+///
+/// // Returns: {"lease": ["property.name", "tenant.user.email"]}
+/// assert_eq!(vars.get("lease").unwrap().len(), 2);
+/// ```
+///
+/// # Use Case
+///
+/// This function enables automatic serialization of only the required Django ORM fields:
+///
+/// ```ignore
+/// // In Python LiveView
+/// class LeaseView(LiveView):
+///     def get_context_data(self):
+///         # Extract template variables automatically
+///         vars = extract_template_variables(self.template_string)
+///         # vars = {"lease": ["property.name", "tenant.user.email"]}
+///
+///         # Generate optimized query
+///         lease = Lease.objects.select_related('property', 'tenant__user').first()
+///
+///         # Serialize only required fields
+///         return {"lease": lease}  # Auto-serializes property.name and tenant.user.email
+/// ```
+pub fn extract_template_variables(
+    template: &str,
+) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    use std::collections::HashMap;
+
+    // Tokenize and parse the template
+    let tokens = crate::lexer::tokenize(template)?;
+    let nodes = parse(&tokens)?;
+
+    let mut variables: HashMap<String, Vec<String>> = HashMap::new();
+
+    // Walk the AST and extract variable paths
+    extract_from_nodes(&nodes, &mut variables);
+
+    // Deduplicate and sort paths for each variable
+    for paths in variables.values_mut() {
+        paths.sort();
+        paths.dedup();
+    }
+
+    Ok(variables)
+}
+
+/// Recursively extract variable paths from AST nodes
+fn extract_from_nodes(
+    nodes: &[Node],
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    for node in nodes {
+        match node {
+            Node::Variable(var_expr, _filters) => {
+                // Extract from variable: {{ variable.path }}
+                extract_from_variable(var_expr, variables);
+            }
+            Node::If {
+                condition,
+                true_nodes,
+                false_nodes,
+            } => {
+                // Extract from condition: {% if variable.path %}
+                extract_from_expression(condition, variables);
+                // Recurse into if branches
+                extract_from_nodes(true_nodes, variables);
+                extract_from_nodes(false_nodes, variables);
+            }
+            Node::For {
+                var_name: _,
+                iterable,
+                nodes,
+                reversed: _,
+            } => {
+                // Extract from iterable: {% for item in variable.path %}
+                extract_from_variable(iterable, variables);
+                // Recurse into for body
+                extract_from_nodes(nodes, variables);
+            }
+            Node::Block { nodes, name: _ } => {
+                // Recurse into block body
+                extract_from_nodes(nodes, variables);
+            }
+            Node::With { assignments, nodes } => {
+                // Extract from with assignments: {% with x=variable.path %}
+                for (_var_name, expr) in assignments {
+                    extract_from_variable(expr, variables);
+                }
+                // Recurse into with body
+                extract_from_nodes(nodes, variables);
+            }
+            Node::ReactComponent {
+                props,
+                children,
+                name: _,
+            } => {
+                // Extract from component props
+                for (_prop_name, prop_value) in props {
+                    extract_from_variable(prop_value, variables);
+                }
+                // Recurse into children
+                extract_from_nodes(children, variables);
+            }
+            Node::RustComponent { props, name: _ } => {
+                // Extract from component props
+                for (_prop_name, prop_value) in props {
+                    extract_from_variable(prop_value, variables);
+                }
+            }
+            // Text, Comment, CsrfToken, Static, Include, Extends don't contain variable references
+            _ => {}
+        }
+    }
+}
+
+/// Extract variable path from a single variable reference
+///
+/// Examples:
+/// - "lease.property.name" -> root="lease", path="property.name"
+/// - "user.email" -> root="user", path="email"
+/// - "count" -> root="count", path="" (no sub-path)
+fn extract_from_variable(
+    var_expr: &str,
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    // Split on '.' to get path components
+    let parts: Vec<&str> = var_expr.split('.').collect();
+
+    if parts.is_empty() {
+        return;
+    }
+
+    let root = parts[0].to_string();
+
+    if parts.len() == 1 {
+        // Simple variable (no path)
+        // Still track it, but with empty path
+        variables.entry(root).or_default();
+    } else {
+        // Has a path (e.g., "lease.property.name")
+        let path = parts[1..].join(".");
+        variables.entry(root).or_default().push(path);
+    }
+}
+
+/// Extract variable paths from an expression (like in if tags)
+///
+/// Handles:
+/// - {% if lease.property %}
+/// - {% if lease.tenant.user.email %}
+///
+/// # Known Limitations (Phase 1)
+///
+/// This uses simplified expression parsing that splits on whitespace and dots.
+/// String literals with dots (e.g., "example.com") may be incorrectly extracted
+/// as variable paths. This creates harmless false positives - extra variables
+/// that won't be used in serialization.
+///
+/// **Impact**: Low - false positives don't break functionality
+/// **Fix**: Phase 2 will implement full expression grammar parsing
+fn extract_from_expression(
+    expr: &str,
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    // Simple approach: look for word.word.word patterns
+    // More sophisticated: parse the full expression grammar
+
+    // Split by common operators and whitespace
+    let tokens: Vec<&str> = expr
+        .split(|c: char| c.is_whitespace() || "()[]{}=!<>&|+-*/%,".contains(c))
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    for token in tokens {
+        // Check if this looks like a variable path (contains dots)
+        if token.contains('.') && !token.starts_with('"') && !token.starts_with('\'') {
+            extract_from_variable(token, variables);
+        } else if !token.starts_with('"')
+            && !token.starts_with('\'')
+            && !token.chars().all(|c| c.is_numeric() || c == '.')
+            && token.chars().any(|c| c.is_alphabetic())
+        {
+            // Simple variable name without path
+            variables.entry(token.to_string()).or_default();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,5 +791,362 @@ mod tests {
             Node::Block { name, .. } => assert_eq!(name, "content"),
             _ => panic!("Expected Block node"),
         }
+    }
+
+    // Tests for variable extraction (JIT serialization)
+
+    #[test]
+    fn test_extract_simple_variable() {
+        let template = "{{ name }}";
+        let vars = extract_template_variables(template).unwrap();
+        assert!(vars.contains_key("name"));
+        assert_eq!(vars.get("name").unwrap().len(), 0); // No path, just root
+    }
+
+    #[test]
+    fn test_extract_nested_variable() {
+        let template = "{{ user.email }}";
+        let vars = extract_template_variables(template).unwrap();
+        assert!(vars.contains_key("user"));
+        assert_eq!(vars.get("user").unwrap(), &vec!["email".to_string()]);
+    }
+
+    #[test]
+    fn test_extract_multiple_paths() {
+        let template = r#"
+            {{ lease.property.name }}
+            {{ lease.tenant.user.email }}
+            {{ lease.end_date }}
+        "#;
+        let vars = extract_template_variables(template).unwrap();
+
+        assert!(vars.contains_key("lease"));
+        let lease_paths = vars.get("lease").unwrap();
+        assert_eq!(lease_paths.len(), 3);
+        assert!(lease_paths.contains(&"property.name".to_string()));
+        assert!(lease_paths.contains(&"tenant.user.email".to_string()));
+        assert!(lease_paths.contains(&"end_date".to_string()));
+    }
+
+    #[test]
+    fn test_extract_with_filters() {
+        let template = r#"{{ lease.end_date|date:"M d, Y" }}"#;
+        let vars = extract_template_variables(template).unwrap();
+        assert!(vars.contains_key("lease"));
+        assert_eq!(vars.get("lease").unwrap(), &vec!["end_date".to_string()]);
+    }
+
+    #[test]
+    fn test_extract_in_if_tag() {
+        let template = r#"{% if lease.property.status == "active" %}...{% endif %}"#;
+        let vars = extract_template_variables(template).unwrap();
+        assert!(vars.contains_key("lease"));
+        assert!(vars
+            .get("lease")
+            .unwrap()
+            .contains(&"property.status".to_string()));
+    }
+
+    #[test]
+    fn test_extract_in_for_tag() {
+        let template = r#"{% for item in items.all %}{{ item.name }}{% endfor %}"#;
+        let vars = extract_template_variables(template).unwrap();
+        assert!(vars.contains_key("items"));
+        assert!(vars.get("items").unwrap().contains(&"all".to_string()));
+        assert!(vars.contains_key("item"));
+        assert!(vars.get("item").unwrap().contains(&"name".to_string()));
+    }
+
+    #[test]
+    fn test_extract_deduplication() {
+        let template = r#"
+            {{ lease.property.name }}
+            {{ lease.property.name }}
+            {{ lease.property.address }}
+        "#;
+        let vars = extract_template_variables(template).unwrap();
+        let lease_paths = vars.get("lease").unwrap();
+
+        // Should have 2 unique paths, not 3
+        assert_eq!(lease_paths.len(), 2);
+        assert!(lease_paths.contains(&"property.name".to_string()));
+        assert!(lease_paths.contains(&"property.address".to_string()));
+    }
+
+    #[test]
+    fn test_extract_real_world_template() {
+        let template = r#"
+            {% for lease in expiring_soon %}
+              <td>{{ lease.property.name }}</td>
+              <td>{{ lease.property.address }}</td>
+              <td>{{ lease.tenant.user.get_full_name }}</td>
+              <td>{{ lease.tenant.user.email }}</td>
+              <td>{{ lease.end_date|date:"M d, Y" }}</td>
+            {% endfor %}
+        "#;
+        let vars = extract_template_variables(template).unwrap();
+
+        assert!(vars.contains_key("lease"));
+        let lease_paths = vars.get("lease").unwrap();
+
+        assert!(lease_paths.contains(&"property.name".to_string()));
+        assert!(lease_paths.contains(&"property.address".to_string()));
+        assert!(lease_paths.contains(&"tenant.user.get_full_name".to_string()));
+        assert!(lease_paths.contains(&"tenant.user.email".to_string()));
+        assert!(lease_paths.contains(&"end_date".to_string()));
+
+        // Check expiring_soon is tracked
+        assert!(vars.contains_key("expiring_soon"));
+    }
+
+    #[test]
+    fn test_extract_with_tag() {
+        let template = r#"{% with total=items.count %}{{ total }}{% endwith %}"#;
+        let vars = extract_template_variables(template).unwrap();
+        assert!(vars.contains_key("items"));
+        assert!(vars.get("items").unwrap().contains(&"count".to_string()));
+        assert!(vars.contains_key("total"));
+    }
+
+    // Edge case tests
+    #[test]
+    fn test_extract_empty_template() {
+        let template = "";
+        let vars = extract_template_variables(template).unwrap();
+        assert_eq!(vars.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_only_text() {
+        let template = "<html><body>Hello World</body></html>";
+        let vars = extract_template_variables(template).unwrap();
+        assert_eq!(vars.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_whitespace_handling() {
+        let template = "{{  user.name  }}";
+        let vars = extract_template_variables(template).unwrap();
+        assert!(vars.contains_key("user"));
+        assert!(vars.get("user").unwrap().contains(&"name".to_string()));
+    }
+
+    #[test]
+    fn test_extract_deeply_nested_paths() {
+        let template = "{{ a.b.c.d.e.f.g.h.i.j }}";
+        let vars = extract_template_variables(template).unwrap();
+        assert!(vars.contains_key("a"));
+        assert!(vars
+            .get("a")
+            .unwrap()
+            .contains(&"b.c.d.e.f.g.h.i.j".to_string()));
+    }
+
+    #[test]
+    fn test_extract_mixed_content() {
+        let template = r#"
+            <div class="header">{{ site.name }}</div>
+            {% if user.is_authenticated %}
+                <p>Welcome {{ user.profile.display_name }}!</p>
+                {% for message in user.messages.unread %}
+                    <div>{{ message.text }}</div>
+                {% endfor %}
+            {% else %}
+                <a href="/login">Login</a>
+            {% endif %}
+        "#;
+        let vars = extract_template_variables(template).unwrap();
+
+        assert!(vars.contains_key("site"));
+        assert!(vars.get("site").unwrap().contains(&"name".to_string()));
+
+        assert!(vars.contains_key("user"));
+        let user_paths = vars.get("user").unwrap();
+        assert!(user_paths.contains(&"is_authenticated".to_string()));
+        assert!(user_paths.contains(&"profile.display_name".to_string()));
+        assert!(user_paths.contains(&"messages.unread".to_string()));
+
+        assert!(vars.contains_key("message"));
+        assert!(vars.get("message").unwrap().contains(&"text".to_string()));
+    }
+
+    #[test]
+    fn test_extract_with_complex_filters() {
+        let template = r#"
+            {{ date|date:"Y-m-d H:i:s" }}
+            {{ text|truncatewords:10|upper }}
+            {{ value|default:"N/A"|safe }}
+        "#;
+        let vars = extract_template_variables(template).unwrap();
+        assert!(vars.contains_key("date"));
+        assert!(vars.contains_key("text"));
+        assert!(vars.contains_key("value"));
+    }
+
+    #[test]
+    fn test_extract_multiple_variables_same_line() {
+        let template = "{{ a }} {{ b }} {{ c.d }} {{ e.f.g }}";
+        let vars = extract_template_variables(template).unwrap();
+        assert_eq!(vars.len(), 4);
+        assert!(vars.contains_key("a"));
+        assert!(vars.contains_key("b"));
+        assert!(vars.contains_key("c"));
+        assert!(vars.contains_key("e"));
+    }
+
+    #[test]
+    fn test_extract_nested_blocks() {
+        let template = r#"
+            {% block outer %}
+                {{ outer_var }}
+                {% block inner %}
+                    {{ inner_var }}
+                {% endblock %}
+            {% endblock %}
+        "#;
+        let vars = extract_template_variables(template).unwrap();
+        assert!(vars.contains_key("outer_var"));
+        assert!(vars.contains_key("inner_var"));
+    }
+
+    #[test]
+    fn test_extract_complex_for_loops() {
+        let template = r#"
+            {% for category in categories.active %}
+                {% for item in category.items.filter_by_status %}
+                    {{ item.title }}
+                    {% for tag in item.tags.all %}
+                        {{ tag.name }}
+                    {% endfor %}
+                {% endfor %}
+            {% endfor %}
+        "#;
+        let vars = extract_template_variables(template).unwrap();
+
+        assert!(vars.contains_key("categories"));
+        assert!(vars
+            .get("categories")
+            .unwrap()
+            .contains(&"active".to_string()));
+
+        assert!(vars.contains_key("category"));
+        assert!(vars
+            .get("category")
+            .unwrap()
+            .contains(&"items.filter_by_status".to_string()));
+
+        assert!(vars.contains_key("item"));
+        let item_paths = vars.get("item").unwrap();
+        assert!(item_paths.contains(&"title".to_string()));
+        assert!(item_paths.contains(&"tags.all".to_string()));
+
+        assert!(vars.contains_key("tag"));
+        assert!(vars.get("tag").unwrap().contains(&"name".to_string()));
+    }
+
+    #[test]
+    fn test_extract_complex_conditionals() {
+        // Note: Current parser extracts from if condition but not elif conditions
+        // This is a known limitation that will be addressed in future phases
+        let template = r#"
+            {% if user.profile.is_verified and user.subscription.is_active %}
+                Premium User
+            {% endif %}
+        "#;
+        let vars = extract_template_variables(template).unwrap();
+
+        assert!(vars.contains_key("user"));
+        let user_paths = vars.get("user").unwrap();
+        assert!(user_paths.contains(&"profile.is_verified".to_string()));
+        assert!(user_paths.contains(&"subscription.is_active".to_string()));
+    }
+
+    #[test]
+    fn test_extract_special_characters_in_text() {
+        let template = r#"<div data-value="{{ value }}">{{ & < > }}</div>"#;
+        let vars = extract_template_variables(template).unwrap();
+        assert!(vars.contains_key("value"));
+    }
+
+    #[test]
+    fn test_extract_with_includes() {
+        // Even though we don't process includes, we should extract variables
+        let template = r#"
+            {% include "header.html" with title=page.title %}
+            {{ content }}
+        "#;
+        let vars = extract_template_variables(template).unwrap();
+        // Should at least extract 'content'
+        assert!(vars.contains_key("content"));
+    }
+
+    #[test]
+    fn test_extract_react_component() {
+        // Note: Current parser extracts from tag body but not tag arguments
+        // This is a known limitation that will be addressed in future phases
+        let template = r#"{% react "Button" props=button.props %}{{ button.label }}{% endreact %}"#;
+        let vars = extract_template_variables(template).unwrap();
+        assert!(vars.contains_key("button"));
+        let button_paths = vars.get("button").unwrap();
+        assert!(button_paths.contains(&"label".to_string()));
+        // Note: button.props is not currently extracted from tag arguments
+    }
+
+    #[test]
+    fn test_extract_large_template() {
+        // Test performance with a large template
+        let mut template_parts = Vec::new();
+        for i in 0..100 {
+            template_parts.push(format!(
+                r#"
+                {{% for obj{i} in list{i} %}}
+                    {{{{ obj{i}.field1 }}}}
+                    {{{{ obj{i}.field2.nested }}}}
+                {{% endfor %}}
+            "#
+            ));
+        }
+        let template = template_parts.join("\n");
+        let vars = extract_template_variables(&template).unwrap();
+
+        // Should have extracted variables for all 100 iterations
+        assert!(vars.len() >= 100);
+    }
+
+    #[test]
+    fn test_extract_paths_sorted() {
+        let template = r#"
+            {{ obj.zebra }}
+            {{ obj.apple }}
+            {{ obj.middle }}
+        "#;
+        let vars = extract_template_variables(template).unwrap();
+        let paths = vars.get("obj").unwrap();
+
+        // Paths should be sorted
+        assert_eq!(paths[0], "apple");
+        assert_eq!(paths[1], "middle");
+        assert_eq!(paths[2], "zebra");
+    }
+
+    #[test]
+    fn test_extract_method_calls() {
+        let template = "{{ items.all }} {{ user.get_full_name }} {{ count.increment }}";
+        let vars = extract_template_variables(template).unwrap();
+
+        assert!(vars.contains_key("items"));
+        assert!(vars.get("items").unwrap().contains(&"all".to_string()));
+
+        assert!(vars.contains_key("user"));
+        assert!(vars
+            .get("user")
+            .unwrap()
+            .contains(&"get_full_name".to_string()));
+
+        assert!(vars.contains_key("count"));
+        assert!(vars
+            .get("count")
+            .unwrap()
+            .contains(&"increment".to_string()));
     }
 }

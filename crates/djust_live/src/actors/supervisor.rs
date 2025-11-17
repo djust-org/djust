@@ -305,7 +305,7 @@ mod tests {
         // Create multiple sessions
         for i in 0..10 {
             supervisor
-                .get_or_create_session(format!("session-{}", i))
+                .get_or_create_session(format!("session-{i}"))
                 .await;
         }
 
@@ -313,7 +313,7 @@ mod tests {
 
         // Remove all
         for i in 0..10 {
-            supervisor.remove_session(&format!("session-{}", i)).await;
+            supervisor.remove_session(&format!("session-{i}")).await;
         }
 
         assert_eq!(supervisor.stats().active_sessions, 0);
@@ -326,7 +326,7 @@ mod tests {
         // Create sessions
         for i in 0..5 {
             supervisor
-                .get_or_create_session(format!("session-{}", i))
+                .get_or_create_session(format!("session-{i}"))
                 .await;
         }
 

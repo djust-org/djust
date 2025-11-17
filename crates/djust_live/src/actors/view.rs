@@ -375,7 +375,7 @@ impl ViewActor {
                 params_dict
                     .set_item(key, value.to_object(py))
                     .map_err(|e| {
-                        ActorError::Python(format!("Failed to convert param '{}': {}", key, e))
+                        ActorError::Python(format!("Failed to convert param '{key}': {e}"))
                     })?;
             }
 
@@ -412,25 +412,22 @@ impl ViewActor {
             })?;
 
             let context_dict = context_method.call0().map_err(|e| {
-                ActorError::Python(format!("Error calling get_context_data(): {}", e))
+                ActorError::Python(format!("Error calling get_context_data(): {e}"))
             })?;
 
             let context_dict = context_dict.downcast::<PyDict>().map_err(|e| {
-                ActorError::Python(format!("get_context_data() did not return dict: {}", e))
+                ActorError::Python(format!("get_context_data() did not return dict: {e}"))
             })?;
 
             // Convert to HashMap and update backend
             let mut state = HashMap::new();
             for (key, value) in context_dict.iter() {
                 let key_str: String = key.extract().map_err(|e| {
-                    ActorError::Python(format!("Failed to extract key as string: {}", e))
+                    ActorError::Python(format!("Failed to extract key as string: {e}"))
                 })?;
 
                 let rust_value = Value::extract_bound(&value).map_err(|e| {
-                    ActorError::Python(format!(
-                        "Failed to convert value for key '{}': {}",
-                        key_str, e
-                    ))
+                    ActorError::Python(format!("Failed to convert value for key '{key_str}': {e}"))
                 })?;
 
                 state.insert(key_str, rust_value);

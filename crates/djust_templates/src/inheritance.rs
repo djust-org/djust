@@ -217,8 +217,7 @@ pub fn build_inheritance_chain<L: TemplateLoader>(
 
     if depth >= max_depth {
         return Err(DjangoRustError::TemplateError(format!(
-            "Template inheritance depth limit ({}) exceeded - possible circular inheritance",
-            max_depth
+            "Template inheritance depth limit ({max_depth}) exceeded - possible circular inheritance"
         )));
     }
 
@@ -300,19 +299,19 @@ fn node_to_template_string(node: &Node) -> String {
     match node {
         Node::Text(text) => text.clone(),
         Node::Variable(var_name, filters) => {
-            let mut result = format!("{{{{ {} ", var_name);
+            let mut result = format!("{{{{ {var_name} ");
             for (filter_name, arg) in filters {
                 if let Some(arg) = arg {
-                    result.push_str(&format!("|{}:\"{}\" ", filter_name, arg));
+                    result.push_str(&format!("|{filter_name}:\"{arg}\" "));
                 } else {
-                    result.push_str(&format!("|{} ", filter_name));
+                    result.push_str(&format!("|{filter_name} "));
                 }
             }
             result.push_str("}}");
             result
         }
         Node::Block { name, nodes } => {
-            let mut result = format!("{{% block {} %}}", name);
+            let mut result = format!("{{% block {name} %}}");
             result.push_str(&nodes_to_template_string(nodes));
             result.push_str("{% endblock %}");
             result
@@ -322,7 +321,7 @@ fn node_to_template_string(node: &Node) -> String {
             true_nodes,
             false_nodes,
         } => {
-            let mut result = format!("{{% if {} %}}", condition);
+            let mut result = format!("{{% if {condition} %}}");
             result.push_str(&nodes_to_template_string(true_nodes));
             if !false_nodes.is_empty() {
                 result.push_str("{% else %}");
@@ -337,7 +336,7 @@ fn node_to_template_string(node: &Node) -> String {
             reversed,
             nodes,
         } => {
-            let mut result = format!("{{% for {} in {}", var_name, iterable);
+            let mut result = format!("{{% for {var_name} in {iterable}");
             if *reversed {
                 result.push_str(" reversed");
             }
@@ -352,7 +351,7 @@ fn node_to_template_string(node: &Node) -> String {
                 if i > 0 {
                     result.push(' ');
                 }
-                result.push_str(&format!("{}={}", key, value));
+                result.push_str(&format!("{key}={value}"));
             }
             result.push_str(" %}");
             result.push_str(&nodes_to_template_string(nodes));
@@ -361,9 +360,9 @@ fn node_to_template_string(node: &Node) -> String {
         }
         Node::Comment => String::new(),    // Comments are stripped
         Node::Extends(_) => String::new(), // Extends is already processed
-        Node::Include(path) => format!("{{% include \"{}\" %}}", path),
+        Node::Include(path) => format!("{{% include \"{path}\" %}}"),
         Node::CsrfToken => "{% csrf_token %}".to_string(),
-        Node::Static(path) => format!("{{% static \"{}\" %}}", path),
+        Node::Static(path) => format!("{{% static \"{path}\" %}}"),
         Node::ReactComponent { .. } => {
             // React components should be preserved as-is if possible
             // For now, skip them as they're handled separately
@@ -633,7 +632,6 @@ mod tests {
 
     #[test]
     fn test_template_not_found_error_lists_directories() {
-        use std::path::PathBuf;
         use tempfile::TempDir;
 
         // Create temporary directories
@@ -669,9 +667,7 @@ mod tests {
             let dir_str = dir.display().to_string();
             assert!(
                 error_message.contains(&dir_str),
-                "Error message should contain directory: {}\nActual message: {}",
-                dir_str,
-                error_message
+                "Error message should contain directory: {dir_str}\nActual message: {error_message}"
             );
         }
 
