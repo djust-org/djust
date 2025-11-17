@@ -589,26 +589,39 @@ run_phase_implementation() {
     return 0
 }
 
-# Execute all phases in sequence
+# Execute all phases in sequence with per-phase PRs
 execute_all_phases() {
     local feature_name="$1"
-    local branch_name="$2"
+    local base_branch_name="$2"
     local feature_spec="$3"
 
     local total_phases=${#PHASES[@]}
     local completed_phases=0
 
     section "Multi-Phase Execution: $total_phases phase(s)"
+    log "Workflow: Implement → PR → Review → Merge → Next Phase"
+    echo ""
 
     for i in "${!PHASES[@]}"; do
         local phase_name="${PHASES[$i]}"
+        local phase_num=$((i + 1))
+        local phase_branch="phase-${phase_num}/${base_branch_name}"
+
+        highlight "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        highlight " Phase $phase_num/$total_phases: $phase_name"
+        highlight "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+
+        # Create branch for this phase (from main)
+        log "Creating branch for phase $phase_num: $phase_branch"
+        git checkout -b "$phase_branch" main
 
         # Create context for this phase
-        create_claude_context "$feature_name" "$branch_name" "$phase_name" "$i" "$total_phases" "$feature_spec"
+        create_claude_context "$feature_name" "$phase_branch" "$phase_name" "$i" "$total_phases" "$feature_spec"
 
-        # Execute phase
+        # Execute phase implementation
         if ! run_phase_implementation "$phase_name" "$i" "$total_phases"; then
-            error "❌ Feature implementation failed at phase $((i + 1))/$total_phases: $phase_name"
+            error "❌ Phase implementation failed at phase $phase_num/$total_phases: $phase_name"
             echo ""
             info "Completed phases: $completed_phases/$total_phases"
             info "Failed phase: $phase_name"
@@ -616,51 +629,248 @@ execute_all_phases() {
             return 1
         fi
 
+        # Create PR for this phase
+        local pr_number=$(create_phase_pr "$phase_name" "$phase_num" "$total_phases")
+        if [ -z "$pr_number" ]; then
+            error "Failed to create PR for phase $phase_num"
+            return 1
+        fi
+
+        # Self-review the PR
+        self_review_pr "$pr_number" "$phase_name"
+
+        # Resolve any comments from self-review
+        resolve_pr_comments "$pr_number" "$phase_name"
+
+        # Merge the PR
+        if ! merge_phase_pr "$pr_number" "$phase_num"; then
+            error "Failed to merge PR #$pr_number for phase $phase_num"
+            return 1
+        fi
+
         completed_phases=$((completed_phases + 1))
 
-        # Brief pause between phases
+        # Brief pause before next phase
         if [ $((i + 1)) -lt $total_phases ]; then
-            log "Phase $((i + 1))/$total_phases complete. Moving to next phase in 3 seconds..."
-            sleep 3
+            log ""
+            log "Phase $phase_num/$total_phases complete and merged!"
+            log "Moving to next phase in 5 seconds..."
+            sleep 5
         fi
     done
 
-    log "✓ All $total_phases phase(s) completed successfully!"
+    log ""
+    highlight "✓ All $total_phases phase(s) completed and merged!"
     return 0
 }
 
-# Create final PR after all phases
-create_final_pr() {
-    local feature_name="$1"
-    local branch_name="$2"
+# Create PR for current phase
+create_phase_pr() {
+    local phase_name="$1"
+    local phase_num="$2"
+    local total_phases="$3"
 
-    section "Creating Pull Request"
+    section "Creating Pull Request for Phase $phase_num"
 
     # Check if there are commits to PR
-    local commit_count=$(git log --oneline origin/$(git rev-parse --abbrev-ref HEAD@{upstream} 2>/dev/null || echo "main")..HEAD 2>/dev/null | wc -l || echo 0)
+    local commit_count=$(git log --oneline origin/main..HEAD 2>/dev/null | wc -l || echo 0)
 
     if [ "$commit_count" -eq 0 ]; then
         warn "No commits found on this branch - nothing to PR"
         return 1
     fi
 
-    log "Creating PR with $commit_count commit(s)..."
+    log "Creating PR for phase $phase_num/$total_phases with $commit_count commit(s)..."
 
-    # Create PR
-    gh pr create --fill --label "enhancement"
+    # Create PR with detailed title and body
+    local pr_title="feat(phase-$phase_num): $phase_name"
+    local pr_body="## Phase $phase_num/$total_phases: $phase_name
 
+This PR implements Phase $phase_num of the multi-phase feature.
+
+### Implementation
+- Completed phase $phase_num as specified
+- All tests passing
+- Quality gates passed
+
+### Next Steps
+- Review this phase
+- Merge when approved
+- Phase $((phase_num + 1))/$total_phases will follow
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+
+    gh pr create --title "$pr_title" --body "$pr_body" --label "enhancement"
+
+    local pr_number=$(gh pr view --json number -q .number 2>/dev/null || echo "")
     local pr_url=$(gh pr view --json url -q .url 2>/dev/null || echo "")
 
     if [ -n "$pr_url" ]; then
-        highlight "✓ PR Created: $pr_url"
-
-        # Open in browser
-        if command -v open &> /dev/null; then
-            open "$pr_url"
-        fi
+        highlight "✓ PR Created: $pr_url (PR #$pr_number)"
+        echo "$pr_number"
+        return 0
     else
-        warn "PR created but URL not available"
+        error "Failed to create PR"
+        return 1
     fi
+}
+
+# Claude self-reviews the PR
+self_review_pr() {
+    local pr_number="$1"
+    local phase_name="$2"
+
+    section "Self-Reviewing PR #$pr_number"
+
+    log "Claude is reviewing the PR..."
+
+    # Create self-review context
+    local review_context=$(cat << 'EOF'
+# PR Self-Review Task
+
+You are reviewing your own Pull Request to ensure quality before requesting team review.
+
+## Your Task
+
+1. **Read the PR diff**: Use `gh pr diff` to see all changes
+2. **Review systematically**:
+   - Code quality: Are there any obvious bugs, security issues, or bad practices?
+   - Tests: Are edge cases covered? Any missing tests?
+   - Documentation: Are docstrings clear? Is README updated if needed?
+   - Performance: Any obvious performance issues?
+   - Security: Input validation? SQL injection risks? XSS vulnerabilities?
+
+3. **Create review comments** for any issues found:
+   - Use `gh pr review <pr#> --comment --body "message"`
+   - Be specific: file, line number, issue, suggested fix
+   - Categorize: [CRITICAL], [IMPORTANT], [MINOR]
+
+4. **Approve if no critical issues**:
+   - If only minor/optional improvements: `gh pr review <pr#> --approve --body "LGTM with minor suggestions"`
+   - If critical issues: `gh pr review <pr#> --request-changes --body "Critical issues found"`
+
+## Standards Checklist
+
+Before approving, verify:
+- [ ] No clippy/ruff warnings
+- [ ] All tests pass
+- [ ] Edge cases tested
+- [ ] Documentation complete
+- [ ] No security vulnerabilities
+- [ ] Code follows project style
+- [ ] No debugging code left in (println!, dbg!, console.log)
+- [ ] Error messages are helpful
+
+Begin your review now.
+EOF
+)
+
+    # Run Claude to self-review
+    echo "$review_context" | claude --dangerously-skip-user-approval-for-tools
+
+    log "✓ Self-review complete"
+}
+
+# Resolve PR review comments
+resolve_pr_comments() {
+    local pr_number="$1"
+    local phase_name="$2"
+
+    section "Resolving PR #$pr_number Review Comments"
+
+    # Check if there are unresolved review comments
+    local review_decision=$(gh pr view "$pr_number" --json reviewDecision -q .reviewDecision)
+
+    if [ "$review_decision" == "APPROVED" ]; then
+        highlight "✓ PR already approved - no comments to resolve"
+        return 0
+    fi
+
+    if [ "$review_decision" != "CHANGES_REQUESTED" ]; then
+        log "No review decision yet (status: $review_decision)"
+        return 0
+    fi
+
+    log "PR has requested changes - Claude will address them..."
+
+    # Create comment resolution context
+    local resolve_context=$(cat << EOF
+# PR Comment Resolution Task
+
+Your PR #$pr_number has review comments requesting changes.
+
+## Your Task
+
+1. **Read all review comments**:
+   \`\`\`bash
+   gh pr view $pr_number --comments
+   \`\`\`
+
+2. **Address each comment**:
+   - Fix the code based on feedback
+   - Run tests to verify fix
+   - Run quality gates (cargo fmt, clippy, ruff, etc.)
+   - Commit with descriptive message referencing the comment
+
+3. **Respond to comments**:
+   - After fixing, respond to each comment explaining your fix
+   - Link to the commit that addresses it
+
+4. **Push updates**:
+   \`\`\`bash
+   git push origin $(git branch --show-current)
+   \`\`\`
+
+5. **Request re-review**:
+   \`\`\`bash
+   gh pr review $pr_number --approve --body "All comments addressed. Ready for re-review."
+   \`\`\`
+
+Begin addressing review comments now.
+EOF
+)
+
+    # Run Claude to resolve comments
+    echo "$resolve_context" | claude --dangerously-skip-user-approval-for-tools
+
+    log "✓ Review comments addressed"
+}
+
+# Merge phase PR
+merge_phase_pr() {
+    local pr_number="$1"
+    local phase_num="$2"
+
+    section "Merging PR #$pr_number (Phase $phase_num)"
+
+    # Wait for approval
+    local max_attempts=10
+    local attempt=0
+
+    while [ $attempt -lt $max_attempts ]; do
+        local review_decision=$(gh pr view "$pr_number" --json reviewDecision -q .reviewDecision)
+
+        if [ "$review_decision" == "APPROVED" ]; then
+            log "✓ PR approved - merging..."
+
+            # Merge PR
+            gh pr merge "$pr_number" --squash --delete-branch
+
+            # Update local main
+            git checkout main
+            git pull origin main
+
+            highlight "✓ Phase $phase_num merged to main"
+            return 0
+        else
+            log "Waiting for approval (status: $review_decision) - attempt $((attempt + 1))/$max_attempts"
+            sleep 10
+            attempt=$((attempt + 1))
+        fi
+    done
+
+    error "PR not approved after $max_attempts attempts"
+    return 1
 }
 
 # Show summary
@@ -844,37 +1054,24 @@ main() {
         branch_name="feature/${feature_name}-$(date +%Y%m%d)"
     fi
 
-    info "Branch: $branch_name"
+    info "Branch prefix: $branch_name"
     info "Phases to execute: ${#PHASES[@]}"
+    info "Workflow: Each phase gets its own branch → PR → Review → Merge"
     echo ""
-
-    # Create feature branch
-    section "Creating Feature Branch"
-
-    if git show-ref --verify --quiet "refs/heads/$branch_name"; then
-        warn "Branch already exists: $branch_name"
-        read -p "$(echo -e ${CYAN})Switch to existing branch? (y/N)$(echo -e ${NC}) " -n 1 -r
-        echo ""
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            git checkout "$branch_name"
-            log "✓ Switched to existing branch"
-        else
-            exit 1
-        fi
-    else
-        git checkout -b "$branch_name"
-        log "✓ Created and switched to: $branch_name"
-    fi
 
     if [ "$DRY_RUN" = true ]; then
         # Create context for first phase only (preview)
-        create_claude_context "feature" "$branch_name" "${PHASES[0]}" 0 "${#PHASES[@]}" "$FEATURE_SPEC"
+        local temp_branch="phase-1/${branch_name}"
+        create_claude_context "feature" "$temp_branch" "${PHASES[0]}" 0 "${#PHASES[@]}" "$FEATURE_SPEC"
         info "Dry run mode - context created at: $TEMP_DIR/context.md"
         info "Review and run without --dry-run to execute"
         exit 0
     fi
 
     # Confirmation prompt
+    echo ""
+    log "This will create ${#PHASES[@]} separate PRs (one per phase)."
+    log "Each PR will be reviewed and merged before moving to the next phase."
     echo ""
     read -p "$(echo -e ${CYAN})Start multi-phase feature implementation? (y/N)$(echo -e ${NC}) " -n 1 -r
     echo ""
@@ -883,16 +1080,13 @@ main() {
         exit 0
     fi
 
-    # Execute all phases
+    # Execute all phases (each creates its own PR, reviews it, and merges)
     local feature_name=$(basename "$FEATURE_SPEC" .yaml)
     if ! execute_all_phases "$feature_name" "$branch_name" "$FEATURE_SPEC"; then
         error "❌ Feature implementation failed"
         show_summary
         exit 1
     fi
-
-    # Create final PR
-    create_final_pr "$feature_name" "$branch_name"
 
     # Show summary
     show_summary
