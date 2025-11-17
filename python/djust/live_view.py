@@ -55,7 +55,19 @@ class DjangoJSONEncoder(json.JSONEncoder):
     - QuerySets → list
     """
 
+    # Class variable to track recursion depth
+    _depth = 0
+    _max_depth = 2  # Limit to 2 levels of nested models
+
     def default(self, obj):
+        # Track recursion depth to prevent infinite loops
+        DjangoJSONEncoder._depth += 1
+        try:
+            return self._default_impl(obj)
+        finally:
+            DjangoJSONEncoder._depth -= 1
+
+    def _default_impl(self, obj):
         # Handle Component and LiveComponent instances (render to HTML)
         # Import from both old and new locations for compatibility
         from .component import Component, LiveComponent
@@ -94,15 +106,22 @@ class DjangoJSONEncoder(json.JSONEncoder):
                     field_name = field.name
                     value = getattr(obj, field_name, None)
 
-                    # Skip None values and relations (ForeignKey, etc.)
+                    # Skip None values
                     if value is None:
                         result[field_name] = None
                     elif isinstance(value, models.Model):
-                        # For ForeignKey, just include id and __str__
-                        result[field_name] = {
-                            "id": str(value.pk) if value.pk else None,
-                            "__str__": str(value),
-                        }
+                        # For ForeignKey/OneToOne, recursively serialize if under depth limit
+                        if DjangoJSONEncoder._depth < DjangoJSONEncoder._max_depth:
+                            # Recursively serialize the related object with full fields and methods
+                            result[field_name] = json.loads(
+                                json.dumps(value, cls=DjangoJSONEncoder)
+                            )
+                        else:
+                            # At max depth, just include id and __str__ to prevent infinite recursion
+                            result[field_name] = {
+                                "id": str(value.pk) if value.pk else None,
+                                "__str__": str(value),
+                            }
                     else:
                         result[field_name] = value
                 except (AttributeError, ValueError):
