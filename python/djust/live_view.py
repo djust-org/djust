@@ -534,6 +534,10 @@ class LiveView(View):
 
             if not paths_for_var:
                 # No template access detected, use default serialization
+                print(
+                    f"[JIT] No paths found for '{variable_name}', using DjangoJSONEncoder fallback",
+                    file=sys.stderr,
+                )
                 return [json.loads(json.dumps(obj, cls=DjangoJSONEncoder)) for obj in queryset]
 
             # Generate cache key
@@ -545,10 +549,24 @@ class LiveView(View):
             # Check cache
             if cache_key in _jit_serializer_cache:
                 serializer, optimization = _jit_serializer_cache[cache_key]
+                print(
+                    f"[JIT] Cache HIT for '{variable_name}' - using cached serializer",
+                    file=sys.stderr,
+                )
             else:
                 # Generate and compile serializer
                 model_class = queryset.model
                 optimization = analyze_queryset_optimization(model_class, paths_for_var)
+
+                print(
+                    f"[JIT] Cache MISS for '{variable_name}' ({model_class.__name__}) - generating serializer for paths: {paths_for_var}",
+                    file=sys.stderr,
+                )
+                if optimization:
+                    print(
+                        f"[JIT] Query optimization: select_related={optimization.get('select_related', [])}, prefetch_related={optimization.get('prefetch_related', [])}",
+                        file=sys.stderr,
+                    )
 
                 # Generate serializer code
                 code = generate_serializer_code(model_class.__name__, paths_for_var)
@@ -563,6 +581,11 @@ class LiveView(View):
                 queryset = optimize_queryset(queryset, optimization)
 
             # Serialize all objects
+            count = queryset.count()
+            print(
+                f"[JIT] Serializing {count} {queryset.model.__name__} objects for '{variable_name}'",
+                file=sys.stderr,
+            )
             return [serializer(obj) for obj in queryset]
 
         except Exception as e:

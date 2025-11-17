@@ -537,7 +537,7 @@ fn extract_from_nodes(
                 extract_from_nodes(false_nodes, variables);
             }
             Node::For {
-                var_name: _,
+                var_name,
                 iterable,
                 nodes,
                 reversed: _,
@@ -549,6 +549,19 @@ fn extract_from_nodes(
                 extract_from_nodes(nodes, variables);
                 // Recurse into empty block
                 extract_from_nodes(empty_nodes, variables);
+
+                // FIX: Transfer paths from loop variable to iterable
+                // Example: {% for property in properties %}{{ property.name }}{% endfor %}
+                // - Before: properties=[], property=[name, bedrooms, ...]
+                // - After:  properties=[name, bedrooms, ...], property removed
+                if let Some(loop_var_paths) = variables.remove(var_name) {
+                    // Transfer paths from loop variable to iterable
+                    let iterable_name = iterable.split('.').next().unwrap_or(iterable);
+                    variables
+                        .entry(iterable_name.to_string())
+                        .or_default()
+                        .extend(loop_var_paths);
+                }
             }
             Node::Block { nodes, name: _ } => {
                 // Recurse into block body
