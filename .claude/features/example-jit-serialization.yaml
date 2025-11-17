@@ -1,0 +1,191 @@
+# Feature Specification: JIT Auto-Serialization
+# This file defines a multi-phase feature for auto_feature_dev.sh
+
+feature: "jit-auto-serialization"
+title: "JIT Auto-Serialization for Django ORM"
+
+description: |
+  Implement Just-In-Time auto-serialization to automatically optimize Django ORM
+  queries based on template variable usage. This eliminates N+1 query problems
+  and reduces manual select_related/prefetch_related calls.
+
+  The feature is implemented in 3 phases: variable extraction, query optimization,
+  and integration testing.
+
+repository: "https://github.com/yourusername/djust"
+issue_number: 95  # Optional: link to GitHub issue
+epic: "Performance Optimization"
+
+# Phases (executed in order)
+phases:
+  - name: phase-1-variable-extraction
+    title: "Template Variable Extraction"
+    description: |
+      Extract variable access patterns from Django templates (e.g., lease.property.name)
+      using Rust-based parser. Returns nested dictionary of variable paths.
+
+    # Documentation reference
+    docs:
+      - "docs/templates/ORM_JIT_API.md#phase-1-template-variable-extraction"
+      - "DEVELOPMENT_PROCESS.md#implementation-step-3"
+
+    # Estimated time in minutes
+    estimated_time: 60
+
+    # Dependencies (phases that must complete before this one)
+    dependencies: []
+
+    # Deliverables for this phase
+    deliverables:
+      - "Rust: extract_template_variables() function"
+      - "Python: extract_template_variables() binding"
+      - "Tests: 50+ comprehensive tests (Rust + Python)"
+      - "Benchmarks: Criterion benchmarks for performance"
+      - "Docs: API documentation with examples"
+
+    # Success criteria
+    success_criteria:
+      - "All tests pass (cargo test, pytest)"
+      - "Benchmarks show <5ms for typical templates"
+      - "Zero clippy warnings"
+      - "Documentation complete with examples"
+      - "Edge cases documented"
+
+    # Quality gates for this phase
+    quality_gates:
+      - "cargo clippy --all-targets -- -D warnings"
+      - "cargo test -p djust_templates"
+      - "pytest python/tests/test_template_variable_extraction.py"
+      - "cargo bench --bench variable_extraction"
+
+  - name: phase-2-query-optimizer
+    title: "Query Optimizer Implementation"
+    description: |
+      Implement automatic select_related/prefetch_related based on extracted
+      variable paths. Analyzes template needs and generates optimal queryset.
+
+    docs:
+      - "docs/templates/ORM_JIT_API.md#phase-2-query-optimizer"
+
+    estimated_time: 90
+
+    dependencies:
+      - phase-1-variable-extraction
+
+    deliverables:
+      - "Rust: Query optimizer algorithm"
+      - "Python: optimize_queryset() function"
+      - "Tests: Integration tests with Django ORM"
+      - "Benchmarks: Query count reduction metrics"
+      - "Docs: Query optimization guide"
+
+    success_criteria:
+      - "Reduces N+1 queries to single query"
+      - "Handles nested relationships correctly"
+      - "Works with GenericForeignKey"
+      - "Performance tests show <1ms overhead"
+      - "Zero false positives in optimization"
+
+    quality_gates:
+      - "cargo test -p djust_templates"
+      - "pytest python/tests/test_query_optimizer.py"
+      - "python examples/demo_project/manage.py test"
+
+  - name: phase-3-integration-testing
+    title: "Integration & End-to-End Testing"
+    description: |
+      Complete integration with LiveView, add end-to-end tests, performance
+      validation, and production readiness checks.
+
+    docs:
+      - "docs/templates/ORM_JIT_API.md#phase-3-integration"
+
+    estimated_time: 45
+
+    dependencies:
+      - phase-1-variable-extraction
+      - phase-2-query-optimizer
+
+    deliverables:
+      - "Integration with LiveView.render()"
+      - "E2E tests with real Django models"
+      - "Performance comparison (before/after)"
+      - "Production deployment guide"
+      - "Migration guide from manual to auto"
+
+    success_criteria:
+      - "All demo app tests pass"
+      - "Query count reduced by 80%+ in benchmarks"
+      - "Zero regressions in existing functionality"
+      - "Documentation complete for users"
+      - "Ready for production use"
+
+    quality_gates:
+      - "make test"
+      - "make build"
+      - "make lint"
+      - "python examples/demo_project/manage.py check"
+
+# Overall feature metadata
+metadata:
+  priority: "high"
+  complexity: "medium"
+  estimated_total_time: 195  # Sum of all phase times
+  assignee: "claude-code"
+  created: "2025-11-16"
+  target_completion: "2025-11-20"
+
+# Labels for GitHub PR/issues
+labels:
+  - "enhancement"
+  - "performance"
+  - "orm"
+  - "phase-implementation"
+
+# Validation rules specific to this feature
+validation:
+  require_benchmarks: true
+  require_performance_tests: true
+  min_test_coverage: 85
+
+# Rollback strategy if feature needs to be reverted
+rollback:
+  strategy: "feature-flag"
+  feature_flag: "JIT_AUTO_SERIALIZATION"
+  safe_to_revert: true
+  revert_procedure: |
+    1. Set JIT_AUTO_SERIALIZATION=False in settings
+    2. Restart servers
+    3. Monitor for any issues
+    4. Revert code if necessary
+
+# Success metrics for measuring feature impact
+success_metrics:
+  - name: "query_count_reduction"
+    target: "80%"
+    measurement: "Compare query count before/after in demo app"
+
+  - name: "template_render_time"
+    target: "<100ms"
+    measurement: "P95 render time for complex templates"
+
+  - name: "developer_time_saved"
+    target: "50%"
+    measurement: "Time to write manual select_related vs auto"
+
+# Related documentation
+related_docs:
+  - "docs/templates/ORM_JIT_API.md"
+  - "DEVELOPMENT_PROCESS.md"
+  - "docs/PERFORMANCE.md"
+
+# References
+references:
+  - title: "Django select_related documentation"
+    url: "https://docs.djangoproject.com/en/stable/ref/models/querysets/#select-related"
+
+  - title: "N+1 Query Problem"
+    url: "https://stackoverflow.com/questions/97197/what-is-the-n1-selects-problem"
+
+  - title: "Phoenix LiveView (inspiration)"
+    url: "https://hexdocs.pm/phoenix_live_view/"

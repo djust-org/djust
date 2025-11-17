@@ -1,0 +1,154 @@
+# Generic Feature Development Configuration
+# This file configures the auto_feature_dev.sh automation script
+
+# Project Information
+project_name: "djust"
+description: "Phoenix LiveView-style reactive server-side rendering for Django"
+
+# Tech Stack (determines which quality gates to run)
+# Options: python | rust | python-rust | nodejs | typescript | go | ruby
+tech_stack: "python-rust"
+
+# Git Configuration
+main_branch: "main"
+branch_prefix: "feature"
+
+# Quality Gates (commands run before each commit)
+quality_gates:
+  rust:
+    - "cargo fmt --all"
+    - "cargo clippy --all-targets --all-features -- -D warnings"
+  python:
+    - "ruff check python/"
+    - "ruff format python/"
+
+# Test Commands (run during implementation)
+test_commands:
+  rust:
+    - "cargo test --all"
+  python:
+    - "pytest python/"
+
+# Build Commands (run for final validation)
+build_commands:
+  - "make build"
+
+# Documentation Paths (updated during implementation)
+doc_paths:
+  - "README.md"
+  - "CLAUDE.md"
+  - "docs/"
+  - "DEVELOPMENT_PROCESS.md"
+
+# Development Process File
+dev_process_file: "DEVELOPMENT_PROCESS.md"
+
+# Project Context File
+project_context_file: "CLAUDE.md"
+
+# Session Logging
+session_log_dir: ".claude/sessions"
+session_log_format: "markdown"  # markdown | json
+
+# Phase Configuration
+phase_defaults:
+  estimated_time: 60  # minutes
+  require_tests: true
+  require_docs: true
+  require_benchmarks: false  # Set to true for performance-critical phases
+
+# PR Configuration
+pr_auto_merge: false  # Set to true to auto-merge if CI passes
+pr_labels:
+  - "enhancement"
+pr_template: ".github/pull_request_template.md"
+
+# Validation Rules
+validation:
+  # Files that should never be committed
+  excluded_files:
+    - "__pycache__"
+    - "*.pyc"
+    - ".DS_Store"
+    - "target/debug"
+    - "target/release"
+    - "node_modules"
+    - "*.log"
+    - ".env"
+
+  # Required files (warn if missing after implementation)
+  required_files:
+    - "README.md"
+    - "CLAUDE.md"
+
+  # Maximum lines of code per phase (warn if exceeded)
+  max_loc_per_phase: 1000
+
+# Claude Code Settings
+claude:
+  allowed_tools:
+    - "Read"
+    - "Write"
+    - "Edit"
+    - "Bash"
+    - "Grep"
+    - "Glob"
+    - "Task"
+    - "TodoWrite"
+  permission_mode: "acceptEdits"  # acceptEdits | ask
+  verbose: true
+
+# Custom Commands (project-specific)
+custom_commands:
+  pre_phase:
+    - "echo 'Starting phase...'"
+  post_phase:
+    - "echo 'Phase complete'"
+  pre_pr:
+    - "make lint"
+    - "make test"
+
+# Notification Settings (optional)
+notifications:
+  enabled: false
+  slack_webhook: ""
+  email: ""
+
+# Performance Tracking
+performance:
+  track_time: true
+  track_loc: true
+  track_test_coverage: false
+
+# Examples of Different Tech Stacks:
+#
+# For pure Python project:
+#   tech_stack: "python"
+#   quality_gates:
+#     python:
+#       - "ruff check ."
+#       - "ruff format ."
+#       - "mypy ."
+#   test_commands:
+#     python:
+#       - "pytest"
+#
+# For Node.js/TypeScript project:
+#   tech_stack: "typescript"
+#   quality_gates:
+#     nodejs:
+#       - "npm run lint"
+#       - "npm run format"
+#   test_commands:
+#     nodejs:
+#       - "npm test"
+#
+# For Go project:
+#   tech_stack: "go"
+#   quality_gates:
+#     go:
+#       - "go fmt ./..."
+#       - "go vet ./..."
+#   test_commands:
+#     go:
+#       - "go test ./..."
