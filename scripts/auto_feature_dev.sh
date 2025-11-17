@@ -309,6 +309,41 @@ create_claude_context() {
         project_context=$(cat "$REPO_ROOT/CLAUDE.md")
     fi
 
+    # Generate tech stack specific guidelines
+    local tech_guidelines=""
+    case "$TECH_STACK" in
+        python)
+            tech_guidelines="- Follow PEP 8 and Python best practices
+- Add type hints where beneficial
+- Write docstrings for all public APIs
+- Use pytest for testing"
+            ;;
+        rust)
+            tech_guidelines="- Follow Rust best practices
+- Use cargo fmt and cargo clippy
+- Add comprehensive documentation comments
+- Write tests in same file or tests/ directory"
+            ;;
+        python-rust)
+            tech_guidelines="**Python Code**:
+- Follow PEP 8 and Python best practices
+- Add type hints where beneficial
+- Write docstrings for all public APIs
+
+**Rust Code**:
+- Follow Rust best practices
+- Use cargo fmt and cargo clippy
+- Add comprehensive documentation comments
+- Ensure PyO3 bindings are well-documented"
+            ;;
+        nodejs|typescript)
+            tech_guidelines="- Follow Node.js/TypeScript best practices
+- Use ESLint and Prettier
+- Add JSDoc or TypeScript types
+- Write tests with Jest or similar"
+            ;;
+    esac
+
     # Create comprehensive context file
     cat > "$TEMP_DIR/context.md" << EOF
 # Feature Development - Multi-Phase Implementation
@@ -353,38 +388,7 @@ Complete the following steps systematically:
 
 **Tech Stack Specific ($TECH_STACK)**:
 
-$(case "$TECH_STACK" in
-    python)
-        echo "- Follow PEP 8 and Python best practices"
-        echo "- Add type hints where beneficial"
-        echo "- Write docstrings for all public APIs"
-        echo "- Use pytest for testing"
-        ;;
-    rust)
-        echo "- Follow Rust best practices"
-        echo "- Use cargo fmt and cargo clippy"
-        echo "- Add comprehensive documentation comments"
-        echo "- Write tests in same file or tests/ directory"
-        ;;
-    python-rust)
-        echo "**Python Code**:"
-        echo "- Follow PEP 8 and Python best practices"
-        echo "- Add type hints where beneficial"
-        echo "- Write docstrings for all public APIs"
-        echo ""
-        echo "**Rust Code**:"
-        echo "- Follow Rust best practices"
-        echo "- Use cargo fmt and cargo clippy"
-        echo "- Add comprehensive documentation comments"
-        echo "- Ensure PyO3 bindings are well-documented"
-        ;;
-    nodejs|typescript)
-        echo "- Follow Node.js/TypeScript best practices"
-        echo "- Use ESLint and Prettier"
-        echo "- Add JSDoc or TypeScript types"
-        echo "- Write tests with Jest or similar"
-        ;;
-esac)
+$tech_guidelines
 
 ### Step 3: Implementation
 - Implement the phase functionality
