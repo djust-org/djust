@@ -128,11 +128,13 @@ impl InheritanceChain {
                 iterable,
                 reversed,
                 nodes,
+                empty_nodes,
             } => Node::For {
                 var_name: var_name.clone(),
                 iterable: iterable.clone(),
                 reversed: *reversed,
                 nodes: self.apply_block_overrides(nodes),
+                empty_nodes: self.apply_block_overrides(empty_nodes),
             },
             Node::With { assignments, nodes } => Node::With {
                 assignments: assignments.clone(),
@@ -335,6 +337,7 @@ fn node_to_template_string(node: &Node) -> String {
             iterable,
             reversed,
             nodes,
+            empty_nodes,
         } => {
             let mut result = format!("{{% for {var_name} in {iterable}");
             if *reversed {
@@ -342,6 +345,10 @@ fn node_to_template_string(node: &Node) -> String {
             }
             result.push_str(" %}");
             result.push_str(&nodes_to_template_string(nodes));
+            if !empty_nodes.is_empty() {
+                result.push_str("{% empty %}");
+                result.push_str(&nodes_to_template_string(empty_nodes));
+            }
             result.push_str("{% endfor %}");
             result
         }
@@ -534,6 +541,7 @@ mod tests {
             iterable: "items".to_string(),
             reversed: false,
             nodes: vec![Node::Variable("item.name".to_string(), vec![])],
+            empty_nodes: vec![],
         }];
 
         let result = nodes_to_template_string(&nodes);
@@ -550,6 +558,7 @@ mod tests {
             iterable: "items".to_string(),
             reversed: true,
             nodes: vec![Node::Text("Item".to_string())],
+            empty_nodes: vec![],
         }];
 
         let result = nodes_to_template_string(&nodes);
@@ -611,6 +620,7 @@ mod tests {
                         Node::Variable("item.name".to_string(), vec![("upper".to_string(), None)]),
                         Node::Text("</li>".to_string()),
                     ],
+                    empty_nodes: vec![],
                 }],
                 false_nodes: vec![Node::Text("<p>No items</p>".to_string())],
             }],

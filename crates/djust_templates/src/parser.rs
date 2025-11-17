@@ -17,6 +17,7 @@ pub enum Node {
         iterable: String,
         reversed: bool,
         nodes: Vec<Node>,
+        empty_nodes: Vec<Node>, // Rendered when iterable is empty
     },
     Block {
         name: String,
@@ -125,13 +126,14 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     };
 
                     let iterable = iterable_parts.join(" ");
-                    let (nodes, end_pos) = parse_for_block(tokens, *i + 1)?;
+                    let (nodes, empty_nodes, end_pos) = parse_for_block(tokens, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::For {
                         var_name,
                         iterable,
                         reversed,
                         nodes,
+                        empty_nodes,
                     }))
                 }
 
@@ -362,19 +364,30 @@ fn parse_if_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, Vec<Node
     ))
 }
 
-fn parse_for_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)> {
+fn parse_for_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, Vec<Node>, usize)> {
     let mut nodes = Vec::new();
+    let mut empty_nodes = Vec::new();
+    let mut in_empty_block = false;
     let mut i = start;
 
     while i < tokens.len() {
         if let Token::Tag(name, _) = &tokens[i] {
             if name == "endfor" {
-                return Ok((nodes, i));
+                return Ok((nodes, empty_nodes, i));
+            } else if name == "empty" {
+                // Switch to parsing the empty block
+                in_empty_block = true;
+                i += 1;
+                continue;
             }
         }
 
         if let Some(node) = parse_token(tokens, &mut i)? {
-            nodes.push(node);
+            if in_empty_block {
+                empty_nodes.push(node);
+            } else {
+                nodes.push(node);
+            }
         }
         i += 1;
     }
@@ -528,11 +541,14 @@ fn extract_from_nodes(
                 iterable,
                 nodes,
                 reversed: _,
+                empty_nodes,
             } => {
                 // Extract from iterable: {% for item in variable.path %}
                 extract_from_variable(iterable, variables);
                 // Recurse into for body
                 extract_from_nodes(nodes, variables);
+                // Recurse into empty block
+                extract_from_nodes(empty_nodes, variables);
             }
             Node::Block { nodes, name: _ } => {
                 // Recurse into block body

@@ -49,11 +49,17 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
             iterable,
             reversed,
             nodes,
+            empty_nodes,
         } => {
             let iterable_value = context.get(iterable).cloned().unwrap_or(Value::Null);
 
             match iterable_value {
                 Value::List(items) => {
+                    // If list is empty, render the {% empty %} block
+                    if items.is_empty() {
+                        return render_nodes(empty_nodes, context);
+                    }
+
                     let mut output = String::new();
                     let mut ctx = context.clone();
 
@@ -71,7 +77,10 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
 
                     Ok(output)
                 }
-                _ => Ok(String::new()),
+                _ => {
+                    // If not a list (null, etc.), render the empty block
+                    render_nodes(empty_nodes, context)
+                }
             }
         }
 
@@ -890,6 +899,62 @@ mod tests {
         );
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "xyz");
+    }
+
+    #[test]
+    fn test_render_for_empty_with_items() {
+        // Test that empty block is NOT rendered when list has items
+        let tokens =
+            tokenize("{% for item in items %}{{ item }}{% empty %}No items{% endfor %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "items".to_string(),
+            Value::List(vec![
+                Value::String("a".to_string()),
+                Value::String("b".to_string()),
+            ]),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "ab");
+        assert!(!result.contains("No items"));
+    }
+
+    #[test]
+    fn test_render_for_empty_without_items() {
+        // Test that empty block IS rendered when list is empty
+        let tokens =
+            tokenize("{% for item in items %}{{ item }}{% empty %}No items{% endfor %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("items".to_string(), Value::List(vec![]));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "No items");
+    }
+
+    #[test]
+    fn test_render_for_empty_null_iterable() {
+        // Test that empty block IS rendered when iterable is null/missing
+        let tokens =
+            tokenize("{% for item in items %}{{ item }}{% empty %}No items{% endfor %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let context = Context::new(); // items not set
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "No items");
+    }
+
+    #[test]
+    fn test_render_for_empty_complex_content() {
+        // Test that empty block can contain complex HTML
+        let template = r#"{% for property in properties %}<tr><td>{{ property.name }}</td></tr>{% empty %}<tr><td colspan="6">No properties found. <a href="/add">Add property</a></td></tr>{% endfor %}"#;
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("properties".to_string(), Value::List(vec![]));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert!(result.contains("No properties found"));
+        assert!(result.contains("<a href=\"/add\">"));
+        assert!(result.contains("colspan=\"6\""));
     }
 
     #[test]
