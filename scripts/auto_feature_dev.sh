@@ -661,7 +661,186 @@ execute_all_phases() {
 
     log ""
     highlight "✓ All $total_phases phase(s) completed and merged!"
+
+    # Final documentation update after all phases
+    log ""
+    log "All phases merged - now updating comprehensive documentation..."
+    if ! update_final_documentation "$feature_name" "$base_branch_name" "$total_phases"; then
+        warn "Documentation update failed - continuing anyway"
+    fi
+
     return 0
+}
+
+# Update comprehensive project documentation after all phases
+update_final_documentation() {
+    local feature_name="$1"
+    local base_branch_name="$2"
+    local total_phases="$3"
+
+    section "Comprehensive Documentation Update"
+
+    log "Creating documentation branch..."
+    local docs_branch="docs/${base_branch_name}"
+    git checkout -b "$docs_branch" main
+
+    log "Claude is updating all project documentation..."
+
+    # Create comprehensive documentation update context
+    local docs_context=$(cat << 'EOF'
+# Comprehensive Documentation Update Task
+
+All phases of the feature have been implemented and merged. Now update ALL project documentation to reflect the new feature.
+
+## Your Task
+
+Update comprehensive project documentation in this order:
+
+### 1. Main README.md
+- Add feature to feature list (if not already there)
+- Update installation steps if changed
+- Add usage examples for new feature
+- Update table of contents if needed
+
+### 2. Architecture Documentation
+Check and update these files (create if missing):
+- `docs/ARCHITECTURE.md` - Add new components/modules
+- `docs/templates/ORM_JIT_ARCHITECTURE.md` - Update if this is ORM JIT feature
+- Any phase-specific architecture docs
+
+### 3. API Documentation
+- Update API reference with new public APIs
+- Add code examples
+- Document parameters, return values, exceptions
+- `docs/API_REFERENCE.md` or similar
+
+### 4. Tutorial/Guide
+- Add tutorials showing how to use new feature
+- Step-by-step guides
+- Common patterns and best practices
+
+### 5. CHANGELOG.md
+Add entry for this feature:
+```markdown
+## [Unreleased]
+
+### Added
+- [Feature Name]: Brief description
+  - Phase 1: Template variable extraction
+  - Phase 2: Query optimizer
+  - Phase 3: Serializer code generation
+  - Phase 4: LiveView integration
+  - Phase 5: Caching infrastructure
+  - Phase 6: Testing & documentation
+```
+
+### 6. Examples/Demos
+- Add example code in `examples/` directory
+- Update existing examples if they should use new feature
+- Ensure examples are tested and working
+
+### 7. Migration Guide (if breaking changes)
+Create `docs/MIGRATION_GUIDE.md` if feature requires migration:
+- What changed
+- How to migrate existing code
+- Before/after examples
+
+## Quality Standards
+
+Before creating commit:
+- [ ] All documentation is clear and accurate
+- [ ] Code examples are tested and working
+- [ ] No typos or formatting issues
+- [ ] Links work (internal and external)
+- [ ] Table of contents updated
+- [ ] Screenshots/diagrams added if helpful
+
+## Commit Message
+
+Create descriptive commit:
+```bash
+git commit -m "docs: Comprehensive documentation for [feature name]
+
+Update all project documentation after completing all phases:
+
+- README: Add feature overview and usage examples
+- Architecture: Document new components and design
+- API: Complete API reference for new functionality
+- Guides: Add tutorials and best practices
+- CHANGELOG: Add feature entry with all phases
+- Examples: Add working examples demonstrating feature
+
+All [total_phases] phases now fully documented."
+```
+
+Begin documentation update now.
+EOF
+)
+
+    # Run Claude to update documentation
+    echo "$docs_context" | claude --dangerously-skip-user-approval-for-tools
+
+    # Check if any changes were made
+    if git diff --quiet && git diff --cached --quiet; then
+        log "No documentation changes needed"
+        git checkout main
+        git branch -D "$docs_branch"
+        return 0
+    fi
+
+    log "✓ Documentation updated"
+
+    # Create PR for documentation
+    section "Creating Documentation PR"
+
+    local docs_pr_title="docs: Comprehensive documentation for $feature_name"
+    local docs_pr_body="## Documentation Update
+
+This PR updates all project documentation after completing all $total_phases phases of the $feature_name feature.
+
+### Updated Documentation
+- ✅ README.md - Feature overview and examples
+- ✅ Architecture docs - New components and design
+- ✅ API reference - Complete API documentation
+- ✅ Guides/tutorials - How to use the feature
+- ✅ CHANGELOG - Feature entry
+- ✅ Examples - Working examples
+
+### Review Checklist
+- [ ] All code examples work
+- [ ] No typos or broken links
+- [ ] Documentation is clear and complete
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+
+    gh pr create --title "$docs_pr_title" --body "$docs_pr_body" --label "documentation"
+
+    local docs_pr_number=$(gh pr view --json number -q .number 2>/dev/null || echo "")
+    local docs_pr_url=$(gh pr view --json url -q .url 2>/dev/null || echo "")
+
+    if [ -n "$docs_pr_url" ]; then
+        highlight "✓ Documentation PR Created: $docs_pr_url (PR #$docs_pr_number)"
+
+        # Self-review docs PR
+        log "Self-reviewing documentation PR..."
+        self_review_pr "$docs_pr_number" "documentation"
+
+        # Resolve any comments
+        resolve_pr_comments "$docs_pr_number" "documentation"
+
+        # Auto-merge docs PR (less critical than code PRs)
+        log "Merging documentation PR..."
+        if merge_phase_pr "$docs_pr_number" "docs"; then
+            highlight "✓ Documentation merged to main"
+            return 0
+        else
+            warn "Documentation PR needs manual review: $docs_pr_url"
+            return 1
+        fi
+    else
+        error "Failed to create documentation PR"
+        return 1
+    fi
 }
 
 # Create PR for current phase
