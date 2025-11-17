@@ -57,7 +57,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
     # Class variable to track recursion depth
     _depth = 0
-    _max_depth = 2  # Limit to 2 levels of nested models
+    _max_depth = 3  # Limit to 3 levels of nested models (e.g., lease.tenant.user)
 
     def default(self, obj):
         # Track recursion depth to prevent infinite loops
