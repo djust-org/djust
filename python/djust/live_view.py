@@ -1201,7 +1201,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 else:
                     rendered_context[key] = value
 
-            temp_rust.update_state(rendered_context)
+            # Serialize and deserialize to ensure all types are JSON-compatible
+            # This converts Django models, QuerySets, UUIDs, datetimes, etc.
+            json_str = json.dumps(rendered_context, cls=DjangoJSONEncoder)
+            json_compatible_context = json.loads(json_str)
+
+            temp_rust.update_state(json_compatible_context)
             html = temp_rust.render()
 
             html = self._hydrate_react_components(html)
