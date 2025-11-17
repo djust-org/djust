@@ -1,0 +1,944 @@
+{% extends "base.html" %}
+
+{% block title %}Showcase - djust Interactive Demos{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block extra_head %}
+<style>
+    /* Reset and Base */
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+
+    body {
+        overflow-x: hidden;
+    }
+
+    /* Hero Section */
+    .showcase-hero {
+        position: relative;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        overflow: hidden;
+    }
+
+    .hero-content {
+        position: relative;
+        z-index: 2;
+        text-align: center;
+        padding: 2rem;
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+
+    .hero-title {
+        font-size: clamp(3rem, 8vw, 7rem);
+        font-weight: 900;
+        margin-bottom: 1.5rem;
+        line-height: 1.1;
+        text-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        animation: fadeInUp 1s ease-out;
+    }
+
+    .hero-subtitle {
+        font-size: clamp(1.2rem, 3vw, 2rem);
+        margin-bottom: 3rem;
+        opacity: 0.95;
+        font-weight: 300;
+        animation: fadeInUp 1s ease-out 0.2s backwards;
+    }
+
+    .hero-cta {
+        display: inline-block;
+        padding: 1.25rem 3rem;
+        background: white;
+        color: #667eea;
+        text-decoration: none;
+        border-radius: 50px;
+        font-weight: 700;
+        font-size: 1.2rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        animation: fadeInUp 1s ease-out 0.4s backwards;
+    }
+
+    .hero-cta:hover {
+        transform: translateY(-5px) scale(1.05);
+        box-shadow: 0 15px 40px rgba(0, 0, 0, 0.3);
+        color: #667eea;
+    }
+
+    .hero-bg-pattern {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        opacity: 0.1;
+        background-image:
+            repeating-linear-gradient(45deg, transparent, transparent 35px, rgba(255,255,255,.05) 35px, rgba(255,255,255,.05) 70px);
+    }
+
+    .scroll-indicator {
+        position: absolute;
+        bottom: 2rem;
+        left: 50%;
+        transform: translateX(-50%);
+        animation: bounce 2s infinite;
+        opacity: 0.7;
+    }
+
+    /* Demo Showcase Sections */
+    .demo-showcase {
+        background: var(--color-bg);
+    }
+
+    .showcase-section {
+        position: relative;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        padding: 4rem 2rem;
+        scroll-snap-align: start;
+    }
+
+    .showcase-section:nth-child(even) {
+        background: var(--color-bg-elevated);
+    }
+
+    .showcase-container {
+        max-width: 1400px;
+        margin: 0 auto;
+        width: 100%;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4rem;
+        align-items: center;
+    }
+
+    .showcase-container.reverse {
+        direction: rtl;
+    }
+
+    .showcase-container.reverse > * {
+        direction: ltr;
+    }
+
+    .showcase-content {
+        padding: 2rem;
+    }
+
+    .showcase-number {
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--color-accent);
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        margin-bottom: 1rem;
+    }
+
+    .showcase-title {
+        font-size: clamp(2.5rem, 5vw, 4rem);
+        font-weight: 900;
+        color: var(--color-text);
+        margin-bottom: 1.5rem;
+        line-height: 1.1;
+    }
+
+    .showcase-description {
+        font-size: 1.25rem;
+        color: var(--color-text-muted);
+        line-height: 1.8;
+        margin-bottom: 2rem;
+    }
+
+    .showcase-features {
+        list-style: none;
+        margin-bottom: 2rem;
+    }
+
+    .showcase-features li {
+        font-size: 1.1rem;
+        color: var(--color-text);
+        margin-bottom: 1rem;
+        padding-left: 2rem;
+        position: relative;
+    }
+
+    .showcase-features li::before {
+        content: "✓";
+        position: absolute;
+        left: 0;
+        color: #10b981;
+        font-weight: 700;
+        font-size: 1.3rem;
+    }
+
+    .showcase-demo {
+        background: var(--color-bg-elevated);
+        border: 1px solid var(--color-border);
+        border-radius: 20px;
+        padding: 3rem;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .showcase-demo::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, #667eea, #764ba2, #f093fb);
+    }
+
+    .showcase-demo:hover {
+        transform: translateY(-10px);
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.15);
+    }
+
+    .demo-cta {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 1rem 2rem;
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+        text-decoration: none;
+        border-radius: 50px;
+        font-weight: 700;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+    }
+
+    .demo-cta:hover {
+        transform: translateX(5px);
+        box-shadow: 0 6px 25px rgba(102, 126, 234, 0.6);
+        color: white;
+    }
+
+    /* Counter Demo Specific */
+    .counter-display {
+        font-size: 8rem;
+        font-weight: 900;
+        color: var(--color-accent);
+        text-align: center;
+        margin: 2rem 0;
+        text-shadow: 0 4px 20px rgba(102, 126, 234, 0.3);
+        line-height: 1;
+    }
+
+    .counter-controls {
+        display: flex;
+        gap: 1rem;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+
+    .counter-btn {
+        padding: 1rem 2rem;
+        font-size: 1.1rem;
+        font-weight: 700;
+        border: none;
+        border-radius: 12px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        min-width: 140px;
+    }
+
+    .counter-btn.primary {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+    }
+
+    .counter-btn.secondary {
+        background: var(--color-bg);
+        color: var(--color-text);
+        border: 2px solid var(--color-border);
+    }
+
+    .counter-btn:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+    }
+
+    /* Dropdown Demo Specific */
+    .showcase-dropdown {
+        margin: 2rem 0;
+    }
+
+    .dropdown {
+        position: relative;
+        display: inline-block;
+        width: 100%;
+        max-width: 400px;
+    }
+
+    .dropdown-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 1.5rem 2rem;
+        background: var(--color-bg);
+        border: 2px solid var(--color-border);
+        border-radius: 12px;
+        color: var(--color-text);
+        cursor: pointer;
+        font-size: 1.2rem;
+        font-weight: 600;
+        width: 100%;
+        transition: all 0.3s ease;
+    }
+
+    .dropdown-toggle:hover {
+        border-color: var(--color-accent);
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.2);
+    }
+
+    .dropdown-menu {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        margin-top: 0.5rem;
+        background: var(--color-bg-elevated);
+        border: 1px solid var(--color-border);
+        border-radius: 12px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+        z-index: 1000;
+        overflow: hidden;
+    }
+
+    .dropdown-item {
+        padding: 1.25rem 2rem;
+        color: var(--color-text);
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 1.1rem;
+    }
+
+    .dropdown-item:hover {
+        background: var(--color-accent-muted);
+        padding-left: 2.5rem;
+    }
+
+    /* Debounce Demo Specific */
+    .search-input {
+        width: 100%;
+        padding: 1.5rem 2rem;
+        font-size: 1.3rem;
+        border: 2px solid var(--color-border);
+        border-radius: 12px;
+        background: var(--color-bg);
+        color: var(--color-text);
+        transition: all 0.3s ease;
+        margin-bottom: 2rem;
+    }
+
+    .search-input:focus {
+        outline: none;
+        border-color: var(--color-accent);
+        box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+    }
+
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 1.5rem;
+        margin-top: 2rem;
+    }
+
+    .stat-card {
+        padding: 2rem;
+        border-radius: 16px;
+        text-align: center;
+        border: 2px solid;
+    }
+
+    .stat-card.primary {
+        background: rgba(102, 126, 234, 0.1);
+        border-color: #667eea;
+    }
+
+    .stat-card.success {
+        background: rgba(16, 185, 129, 0.1);
+        border-color: #10b981;
+    }
+
+    .stat-card.info {
+        background: var(--color-bg);
+        border-color: var(--color-border);
+    }
+
+    .stat-label {
+        font-size: 0.9rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--color-text-muted);
+        margin-bottom: 0.75rem;
+        font-weight: 600;
+    }
+
+    .stat-value {
+        font-size: 3rem;
+        font-weight: 900;
+        line-height: 1;
+    }
+
+    .stat-card.primary .stat-value {
+        color: #667eea;
+    }
+
+    .stat-card.success .stat-value {
+        color: #10b981;
+    }
+
+    .stat-card.info .stat-value {
+        color: var(--color-text);
+    }
+
+    /* Cache Demo Specific */
+    .product-results {
+        margin-top: 2rem;
+    }
+
+    .results-title {
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: var(--color-text);
+        margin-bottom: 1rem;
+    }
+
+    .product-item {
+        background: var(--color-bg);
+        border: 1px solid var(--color-border);
+        border-radius: 12px;
+        padding: 1.25rem 1.5rem;
+        margin-bottom: 0.75rem;
+        color: var(--color-text);
+        font-size: 1.1rem;
+        transition: all 0.2s ease;
+    }
+
+    .product-item:hover {
+        transform: translateX(10px);
+        border-color: var(--color-accent);
+    }
+
+    /* More Demos Grid */
+    .more-demos {
+        padding: 6rem 2rem;
+        background: var(--color-bg);
+    }
+
+    .more-demos-title {
+        text-align: center;
+        font-size: 3rem;
+        font-weight: 900;
+        color: var(--color-text);
+        margin-bottom: 3rem;
+    }
+
+    .demos-grid {
+        max-width: 1400px;
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 2rem;
+    }
+
+    .demo-card {
+        background: var(--color-bg-elevated);
+        border: 2px solid var(--color-border);
+        border-radius: 20px;
+        padding: 2.5rem;
+        text-decoration: none;
+        color: var(--color-text);
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .demo-card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, #667eea, #764ba2);
+        transform: scaleX(0);
+        transition: transform 0.3s ease;
+    }
+
+    .demo-card:hover::before {
+        transform: scaleX(1);
+    }
+
+    .demo-card:hover {
+        transform: translateY(-10px);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+        border-color: var(--color-accent);
+    }
+
+    .demo-icon {
+        font-size: 4rem;
+        margin-bottom: 1.5rem;
+        display: block;
+    }
+
+    .demo-card-title {
+        font-size: 1.75rem;
+        font-weight: 700;
+        margin-bottom: 1rem;
+    }
+
+    .demo-card-description {
+        font-size: 1rem;
+        color: var(--color-text-muted);
+        line-height: 1.6;
+    }
+
+    /* Animations */
+    @keyframes fadeInUp {
+        from {
+            opacity: 0;
+            transform: translateY(30px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @keyframes bounce {
+        0%, 100% {
+            transform: translateX(-50%) translateY(0);
+        }
+        50% {
+            transform: translateX(-50%) translateY(-20px);
+        }
+    }
+
+    /* Parallax Effect */
+    .parallax-bg {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        z-index: -1;
+        pointer-events: none;
+    }
+
+    /* Responsive Design */
+    @media (max-width: 1024px) {
+        .showcase-container {
+            grid-template-columns: 1fr;
+            gap: 3rem;
+        }
+
+        .showcase-container.reverse {
+            direction: ltr;
+        }
+
+        .hero-title {
+            font-size: 4rem;
+        }
+
+        .showcase-title {
+            font-size: 3rem;
+        }
+
+        .counter-display {
+            font-size: 6rem;
+        }
+    }
+
+    @media (max-width: 640px) {
+        .showcase-section {
+            padding: 3rem 1rem;
+        }
+
+        .showcase-demo {
+            padding: 2rem 1.5rem;
+        }
+
+        .hero-title {
+            font-size: 2.5rem;
+        }
+
+        .hero-subtitle {
+            font-size: 1.2rem;
+        }
+
+        .counter-display {
+            font-size: 4rem;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+        }
+
+        .demos-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    /* Smooth Scroll */
+    html {
+        scroll-behavior: smooth;
+    }
+
+    /* Feature Badge */
+    .feature-badge {
+        display: inline-block;
+        padding: 0.5rem 1rem;
+        background: linear-gradient(135deg, #10b981, #059669);
+        color: white;
+        border-radius: 50px;
+        font-size: 0.9rem;
+        font-weight: 700;
+        margin-bottom: 1rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div data-liveview-root>
+    <!-- Hero Section -->
+    <section class="showcase-hero">
+        <div class="hero-bg-pattern"></div>
+        <div class="hero-content">
+            <h1 class="hero-title">Interactive Demos</h1>
+            <p class="hero-subtitle">
+                Experience the power of real-time, reactive Django applications.<br>
+                All demos update instantly without page reloads.
+            </p>
+            <a href="#counter" class="hero-cta">Explore Demos</a>
+        </div>
+        <div class="scroll-indicator">
+            <svg width="40" height="40" fill="white" viewBox="0 0 24 24">
+                <path d="M12 4l-8 8h5v8h6v-8h5l-8-8z" transform="rotate(180 12 12)"/>
+            </svg>
+        </div>
+    </section>
+
+    <!-- Demo Showcases -->
+    <div class="demo-showcase">
+
+        <!-- Counter Demo -->
+        <section id="counter" class="showcase-section">
+            <div class="showcase-container">
+                <div class="showcase-content">
+                    <div class="showcase-number">Demo 01</div>
+                    <span class="feature-badge">Basic Reactivity</span>
+                    <h2 class="showcase-title">⚡ Counter</h2>
+                    <p class="showcase-description">
+                        Experience real-time state synchronization with this simple yet powerful counter demo.
+                        Every click updates instantly across the server and client without page reloads.
+                    </p>
+                    <ul class="showcase-features">
+                        <li>Instant state updates via WebSocket</li>
+                        <li>Sub-millisecond VDOM diffing</li>
+                        <li>Zero JavaScript required</li>
+                    </ul>
+                    <a href="/demos/counter/" class="demo-cta">
+                        View Full Demo
+                        <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M5 12h14M12 5l7 7-7 7"/>
+                        </svg>
+                    </a>
+                </div>
+                <div class="showcase-demo">
+                    <div class="counter-display">{{ counter }}</div>
+                    <div class="counter-controls">
+                        <button @click="decrement" class="counter-btn secondary">Decrement</button>
+                        <button @click="reset" class="counter-btn secondary">Reset</button>
+                        <button @click="increment" class="counter-btn primary">Increment</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Dropdown Demo -->
+        <section id="dropdown" class="showcase-section">
+            <div class="showcase-container reverse">
+                <div class="showcase-content">
+                    <div class="showcase-number">Demo 02</div>
+                    <span class="feature-badge">Interactive UI</span>
+                    <h2 class="showcase-title">📋 Dropdown</h2>
+                    <p class="showcase-description">
+                        Interactive dropdown with server-side state management.
+                        Toggle open/close and select items - all synchronized in real-time.
+                    </p>
+                    <ul class="showcase-features">
+                        <li>Dynamic open/close state</li>
+                        <li>Server-side item selection</li>
+                        <li>Smooth animations and transitions</li>
+                    </ul>
+                    <a href="/demos/dropdown/" class="demo-cta">
+                        View Full Demo
+                        <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M5 12h14M12 5l7 7-7 7"/>
+                        </svg>
+                    </a>
+                </div>
+                <div class="showcase-demo">
+                    <div class="showcase-dropdown">
+                        <div class="dropdown">
+                            <button @click="toggle_dropdown" class="dropdown-toggle">
+                                <span>{{ selected_item }}</span>
+                                <span>{% if dropdown_open %}▲{% else %}▼{% endif %}</span>
+                            </button>
+                            {% if dropdown_open %}
+                            <div class="dropdown-menu">
+                                {% for item in dropdown_items %}
+                                <div @click="select_item" data-item="{{ item }}" class="dropdown-item">
+                                    {{ item }}
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Debounce Demo -->
+        <section id="debounce" class="showcase-section">
+            <div class="showcase-container">
+                <div class="showcase-content">
+                    <div class="showcase-number">Demo 03</div>
+                    <span class="feature-badge">Smart Performance</span>
+                    <h2 class="showcase-title">⏱️ Debounce</h2>
+                    <p class="showcase-description">
+                        Type rapidly and watch as the search intelligently waits until you stop typing.
+                        Reduces server calls by ~90% without any custom JavaScript.
+                    </p>
+                    <ul class="showcase-features">
+                        <li>500ms debounce delay</li>
+                        <li>2-second max wait time</li>
+                        <li>Automatic call reduction</li>
+                    </ul>
+                    <a href="/demos/debounce/" class="demo-cta">
+                        View Full Demo
+                        <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M5 12h14M12 5l7 7-7 7"/>
+                        </svg>
+                    </a>
+                </div>
+                <div class="showcase-demo">
+                    <input
+                        type="text"
+                        class="search-input"
+                        @input="debounce_search"
+                        placeholder="Type something rapidly..."
+                        value="{{ debounce_query }}"
+                    >
+                    <div class="stats-grid">
+                        <div class="stat-card primary">
+                            <div class="stat-label">Current Query</div>
+                            <div class="stat-value" style="font-size: 1.5rem; word-break: break-all;">
+                                {{ debounce_query|default:"(empty)" }}
+                            </div>
+                        </div>
+                        <div class="stat-card success">
+                            <div class="stat-label">Server Calls</div>
+                            <div class="stat-value">{{ debounce_count }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Cache Demo -->
+        <section id="cache" class="showcase-section">
+            <div class="showcase-container reverse">
+                <div class="showcase-content">
+                    <div class="showcase-number">Demo 04</div>
+                    <span class="feature-badge">Client-Side Cache</span>
+                    <h2 class="showcase-title">💾 Cache</h2>
+                    <p class="showcase-description">
+                        Search products with intelligent client-side caching.
+                        Repeat searches return instantly from cache with zero server round-trips.
+                    </p>
+                    <ul class="showcase-features">
+                        <li>5-minute TTL cache</li>
+                        <li>Sub-millisecond cache hits</li>
+                        <li>87% reduction in server calls</li>
+                    </ul>
+                    <a href="/demos/cache/" class="demo-cta">
+                        View Full Demo
+                        <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M5 12h14M12 5l7 7-7 7"/>
+                        </svg>
+                    </a>
+                </div>
+                <div class="showcase-demo">
+                    <input
+                        type="text"
+                        class="search-input"
+                        @input="cache_search"
+                        placeholder="Try: laptop, mouse, keyboard..."
+                        value="{{ cache_query }}"
+                    >
+                    <div class="stats-grid">
+                        <div class="stat-card primary">
+                            <div class="stat-label">Server Calls</div>
+                            <div class="stat-value">{{ cache_server_calls }}</div>
+                        </div>
+                        <div class="stat-card success">
+                            <div class="stat-label">Cache Efficiency</div>
+                            <div class="stat-value">{{ cache_efficiency }}%</div>
+                        </div>
+                        <div class="stat-card info">
+                            <div class="stat-label">Results</div>
+                            <div class="stat-value">{{ cache_results|length }}</div>
+                        </div>
+                    </div>
+                    {% if cache_results %}
+                    <div class="product-results">
+                        <div class="results-title">Search Results ({{ cache_results|length }})</div>
+                        {% for product in cache_results %}
+                        <div class="product-item">📦 {{ product }}</div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </section>
+
+    </div>
+
+    <!-- More Demos Section -->
+    <section class="more-demos">
+        <h2 class="more-demos-title">Explore More Demos</h2>
+        <div class="demos-grid">
+            <a href="/demos/throttle/" class="demo-card">
+                <span class="demo-icon">⏱️</span>
+                <h3 class="demo-card-title">Throttle</h3>
+                <p class="demo-card-description">
+                    Intelligent scroll event throttling that limits server calls
+                    while maintaining responsiveness.
+                </p>
+            </a>
+
+            <a href="/demos/smart-dashboard/" class="demo-card">
+                <span class="demo-icon">🏠</span>
+                <h3 class="demo-card-title">Smart Dashboard</h3>
+                <p class="demo-card-description">
+                    Complete dashboard with @client_state decorator showcasing
+                    advanced state management patterns.
+                </p>
+            </a>
+
+            <a href="/demos/todo/" class="demo-card">
+                <span class="demo-icon">✅</span>
+                <h3 class="demo-card-title">Todo List</h3>
+                <p class="demo-card-description">
+                    Full CRUD operations with add, edit, delete, and toggle
+                    functionality - all in real-time.
+                </p>
+            </a>
+
+            <a href="/demos/chat/" class="demo-card">
+                <span class="demo-icon">💬</span>
+                <h3 class="demo-card-title">Live Chat</h3>
+                <p class="demo-card-description">
+                    Real-time messaging system demonstrating WebSocket
+                    communication and live updates.
+                </p>
+            </a>
+
+            <a href="/demos/react/" class="demo-card">
+                <span class="demo-icon">⚛️</span>
+                <h3 class="demo-card-title">React Integration</h3>
+                <p class="demo-card-description">
+                    Hybrid approach combining server-side LiveView with
+                    client-side React components.
+                </p>
+            </a>
+
+            <a href="/demos/performance/" class="demo-card">
+                <span class="demo-icon">⚡</span>
+                <h3 class="demo-card-title">Performance Test</h3>
+                <p class="demo-card-description">
+                    VDOM stress testing with thousands of elements demonstrating
+                    sub-millisecond diffing performance.
+                </p>
+            </a>
+
+            <a href="/demos/datatable/" class="demo-card">
+                <span class="demo-icon">📊</span>
+                <h3 class="demo-card-title">Product DataTable</h3>
+                <p class="demo-card-description">
+                    Interactive data table with sorting, filtering, and pagination
+                    powered by server-side logic.
+                </p>
+            </a>
+        </div>
+    </section>
+
+</div>
+
+<script>
+    // Parallax scroll effect
+    let lastScrollTop = 0;
+    window.addEventListener('scroll', () => {
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        const sections = document.querySelectorAll('.showcase-section');
+
+        sections.forEach((section, index) => {
+            const rect = section.getBoundingClientRect();
+            const isVisible = rect.top < window.innerHeight && rect.bottom > 0;
+
+            if (isVisible) {
+                const demo = section.querySelector('.showcase-demo');
+                if (demo) {
+                    const scrollProgress = (window.innerHeight - rect.top) / window.innerHeight;
+                    const translateY = Math.max(-50, Math.min(50, (0.5 - scrollProgress) * 100));
+                    demo.style.transform = `translateY(${translateY}px)`;
+                }
+            }
+        });
+
+        lastScrollTop = scrollTop;
+    }, { passive: true });
+
+    // Animate stats on scroll
+    const observerOptions = {
+        threshold: 0.3,
+        rootMargin: '0px 0px -100px 0px'
+    };
+
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.style.animation = 'fadeInUp 0.8s ease-out forwards';
+            }
+        });
+    }, observerOptions);
+
+    document.querySelectorAll('.showcase-demo, .demo-card').forEach(el => {
+        observer.observe(el);
+    });
+</script>
+{% endblock %}

@@ -4,6 +4,7 @@ LiveView base class and decorator for reactive Django views
 
 import json
 import logging
+import os
 import sys
 from datetime import datetime, date, time
 from decimal import Decimal
@@ -41,9 +42,11 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
     def default(self, obj):
         # Handle Component and LiveComponent instances (render to HTML)
+        # Import from both old and new locations for compatibility
         from .component import Component, LiveComponent
+        from .components.base import Component as BaseComponent, LiveComponent as BaseLiveComponent
 
-        if isinstance(obj, (Component, LiveComponent)):
+        if isinstance(obj, (Component, LiveComponent, BaseComponent, BaseLiveComponent)):
             return str(obj)  # Calls __str__() which calls render()
 
         # Handle datetime types
@@ -253,9 +256,6 @@ class LiveView(View):
                     # Verify Rust found the same template as Django
                     # This ensures our template search order matches Django's exactly
                     if django_resolved_path:
-                        import os
-                        import sys
-
                         # Check if any of our template dirs + template_name matches Django's path
                         rust_would_find = None
                         for template_dir in template_dirs_str:
@@ -1380,6 +1380,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # Threshold for when to use patches vs full HTML
             PATCH_THRESHOLD = 100
 
+            # Extract cache_request_id if present (for @cache decorator)
+            cache_request_id = params.get("_cacheRequestId")
+
             if patches_json:
                 patches = json_module.loads(patches_json)
                 patch_count = len(patches)
@@ -1389,16 +1392,25 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 if patch_count > 0 and patch_count <= PATCH_THRESHOLD:
                     # Send only patches - client will apply them
                     # If patches fail on client, it should reload the page
-                    return JsonResponse({"patches": patches, "version": version})
+                    response_data = {"patches": patches, "version": version}
+                    if cache_request_id:
+                        response_data["cache_request_id"] = cache_request_id
+                    return JsonResponse(response_data)
                 else:
                     # Empty patches or too many patches - send full HTML instead
                     # Reset VDOM cache since we're sending full HTML
                     # This ensures next patches are calculated from the browser's normalized DOM
                     self._rust_view.reset()
-                    return JsonResponse({"html": html, "version": version})
+                    response_data = {"html": html, "version": version}
+                    if cache_request_id:
+                        response_data["cache_request_id"] = cache_request_id
+                    return JsonResponse(response_data)
             else:
                 # No patches generated - send full HTML
-                return JsonResponse({"html": html, "version": version})
+                response_data = {"html": html, "version": version}
+                if cache_request_id:
+                    response_data["cache_request_id"] = cache_request_id
+                return JsonResponse(response_data)
 
         except Exception as e:
             import traceback

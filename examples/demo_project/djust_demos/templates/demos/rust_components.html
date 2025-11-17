@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rust Components Demo - djust</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Shared Theme System -->
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/utilities.css">
+
+    <!-- Tailwind for utility classes -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+
+    <style>
+        .component-demo {
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .component-demo h4 {
+            color: var(--color-text);
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .demo-result {
+            background: var(--color-bg);
+            border: 2px dashed var(--color-border);
+            border-radius: var(--radius-md);
+            padding: 1.5rem;
+            margin-top: 1rem;
+        }
+
+        .demo-message {
+            padding: 0.75rem 1rem;
+            border-radius: var(--radius-md);
+            background: var(--color-accent-muted);
+            border: 1px solid var(--color-accent);
+            color: var(--color-text);
+            margin-top: 1rem;
+        }
+
+        /* ============================================
+           BOOTSTRAP THEME OVERRIDES
+           Make Bootstrap components follow theme colors
+           ============================================ */
+
+        /* Dropdown Buttons */
+        .btn {
+            background: var(--color-bg-elevated) !important;
+            border-color: var(--color-border) !important;
+            color: var(--color-text) !important;
+        }
+        .btn:hover {
+            background: var(--color-bg) !important;
+            border-color: var(--color-border-hover) !important;
+        }
+
+        .btn-primary {
+            background: var(--color-accent) !important;
+            border-color: var(--color-accent) !important;
+            color: white !important;
+        }
+        .btn-primary:hover {
+            background: var(--color-accent-hover) !important;
+            border-color: var(--color-accent-hover) !important;
+        }
+
+        .btn-success {
+            background: var(--color-success) !important;
+            border-color: var(--color-success) !important;
+            color: white !important;
+        }
+        .btn-success:hover {
+            background: #059669 !important;
+            border-color: #059669 !important;
+        }
+
+        .btn-warning {
+            background: var(--color-warning) !important;
+            border-color: var(--color-warning) !important;
+            color: white !important;
+        }
+        .btn-warning:hover {
+            background: #d97706 !important;
+            border-color: #d97706 !important;
+        }
+
+        .btn-danger {
+            background: var(--color-error) !important;
+            border-color: var(--color-error) !important;
+            color: white !important;
+        }
+        .btn-danger:hover {
+            background: #dc2626 !important;
+            border-color: #dc2626 !important;
+        }
+
+        .btn-info {
+            background: #06b6d4 !important;
+            border-color: #06b6d4 !important;
+            color: white !important;
+        }
+        .btn-info:hover {
+            background: #0891b2 !important;
+            border-color: #0891b2 !important;
+        }
+
+        .btn-secondary {
+            background: var(--color-bg-elevated) !important;
+            border-color: var(--color-border) !important;
+            color: var(--color-text) !important;
+        }
+        .btn-secondary:hover {
+            background: var(--color-bg) !important;
+            border-color: var(--color-border-hover) !important;
+        }
+
+        /* Dropdown Menus */
+        .dropdown-menu {
+            background: var(--color-bg-elevated) !important;
+            border: 1px solid var(--color-border) !important;
+            box-shadow: var(--shadow-lg) !important;
+        }
+
+        .dropdown-item {
+            color: var(--color-text) !important;
+            transition: background-color var(--transition-fast);
+        }
+
+        .dropdown-item:hover {
+            background: var(--color-bg) !important;
+            color: var(--color-accent) !important;
+        }
+
+        .dropdown-divider {
+            border-color: var(--color-border) !important;
+        }
+
+        /* Tabs */
+        .nav-tabs {
+            border-bottom-color: var(--color-border) !important;
+        }
+
+        .nav-tabs .nav-link {
+            color: var(--color-text-muted) !important;
+            border-color: transparent !important;
+        }
+
+        .nav-tabs .nav-link:hover {
+            color: var(--color-text) !important;
+            border-color: var(--color-border) var(--color-border) var(--color-bg-elevated) !important;
+        }
+
+        .nav-tabs .nav-link.active {
+            color: var(--color-accent) !important;
+            background: var(--color-bg-elevated) !important;
+            border-color: var(--color-border) var(--color-border) var(--color-bg-elevated) !important;
+        }
+
+        .nav-pills .nav-link {
+            color: var(--color-text-muted) !important;
+        }
+
+        .nav-pills .nav-link:hover {
+            color: var(--color-text) !important;
+            background: var(--color-bg-elevated) !important;
+        }
+
+        .nav-pills .nav-link.active {
+            background: var(--color-accent) !important;
+            color: white !important;
+        }
+
+        .tab-content {
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-top: none;
+            padding: 1.5rem;
+            border-radius: 0 0 var(--radius-md) var(--radius-md);
+        }
+
+        /* Alerts */
+        .alert {
+            border-radius: var(--radius-md);
+            border: 1px solid;
+        }
+
+        .alert-success {
+            background: rgba(16, 185, 129, 0.1) !important;
+            border-color: var(--color-success) !important;
+            color: var(--color-text) !important;
+        }
+
+        .alert-info {
+            background: rgba(6, 182, 212, 0.1) !important;
+            border-color: #06b6d4 !important;
+            color: var(--color-text) !important;
+        }
+    </style>
+</head>
+<body>
+    <div data-liveview-root>
+    <!-- Navbar Component -->
+    {{ navbar.render }}
+
+    <!-- Theme Toggle -->
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+        <svg class="theme-icon-dark" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+        <svg class="theme-icon-light" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="display: none;">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+    </button>
+
+    <!-- Hero Section -->
+    <section class="hero-section" style="padding: 4rem 0 2rem;">
+        <div class="container mx-auto px-4">
+            <div class="max-w-4xl mx-auto text-center">
+                <div class="flex items-center justify-center gap-3 mb-4">
+                    <div class="text-5xl">🐍</div>
+                    <h1 class="hero-title" style="font-size: 2.5rem; margin-bottom: 0;">Python Components</h1>
+                </div>
+                <p class="hero-subtitle">
+                    Stateful UI components with Python-side behavior and event handling
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Demo Section -->
+    <section class="section-modern" style="padding: 2rem 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+
+            <!-- Messages Section -->
+            {% if dropdown_message %}
+            <div class="demo-message mb-4">
+                <strong>Dropdown Event:</strong> {{ dropdown_message }}
+                <button @click="clear_messages" class="btn btn-sm float-end" style="padding: 0.25rem 0.75rem;">Clear</button>
+            </div>
+            {% endif %}
+
+            <!-- Dropdown Demos -->
+            <div class="row g-4 mb-5">
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.03);">
+                            <h2 class="text-2xl font-bold m-0" style="color: var(--color-text);">
+                                DropdownComponent
+                            </h2>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Python component instances with state and event handlers
+                            </p>
+                        </div>
+
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            <!-- Basic Dropdown -->
+                            <div class="component-demo">
+                                <h4>Interactive Dropdown with State</h4>
+                                <p style="color: var(--color-text-muted); margin-bottom: 1rem;">
+                                    <strong>Try it:</strong> Click an option to see the dropdown update its label and color dynamically!
+                                </p>
+                                {{ basic_dropdown.render }}
+                                {% if selected_option != "opt1" %}
+                                <div class="alert alert-success mt-3">
+                                    ✓ The dropdown label and color changed because the component was recreated with new state
+                                </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Variants Grid -->
+                            <div class="component-demo">
+                                <h4>Dropdown Variants</h4>
+                                <p style="color: var(--color-text-muted); margin-bottom: 1rem;">
+                                    <strong>Try it:</strong> Click any dropdown to select an option. The label updates to show your selection!
+                                </p>
+                                <div class="row g-3">
+                                    <div class="col-md-3">
+                                        <label class="form-label" style="font-weight: 600;">Primary</label>
+                                        {{ dropdown_primary.render }}
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label" style="font-weight: 600;">Success</label>
+                                        {{ dropdown_success.render }}
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label" style="font-weight: 600;">Warning</label>
+                                        {{ dropdown_warning.render }}
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label" style="font-weight: 600;">Danger</label>
+                                        {{ dropdown_danger.render }}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Sizes -->
+                            <div class="component-demo">
+                                <h4>Dropdown Sizes with Shared State</h4>
+                                <p style="color: var(--color-text-muted); margin-bottom: 1rem;">
+                                    <strong>Interactive Demo:</strong> Click any dropdown to select a country. All three dropdowns share the same state and update together!
+                                </p>
+                                {% if selected_country != "United States" %}
+                                <div class="alert alert-info mb-3">
+                                    <strong>Current Selection:</strong> {{ selected_country }}
+                                    <span class="ms-2">(all dropdowns synchronized)</span>
+                                </div>
+                                {% endif %}
+                                <div class="d-flex gap-3 align-items-center flex-wrap">
+                                    <div>
+                                        <label class="form-label" style="font-weight: 600;">Small</label>
+                                        {{ dropdown_small.render }}
+                                    </div>
+                                    <div>
+                                        <label class="form-label" style="font-weight: 600;">Medium</label>
+                                        {{ dropdown_medium.render }}
+                                    </div>
+                                    <div>
+                                        <label class="form-label" style="font-weight: 600;">Large</label>
+                                        {{ dropdown_large.render }}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- States -->
+                            <div class="component-demo">
+                                <h4>Dropdown States</h4>
+                                <p style="color: var(--color-text-muted); margin-bottom: 1rem;">
+                                    <strong>Try it:</strong> Click the location dropdown to change the selection. The disabled dropdown cannot be clicked.
+                                </p>
+                                <div class="row g-3">
+                                    <div class="col-md-6">
+                                        <label class="form-label" style="font-weight: 600;">With Selected Value</label>
+                                        {{ dropdown_selected.render }}
+                                        {% if selected_location != "Canada" %}
+                                        <div class="alert alert-success mt-2 mb-0" style="padding: 0.5rem;">
+                                            ✓ Selection changed to {{ selected_location }}
+                                        </div>
+                                        {% endif %}
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label" style="font-weight: 600;">Disabled</label>
+                                        {{ dropdown_disabled.render }}
+                                        <div class="text-muted mt-2" style="font-size: 0.875rem;">
+                                            This dropdown is non-interactive
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tabs Demos -->
+            <div class="row g-4 mb-5">
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(16, 185, 129, 0.03);">
+                            <h2 class="text-2xl font-bold m-0" style="color: var(--color-text);">
+                                TabsComponent
+                            </h2>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Python component with stateful tabs and content
+                            </p>
+                        </div>
+
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            <!-- Default Tabs -->
+                            <div class="component-demo">
+                                <h4>Default Tabs</h4>
+                                <p style="color: var(--color-text-muted); margin-bottom: 1rem;">
+                                    <strong>Try it:</strong> Click the tabs to switch between Overview, Features, and Usage content!
+                                </p>
+                                {{ basic_tabs.render }}
+                            </div>
+
+                            <!-- Pills Variant -->
+                            <div class="component-demo">
+                                <h4>Pills Tabs</h4>
+                                <p style="color: var(--color-text-muted); margin-bottom: 1rem;">
+                                    <strong>Try it:</strong> Rounded pill-style tabs. Click to switch between tab panels!
+                                </p>
+                                {{ pills_tabs.render }}
+                            </div>
+
+                            <!-- Underline Variant -->
+                            <div class="component-demo">
+                                <h4>Underline Tabs</h4>
+                                <p style="color: var(--color-text-muted); margin-bottom: 1rem;">
+                                    <strong>Try it:</strong> Modern underline style. Click tabs to see different content!
+                                </p>
+                                {{ underline_tabs.render }}
+                            </div>
+
+                            <!-- Vertical Tabs -->
+                            <div class="component-demo">
+                                <h4>Vertical Tabs</h4>
+                                <p style="color: var(--color-text-muted); margin-bottom: 1rem;">
+                                    <strong>Try it:</strong> Vertical layout for side navigation. Click each tab to explore!
+                                </p>
+                                {{ vertical_tabs.render }}
+                            </div>
+
+                            <!-- Interactive Demo -->
+                            <div class="component-demo">
+                                <h4>Live State Updates</h4>
+                                <p style="color: var(--color-text-muted); margin-bottom: 1rem;">
+                                    <strong>Try it:</strong> Click the counter button to see the tab content update in real-time!
+                                </p>
+                                <div class="mb-3 p-3" style="background: var(--color-bg); border-radius: var(--radius-md); border: 2px solid var(--color-accent);">
+                                    <div class="d-flex align-items-center gap-3">
+                                        <button @click="increment_counter" class="btn btn-primary">
+                                            <strong>+</strong> Increment
+                                        </button>
+                                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--color-accent);">
+                                            Counter: {{ counter }}
+                                        </div>
+                                        <button @click="reset_counter" class="btn btn-secondary">
+                                            Reset
+                                        </button>
+                                    </div>
+                                </div>
+                                {{ interactive_tabs.render }}
+                                <div class="alert alert-info mt-3">
+                                    <strong>How it works:</strong> The TabsComponent is recreated each time with updated content reflecting the new counter value. This demonstrates Python-side state management!
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Implementation Code -->
+            <div class="row g-4">
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(245, 158, 11, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Implementation</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                How to use these components in your templates
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            <!-- Python Code -->
+                            <div class="mb-4">
+                                <div class="code-header-modern">
+                                    <span>views.py</span>
+                                    <span class="code-badge-modern">Python</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from djust import LiveView
+from djust.components.ui import DropdownComponent, DropdownItem
+from djust.components.layout import TabsComponent, TabItem
+
+class MyView(LiveView):
+    def mount(self, request):
+        # Create dropdown component with DropdownItem objects
+        self.my_dropdown = DropdownComponent(
+            label="Choose an option",
+            variant="primary",
+            items=[
+                DropdownItem('Option 1', action='select_option', data={'value': '1'}),
+                DropdownItem('Option 2', action='select_option', data={'value': '2'}),
+                DropdownItem('Option 3', action='select_option', icon='✓'),
+            ]
+        )
+
+        # Create tabs component with TabItem objects
+        self.my_tabs = TabsComponent(
+            tabs=[
+                TabItem(id='tab1', label='Tab 1', content='Content 1'),
+                TabItem(id='tab2', label='Tab 2', content='Content 2', badge='3'),
+            ],
+            active_tab='tab1',
+            variant='pills',
+            action='switch_tab'
+        )
+
+    def select_option(self, value: str = None, **kwargs):
+        # Handle dropdown selection
+        print(f"Selected: {value}")
+
+    def switch_tab(self, tab: str = None, **kwargs):
+        # Handle tab change
+        self.my_tabs.activate_tab(tab)</code></pre>
+                                </div>
+                            </div>
+
+                            <!-- Template Code -->
+                            <div>
+                                <div class="code-header-modern">
+                                    <span>template.html</span>
+                                    <span class="code-badge-modern">Django Template</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-html">&lt;!-- Render dropdown component --&gt;
+&#123;&#123; my_dropdown.render &#125;&#125;
+
+&lt;!-- Render tabs component --&gt;
+&#123;&#123; my_tabs.render &#125;&#125;</code></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Back Button -->
+            <div class="text-center mt-4">
+                <a href="/demos/" class="btn-secondary-modern">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                    </svg>
+                    <span>Back to Demos</span>
+                </a>
+            </div>
+        </div>
+    </section>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>hljs.highlightAll();</script>
+
+    <!-- Theme Switcher -->
+    <script src="/static/js/theme-switcher.js"></script>
+</body>
+</html>

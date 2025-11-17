@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}Counter Demo - djust{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block content %}
+<div data-liveview-root>
+    <!-- Hero Section -->
+    {{ hero|safe }}
+
+    <!-- Demo Section -->
+    <section class="section-modern" style="padding: 2rem 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+            <div class="row g-4">
+                <!-- Live Demo Card -->
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Live Demo</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Click buttons to see instant updates without page reload
+                            </p>
+                        </div>
+                        <div class="p-6" style="background: var(--color-bg-elevated); min-height: 300px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2rem;">
+                            <!-- Counter Display -->
+                            <div class="text-center" style="width: 100%;">
+                                <div style="background: var(--color-accent-muted); border: 2px solid var(--color-accent); border-radius: var(--radius-lg); padding: 2rem; margin-bottom: 2rem;">
+                                    <div style="font-size: 1rem; color: var(--color-text-muted); margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Count</div>
+                                    <div style="font-size: 4rem; font-weight: 800; color: var(--color-accent); line-height: 1;">{{ count }}</div>
+                                </div>
+                            </div>
+
+                            <!-- Buttons -->
+                            <div class="flex gap-3 flex-wrap justify-center" style="width: 100%;">
+                                <button @click="increment" class="btn-primary-modern">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                                    </svg>
+                                    <span>Increment</span>
+                                </button>
+                                <button @click="decrement" class="btn-secondary-modern">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"></path>
+                                    </svg>
+                                    <span>Decrement</span>
+                                </button>
+                                <button @click="reset" class="btn-secondary-modern">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                    </svg>
+                                    <span>Reset</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Implementation Code -->
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(16, 185, 129, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Implementation</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Full source code for this demo
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            <!-- Python Code -->
+                            <div class="mb-4">
+                                {{ code|safe }}
+                            </div>
+
+                            <!-- Template Code -->
+                            <div>
+                                {{ code_1|safe }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Features Section -->
+            <div class="row g-4 mt-4">
+                <div class="col-12">
+                    {{ features|safe }}
+                </div>
+            </div>
+
+            <!-- Back Button -->
+            {{ back_btn|safe }}
+        </div>
+    </section>
+</div>
+{% endblock %}

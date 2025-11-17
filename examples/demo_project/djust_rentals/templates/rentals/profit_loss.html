@@ -1,0 +1,12 @@
+{% extends "rentals/base.html" %}
+{% block title %}Profit & Loss{% endblock %}
+{% block extra_head %}<script src="https://cdn.tailwindcss.com"></script><style>body{background:#020617;color:#f8fafc}.card{background:#0f172a;border:1px solid #1e293b;border-radius:.5rem;padding:1.5rem;margin-bottom:1.5rem}</style>{% endblock %}
+{% block content %}
+<div data-liveview-root class="min-h-screen bg-slate-950 py-6">
+  <div class="container mx-auto px-4 max-w-7xl">
+    <h1 class="text-3xl font-bold mb-6">📊 Profit & Loss Statement</h1>
+    <div class="grid grid-cols-3 gap-4 mb-6"><div class="card text-center"><p class="text-slate-400">YTD Income</p><p class="text-3xl font-bold text-emerald-400">${{ytd_income}}</p></div><div class="card text-center"><p class="text-slate-400">YTD Expenses</p><p class="text-3xl font-bold text-red-400">${{ytd_expenses}}</p></div><div class="card text-center"><p class="text-slate-400">YTD Profit</p><p class="text-3xl font-bold {% if ytd_profit >= 0 %}text-emerald-400{% else %}text-red-400{% endif %}">${{ytd_profit}}</p></div></div>
+    <div class="card"><h2 class="text-xl font-semibold mb-4">Monthly P&L</h2><table class="w-full"><thead class="bg-slate-900"><tr><th class="p-3 text-left">Month</th><th class="p-3 text-right">Income</th><th class="p-3 text-right">Expenses</th><th class="p-3 text-right">Profit</th></tr></thead><tbody>{% for month in monthly_pl %}<tr class="border-t border-slate-800"><td class="p-3">{{month.month}}</td><td class="p-3 text-right text-emerald-400">${{month.income}}</td><td class="p-3 text-right text-red-400">${{month.expenses}}</td><td class="p-3 text-right font-semibold {% if month.profit >= 0 %}text-emerald-400{% else %}text-red-400{% endif %}">${{month.profit}}</td></tr>{% endfor %}</tbody></table></div>
+  </div>
+</div>
+{% endblock %}

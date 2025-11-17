@@ -1,0 +1,164 @@
+{% extends "rentals/base.html" %}
+
+{% block title %}Properties - Rental Management{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        colors: {
+          slate: { 950: '#020617', 900: '#0f172a', 800: '#1e293b', 700: '#334155', 600: '#475569' }
+        }
+      }
+    }
+  }
+</script>
+<style>
+  body { background-color: #020617; color: #f8fafc; }
+  .card-shadcn { background-color: #0f172a; border: 1px solid #1e293b; border-radius: 0.5rem; }
+  .input-shadcn { background-color: #1e293b; border: 1px solid #334155; border-radius: 0.375rem; padding: 0.5rem 0.75rem; color: #f8fafc; width: 100%; }
+  .input-shadcn:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); }
+  .btn-primary { background-color: #3b82f6; color: white; padding: 0.5rem 1rem; border-radius: 0.375rem; font-weight: 500; }
+  .btn-primary:hover { background-color: #2563eb; }
+  .btn-secondary { background-color: #1e293b; color: #f8fafc; padding: 0.5rem 1rem; border-radius: 0.375rem; border: 1px solid #334155; }
+  .badge-occupied { background-color: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); color: #22c55e; padding: 0.25rem 0.625rem; border-radius: 9999px; font-size: 0.75rem; }
+  .badge-available { background-color: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); color: #3b82f6; padding: 0.25rem 0.625rem; border-radius: 9999px; font-size: 0.75rem; }
+  .badge-maintenance { background-color: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); color: #fbbf24; padding: 0.25rem 0.625rem; border-radius: 9999px; font-size: 0.75rem; }
+  .table-shadcn { width: 100%; border-collapse: collapse; }
+  .table-shadcn th { background-color: #1e293b; padding: 0.75rem; text-align: left; font-size: 0.875rem; color: #cbd5e1; border-bottom: 1px solid #334155; }
+  .table-shadcn td { padding: 0.75rem; border-bottom: 1px solid #1e293b; }
+  .table-shadcn tr:hover { background-color: rgba(30, 41, 59, 0.5); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div data-liveview-root class="min-h-screen bg-slate-950 text-slate-50 py-6">
+  <div class="container mx-auto px-4 max-w-7xl">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-8">
+      <div>
+        <h1 class="text-4xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+          🏘️ Properties
+        </h1>
+        <p class="text-slate-400">Manage your rental properties</p>
+      </div>
+      <a href="{% url 'rentals:property-add' %}" class="btn-primary">+ Add Property</a>
+    </div>
+
+    <!-- Search and Filters -->
+    <div class="card-shadcn p-6 mb-6">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <!-- Search -->
+        <div class="md:col-span-2">
+          <label class="block text-sm text-slate-400 mb-2">Search Properties</label>
+          <input type="text"
+                 @input="search"
+                 value="{{ search_query }}"
+                 placeholder="Search by name, address, or city..."
+                 class="input-shadcn">
+        </div>
+
+        <!-- Status Filter -->
+        <div>
+          <label class="block text-sm text-slate-400 mb-2">Status</label>
+          <select @change="filter_by_status" class="input-shadcn">
+            <option value="all" {% if filter_status == 'all' %}selected{% endif %}>All Statuses</option>
+            {% for choice in status_choices %}
+            <option value="{{ choice.0 }}" {% if filter_status == choice.0 %}selected{% endif %}>{{ choice.1 }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <!-- Type Filter -->
+        <div>
+          <label class="block text-sm text-slate-400 mb-2">Property Type</label>
+          <select @change="filter_by_type" class="input-shadcn">
+            <option value="all" {% if filter_type == 'all' %}selected{% endif %}>All Types</option>
+            {% for choice in property_types %}
+            <option value="{{ choice.0 }}" {% if filter_type == choice.0 %}selected{% endif %}>{{ choice.1 }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Summary Stats -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      <div class="card-shadcn p-4">
+        <p class="text-sm text-slate-400">Total Properties</p>
+        <p class="text-2xl font-bold">{{ total_count }}</p>
+      </div>
+      <div class="card-shadcn p-4">
+        <p class="text-sm text-slate-400">Occupied</p>
+        <p class="text-2xl font-bold text-green-400">{{ occupied_count }}</p>
+      </div>
+      <div class="card-shadcn p-4">
+        <p class="text-sm text-slate-400">Available</p>
+        <p class="text-2xl font-bold text-blue-400">{{ available_count }}</p>
+      </div>
+      <div class="card-shadcn p-4">
+        <p class="text-sm text-slate-400">Under Maintenance</p>
+        <p class="text-2xl font-bold text-yellow-400">{{ maintenance_count }}</p>
+      </div>
+    </div>
+
+    <!-- Properties Table -->
+    <div class="card-shadcn overflow-hidden">
+      <table class="table-shadcn">
+        <thead>
+          <tr>
+            <th>Property</th>
+            <th>Type</th>
+            <th>Details</th>
+            <th>Monthly Rent</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for property in properties %}
+          <tr>
+            <td>
+              <div class="font-medium">{{ property.name }}</div>
+              <div class="text-sm text-slate-400">{{ property.address }}</div>
+            </td>
+            <td>{{ property.get_property_type_display }}</td>
+            <td class="text-sm">
+              <div>{{ property.bedrooms }} bed, {{ property.bathrooms }} bath</div>
+              <div class="text-slate-400">{{ property.square_feet }} sq ft</div>
+            </td>
+            <td class="font-semibold text-emerald-400">${{ property.monthly_rent }}</td>
+            <td>
+              {% if property.status == 'occupied' %}
+                <span class="badge-occupied">Occupied</span>
+              {% elif property.status == 'available' %}
+                <span class="badge-available">Available</span>
+              {% elif property.status == 'maintenance' %}
+                <span class="badge-maintenance">Maintenance</span>
+              {% else %}
+                <span class="badge-available">{{ property.get_status_display }}</span>
+              {% endif %}
+            </td>
+            <td>
+              <div class="flex gap-2">
+                <a href="{% url 'rentals:property-detail' property.pk %}" class="text-blue-400 hover:text-blue-300">View</a>
+                <a href="{% url 'rentals:property-edit' property.pk %}" class="text-slate-400 hover:text-slate-300">Edit</a>
+              </div>
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="6" class="text-center py-8 text-slate-400">
+              No properties found. <a href="{% url 'rentals:property-add' %}" class="text-blue-400">Add your first property</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

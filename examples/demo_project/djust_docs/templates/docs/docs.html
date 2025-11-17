@@ -1,0 +1,1591 @@
+{% extends "base.html" %}
+
+{% block title %}Documentation - djust{% endblock %}
+
+{% block nav_docs_active %}active{% endblock %}
+
+{% block extra_styles %}
+    /* Highlight.js atom-one-dark theme */
+    pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#abb2bf;background:#282c34}.hljs-comment,.hljs-quote{color:#5c6370;font-style:italic}.hljs-doctag,.hljs-formula,.hljs-keyword{color:#c678dd}.hljs-deletion,.hljs-name,.hljs-section,.hljs-selector-tag,.hljs-subst{color:#e06c75}.hljs-literal{color:#56b6c2}.hljs-addition,.hljs-attribute,.hljs-meta .hljs-string,.hljs-regexp,.hljs-string{color:#98c379}.hljs-attr,.hljs-number,.hljs-selector-attr,.hljs-selector-class,.hljs-selector-pseudo,.hljs-template-variable,.hljs-type,.hljs-variable{color:#d19a66}.hljs-bullet,.hljs-link,.hljs-meta,.hljs-selector-id,.hljs-symbol,.hljs-title{color:#61aeee}.hljs-built_in,.hljs-class .hljs-title,.hljs-title.class_{color:#e6c07b}.hljs-emphasis{font-style:italic}.hljs-strong{font-weight:700}.hljs-link{text-decoration:underline}
+
+    .docs-nav {
+        position: sticky;
+        top: 80px;
+        max-height: calc(100vh - 100px);
+        overflow-y: auto;
+    }
+    .docs-nav .nav-link {
+        color: #666;
+        padding: 0.5rem 1rem;
+        border-left: 3px solid transparent;
+    }
+    .docs-nav .nav-link:hover,
+    .docs-nav .nav-link.active {
+        color: #667eea;
+        border-left-color: #667eea;
+        background: #f8f9fa;
+    }
+    .docs-section {
+        scroll-margin-top: 80px;
+        margin-bottom: 3rem;
+        padding-top: 1rem;
+    }
+    .docs-section h2 {
+        color: #2c3e50;
+        font-weight: 600;
+        margin-bottom: 1.5rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 3px solid #667eea;
+    }
+    .docs-section h3 {
+        color: #34495e;
+        font-weight: 600;
+        margin-top: 2rem;
+        margin-bottom: 1rem;
+    }
+    :not(pre) > code {
+        background: #f4f4f4;
+        padding: 0.2rem 0.4rem;
+        border-radius: 4px;
+        font-size: 0.875rem;
+        color: #e83e8c;
+    }
+    pre {
+        border-radius: 8px;
+        margin: 1.5rem 0;
+    }
+    .alert-docs {
+        border-left: 4px solid #667eea;
+        background: #f0f2ff;
+        border-radius: 4px;
+    }
+    .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 1.5rem;
+        margin: 2rem 0;
+    }
+    .feature-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 8px;
+        border: 1px solid #e9ecef;
+        transition: all 0.3s;
+    }
+    .feature-card:hover {
+        border-color: #667eea;
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+    }
+    .feature-card h4 {
+        color: #667eea;
+        font-weight: 600;
+        margin-bottom: 0.75rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="row">
+        <!-- Sidebar Navigation -->
+        <div class="col-md-3">
+            <div class="docs-nav">
+                <nav class="nav flex-column">
+                    <a class="nav-link active" href="#introduction">Introduction</a>
+                    <a class="nav-link" href="#why-djust">Why djust?</a>
+                    <a class="nav-link" href="#installation">Installation</a>
+                    <a class="nav-link" href="#quick-start">Quick Start</a>
+                    <a class="nav-link" href="#core-concepts">Core Concepts</a>
+                    <a class="nav-link" href="#liveview">LiveView</a>
+                    <a class="nav-link" href="#components">Components</a>
+                    <a class="nav-link" href="#component-ids" style="padding-left: 1.5rem;">Component IDs</a>
+                    <a class="nav-link" href="#event-handling">Event Handling</a>
+                    <a class="nav-link" href="#forms">Form Integration</a>
+                    <a class="nav-link" href="#templates">Templates</a>
+                    <a class="nav-link" href="#state-management">State Management</a>
+                    <a class="nav-link" href="#custom-components">Custom Components</a>
+                    <a class="nav-link" href="#styling">Styling</a>
+                    <a class="nav-link" href="#deployment">Deployment</a>
+                    <a class="nav-link" href="#api-reference">API Reference</a>
+                </nav>
+            </div>
+        </div>
+
+        <!-- Main Documentation Content -->
+        <div class="col-md-9">
+            <!-- Introduction -->
+            <section id="introduction" class="docs-section">
+                <h2>Introduction</h2>
+                <p class="lead">djust is a powerful framework that brings Phoenix LiveView-style real-time interactivity to Django, powered by Rust's blazing-fast VDOM diffing.</p>
+
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <h4>⚡ Real-time Reactive</h4>
+                        <p>Server-rendered UI that updates in real-time via WebSockets. No JavaScript frameworks required.</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>🦀 Rust-Powered</h4>
+                        <p>Leverages Rust's performance for efficient VDOM diffing and minimal data transfer.</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>🎨 Framework Agnostic</h4>
+                        <p>Use with Bootstrap 5, Tailwind CSS, or plain HTML. Your choice.</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>📦 Component Library</h4>
+                        <p>Rich set of built-in components: buttons, alerts, forms, tables, modals, and more.</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>🔄 Django Forms</h4>
+                        <p>Seamless integration with Django's form system for validation and processing.</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>🎯 Zero JavaScript</h4>
+                        <p>Write all your logic in Python. No need to learn a frontend framework.</p>
+                    </div>
+                </div>
+
+                <div class="alert alert-docs">
+                    <strong>Why djust?</strong><br>
+                    Build interactive, real-time web applications with the simplicity of server-side rendering and the responsiveness of modern SPAs. Perfect for dashboards, admin interfaces, forms, and real-time data displays.
+                </div>
+            </section>
+
+            <!-- Why djust -->
+            <section id="why-djust" class="docs-section">
+                <h2>Why djust?</h2>
+
+                <h3>The Django Developer's Dilemma</h3>
+                <p>When building modern reactive UIs, Django developers traditionally face two difficult choices:</p>
+
+                <div class="row mb-4">
+                    <div class="col-md-6">
+                        <div class="card border-danger">
+                            <div class="card-header bg-danger text-white">
+                                <strong>Option A: Add JavaScript Framework</strong>
+                            </div>
+                            <div class="card-body">
+                                <ul class="text-danger">
+                                    <li>Maintain two codebases (Python + JavaScript)</li>
+                                    <li>Complex build tooling (webpack, npm, etc.)</li>
+                                    <li>API layer complexity (REST/GraphQL)</li>
+                                    <li>State synchronization headaches</li>
+                                    <li>Slower time to market</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card border-danger">
+                            <div class="card-header bg-danger text-white">
+                                <strong>Option B: Switch to Phoenix LiveView</strong>
+                            </div>
+                            <div class="card-body">
+                                <ul class="text-danger">
+                                    <li>Abandon Django ecosystem entirely</li>
+                                    <li>Lose Django Admin, ORM, middleware</li>
+                                    <li>Team must learn Elixir/functional programming</li>
+                                    <li>6-12 month migration project</li>
+                                    <li>High risk, high cost</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card border-success mb-4">
+                    <div class="card-header bg-success text-white">
+                        <strong>The Solution: djust</strong>
+                    </div>
+                    <div class="card-body">
+                        <ul class="text-success">
+                            <li>✅ Keep Django ecosystem (Admin, ORM, Auth, 4,000+ packages)</li>
+                            <li>✅ Write reactive UIs in pure Python (no JavaScript required)</li>
+                            <li>✅ Rust-powered performance (10-100x faster rendering)</li>
+                            <li>✅ Incremental adoption (add to existing Django apps)</li>
+                            <li>✅ Ship features faster with less code</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h3>Blazing Fast Performance</h3>
+                <p>Rust powers the performance-critical rendering path, delivering unprecedented speed:</p>
+
+                <table class="table table-bordered">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Operation</th>
+                            <th>Django</th>
+                            <th>djust</th>
+                            <th>Speedup</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Template Rendering (100 items)</td>
+                            <td>2.5 ms</td>
+                            <td><strong>0.15 ms</strong></td>
+                            <td class="text-success"><strong>16.7x faster</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Large List (10k items)</td>
+                            <td>450 ms</td>
+                            <td><strong>12 ms</strong></td>
+                            <td class="text-success"><strong>37.5x faster</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Virtual DOM Diff</td>
+                            <td>N/A</td>
+                            <td><strong>0.08 ms</strong></td>
+                            <td class="text-success"><strong>Sub-millisecond</strong></td>
+                        </tr>
+                        <tr>
+                            <td>Round-trip Update</td>
+                            <td>50 ms</td>
+                            <td><strong>5 ms</strong></td>
+                            <td class="text-success"><strong>10x faster</strong></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div class="alert alert-info">
+                    <strong>What This Means:</strong> Sub-millisecond rendering enables real-time experiences previously impossible in Django. Users get instant feedback on form validation, search, and filters. Your application feels native and responsive.
+                </div>
+
+                <h3>Keep Your Django Investment</h3>
+                <p>Unlike Phoenix LiveView or JavaScript frameworks, you keep <strong>everything Django offers:</strong></p>
+
+                <div class="row mt-3 mb-3">
+                    <div class="col-md-3">
+                        <div class="text-center">
+                            <h4 class="text-primary">🔧 Django Admin</h4>
+                            <p class="small">No equivalent in other frameworks</p>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="text-center">
+                            <h4 class="text-primary">💾 Django ORM</h4>
+                            <p class="small">Rich, mature, battle-tested</p>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="text-center">
+                            <h4 class="text-primary">🔐 Django Auth</h4>
+                            <p class="small">Complete authentication system</p>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="text-center">
+                            <h4 class="text-primary">📦 4,000+ Packages</h4>
+                            <p class="small">DRF, Celery, Allauth, and more</p>
+                        </div>
+                    </div>
+                </div>
+
+                <h3>Write Less Code, Ship Faster</h3>
+                <p>Stay in Python - no context switching between languages:</p>
+
+                <div class="row">
+                    <div class="col-md-6">
+                        <h5 class="text-success">djust (Pure Python)</h5>
+                        <pre><code class="language-python">class TodoListView(LiveView):
+    template_name = 'todos.html'
+
+    def mount(self, request):
+        self.todos = []
+
+    def add_todo(self, text=""):
+        self.todos.append({
+            'text': text,
+            'done': False
+        })
+
+    def toggle_todo(self, index=0):
+        self.todos[index]['done'] = \\
+            not self.todos[index]['done']</code></pre>
+                        <p class="text-success"><strong>✅ One language, 50-70% less code</strong></p>
+                    </div>
+                    <div class="col-md-6">
+                        <h5 class="text-danger">React + Django REST (Two Languages)</h5>
+                        <pre><code class="language-python"># Django backend
+class TodoViewSet(viewsets.ModelViewSet):
+    queryset = Todo.objects.all()
+    serializer_class = TodoSerializer
+</code></pre>
+                        <pre><code class="language-javascript">// React frontend
+function TodoList() {
+  const [todos, setTodos] = useState([]);
+
+  const addTodo = async (text) => {
+    const res = await fetch('/api/todos/', {
+      method: 'POST',
+      body: JSON.stringify({ text })
+    });
+    const todo = await res.json();
+    setTodos([...todos, todo]);
+  };
+  // More boilerplate...
+}</code></pre>
+                        <p class="text-danger"><strong>❌ Two codebases, complex state sync</strong></p>
+                    </div>
+                </div>
+
+                <h3>No Build Step Required</h3>
+                <pre><code class="language-bash"># djust - Simple!
+pip install djust
+# Add to INSTALLED_APPS
+# Write code, refresh browser - done! ✅
+
+# vs React/Vue/Svelte - Complex
+npm install react webpack babel ...
+# Configure webpack.config.js, babel.config.js, tsconfig.json...
+npm run build  # Wait 30-60 seconds
+# Hope build doesn't break in production ❌</code></pre>
+
+                <p><strong>Client bundle:</strong> Just ~5KB JavaScript (vs 100-300KB+ for React apps)</p>
+
+                <h3>Perfect Use Cases</h3>
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <h4>📊 Dashboards & Analytics</h4>
+                        <p>Real-time metrics, live data updates, interactive filtering and search.</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>🛒 E-commerce</h4>
+                        <p>Real-time inventory, live shopping cart, instant search, dynamic filters.</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>📝 Form-Heavy Apps</h4>
+                        <p>Real-time validation, multi-step wizards, dynamic fields, instant feedback.</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>🤝 Collaborative Tools</h4>
+                        <p>Real-time updates, live notifications, shared state visualization.</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>🔧 Admin Interfaces</h4>
+                        <p>Interactive data management, live search and filtering, instant updates.</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>📈 Data Visualization</h4>
+                        <p>Live charts and graphs, interactive filters, real-time data feeds.</p>
+                    </div>
+                </div>
+
+                <h3>Incremental Adoption</h3>
+                <p>Add reactivity to specific components without rewriting your entire app:</p>
+
+                <ol>
+                    <li><strong>Start</strong> with traditional Django views</li>
+                    <li><strong>Add LiveView</strong> to specific interactive components (filters, search, forms)</li>
+                    <li><strong>Gradually increase</strong> coverage as needed</li>
+                    <li><strong>No "big bang" rewrite</strong> required</li>
+                </ol>
+
+                <pre><code class="language-python"># Keep existing Django views
+class ProductListView(ListView):
+    model = Product
+    template_name = 'products/list.html'
+
+# Add live filtering to just the filters widget
+class LiveProductFilters(LiveView):
+    def mount(self, request):
+        self.search = ""
+        self.categories = Category.objects.all()
+
+    def filter_products(self, value=""):
+        self.search = value
+        # Real-time filtering without page reload!</code></pre>
+
+                <h3>How It Works</h3>
+                <p>The secret: <strong>Rust handles the performance-critical path</strong></p>
+
+                <pre><code class="language-text">┌─────────────────────────────────────────────┐
+│  Developer writes Python (high productivity)│
+│  class MyView(LiveView):                    │
+│      def increment(self):                   │
+│          self.count += 1                    │
+└──────────────────┬──────────────────────────┘
+                   │ Python/Rust FFI (PyO3)
+┌──────────────────▼──────────────────────────┐
+│  Rust executes hot path (high performance)  │
+│  - Template parsing & rendering             │
+│  - VDOM construction & diffing              │
+│  - HTML parsing                             │
+│  - Binary serialization (MessagePack)       │
+└─────────────────────────────────────────────┘
+                   │ WebSocket (Binary)
+┌──────────────────▼──────────────────────────┐
+│  Browser receives minimal updates           │
+│  - Only changed DOM nodes                   │
+│  - ~5KB client JavaScript                   │
+│  - Instant UI updates                       │
+└─────────────────────────────────────────────┘</code></pre>
+
+                <div class="alert alert-docs">
+                    <strong>The Best of Both Worlds:</strong><br>
+                    Python where it matters (business logic, developer experience) + Rust where it matters (rendering, diffing, performance) = 10-100x faster than pure Python, simpler than JavaScript frameworks, without abandoning Django.
+                </div>
+            </section>
+
+            <!-- Installation -->
+            <section id="installation" class="docs-section">
+                <h2>Installation</h2>
+
+                <h3>1. Install the Package</h3>
+                <pre><code class="language-bash">pip install djust</code></pre>
+
+                <h3>2. Add to INSTALLED_APPS</h3>
+                <pre><code class="language-python"># settings.py
+INSTALLED_APPS = [
+    # ... other apps
+    'djust',
+]</code></pre>
+
+                <h3>3. Configure WebSocket Routing</h3>
+                <pre><code class="language-python"># asgi.py
+import os
+from django.core.asgi import get_asgi_application
+from channels.routing import ProtocolTypeRouter, URLRouter
+from channels.auth import AuthMiddlewareStack
+from djust.routing import websocket_urlpatterns
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.settings')
+
+application = ProtocolTypeRouter({
+    "http": get_asgi_application(),
+    "websocket": AuthMiddlewareStack(
+        URLRouter(websocket_urlpatterns)
+    ),
+})</code></pre>
+
+                <h3>4. Add Required Settings</h3>
+                <pre><code class="language-python"># settings.py
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer"
+    }
+}
+
+# For production, use Redis:
+# CHANNEL_LAYERS = {
+#     "default": {
+#         "BACKEND": "channels_redis.core.RedisChannelLayer",
+#         "CONFIG": {
+#             "hosts": [("127.0.0.1", 6379)],
+#         },
+#     },
+# }</code></pre>
+
+                <h3>5. Run with ASGI Server</h3>
+                <pre><code class="language-bash"># Development
+python manage.py runserver
+
+# Production with Daphne
+daphne -b 0.0.0.0 -p 8000 myproject.asgi:application
+
+# Production with Uvicorn
+uvicorn myproject.asgi:application --host 0.0.0.0 --port 8000</code></pre>
+            </section>
+
+            <!-- Quick Start -->
+            <section id="quick-start" class="docs-section">
+                <h2>Quick Start</h2>
+                <p>Create your first LiveView in 5 minutes:</p>
+
+                <h3>1. Create a LiveView</h3>
+                <pre><code class="language-python"># views.py
+from djust import LiveView
+from djust.components import ButtonComponent, AlertComponent
+
+class CounterView(LiveView):
+    template_name = "counter.html"
+
+    def mount(self, request):
+        """Initialize state when page loads"""
+        self.count = 0
+        self.message = ""
+
+        # Create interactive button
+        self.increment_btn = ButtonComponent(
+            label="Increment",
+            variant="primary",
+            on_click="increment"
+        )
+
+    def increment(self):
+        """Handle button click"""
+        self.count += 1
+        self.message = f"Count is {self.count}"</code></pre>
+
+                <h3>2. Create a Template</h3>
+                <pre><code class="language-html">&lt;!-- templates/counter.html --&gt;
+{&#37; extends "base.html" &#37;}
+
+{&#37; block content &#37;}
+&lt;div data-liveview-root&gt;
+    &lt;h1&gt;Count: &#123;&#123; count &#125;&#125;&lt;/h1&gt;
+    &#123;&#123; increment_btn.render &#125;&#125;
+
+    {&#37; if message &#37;}
+        &lt;p class="text-success"&gt;&#123;&#123; message &#125;&#125;&lt;/p&gt;
+    {&#37; endif &#37;}
+&lt;/div&gt;
+{&#37; endblock &#37;}</code></pre>
+
+                <h3>3. Add URL Route</h3>
+                <pre><code class="language-python"># urls.py
+from django.urls import path
+from .views import CounterView
+
+urlpatterns = [
+    path('counter/', CounterView.as_view(), name='counter'),
+]</code></pre>
+
+                <div class="alert alert-success">
+                    <strong>That's it!</strong> Visit <code>/counter/</code> and click the button. The count updates in real-time without page reload!
+                </div>
+            </section>
+
+            <!-- Core Concepts -->
+            <section id="core-concepts" class="docs-section">
+                <h2>Core Concepts</h2>
+
+                <h3>Architecture Overview</h3>
+                <p>djust uses a server-centric architecture:</p>
+
+                <pre><code class="language-text">Browser                          Server
+--------                         --------
+1. User visits /page/    →       Django renders initial HTML
+2. Browser receives HTML  ←       + LiveView JavaScript
+3. WebSocket connects     ↔       WebSocket handler
+4. User clicks button     →       Event sent via WS
+5. Server processes       ←       Python method executed
+6. VDOM diff calculated   ←       Rust computes minimal changes
+7. DOM updated            ←       Only changes sent via WS</code></pre>
+
+                <h3>Key Components</h3>
+                <ul>
+                    <li><strong>LiveView</strong> - Server-side class managing page state and events</li>
+                    <li><strong>Components</strong> - Reusable UI elements (buttons, alerts, forms, etc.)</li>
+                    <li><strong>Templates</strong> - Django templates with <code>data-liveview-root</code></li>
+                    <li><strong>Events</strong> - User interactions (@click, @submit, @change)</li>
+                    <li><strong>State</strong> - Python attributes automatically synced to templates</li>
+                    <li><strong>VDOM</strong> - Rust-powered diffing for efficient updates</li>
+                </ul>
+
+                <h3>One LiveView Per Page</h3>
+                <p>Each URL route has <strong>one LiveView class</strong> that manages the entire page. Within that LiveView, you can:</p>
+                <ul>
+                    <li>Use multiple components</li>
+                    <li>Manage multiple state variables</li>
+                    <li>Handle many different events</li>
+                    <li>Create complex, interactive UIs</li>
+                </ul>
+            </section>
+
+            <!-- LiveView -->
+            <section id="liveview" class="docs-section">
+                <h2>LiveView</h2>
+
+                <h3>Lifecycle Methods</h3>
+                <pre><code class="language-python">class MyView(LiveView):
+    template_name = "my_template.html"
+
+    def mount(self, request):
+        """Called once when page first loads
+        Initialize state and components here"""
+        self.counter = 0
+        self.user = request.user
+        self.items = []
+
+    def get_context_data(self, **kwargs):
+        """Called on every render
+        Add computed values to template context"""
+        context = super().get_context_data(**kwargs)
+        context['item_count'] = len(self.items)
+        context['user_name'] = self.user.get_full_name()
+        return context
+
+    def handle_connect(self, request):
+        """Called when WebSocket connects
+        Optional: customize connection handling"""
+        pass
+
+    def handle_disconnect(self):
+        """Called when WebSocket disconnects
+        Optional: cleanup resources"""
+        pass</code></pre>
+
+                <h3>State Management</h3>
+                <p>Any instance attribute becomes available in your template:</p>
+                <pre><code class="language-python">def mount(self, request):
+    # These are all accessible in templates as &#123;&#123; variable_name &#125;&#125;
+    self.counter = 0
+    self.message = "Hello"
+    self.items = ["a", "b", "c"]
+    self.user_data = {"name": "John", "age": 30}
+    self.is_active = True</code></pre>
+
+                <h3>Event Handlers</h3>
+                <p>Define methods to handle user interactions:</p>
+                <pre><code class="language-python">def increment(self):
+    """Called when element with @click="increment" is clicked"""
+    self.counter += 1
+
+def handle_submit(self):
+    """Called when form with @submit="handle_submit" is submitted"""
+    # Access form data via self.form_data
+    query = self.form_data.get('query', '')
+    self.results = search(query)
+
+def delete_item(self, item_id):
+    """Called with data-item-id parameter"""
+    self.items = [i for i in self.items if i.id != int(item_id)]</code></pre>
+            </section>
+
+            <!-- Components -->
+            <section id="components" class="docs-section">
+                <h2>Built-in Components</h2>
+
+                <h3>Button Component</h3>
+                <pre><code class="language-python">from djust.components import ButtonComponent
+
+self.my_button = ButtonComponent(
+    label="Click Me",
+    variant="primary",    # primary, secondary, success, danger, warning, info
+    size="md",           # sm, md, lg
+    on_click="handle_click",
+    icon="plus",         # Bootstrap icon name
+    disabled=False
+)</code></pre>
+
+                <h3>Alert Component</h3>
+                <pre><code class="language-python">from djust.components import AlertComponent
+
+self.alert = AlertComponent(
+    message="Operation successful!",
+    variant="success",    # success, info, warning, danger
+    dismissible=True,
+    icon="check-circle"
+)</code></pre>
+
+                <h3>Card Component</h3>
+                <pre><code class="language-python">from djust.components import CardComponent
+
+self.card = CardComponent(
+    title="User Profile",
+    content="<p>Profile content here</p>",
+    footer="Last updated: Today",
+    variant="light",     # light, dark, primary, etc.
+    image_url="/static/img/profile.jpg"
+)</code></pre>
+
+                <h3>Table Component</h3>
+                <pre><code class="language-python">from djust.components import TableComponent
+
+self.table = TableComponent(
+    columns=[
+        {"key": "name", "label": "Name", "sortable": True},
+        {"key": "email", "label": "Email"},
+        {"key": "created", "label": "Created", "sortable": True},
+    ],
+    data=users,
+    striped=True,
+    hover=True,
+    on_row_click="view_user"
+)</code></pre>
+
+                <h3>Modal Component</h3>
+                <pre><code class="language-python">from djust.components import ModalComponent
+
+self.modal = ModalComponent(
+    title="Confirm Delete",
+    content="Are you sure you want to delete this item?",
+    size="md",           # sm, md, lg, xl
+    show=False,          # Control visibility
+    on_confirm="confirm_delete",
+    on_cancel="close_modal"
+)</code></pre>
+
+                <p class="text-muted">See the <a href="/kitchen-sink/">Component Kitchen Sink</a> for examples of all available components.</p>
+
+                <h3 id="component-ids">Automatic Component ID Management</h3>
+                <p>Components automatically receive stable <code>component_id</code> values based on their attribute names. This eliminates manual ID management:</p>
+
+                <pre><code class="language-python"># When you write:
+self.alert_success = AlertComponent(message="Success!")
+
+# The framework automatically:
+# 1. Sets component.component_id = "alert_success"
+# 2. Persists this ID across renders and events
+# 3. Uses it in HTML: data-component-id="alert_success"
+# 4. Routes events back to the correct component</code></pre>
+
+                <div class="alert alert-info">
+                    <strong>Why it works:</strong>
+                    <ul class="mb-0">
+                        <li>The attribute name (<code>alert_success</code>) is already unique within your view</li>
+                        <li>It's stable across re-renders and WebSocket reconnections</li>
+                        <li>Event handlers can reference components by their attribute names</li>
+                        <li>No manual ID strings to keep in sync</li>
+                    </ul>
+                </div>
+
+                <h4>Event Routing with Automatic IDs</h4>
+                <p>Event handlers receive the <code>component_id</code> automatically and can use it to route to the correct component:</p>
+
+                <pre><code class="language-python">class MyView(LiveView):
+    def mount(self, request):
+        self.alert_warning = AlertComponent(
+            message="Warning message",
+            dismissible=True
+        )
+        # component_id is automatically "alert_warning"
+
+    def dismiss(self, component_id: str = None):
+        """Handle dismissal - automatically routes to correct component"""
+        if component_id and hasattr(self, component_id):
+            component = getattr(self, component_id)
+            if hasattr(component, 'dismiss'):
+                component.dismiss()  # component_id="alert_warning"</code></pre>
+
+                <p class="text-muted">When the dismiss button is clicked, the client automatically sends <code>component_id="alert_warning"</code>, and the handler uses <code>getattr(self, "alert_warning")</code> to find the component.</p>
+            </section>
+
+            <!-- Event Handling -->
+            <section id="event-handling" class="docs-section">
+                <h2>Event Handling</h2>
+
+                <h3>Event Directives</h3>
+                <p>Attach event handlers using special <code>@</code> attributes:</p>
+
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Directive</th>
+                            <th>Description</th>
+                            <th>Example</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>@click</code></td>
+                            <td>Handle click events</td>
+                            <td><code>&lt;button @click="increment"&gt;</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>@submit</code></td>
+                            <td>Handle form submissions</td>
+                            <td><code>&lt;form @submit="handle_submit"&gt;</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>@change</code></td>
+                            <td>Handle input changes</td>
+                            <td><code>&lt;input @change="validate_field"&gt;</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>@input</code></td>
+                            <td>Handle input while typing</td>
+                            <td><code>&lt;input @input="live_search"&gt;</code></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>Event Parameters</h3>
+                <p>Pass data to event handlers using <code>data-*</code> attributes:</p>
+                <pre><code class="language-html">&lt;!-- Template --&gt;
+&lt;button
+    @click="delete_item"
+    data-item-id="&#123;&#123; item.id &#125;&#125;"
+    data-confirm="true"
+&gt;
+    Delete
+&lt;/button&gt;</code></pre>
+
+                <pre><code class="language-python"># View
+def delete_item(self, item_id, confirm=None):
+    """Receives parameters from data-* attributes"""
+    if confirm == "true":
+        self.items = [i for i in self.items if i.id != int(item_id)]</code></pre>
+
+                <h3>Form Data Access</h3>
+                <p>Access form field values in submit handlers:</p>
+                <pre><code class="language-python">def handle_submit(self):
+    # Form data automatically available in self.form_data
+    username = self.form_data.get('username', '')
+    password = self.form_data.get('password', '')
+    remember = self.form_data.get('remember_me', False)
+
+    # Process the data
+    if authenticate(username, password):
+        self.success_message = "Login successful!"</code></pre>
+            </section>
+
+            <!-- Form Integration -->
+            <section id="forms" class="docs-section">
+                <h2>Django Forms Integration</h2>
+                <p>djust seamlessly integrates with Django's form system for validation and processing.</p>
+
+                <h3>Basic Form Integration</h3>
+                <pre><code class="language-python"># forms.py
+from django import forms
+
+class ContactForm(forms.Form):
+    name = forms.CharField(max_length=100)
+    email = forms.EmailField()
+    message = forms.CharField(widget=forms.Textarea)
+
+# views.py
+from djust import LiveView
+from .forms import ContactForm
+
+class ContactFormView(LiveView):
+    template_name = "contact.html"
+
+    def mount(self, request):
+        self.form = ContactForm()
+        self.success_message = ""
+
+    def handle_submit(self):
+        # Create form instance with submitted data
+        self.form = ContactForm(self.form_data)
+
+        if self.form.is_valid():
+            # Process the data
+            name = self.form.cleaned_data['name']
+            email = self.form.cleaned_data['email']
+            message = self.form.cleaned_data['message']
+
+            # Send email, save to DB, etc.
+            send_mail(name, email, message)
+
+            self.success_message = "Thank you! We'll be in touch."
+            self.form = ContactForm()  # Reset form
+        # Form errors automatically displayed in template</code></pre>
+
+                <h3>Auto-Rendering Forms</h3>
+                <p>Use the <code>auto_form</code> template tag for automatic form rendering:</p>
+                <pre><code class="language-html">&lt;!-- templates/contact.html --&gt;
+{&#37; load djust &#37;}
+
+&lt;div data-liveview-root&gt;
+    &lt;form @submit="handle_submit"&gt;
+        {&#37; auto_form form framework="bootstrap5" &#37;}
+
+        &lt;button type="submit" class="btn btn-primary"&gt;Submit&lt;/button&gt;
+    &lt;/form&gt;
+
+    {&#37; if success_message &#37;}
+        &lt;div class="alert alert-success"&gt;&#123;&#123; success_message &#125;&#125;&lt;/div&gt;
+    {&#37; endif &#37;}
+&lt;/div&gt;</code></pre>
+
+                <h3>Framework Options</h3>
+                <p>The <code>auto_form</code> tag supports multiple CSS frameworks:</p>
+                <pre><code class="language-html">&lt;!-- Bootstrap 5 (default) --&gt;
+{&#37; auto_form form framework="bootstrap5" &#37;}
+
+&lt;!-- Tailwind CSS --&gt;
+{&#37; auto_form form framework="tailwind" &#37;}
+
+&lt;!-- Plain HTML --&gt;
+{&#37; auto_form form framework="plain" &#37;}</code></pre>
+
+                <h3>Real-time Validation</h3>
+                <p>Validate fields as users type:</p>
+                <pre><code class="language-python">class SignupFormView(LiveView):
+    def mount(self, request):
+        self.form = SignupForm()
+        self.username_error = ""
+
+    def validate_username(self):
+        # Called when username field changes
+        username = self.form_data.get('username', '')
+
+        if len(username) < 3:
+            self.username_error = "Username must be at least 3 characters"
+        elif User.objects.filter(username=username).exists():
+            self.username_error = "Username already taken"
+        else:
+            self.username_error = ""</code></pre>
+
+                <pre><code class="language-html">&lt;input
+    type="text"
+    name="username"
+    @change="validate_username"
+    class="form-control"
+&gt;
+{&#37; if username_error &#37;}
+    &lt;div class="text-danger"&gt;&#123;&#123; username_error &#125;&#125;&lt;/div&gt;
+{&#37; endif &#37;}</code></pre>
+
+                <p class="text-muted">See the <a href="/forms/">Forms Demo</a> for complete examples of form integration.</p>
+            </section>
+
+            <!-- Templates -->
+            <section id="templates" class="docs-section">
+                <h2>Templates</h2>
+
+                <h3>LiveView Root Element</h3>
+                <p>All LiveView templates must have a root element with <code>data-liveview-root</code>:</p>
+                <pre><code class="language-html">{&#37; extends "base.html" &#37;}
+
+{&#37; block content &#37;}
+&lt;div data-liveview-root&gt;
+    &lt;!-- Your LiveView content here --&gt;
+    &lt;h1&gt;&#123;&#123; title &#125;&#125;&lt;/h1&gt;
+    &lt;p&gt;&#123;&#123; message &#125;&#125;&lt;/p&gt;
+&lt;/div&gt;
+{&#37; endblock &#37;}</code></pre>
+
+                <h3>Accessing State Variables</h3>
+                <p>All instance attributes from your LiveView are available in templates:</p>
+                <pre><code class="language-python"># views.py
+def mount(self, request):
+    self.counter = 0
+    self.items = ["apple", "banana", "cherry"]
+    self.user = request.user
+    self.config = {"theme": "dark", "notifications": True}</code></pre>
+
+                <pre><code class="language-html">&lt;!-- templates/my_view.html --&gt;
+&lt;p&gt;Count: &#123;&#123; counter &#125;&#125;&lt;/p&gt;
+
+&lt;ul&gt;
+    {&#37; for item in items &#37;}
+        &lt;li&gt;&#123;&#123; item &#125;&#125;&lt;/li&gt;
+    {&#37; endfor &#37;}
+&lt;/ul&gt;
+
+&lt;p&gt;Welcome, &#123;&#123; user.username &#125;&#125;!&lt;/p&gt;
+&lt;p&gt;Theme: &#123;&#123; config.theme &#125;&#125;&lt;/p&gt;</code></pre>
+
+                <h3>Rendering Components</h3>
+                <p>Components are rendered using the <code>.render</code> attribute:</p>
+                <pre><code class="language-python"># views.py
+def mount(self, request):
+    self.save_btn = ButtonComponent(
+        label="Save",
+        variant="success",
+        on_click="save_data"
+    )
+    self.alert = AlertComponent(
+        message="Changes saved!",
+        variant="success"
+    )</code></pre>
+
+                <pre><code class="language-html">&lt;!-- Render components --&gt;
+&#123;&#123; save_btn.render &#125;&#125;
+&#123;&#123; alert.render &#125;&#125;</code></pre>
+
+                <h3>Conditional Rendering</h3>
+                <pre><code class="language-html">&lt;!-- Show/hide based on state --&gt;
+{&#37; if is_loading &#37;}
+    &lt;div class="spinner"&gt;Loading...&lt;/div&gt;
+{&#37; else &#37;}
+    &lt;div class="content"&gt;&#123;&#123; data &#125;&#125;&lt;/div&gt;
+{&#37; endif &#37;}
+
+&lt;!-- Render list items --&gt;
+{&#37; for item in items &#37;}
+    &lt;div class="item"&gt;
+        &lt;h3&gt;&#123;&#123; item.title &#125;&#125;&lt;/h3&gt;
+        &lt;button @click="delete" data-item-id="&#123;&#123; item.id &#125;&#125;"&gt;Delete&lt;/button&gt;
+    &lt;/div&gt;
+{&#37; empty &#37;}
+    &lt;p&gt;No items found.&lt;/p&gt;
+{&#37; endfor &#37;}</code></pre>
+
+                <h3>Template Tags</h3>
+                <p>djust provides custom template tags:</p>
+                <pre><code class="language-html">{&#37; load djust &#37;}
+
+&lt;!-- Auto-render Django forms --&gt;
+{&#37; auto_form form framework="bootstrap5" &#37;}
+
+&lt;!-- Component rendering helpers --&gt;
+{&#37; render_component component &#37;}</code></pre>
+            </section>
+
+            <!-- State Management -->
+            <section id="state-management" class="docs-section">
+                <h2>State Management</h2>
+
+                <h3>Simple State</h3>
+                <p>State is managed as instance attributes on your LiveView class:</p>
+                <pre><code class="language-python">class TodoView(LiveView):
+    def mount(self, request):
+        # Initialize state
+        self.todos = []
+        self.new_todo = ""
+        self.filter = "all"  # all, active, completed
+
+    def add_todo(self):
+        # Modify state - UI updates automatically
+        if self.new_todo.strip():
+            self.todos.append({
+                "id": len(self.todos) + 1,
+                "text": self.new_todo,
+                "completed": False
+            })
+            self.new_todo = ""  # Reset input
+
+    def toggle_todo(self, todo_id):
+        # Update nested state
+        for todo in self.todos:
+            if todo["id"] == int(todo_id):
+                todo["completed"] = not todo["completed"]
+
+    def delete_todo(self, todo_id):
+        # Remove from state
+        self.todos = [t for t in self.todos if t["id"] != int(todo_id)]</code></pre>
+
+                <h3>Computed Properties</h3>
+                <p>Use <code>get_context_data</code> for computed values:</p>
+                <pre><code class="language-python">def get_context_data(self, **kwargs):
+    context = super().get_context_data(**kwargs)
+
+    # Compute derived values
+    context['active_count'] = sum(1 for t in self.todos if not t['completed'])
+    context['completed_count'] = sum(1 for t in self.todos if t['completed'])
+    context['filtered_todos'] = self._get_filtered_todos()
+
+    return context
+
+def _get_filtered_todos(self):
+    if self.filter == "active":
+        return [t for t in self.todos if not t['completed']]
+    elif self.filter == "completed":
+        return [t for t in self.todos if t['completed']]
+    return self.todos</code></pre>
+
+                <h3>State Persistence</h3>
+                <p>State can be persisted to database, session, or cache:</p>
+                <pre><code class="language-python">class ShoppingCartView(LiveView):
+    def mount(self, request):
+        # Load from session
+        self.cart_items = request.session.get('cart', [])
+
+    def add_to_cart(self, product_id):
+        self.cart_items.append({"id": product_id, "quantity": 1})
+        # Save to session
+        self.request.session['cart'] = self.cart_items
+
+    def handle_disconnect(self):
+        # Save to database on disconnect
+        if self.request.user.is_authenticated:
+            Cart.objects.update_or_create(
+                user=self.request.user,
+                defaults={'items': self.cart_items}
+            )</code></pre>
+
+                <h3>State Updates Trigger Re-renders</h3>
+                <p>Any state change automatically triggers a re-render:</p>
+                <pre><code class="language-python">def increment(self):
+    self.counter += 1  # UI updates automatically
+
+def load_data(self):
+    self.is_loading = True  # Shows loading spinner
+    self.data = fetch_from_api()
+    self.is_loading = False  # Hides spinner, shows data</code></pre>
+
+                <div class="alert alert-docs">
+                    <strong>Performance Tip:</strong> Only the changed parts of the DOM are updated thanks to Rust-powered VDOM diffing. Large state changes result in minimal network transfer.
+                </div>
+            </section>
+
+            <!-- Custom Components -->
+            <section id="custom-components" class="docs-section">
+                <h2>Creating Custom Components</h2>
+
+                <h3>Component Class</h3>
+                <p>Create reusable components by inheriting from <code>LiveComponent</code>:</p>
+                <pre><code class="language-python"># components.py
+from djust.components import LiveComponent
+
+class UserCardComponent(LiveComponent):
+    """Reusable user profile card"""
+
+    template_name = "components/user_card.html"
+
+    def __init__(self, user, show_actions=True):
+        super().__init__()
+        self.user = user
+        self.show_actions = show_actions
+        self.is_following = False
+
+    def toggle_follow(self):
+        """Handle follow/unfollow action"""
+        self.is_following = not self.is_following
+
+        if self.is_following:
+            Follow.objects.create(follower=self.current_user, following=self.user)
+        else:
+            Follow.objects.filter(follower=self.current_user, following=self.user).delete()</code></pre>
+
+                <h3>Component Template</h3>
+                <pre><code class="language-html">&lt;!-- templates/components/user_card.html --&gt;
+&lt;div class="card"&gt;
+    &lt;img src="&#123;&#123; user.avatar_url &#125;&#125;" class="card-img-top" alt="Avatar"&gt;
+    &lt;div class="card-body"&gt;
+        &lt;h5 class="card-title"&gt;&#123;&#123; user.get_full_name &#125;&#125;&lt;/h5&gt;
+        &lt;p class="card-text"&gt;&#123;&#123; user.bio &#125;&#125;&lt;/p&gt;
+
+        {&#37; if show_actions &#37;}
+            &lt;button
+                @click="toggle_follow"
+                class="btn btn-{&#37; if is_following &#37;}secondary{&#37; else &#37;}primary{&#37; endif &#37;}"
+            &gt;
+                {&#37; if is_following &#37;}Unfollow{&#37; else &#37;}Follow{&#37; endif &#37;}
+            &lt;/button&gt;
+        {&#37; endif &#37;}
+    &lt;/div&gt;
+&lt;/div&gt;</code></pre>
+
+                <h3>Using Custom Components</h3>
+                <pre><code class="language-python"># views.py
+from .components import UserCardComponent
+
+class ProfileView(LiveView):
+    template_name = "profile.html"
+
+    def mount(self, request):
+        users = User.objects.all()[:5]
+
+        # Create component instances
+        self.user_cards = [
+            UserCardComponent(user=user, show_actions=True)
+            for user in users
+        ]</code></pre>
+
+                <pre><code class="language-html">&lt;!-- templates/profile.html --&gt;
+&lt;div data-liveview-root&gt;
+    &lt;h1&gt;Suggested Users&lt;/h1&gt;
+    &lt;div class="row"&gt;
+        {&#37; for card in user_cards &#37;}
+            &lt;div class="col-md-4"&gt;
+                &#123;&#123; card.render &#125;&#125;
+            &lt;/div&gt;
+        {&#37; endfor &#37;}
+    &lt;/div&gt;
+&lt;/div&gt;</code></pre>
+
+                <h3>Component Lifecycle</h3>
+                <pre><code class="language-python">class MyComponent(LiveComponent):
+    def mount(self):
+        """Called when component is created"""
+        self.initialize_state()
+
+    def update(self, **kwargs):
+        """Called when component receives new props"""
+        self.user = kwargs.get('user')
+        self.refresh_data()
+
+    def destroy(self):
+        """Called when component is removed"""
+        self.cleanup()</code></pre>
+
+                <div class="alert alert-docs">
+                    <strong>Note:</strong> Components maintain their own state and can handle their own events independently of the parent LiveView.
+                </div>
+            </section>
+
+            <!-- Styling -->
+            <section id="styling" class="docs-section">
+                <h2>Styling</h2>
+
+                <h3>CSS Framework Support</h3>
+                <p>djust works with any CSS framework:</p>
+
+                <h4>Bootstrap 5</h4>
+                <pre><code class="language-html">&lt;!-- base.html --&gt;
+&lt;link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"&gt;
+
+&lt;!-- Components use Bootstrap classes by default --&gt;
+&#123;&#123; button.render &#125;&#125;  &lt;!-- Renders with btn, btn-primary, etc. --&gt;</code></pre>
+
+                <h4>Tailwind CSS</h4>
+                <pre><code class="language-html">&lt;!-- base.html --&gt;
+&lt;script src="https://cdn.tailwindcss.com"&gt;&lt;/script&gt;
+
+&lt;!-- Use Tailwind classes in templates --&gt;
+&lt;div class="bg-blue-500 text-white p-4 rounded-lg"&gt;
+    &#123;&#123; content &#125;&#125;
+&lt;/div&gt;</code></pre>
+
+                <h3>Custom Styling</h3>
+                <pre><code class="language-html">&lt;!-- Add custom styles in your template --&gt;
+{&#37; block extra_styles &#37;}
+    .my-custom-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border-radius: 12px;
+        padding: 2rem;
+        color: white;
+    }
+
+    .pulse-animation {
+        animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+{&#37; endblock &#37;}</code></pre>
+
+                <h3>Dynamic Classes</h3>
+                <p>Apply classes conditionally based on state:</p>
+                <pre><code class="language-html">&lt;button
+    class="btn {&#37; if is_active &#37;}btn-primary{&#37; else &#37;}btn-secondary{&#37; endif &#37;}"
+    @click="toggle"
+&gt;
+    Toggle
+&lt;/button&gt;
+
+&lt;div class="item {&#37; if item.completed &#37;}completed{&#37; endif &#37;} {&#37; if item.important &#37;}important{&#37; endif &#37;}"&gt;
+    &#123;&#123; item.title &#125;&#125;
+&lt;/div&gt;</code></pre>
+
+                <h3>Component Styling</h3>
+                <p>Customize built-in components:</p>
+                <pre><code class="language-python">self.button = ButtonComponent(
+    label="Custom Button",
+    variant="primary",
+    css_class="my-custom-class shadow-lg",  # Additional classes
+    style="min-width: 200px;"  # Inline styles
+)</code></pre>
+            </section>
+
+            <!-- Deployment -->
+            <section id="deployment" class="docs-section">
+                <h2>Deployment</h2>
+
+                <h3>Production Requirements</h3>
+                <p>For production deployment, you need:</p>
+                <ul>
+                    <li><strong>ASGI Server</strong> - Daphne, Uvicorn, or Hypercorn</li>
+                    <li><strong>Redis</strong> - For channel layer (multi-worker support)</li>
+                    <li><strong>WebSocket Support</strong> - Reverse proxy configured for WebSockets</li>
+                </ul>
+
+                <h3>Redis Configuration</h3>
+                <pre><code class="language-python"># settings.py
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [("redis", 6379)],
+            "capacity": 1500,
+            "expiry": 10,
+        },
+    },
+}</code></pre>
+
+                <h3>Nginx Configuration</h3>
+                <pre><code class="language-nginx"># nginx.conf
+upstream django {
+    server web:8000;
+}
+
+server {
+    listen 80;
+    server_name example.com;
+
+    # WebSocket support
+    location /ws/ {
+        proxy_pass http://django;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 86400;
+    }
+
+    # Regular HTTP
+    location / {
+        proxy_pass http://django;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Static files
+    location /static/ {
+        alias /app/static/;
+    }
+}</code></pre>
+
+                <h3>Docker Compose</h3>
+                <pre><code class="language-yaml"># docker-compose.yml
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  web:
+    build: .
+    command: daphne -b 0.0.0.0 -p 8000 myproject.asgi:application
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    environment:
+      - DJANGO_SETTINGS_MODULE=myproject.settings.production
+      - REDIS_HOST=redis</code></pre>
+
+                <h3>Environment Variables</h3>
+                <pre><code class="language-bash"># .env
+DEBUG=False
+SECRET_KEY=your-secret-key-here
+ALLOWED_HOSTS=example.com,www.example.com
+REDIS_HOST=redis
+DATABASE_URL=postgres://user:pass@db:5432/dbname</code></pre>
+
+                <h3>Running with Daphne</h3>
+                <pre><code class="language-bash"># Install Daphne
+pip install daphne
+
+# Run production server
+daphne -b 0.0.0.0 -p 8000 myproject.asgi:application</code></pre>
+
+                <h3>Running with Uvicorn</h3>
+                <pre><code class="language-bash"># Install Uvicorn
+pip install uvicorn[standard]
+
+# Run production server
+uvicorn myproject.asgi:application --host 0.0.0.0 --port 8000 --workers 4</code></pre>
+
+                <div class="alert alert-warning">
+                    <strong>Important:</strong> Always use Redis for the channel layer in production. The in-memory backend doesn't support multiple workers.
+                </div>
+            </section>
+
+            <!-- API Reference -->
+            <section id="api-reference" class="docs-section">
+                <h2>API Reference</h2>
+
+                <h3>LiveView Class</h3>
+                <table class="table table-bordered">
+                    <thead>
+                        <tr>
+                            <th>Method/Attribute</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>template_name</code></td>
+                            <td>Path to the template file</td>
+                        </tr>
+                        <tr>
+                            <td><code>mount(request)</code></td>
+                            <td>Initialize state when page first loads</td>
+                        </tr>
+                        <tr>
+                            <td><code>get_context_data(**kwargs)</code></td>
+                            <td>Add computed values to template context</td>
+                        </tr>
+                        <tr>
+                            <td><code>handle_connect(request)</code></td>
+                            <td>Called when WebSocket connects</td>
+                        </tr>
+                        <tr>
+                            <td><code>handle_disconnect()</code></td>
+                            <td>Called when WebSocket disconnects</td>
+                        </tr>
+                        <tr>
+                            <td><code>form_data</code></td>
+                            <td>Dictionary of form field values from events</td>
+                        </tr>
+                        <tr>
+                            <td><code>request</code></td>
+                            <td>Django request object</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>LiveComponent Class</h3>
+                <table class="table table-bordered">
+                    <thead>
+                        <tr>
+                            <th>Method/Attribute</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>template_name</code></td>
+                            <td>Path to the component template file</td>
+                        </tr>
+                        <tr>
+                            <td><code>mount()</code></td>
+                            <td>Called when component is created</td>
+                        </tr>
+                        <tr>
+                            <td><code>update(**kwargs)</code></td>
+                            <td>Called when component receives new props</td>
+                        </tr>
+                        <tr>
+                            <td><code>destroy()</code></td>
+                            <td>Called when component is removed</td>
+                        </tr>
+                        <tr>
+                            <td><code>render</code></td>
+                            <td>Property that returns rendered HTML</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>Built-in Components</h3>
+                <table class="table table-bordered">
+                    <thead>
+                        <tr>
+                            <th>Component</th>
+                            <th>Key Parameters</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>ButtonComponent</code></td>
+                            <td>label, variant, size, on_click, icon, disabled</td>
+                        </tr>
+                        <tr>
+                            <td><code>AlertComponent</code></td>
+                            <td>message, variant, dismissible, icon</td>
+                        </tr>
+                        <tr>
+                            <td><code>CardComponent</code></td>
+                            <td>title, content, footer, variant, image_url</td>
+                        </tr>
+                        <tr>
+                            <td><code>TableComponent</code></td>
+                            <td>columns, data, striped, hover, on_row_click</td>
+                        </tr>
+                        <tr>
+                            <td><code>ModalComponent</code></td>
+                            <td>title, content, size, show, on_confirm, on_cancel</td>
+                        </tr>
+                        <tr>
+                            <td><code>BadgeComponent</code></td>
+                            <td>text, variant, pill</td>
+                        </tr>
+                        <tr>
+                            <td><code>ProgressComponent</code></td>
+                            <td>value, max, variant, striped, animated</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>Event Directives</h3>
+                <table class="table table-bordered">
+                    <thead>
+                        <tr>
+                            <th>Directive</th>
+                            <th>Trigger</th>
+                            <th>Example</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>@click</code></td>
+                            <td>Element clicked</td>
+                            <td><code>&lt;button @click="increment"&gt;</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>@submit</code></td>
+                            <td>Form submitted</td>
+                            <td><code>&lt;form @submit="handle_form"&gt;</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>@change</code></td>
+                            <td>Input value changed</td>
+                            <td><code>&lt;select @change="filter"&gt;</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>@input</code></td>
+                            <td>Input while typing</td>
+                            <td><code>&lt;input @input="search"&gt;</code></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>Template Tags</h3>
+                <table class="table table-bordered">
+                    <thead>
+                        <tr>
+                            <th>Tag</th>
+                            <th>Description</th>
+                            <th>Example</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>{&#37; auto_form &#37;}</code></td>
+                            <td>Auto-render Django forms</td>
+                            <td><code>{&#37; auto_form form framework="bootstrap5" &#37;}</code></td>
+                        </tr>
+                        <tr>
+                            <td><code>{&#37; render_component &#37;}</code></td>
+                            <td>Render a component</td>
+                            <td><code>{&#37; render_component card &#37;}</code></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div class="alert alert-docs">
+                    <strong>Need Help?</strong><br>
+                    Check out the <a href="/kitchen-sink/">Component Kitchen Sink</a> for live examples, or visit the <a href="https://github.com/johnrtipton/djust">GitHub repository</a> for more documentation.
+                </div>
+            </section>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>
+        hljs.highlightAll();
+
+        // Smooth scroll to anchors
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth' });
+
+                    // Update active nav link
+                    document.querySelectorAll('.docs-nav .nav-link').forEach(link => {
+                        link.classList.remove('active');
+                    });
+                    this.classList.add('active');
+                }
+            });
+        });
+
+        // Update active nav on scroll
+        window.addEventListener('scroll', () => {
+            let current = '';
+            document.querySelectorAll('.docs-section').forEach(section => {
+                const sectionTop = section.offsetTop;
+                if (pageYOffset >= sectionTop - 100) {
+                    current = section.getAttribute('id');
+                }
+            });
+
+            document.querySelectorAll('.docs-nav .nav-link').forEach(link => {
+                link.classList.remove('active');
+                if (link.getAttribute('href') === `#${current}`) {
+                    link.classList.add('active');
+                }
+            });
+        });
+    </script>
+{% endblock %}

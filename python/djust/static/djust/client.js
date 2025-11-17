@@ -1,6 +1,137 @@
 // djust - WebSocket + HTTP Fallback Client
 
-// === WebSocket LiveView Client ===
+// ============================================================================
+// Centralized Response Handler (WebSocket + HTTP)
+// ============================================================================
+
+/**
+ * Centralized server response handler for both WebSocket and HTTP fallback.
+ * Eliminates code duplication and ensures consistent behavior.
+ *
+ * @param {Object} data - Server response data
+ * @param {string} eventName - Name of the event that triggered this response
+ * @param {HTMLElement} triggerElement - Element that triggered the event
+ * @returns {boolean} - True if handled successfully, false otherwise
+ */
+function handleServerResponse(data, eventName, triggerElement) {
+    try {
+        // Handle cache storage (from @cache decorator)
+        if (data.cache_request_id && pendingCacheRequests.has(data.cache_request_id)) {
+            const { cacheKey, ttl } = pendingCacheRequests.get(data.cache_request_id);
+            const expiresAt = Date.now() + (ttl * 1000);
+            resultCache.set(cacheKey, {
+                patches: data.patches,
+                expiresAt
+            });
+            if (globalThis.djustDebug) {
+                console.log(`[LiveView:cache] Cached patches: ${cacheKey} (TTL: ${ttl}s)`);
+            }
+            pendingCacheRequests.delete(data.cache_request_id);
+        }
+
+        // Handle version tracking and mismatch
+        if (data.version !== undefined) {
+            if (clientVdomVersion === null) {
+                clientVdomVersion = data.version;
+                console.log('[LiveView] Initialized VDOM version:', clientVdomVersion);
+            } else if (clientVdomVersion !== data.version - 1) {
+                // Version mismatch - force full reload
+                console.warn('[LiveView] VDOM version mismatch!');
+                console.warn(`  Expected v${clientVdomVersion + 1}, got v${data.version}`);
+
+                clearOptimisticState(eventName);
+
+                if (data.html) {
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(data.html, 'text/html');
+                    const liveviewRoot = getLiveViewRoot();
+                    const newRoot = doc.querySelector('[data-liveview-root]') || doc.body;
+                    liveviewRoot.innerHTML = newRoot.innerHTML;
+                    clientVdomVersion = data.version;
+                    initReactCounters();
+                    initTodoItems();
+                    bindLiveViewEvents();
+                }
+
+                globalLoadingManager.stopLoading(eventName, triggerElement);
+                return true;
+            }
+            clientVdomVersion = data.version;
+        }
+
+        // Clear optimistic state BEFORE applying changes
+        clearOptimisticState(eventName);
+
+        // Global cleanup of lingering optimistic-pending classes
+        document.querySelectorAll('.optimistic-pending').forEach(el => {
+            el.classList.remove('optimistic-pending');
+        });
+
+        // Apply patches (efficient incremental updates)
+        if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
+            console.log('[LiveView] Applying', data.patches.length, 'patches');
+
+            const success = applyPatches(data.patches);
+            if (success === false) {
+                console.error('[LiveView] Patches failed, reloading page...');
+                globalLoadingManager.stopLoading(eventName, triggerElement);
+                window.location.reload();
+                return false;
+            }
+
+            console.log('[LiveView] Patches applied successfully');
+
+            // Final cleanup
+            document.querySelectorAll('.optimistic-pending').forEach(el => {
+                el.classList.remove('optimistic-pending');
+            });
+
+            initReactCounters();
+            initTodoItems();
+            bindLiveViewEvents();
+        }
+        // Apply full HTML update (fallback)
+        else if (data.html) {
+            console.log('[LiveView] Applying full HTML update');
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(data.html, 'text/html');
+            const liveviewRoot = getLiveViewRoot();
+            const newRoot = doc.querySelector('[data-liveview-root]') || doc.body;
+            liveviewRoot.innerHTML = newRoot.innerHTML;
+
+            document.querySelectorAll('.optimistic-pending').forEach(el => {
+                el.classList.remove('optimistic-pending');
+            });
+
+            initReactCounters();
+            initTodoItems();
+            bindLiveViewEvents();
+        } else {
+            console.warn('[LiveView] Response has neither patches nor html!', data);
+        }
+
+        // Handle form reset
+        if (data.reset_form) {
+            console.log('[LiveView] Resetting form');
+            const form = document.querySelector('[data-liveview-root] form');
+            if (form) form.reset();
+        }
+
+        // Stop loading state
+        globalLoadingManager.stopLoading(eventName, triggerElement);
+        return true;
+
+    } catch (error) {
+        console.error('[LiveView] Error in handleServerResponse:', error);
+        globalLoadingManager.stopLoading(eventName, triggerElement);
+        return false;
+    }
+}
+
+// ============================================================================
+// WebSocket LiveView Client
+// ============================================================================
+
 class LiveViewWebSocket {
     constructor() {
         this.ws = null;
@@ -113,71 +244,17 @@ class LiveViewWebSocket {
                 break;
 
             case 'patch':
-                if (data.patches && data.patches.length > 0) {
-                    console.log('[LiveView] Applying', data.patches.length, 'patches');
-
-                    // Check if this response should be cached
-                    if (data.cache_request_id && pendingCacheRequests.has(data.cache_request_id)) {
-                        const { cacheKey, ttl } = pendingCacheRequests.get(data.cache_request_id);
-
-                        // Store patches in cache
-                        const expiresAt = Date.now() + (ttl * 1000);
-                        resultCache.set(cacheKey, {
-                            patches: data.patches,
-                            expiresAt
-                        });
-
-                        if (globalThis.djustDebug) {
-                            console.log(`[LiveView:cache] Cached patches: ${cacheKey} (TTL: ${ttl}s)`);
-                        }
-
-                        // Remove from pending
-                        pendingCacheRequests.delete(data.cache_request_id);
-                    }
-
-                    this.applyPatches(data.patches);
-                    bindLiveViewEvents();
-                }
-                // Check if form reset is requested
-                if (data.reset_form) {
-                    console.log('[LiveView] Resetting form');
-                    const form = document.querySelector('[data-liveview-root] form');
-                    if (form) {
-                        form.reset();
-                    }
-                }
-
-                // Phase 5: Stop loading state after patches applied
-                if (this.lastEventName) {
-                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
-                    this.lastEventName = null;
-                    this.lastTriggerElement = null;
-                }
+                // Use centralized response handler
+                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                this.lastEventName = null;
+                this.lastTriggerElement = null;
                 break;
 
             case 'html_update':
-                // Full HTML update for views with dynamic templates
-                console.log('[LiveView] Applying full HTML update');
-                let container = document.querySelector('[data-liveview-root]');
-                if (container) {
-                    container.innerHTML = data.html;
-                    bindLiveViewEvents();
-                }
-                // Check if form reset is requested
-                if (data.reset_form) {
-                    console.log('[LiveView] Resetting form');
-                    const form = document.querySelector('[data-liveview-root] form');
-                    if (form) {
-                        form.reset();
-                    }
-                }
-
-                // Phase 5: Stop loading state after HTML update
-                if (this.lastEventName) {
-                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
-                    this.lastEventName = null;
-                    this.lastTriggerElement = null;
-                }
+                // Use centralized response handler
+                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                this.lastEventName = null;
+                this.lastTriggerElement = null;
                 break;
 
             case 'error':
@@ -255,139 +332,8 @@ class LiveViewWebSocket {
         return true;
     }
 
-    applyPatches(patches) {
-        patches.forEach(patch => {
-            const element = this.getElementByPath(patch.path);
-            if (!element) {
-                console.warn('[LiveView] Element not found for path:', patch.path);
-                return;
-            }
-
-            switch (patch.type) {
-                case 'Replace':
-                    this.patchReplace(element, patch.node);
-                    break;
-                case 'SetText':
-                    this.patchSetText(element, patch.text);
-                    break;
-                case 'SetAttr':
-                    this.patchSetAttr(element, patch.key, patch.value);
-                    break;
-                case 'RemoveAttr':
-                    this.patchRemoveAttr(element, patch.key);
-                    break;
-                case 'InsertChild':
-                    this.patchInsertChild(element, patch.index, patch.node);
-                    break;
-                case 'RemoveChild':
-                    this.patchRemoveChild(element, patch.index);
-                    break;
-                case 'MoveChild':
-                    this.patchMoveChild(element, patch.from, patch.to);
-                    break;
-            }
-        });
-    }
-
-    getElementByPath(path) {
-        if (path.length === 0) {
-            return document.querySelector('[data-live-view]') || document.body;
-        }
-
-        let element = document.querySelector('[data-live-view]') || document.body;
-        for (const index of path) {
-            const children = Array.from(element.childNodes).filter(child =>
-                child.nodeType === Node.ELEMENT_NODE || child.nodeType === Node.TEXT_NODE
-            );
-            if (children[index]) {
-                element = children[index];
-            } else {
-                return null;
-            }
-        }
-        return element;
-    }
-
-    patchReplace(element, node) {
-        const newElement = this.vnodeToElement(node);
-        element.replaceWith(newElement);
-    }
-
-    patchSetText(element, text) {
-        element.textContent = text;
-    }
-
-    patchSetAttr(element, key, value) {
-        // Skip LiveView directives (@click, @submit, etc.)
-        if (element.nodeType === Node.ELEMENT_NODE && !key.startsWith('@')) {
-            element.setAttribute(key, value);
-        }
-    }
-
-    patchRemoveAttr(element, key) {
-        if (element.nodeType === Node.ELEMENT_NODE) {
-            element.removeAttribute(key);
-        }
-    }
-
-    patchInsertChild(element, index, node) {
-        const newElement = this.vnodeToElement(node);
-        const children = Array.from(element.childNodes).filter(child =>
-            child.nodeType === Node.ELEMENT_NODE || child.nodeType === Node.TEXT_NODE
-        );
-
-        if (index >= children.length) {
-            element.appendChild(newElement);
-        } else {
-            element.insertBefore(newElement, children[index]);
-        }
-    }
-
-    patchRemoveChild(element, index) {
-        const children = Array.from(element.childNodes).filter(child =>
-            child.nodeType === Node.ELEMENT_NODE || child.nodeType === Node.TEXT_NODE
-        );
-        if (children[index]) {
-            children[index].remove();
-        }
-    }
-
-    patchMoveChild(element, from, to) {
-        const children = Array.from(element.childNodes).filter(child =>
-            child.nodeType === Node.ELEMENT_NODE || child.nodeType === Node.TEXT_NODE
-        );
-
-        if (children[from]) {
-            const child = children[from];
-            if (to >= children.length) {
-                element.appendChild(child);
-            } else {
-                element.insertBefore(child, children[to]);
-            }
-        }
-    }
-
-    vnodeToElement(vnode) {
-        if (vnode.tag === '#text') {
-            return document.createTextNode(vnode.text || '');
-        }
-
-        const element = document.createElement(vnode.tag);
-
-        // Set attributes (skip LiveView directives like @click, @submit, etc.)
-        for (const [key, value] of Object.entries(vnode.attrs || {})) {
-            if (!key.startsWith('@')) {
-                element.setAttribute(key, value);
-            }
-        }
-
-        // Add children
-        for (const child of vnode.children || []) {
-            element.appendChild(this.vnodeToElement(child));
-        }
-
-        return element;
-    }
+    // Removed duplicate applyPatches and patch helper methods
+    // Now using centralized handleServerResponse() -> applyPatches()
 
     startHeartbeat(interval = 30000) {
         setInterval(() => {
@@ -2121,6 +2067,10 @@ class LoadingManager {
                 element.classList.remove(modifier.value);
             }
         });
+
+        // Also remove optimistic-pending class (from @optimistic decorator)
+        // This is needed because VDOM patches may replace elements before clearOptimisticState runs
+        element.classList.remove('optimistic-pending');
     }
 
     isLoading(eventName) {
@@ -2221,81 +2171,8 @@ async function handleEvent(eventName, params) {
         if (response.ok) {
             const data = await response.json();
 
-            // Check for version mismatch
-            if (data.version !== undefined) {
-                if (clientVdomVersion === null) {
-                    // First response, initialize version
-                    clientVdomVersion = data.version;
-                    console.log('[LiveView] Initialized VDOM version:', clientVdomVersion);
-                } else if (clientVdomVersion !== data.version - 1) {
-                    // Version mismatch detected! Client and server are out of sync
-                    console.warn('[LiveView] VDOM version mismatch detected!');
-                    console.warn(`  Client expected version ${clientVdomVersion + 1}, but server is at ${data.version}`);
-                    console.warn('  Clearing client VDOM cache and using full HTML');
-
-                    // Clear optimistic state before full reload
-                    clearOptimisticState(eventName);
-
-                    // Force full HTML reload to resync
-                    if (data.html) {
-                        const parser = new DOMParser();
-                        const doc = parser.parseFromString(data.html, 'text/html');
-                        const liveviewRoot = getLiveViewRoot();
-                        const newRoot = doc.querySelector('[data-liveview-root]') || doc.body;
-                        liveviewRoot.innerHTML = newRoot.innerHTML;
-                        clientVdomVersion = data.version;
-                        initReactCounters();
-                        initTodoItems();
-                        bindLiveViewEvents();
-                    }
-                    // Phase 5: Stop loading state after version mismatch recovery
-                    globalLoadingManager.stopLoading(eventName, triggerElement);
-                    return;
-                }
-                // Update client version
-                clientVdomVersion = data.version;
-            }
-
-            // Clear optimistic state BEFORE applying patches (Phase 3)
-            // This restores button state before DOM is modified
-            clearOptimisticState(eventName);
-
-            if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
-                // Try to apply DOM patches (efficient!)
-                console.log('[LiveView] Applying', data.patches.length, 'patches');
-                const success = applyPatches(data.patches);
-                if (success === false) {
-                    // Patches failed - reload the page to get fresh state
-                    console.error('[LiveView] Patches failed to apply, reloading page...');
-                    // Phase 5: Stop loading state before reload
-                    globalLoadingManager.stopLoading(eventName, triggerElement);
-                    window.location.reload();
-                    return;
-                }
-                console.log('[LiveView] Patches applied successfully');
-                // Re-bind event handlers to new/modified elements
-                initReactCounters();
-                initTodoItems();
-                bindLiveViewEvents();
-            } else if (data.html) {
-                // Server sent full HTML (no patches available)
-                console.log('[LiveView] Applying HTML update (length:', data.html.length, 'chars)');
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(data.html, 'text/html');
-                const liveviewRoot = getLiveViewRoot();
-                const newRoot = doc.querySelector('[data-liveview-root]') || doc.body;
-                liveviewRoot.innerHTML = newRoot.innerHTML;
-                console.log('[LiveView] HTML update applied');
-                // Re-bind event handlers to new elements
-                initReactCounters();
-                initTodoItems();
-                bindLiveViewEvents();
-            } else {
-                console.warn('[LiveView] Response has neither patches nor html!', data);
-            }
-
-            // Phase 5: Stop loading state after successful update
-            globalLoadingManager.stopLoading(eventName, triggerElement);
+            // Use centralized response handler
+            handleServerResponse(data, eventName, triggerElement);
         } else {
             // Handle HTTP errors (500, 404, etc.)
             const errorData = await response.json().catch(() => ({}));

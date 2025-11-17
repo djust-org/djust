@@ -1,0 +1,869 @@
+{% extends "base.html" %}
+
+{% block title %}Interactive Demos - djust{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block extra_head %}
+<style>
+    /* Documentation Layout */
+    .docs-layout {
+        display: flex;
+        min-height: calc(100vh - 70px);
+        background: var(--color-bg);
+    }
+
+    /* Sidebar Navigation */
+    .docs-sidebar {
+        width: 280px;
+        position: sticky;
+        top: 70px;
+        height: calc(100vh - 70px);
+        overflow-y: auto;
+        background: var(--color-bg-elevated);
+        border-right: 1px solid var(--color-border);
+        padding: 2rem 1rem;
+    }
+
+    .docs-sidebar h4 {
+        color: var(--color-text);
+        font-size: 0.875rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 0.75rem;
+        padding: 0 0.75rem;
+    }
+
+    .docs-nav {
+        list-style: none;
+        padding: 0;
+        margin: 0 0 2rem 0;
+    }
+
+    .docs-nav-item {
+        margin-bottom: 0.25rem;
+    }
+
+    .docs-nav-link {
+        display: block;
+        padding: 0.5rem 0.75rem;
+        color: var(--color-text-muted);
+        text-decoration: none;
+        border-radius: var(--radius-md);
+        transition: all 0.2s;
+        font-size: 0.875rem;
+    }
+
+    .docs-nav-link:hover {
+        background: var(--color-bg);
+        color: var(--color-text);
+    }
+
+    .docs-nav-link.active {
+        background: var(--color-accent-muted);
+        color: var(--color-accent);
+        font-weight: 500;
+    }
+
+    /* Main Content */
+    .docs-content {
+        flex: 1;
+        padding: 3rem;
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+
+    /* Demo Sections */
+    .demo-section {
+        margin-bottom: 4rem;
+        scroll-margin-top: 100px;
+    }
+
+    .demo-section-header {
+        margin-bottom: 1.5rem;
+        padding-bottom: 1rem;
+        border-bottom: 2px solid var(--color-border);
+    }
+
+    .demo-section-title {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        font-size: 2rem;
+        font-weight: 700;
+        color: var(--color-text);
+        margin: 0 0 0.5rem 0;
+    }
+
+    .demo-section-subtitle {
+        color: var(--color-text-muted);
+        font-size: 1rem;
+        margin: 0;
+    }
+
+    /* Demo Container */
+    .demo-container {
+        background: var(--color-bg-elevated);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+        margin-bottom: 1.5rem;
+    }
+
+    .demo-live {
+        padding: 2rem;
+        border-bottom: 1px solid var(--color-border);
+    }
+
+    /* Code Section with Expandable */
+    .demo-code-section {
+        background: var(--color-bg);
+    }
+
+    .code-section-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 1rem 1.5rem;
+        border-bottom: 1px solid var(--color-border);
+        cursor: pointer;
+        user-select: none;
+        transition: background 0.2s;
+    }
+
+    .code-section-header:hover {
+        background: var(--color-bg-elevated);
+    }
+
+    .code-section-title {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.875rem;
+        font-weight: 600;
+        color: var(--color-text);
+    }
+
+    .code-section-toggle {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.75rem;
+        color: var(--color-text-muted);
+    }
+
+    .toggle-icon {
+        transition: transform 0.3s;
+    }
+
+    .toggle-icon.expanded {
+        transform: rotate(180deg);
+    }
+
+    .code-section-content {
+        max-height: 0;
+        overflow: hidden;
+        transition: max-height 0.3s ease-out;
+    }
+
+    .code-section-content.expanded {
+        max-height: 1000px;
+    }
+
+    /* Code Tabs */
+    .code-tabs {
+        display: flex;
+        gap: 0.5rem;
+        padding: 1rem 1.5rem 0;
+        background: var(--color-bg);
+        border-bottom: 1px solid var(--color-border);
+    }
+
+    .code-tab {
+        padding: 0.5rem 1rem;
+        background: transparent;
+        border: none;
+        border-bottom: 2px solid transparent;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        font-size: 0.875rem;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+
+    .code-tab:hover {
+        color: var(--color-text);
+    }
+
+    .code-tab.active {
+        color: var(--color-accent);
+        border-bottom-color: var(--color-accent);
+    }
+
+    .code-tab-content {
+        display: none;
+        padding: 0;
+    }
+
+    .code-tab-content.active {
+        display: block;
+    }
+
+    /* CodeBlock component handles its own styling - no need for custom pre/code styles */
+
+    /* Feature Tags */
+    .feature-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 1rem;
+    }
+
+    .feature-tag {
+        padding: 0.25rem 0.75rem;
+        background: var(--color-bg);
+        border: 1px solid var(--color-border);
+        border-radius: 999px;
+        font-size: 0.75rem;
+        color: var(--color-text-muted);
+    }
+
+    /* Dropdown Demo Styles */
+    .dropdown {
+        position: relative;
+        display: inline-block;
+    }
+
+    .dropdown-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.75rem 1rem;
+        background: var(--color-bg);
+        border: 2px solid var(--color-border);
+        border-radius: var(--radius-md);
+        color: var(--color-text);
+        cursor: pointer;
+        min-width: 200px;
+    }
+
+    .dropdown-menu {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        margin-top: 0.5rem;
+        background: var(--color-bg-elevated);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        min-width: 200px;
+        z-index: 1000;
+    }
+
+    .dropdown-item {
+        padding: 0.75rem 1rem;
+        color: var(--color-text);
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+
+    .dropdown-item:hover {
+        background: var(--color-accent-muted);
+    }
+
+    /* Mobile Sidebar Toggle */
+    .sidebar-toggle {
+        display: none;
+        position: fixed;
+        bottom: 2rem;
+        right: 2rem;
+        width: 56px;
+        height: 56px;
+        background: var(--color-accent);
+        color: white;
+        border: none;
+        border-radius: 50%;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        z-index: 1000;
+        cursor: pointer;
+    }
+
+    @media (max-width: 1024px) {
+        .docs-sidebar {
+            position: fixed;
+            left: -280px;
+            top: 70px;
+            z-index: 999;
+            transition: left 0.3s;
+            box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .docs-sidebar.open {
+            left: 0;
+        }
+
+        .sidebar-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .docs-content {
+            padding: 2rem 1rem;
+        }
+    }
+
+    html {
+        scroll-behavior: smooth;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div data-liveview-root class="docs-layout">
+    <!-- Sidebar Navigation -->
+    <aside class="docs-sidebar" id="docs-sidebar">
+        <nav>
+            <!-- Basic Demos -->
+            <h4>Basic Demos</h4>
+            <ul class="docs-nav">
+                <li class="docs-nav-item">
+                    <a href="#counter" class="docs-nav-link">⚡ Counter</a>
+                </li>
+                <li class="docs-nav-item">
+                    <a href="#dropdown" class="docs-nav-link">📋 Dropdown</a>
+                </li>
+            </ul>
+
+            <!-- State Management -->
+            <h4>State Management</h4>
+            <ul class="docs-nav">
+                <li class="docs-nav-item">
+                    <a href="#debounce" class="docs-nav-link">⏱️ Debounce</a>
+                </li>
+                <li class="docs-nav-item">
+                    <a href="#cache" class="docs-nav-link">💾 Cache</a>
+                </li>
+                <li class="docs-nav-item">
+                    <a href="/demos/smart-dashboard/" class="docs-nav-link">🏠 Smart Dashboard</a>
+                </li>
+            </ul>
+
+            <!-- More Demos -->
+            <h4>More Demos</h4>
+            <ul class="docs-nav">
+                <li class="docs-nav-item">
+                    <a href="/demos/throttle/" class="docs-nav-link">⏱️ Throttle</a>
+                </li>
+                <li class="docs-nav-item">
+                    <a href="/demos/todo/" class="docs-nav-link">✅ Todo List</a>
+                </li>
+                <li class="docs-nav-item">
+                    <a href="/demos/chat/" class="docs-nav-link">💬 Live Chat</a>
+                </li>
+                <li class="docs-nav-item">
+                    <a href="/demos/react/" class="docs-nav-link">⚛️ React Integration</a>
+                </li>
+                <li class="docs-nav-item">
+                    <a href="/demos/performance/" class="docs-nav-link">⚡ Performance Test</a>
+                </li>
+                <li class="docs-nav-item">
+                    <a href="/demos/datatable/" class="docs-nav-link">📊 Product DataTable</a>
+                </li>
+            </ul>
+        </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="docs-content">
+        <!-- Page Header -->
+        <div style="margin-bottom: 3rem;">
+            <h1 style="font-size: 3rem; font-weight: 700; color: var(--color-text); margin-bottom: 0.5rem;">
+                Interactive Demos
+            </h1>
+            <p style="font-size: 1.25rem; color: var(--color-text-muted); margin: 0;">
+                Explore real-time, reactive examples showcasing djust's capabilities.
+                All demos on this page are fully interactive and update without page reloads.
+            </p>
+        </div>
+
+        <!-- Counter Demo -->
+        <section id="counter" class="demo-section">
+            <div class="demo-section-header">
+                <h2 class="demo-section-title">
+                    <span>⚡</span>
+                    <span>Counter</span>
+                </h2>
+                <p class="demo-section-subtitle">
+                    Simple counter demonstrating real-time state management and event handling.
+                </p>
+            </div>
+
+            <div class="demo-container">
+                <!-- Live Demo -->
+                <div class="demo-live">
+                    <div style="text-align: center; padding: 2rem;">
+                        <div style="font-size: 4rem; font-weight: 700; color: var(--color-accent); margin-bottom: 2rem;">
+                            {{ counter }}
+                        </div>
+                        <div style="display: flex; gap: 1rem; justify-content: center;">
+                            <button @click="decrement" class="btn btn-outline-primary">Decrement</button>
+                            <button @click="reset" class="btn btn-outline-secondary">Reset</button>
+                            <button @click="increment" class="btn btn-primary">Increment</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Code Section -->
+                <div class="demo-code-section">
+                    <div class="code-section-header" onclick="toggleCodeSection(this)">
+                        <div class="code-section-title">
+                            <span>💻</span>
+                            <span>View Code</span>
+                        </div>
+                        <div class="code-section-toggle">
+                            <span>Click to expand</span>
+                            <svg class="toggle-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="code-section-content">
+                        <div class="code-tabs">
+                            <button class="code-tab active" onclick="switchTab(this, 'counter-python')">Python</button>
+                            <button class="code-tab" onclick="switchTab(this, 'counter-html')">HTML</button>
+                        </div>
+                        <div id="counter-python" class="code-tab-content active">
+                            {{ counter_code_python|safe }}
+                        </div>
+                        <div id="counter-html" class="code-tab-content">
+                            {{ counter_code_html|safe }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-tags">
+                <span class="feature-tag">✓ Real-time updates</span>
+                <span class="feature-tag">✓ Event handling (@click)</span>
+                <span class="feature-tag">✓ State synchronization</span>
+            </div>
+        </section>
+
+        <!-- Dropdown Demo -->
+        <section id="dropdown" class="demo-section">
+            <div class="demo-section-header">
+                <h2 class="demo-section-title">
+                    <span>📋</span>
+                    <span>Dropdown</span>
+                </h2>
+                <p class="demo-section-subtitle">
+                    Interactive dropdown menu with dynamic state management.
+                </p>
+            </div>
+
+            <div class="demo-container">
+                <!-- Live Demo -->
+                <div class="demo-live">
+                    <div class="dropdown">
+                        <button @click="toggle_dropdown" class="dropdown-toggle">
+                            <span>{{ selected_item }}</span>
+                            <span style="margin-left: 0.5rem;">{% if dropdown_open %}▲{% else %}▼{% endif %}</span>
+                        </button>
+                        {% if dropdown_open %}
+                        <div class="dropdown-menu">
+                            {% for item in dropdown_items %}
+                            <div @click="select_item" data-item="{{ item }}" class="dropdown-item">
+                                {{ item }}
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Code Section -->
+                <div class="demo-code-section">
+                    <div class="code-section-header" onclick="toggleCodeSection(this)">
+                        <div class="code-section-title">
+                            <span>💻</span>
+                            <span>View Code</span>
+                        </div>
+                        <div class="code-section-toggle">
+                            <span>Click to expand</span>
+                            <svg class="toggle-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="code-section-content">
+                        <div class="code-tabs">
+                            <button class="code-tab active" onclick="switchTab(this, 'dropdown-python')">Python</button>
+                            <button class="code-tab" onclick="switchTab(this, 'dropdown-html')">HTML</button>
+                        </div>
+                        <div id="dropdown-python" class="code-tab-content active">
+                            {{ dropdown_code_python|safe }}
+                        </div>
+                        <div id="dropdown-html" class="code-tab-content">
+                            {{ dropdown_code_html|safe }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-tags">
+                <span class="feature-tag">✓ Toggle open/close</span>
+                <span class="feature-tag">✓ Item selection</span>
+                <span class="feature-tag">✓ State persistence</span>
+            </div>
+        </section>
+
+        <!-- Debounce Demo -->
+        <section id="debounce" class="demo-section">
+            <div class="demo-section-header">
+                <h2 class="demo-section-title">
+                    <span>⏱️</span>
+                    <span>Debounce</span>
+                </h2>
+                <p class="demo-section-subtitle">
+                    Type rapidly - search waits until you stop typing (500ms delay).
+                </p>
+            </div>
+
+            <div class="demo-container">
+                <!-- Live Demo -->
+                <div class="demo-live">
+                    <div class="mb-4">
+                        <label class="form-label" style="color: var(--color-text); font-weight: 600;">Search Query</label>
+                        <input
+                            type="text"
+                            class="form-control form-control-lg"
+                            @input="debounce_search"
+                            placeholder="Type something..."
+                            value="{{ debounce_query }}"
+                            style="background: var(--color-bg); color: var(--color-text); border-color: var(--color-border);"
+                        >
+                        <small style="color: var(--color-text-muted);">Debounced: waits 500ms after typing stops</small>
+                    </div>
+
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <div style="background: var(--color-accent-muted); border: 2px solid var(--color-accent); border-radius: var(--radius-lg); padding: 1.5rem; text-align: center;">
+                                <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 0.5rem; font-weight: 600;">Current Query</div>
+                                <div style="font-size: 1.5rem; font-weight: 700; color: var(--color-text);">{{ debounce_query|default:"(empty)" }}</div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div style="background: rgba(16, 185, 129, 0.1); border: 2px solid rgb(16, 185, 129); border-radius: var(--radius-lg); padding: 1.5rem; text-align: center;">
+                                <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 0.5rem; font-weight: 600;">Server Calls</div>
+                                <div style="font-size: 1.5rem; font-weight: 700; color: rgb(16, 185, 129);">{{ debounce_count }}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Code Section -->
+                <div class="demo-code-section">
+                    <div class="code-section-header" onclick="toggleCodeSection(this)">
+                        <div class="code-section-title">
+                            <span>💻</span>
+                            <span>View Code</span>
+                        </div>
+                        <div class="code-section-toggle">
+                            <span>Click to expand</span>
+                            <svg class="toggle-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="code-section-content">
+                        <div class="code-tabs">
+                            <button class="code-tab active" onclick="switchTab(this, 'debounce-python')">Python</button>
+                            <button class="code-tab" onclick="switchTab(this, 'debounce-html')">HTML</button>
+                        </div>
+                        <div id="debounce-python" class="code-tab-content active">
+                            {{ debounce_code_python|safe }}
+                        </div>
+                        <div id="debounce-html" class="code-tab-content">
+                            {{ debounce_code_html|safe }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-tags">
+                <span class="feature-tag">⏱️ 500ms wait time</span>
+                <span class="feature-tag">⏰ 2s max wait</span>
+                <span class="feature-tag">📉 ~90% call reduction</span>
+            </div>
+        </section>
+
+        <!-- Cache Demo -->
+        <section id="cache" class="demo-section">
+            <div class="demo-section-header">
+                <h2 class="demo-section-title">
+                    <span>💾</span>
+                    <span>Cache</span>
+                </h2>
+                <p class="demo-section-subtitle">
+                    Search products with client-side caching (5min TTL). Repeat searches return instantly from cache.
+                </p>
+            </div>
+
+            <div class="demo-container">
+                <!-- Live Demo -->
+                <div class="demo-live">
+                    <div class="mb-4">
+                        <label class="form-label" style="color: var(--color-text); font-weight: 600;">Product Search</label>
+                        <input
+                            type="text"
+                            class="form-control form-control-lg"
+                            @input="cache_search"
+                            placeholder="Try: laptop, mouse, keyboard..."
+                            value="{{ cache_query }}"
+                            style="background: var(--color-bg); color: var(--color-text); border-color: var(--color-border);"
+                        >
+                        <small style="color: var(--color-text-muted);">Debounced (500ms) + Cached (5 min TTL)</small>
+                    </div>
+
+                    <div class="row g-3 mb-4">
+                        <div class="col-md-4">
+                            <div style="background: var(--color-accent-muted); border: 2px solid var(--color-accent); border-radius: var(--radius-lg); padding: 1.5rem; text-align: center;">
+                                <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 0.5rem; font-weight: 600;">Server Calls</div>
+                                <div style="font-size: 1.5rem; font-weight: 700; color: var(--color-accent);">{{ cache_server_calls }}</div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div style="background: rgba(16, 185, 129, 0.1); border: 2px solid rgb(16, 185, 129); border-radius: var(--radius-lg); padding: 1.5rem; text-align: center;">
+                                <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 0.5rem; font-weight: 600;">Cache Efficiency</div>
+                                <div style="font-size: 1.5rem; font-weight: 700; color: rgb(16, 185, 129);">{{ cache_efficiency }}%</div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div style="background: var(--color-bg); border: 2px solid var(--color-border); border-radius: var(--radius-lg); padding: 1.5rem; text-align: center;">
+                                <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 0.5rem; font-weight: 600;">Results</div>
+                                <div style="font-size: 1.5rem; font-weight: 700; color: var(--color-text);">{{ cache_results|length }}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Results -->
+                    {% if cache_results %}
+                    <div>
+                        <h6 style="color: var(--color-text); margin-bottom: 0.75rem;">Search Results ({{ cache_results|length }})</h6>
+                        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                            {% for product in cache_results %}
+                            <div style="background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 0.75rem 1rem; color: var(--color-text);">
+                                📦 {{ product }}
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- Code Section -->
+                <div class="demo-code-section">
+                    <div class="code-section-header" onclick="toggleCodeSection(this)">
+                        <div class="code-section-title">
+                            <span>💻</span>
+                            <span>View Code</span>
+                        </div>
+                        <div class="code-section-toggle">
+                            <span>Click to expand</span>
+                            <svg class="toggle-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="code-section-content">
+                        <div class="code-tabs">
+                            <button class="code-tab active" onclick="switchTab(this, 'cache-python')">Python</button>
+                            <button class="code-tab" onclick="switchTab(this, 'cache-html')">HTML</button>
+                        </div>
+                        <div id="cache-python" class="code-tab-content active">
+                            {{ cache_code_python|safe }}
+                        </div>
+                        <div id="cache-html" class="code-tab-content">
+                            {{ cache_code_html|safe }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-tags">
+                <span class="feature-tag">💾 5min TTL cache</span>
+                <span class="feature-tag">⚡ &lt;1ms cache hits</span>
+                <span class="feature-tag">📉 87% call reduction</span>
+            </div>
+        </section>
+
+        <!-- More Demos Section -->
+        <section style="margin-top: 4rem; padding: 2rem; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: var(--radius-lg);">
+            <h3 style="color: var(--color-text); margin-bottom: 1.5rem;">More Interactive Demos</h3>
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <a href="/demos/throttle/" style="text-decoration: none; color: var(--color-text);">
+                        <div style="padding: 1rem; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); transition: all 0.2s;" onmouseover="this.style.borderColor='var(--color-accent)'" onmouseout="this.style.borderColor='var(--color-border)'">
+                            <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">⏱️</div>
+                            <div style="font-weight: 600;">Throttle</div>
+                            <div style="font-size: 0.875rem; color: var(--color-text-muted);">Scroll event throttling</div>
+                        </div>
+                    </a>
+                </div>
+                <div class="col-md-4">
+                    <a href="/demos/todo/" style="text-decoration: none; color: var(--color-text);">
+                        <div style="padding: 1rem; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); transition: all 0.2s;" onmouseover="this.style.borderColor='var(--color-accent)'" onmouseout="this.style.borderColor='var(--color-border)'">
+                            <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">✅</div>
+                            <div style="font-weight: 600;">Todo List</div>
+                            <div style="font-size: 0.875rem; color: var(--color-text-muted);">Full CRUD operations</div>
+                        </div>
+                    </a>
+                </div>
+                <div class="col-md-4">
+                    <a href="/demos/chat/" style="text-decoration: none; color: var(--color-text);">
+                        <div style="padding: 1rem; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); transition: all 0.2s;" onmouseover="this.style.borderColor='var(--color-accent)'" onmouseout="this.style.borderColor='var(--color-border)'">
+                            <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">💬</div>
+                            <div style="font-weight: 600;">Live Chat</div>
+                            <div style="font-size: 0.875rem; color: var(--color-text-muted);">Real-time messaging</div>
+                        </div>
+                    </a>
+                </div>
+                <div class="col-md-4">
+                    <a href="/demos/react/" style="text-decoration: none; color: var(--color-text);">
+                        <div style="padding: 1rem; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); transition: all 0.2s;" onmouseover="this.style.borderColor='var(--color-accent)'" onmouseout="this.style.borderColor='var(--color-border)'">
+                            <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">⚛️</div>
+                            <div style="font-weight: 600;">React Integration</div>
+                            <div style="font-size: 0.875rem; color: var(--color-text-muted);">Hybrid server/client</div>
+                        </div>
+                    </a>
+                </div>
+                <div class="col-md-4">
+                    <a href="/demos/performance/" style="text-decoration: none; color: var(--color-text);">
+                        <div style="padding: 1rem; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); transition: all 0.2s;" onmouseover="this.style.borderColor='var(--color-accent)'" onmouseout="this.style.borderColor='var(--color-border)'">
+                            <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">⚡</div>
+                            <div style="font-weight: 600;">Performance Test</div>
+                            <div style="font-size: 0.875rem; color: var(--color-text-muted);">VDOM stress testing</div>
+                        </div>
+                    </a>
+                </div>
+                <div class="col-md-4">
+                    <a href="/demos/datatable/" style="text-decoration: none; color: var(--color-text);">
+                        <div style="padding: 1rem; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); transition: all 0.2s;" onmouseover="this.style.borderColor='var(--color-accent)'" onmouseout="this.style.borderColor='var(--color-border)'">
+                            <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">📊</div>
+                            <div style="font-weight: 600;">Product DataTable</div>
+                            <div style="font-size: 0.875rem; color: var(--color-text-muted);">Data visualization</div>
+                        </div>
+                    </a>
+                </div>
+                <div class="col-md-4">
+                    <a href="/demos/smart-dashboard/" style="text-decoration: none; color: var(--color-text);">
+                        <div style="padding: 1rem; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); transition: all 0.2s;" onmouseover="this.style.borderColor='var(--color-accent)'" onmouseout="this.style.borderColor='var(--color-border)'">
+                            <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">🏠</div>
+                            <div style="font-weight: 600;">Smart Dashboard</div>
+                            <div style="font-size: 0.875rem; color: var(--color-text-muted);">@client_state showcase</div>
+                        </div>
+                    </a>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Mobile Sidebar Toggle -->
+    <button class="sidebar-toggle" id="sidebar-toggle">
+        <svg style="width: 24px; height: 24px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+        </svg>
+    </button>
+</div>
+
+<script>
+    // Toggle Code Section (Expand/Collapse)
+    function toggleCodeSection(header) {
+        const content = header.nextElementSibling;
+        const icon = header.querySelector('.toggle-icon');
+        const toggleText = header.querySelector('.code-section-toggle span');
+
+        if (content.classList.contains('expanded')) {
+            content.classList.remove('expanded');
+            icon.classList.remove('expanded');
+            toggleText.textContent = 'Click to expand';
+        } else {
+            content.classList.add('expanded');
+            icon.classList.add('expanded');
+            toggleText.textContent = 'Click to collapse';
+        }
+    }
+
+    // Switch Code Tabs
+    function switchTab(button, tabId) {
+        // Get parent container
+        const tabsContainer = button.parentElement;
+        const contentContainer = tabsContainer.nextElementSibling;
+
+        // Remove active from all tabs
+        tabsContainer.querySelectorAll('.code-tab').forEach(tab => {
+            tab.classList.remove('active');
+        });
+
+        // Hide all content
+        let sibling = contentContainer;
+        while (sibling && sibling.classList.contains('code-tab-content')) {
+            sibling.classList.remove('active');
+            sibling = sibling.nextElementSibling;
+        }
+
+        // Activate clicked tab
+        button.classList.add('active');
+
+        // Show corresponding content
+        document.getElementById(tabId).classList.add('active');
+    }
+
+    // Sidebar Toggle (Mobile)
+    const sidebar = document.getElementById('docs-sidebar');
+    const sidebarToggle = document.getElementById('sidebar-toggle');
+
+    sidebarToggle.addEventListener('click', () => {
+        sidebar.classList.toggle('open');
+    });
+
+    // Close sidebar when clicking a link (mobile)
+    const navLinks = document.querySelectorAll('.docs-nav-link');
+    navLinks.forEach(link => {
+        link.addEventListener('click', () => {
+            if (window.innerWidth <= 1024) {
+                sidebar.classList.remove('open');
+            }
+        });
+    });
+
+    // Active Link Highlighting
+    const observerOptions = {
+        root: null,
+        rootMargin: '-100px 0px -60% 0px',
+        threshold: 0
+    };
+
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const id = entry.target.getAttribute('id');
+                navLinks.forEach(link => {
+                    link.classList.remove('active');
+                    if (link.getAttribute('href') === `#${id}`) {
+                        link.classList.add('active');
+                    }
+                });
+            }
+        });
+    }, observerOptions);
+
+    // Observe all demo sections
+    document.querySelectorAll('.demo-section').forEach(section => {
+        observer.observe(section);
+    });
+</script>
+{% endblock %}

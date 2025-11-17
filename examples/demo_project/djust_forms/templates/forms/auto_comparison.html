@@ -1,0 +1,177 @@
+{% extends 'base.html' %}
+
+{% block title %}Framework Comparison - djust{% endblock %}
+
+{% block nav_forms_active %}active{% endblock %}
+
+{% block extra_styles %}
+.framework-card {
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+.framework-card h3 {
+    margin-top: 0;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #007bff;
+}
+.badge-framework {
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+.bootstrap-badge { background: #7952b3; color: white; }
+.tailwind-badge { background: #38bdf8; color: white; }
+.plain-badge { background: #6c757d; color: white; }
+
+code {
+    background: #f4f4f4;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 13px;
+}
+{% endblock %}
+
+{% block content %}
+<div class="container mt-5 mb-5">
+    <div class="text-center mb-5">
+        <h1 class="display-4">Auto-Rendered Forms</h1>
+        <p class="lead">Compare different CSS framework adapters</p>
+    </div>
+
+    <!-- Bootstrap 5 -->
+    <div class="framework-card">
+        <h3>
+            <span class="badge-framework bootstrap-badge">Bootstrap 5</span>
+            Bootstrap 5 Framework
+        </h3>
+        <p class="text-muted">
+            Uses Bootstrap 5 utility classes: <code>form-control</code>, <code>form-label</code>, <code>is-invalid</code>, etc.
+            This is the default framework adapter.
+        </p>
+        <div class="row">
+            <div class="col-md-6">
+                <h6>Usage:</h6>
+                <pre class="bg-light p-2"><code>context['form_html'] = mark_safe(
+    self.as_live()  # Default
+)</code></pre>
+            </div>
+            <div class="col-md-6">
+                <h6>Features:</h6>
+                <ul class="small">
+                    <li>Modern, polished UI</li>
+                    <li>Built-in responsive design</li>
+                    <li>Extensive component library</li>
+                    <li>Well-documented</li>
+                </ul>
+            </div>
+        </div>
+        <a href="/forms/auto/" class="btn btn-primary btn-sm mt-2">Try Bootstrap Demo →</a>
+    </div>
+
+    <!-- Tailwind CSS -->
+    <div class="framework-card">
+        <h3>
+            <span class="badge-framework tailwind-badge">Tailwind CSS</span>
+            Tailwind CSS Framework
+        </h3>
+        <p class="text-muted">
+            Uses Tailwind utility classes: <code>block</code>, <code>text-sm</code>, <code>rounded-md</code>, <code>border-gray-300</code>, etc.
+            Utility-first approach for maximum customization.
+        </p>
+        <div class="row">
+            <div class="col-md-6">
+                <h6>Usage:</h6>
+                <pre class="bg-light p-2"><code>context['form_html'] = mark_safe(
+    self.as_live(framework='tailwind')
+)</code></pre>
+            </div>
+            <div class="col-md-6">
+                <h6>Features:</h6>
+                <ul class="small">
+                    <li>Utility-first CSS</li>
+                    <li>Highly customizable</li>
+                    <li>Small bundle size</li>
+                    <li>JIT compilation</li>
+                </ul>
+            </div>
+        </div>
+        <a href="/forms/auto/tailwind/" class="btn btn-info btn-sm mt-2 text-white">Try Tailwind Demo →</a>
+    </div>
+
+    <!-- Plain HTML -->
+    <div class="framework-card">
+        <h3>
+            <span class="badge-framework plain-badge">Plain HTML</span>
+            Plain HTML Framework
+        </h3>
+        <p class="text-muted">
+            Minimal styling with semantic HTML5. Perfect as a starting point for custom CSS or
+            when you want full control over styling.
+        </p>
+        <div class="row">
+            <div class="col-md-6">
+                <h6>Usage:</h6>
+                <pre class="bg-light p-2"><code>context['form_html'] = mark_safe(
+    self.as_live(framework='plain')
+)</code></pre>
+            </div>
+            <div class="col-md-6">
+                <h6>Features:</h6>
+                <ul class="small">
+                    <li>Semantic HTML5</li>
+                    <li>No framework dependencies</li>
+                    <li>Easy to customize</li>
+                    <li>Minimal CSS footprint</li>
+                </ul>
+            </div>
+        </div>
+        <a href="/forms/auto/plain/" class="btn btn-secondary btn-sm mt-2">Try Plain Demo →</a>
+    </div>
+
+    <!-- Code Example -->
+    <div class="framework-card mt-5">
+        <h3>How It Works</h3>
+        <p>Auto-rendering is simple - just call <code>as_live()</code> with your preferred framework:</p>
+
+        <h6 class="mt-4">View Code:</h6>
+        <pre class="bg-light p-3"><code>class MyFormView(FormMixin, LiveView):
+    form_class = MyDjangoForm
+    template_name = 'my_template.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        from django.utils.safestring import mark_safe
+
+        # Choose your framework:
+        context['form_html'] = mark_safe(self.as_live())  # Bootstrap (default)
+        # context['form_html'] = mark_safe(self.as_live(framework='tailwind'))
+        # context['form_html'] = mark_safe(self.as_live(framework='plain'))
+
+        return context</code></pre>
+
+        <h6 class="mt-4">Template Code:</h6>
+        <pre class="bg-light p-3"><code>&lt;form @submit="submit_form"&gt;
+    {% csrf_token %}
+    {{ form_html }}
+    &lt;button type="submit"&gt;Submit&lt;/button&gt;
+&lt;/form&gt;</code></pre>
+    </div>
+
+    <!-- Customization -->
+    <div class="framework-card">
+        <h3>Customization Options</h3>
+        <p>All framework adapters support these options:</p>
+        <pre class="bg-light p-3"><code>self.as_live(
+    framework='bootstrap',          # 'bootstrap', 'tailwind', or 'plain'
+    render_labels=True,             # Show field labels
+    render_help_text=True,          # Show help text
+    render_errors=True,             # Show error messages
+    auto_validate=True,             # Add @change validation
+    wrapper_class='custom-wrapper'  # Custom wrapper class
+)</code></pre>
+    </div>
+</div>
+{% endblock %}

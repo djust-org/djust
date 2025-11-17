@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block title %}Debounce Demo - djust{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block content %}
+<div data-liveview-root>
+    <!-- Hero Section -->
+    {{ hero|safe }}
+
+    <!-- Demo Section -->
+    <section class="section-modern" style="padding: 2rem 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+            <div class="row g-4">
+                <!-- Live Demo Card -->
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Live Demo</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Type rapidly - search waits until you stop typing
+                            </p>
+                        </div>
+                        <div class="p-6" style="background: var(--color-bg-elevated);">
+                            <!-- Search Input -->
+                            <div class="mb-4">
+                                <label class="form-label fw-bold" style="color: var(--color-text);">Search Query</label>
+                                <input
+                                    type="text"
+                                    class="form-control form-control-lg"
+                                    @input="search"
+                                    placeholder="Type something..."
+                                    value="{{ query }}"
+                                    style="background: var(--color-bg); color: var(--color-text); border-color: var(--color-border);"
+                                >
+                                <small style="color: var(--color-text-muted);">
+                                    Debounced: waits 500ms after typing stops (max wait: 2s)
+                                </small>
+                            </div>
+
+                            <!-- Stats -->
+                            <div class="row g-3 mb-4">
+                                <div class="col-md-4">
+                                    <div style="background: var(--color-accent-muted); border: 2px solid var(--color-accent); border-radius: var(--radius-lg); padding: 1.5rem;">
+                                        <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Current Query</div>
+                                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--color-text);">{{ query|default:"(empty)" }}</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div style="background: rgba(16, 185, 129, 0.1); border: 2px solid rgb(16, 185, 129); border-radius: var(--radius-lg); padding: 1.5rem;">
+                                        <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Server Calls</div>
+                                        <div style="font-size: 1.5rem; font-weight: 700; color: rgb(16, 185, 129);">{{ search_count }}</div>
+                                        <small style="color: var(--color-text-muted);">Should be low</small>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div style="background: var(--color-bg); border: 2px solid var(--color-border); border-radius: var(--radius-lg); padding: 1.5rem;">
+                                        <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Query Length</div>
+                                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--color-text);">{{ query|length }}</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Instructions -->
+                            <div style="background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: var(--radius-md); padding: 1rem;">
+                                <h5 style="color: var(--color-text); margin-bottom: 0.75rem;">How to test:</h5>
+                                <ol class="mb-0" style="color: var(--color-text-muted);">
+                                    <li>Open browser console and run: <code style="background: var(--color-bg); padding: 0.2rem 0.4rem; border-radius: 4px; color: var(--color-text);">window.djustDebug = true</code></li>
+                                    <li>Type rapidly in the search box</li>
+                                    <li>Watch the console - you'll see debounce logs</li>
+                                    <li>Notice "Server Calls" only increments when you stop typing</li>
+                                    <li>Try typing continuously for >2 seconds (max_wait will force execution)</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Implementation Code -->
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(16, 185, 129, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Implementation</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Full source code for this demo
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            {{ code|safe }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Features Section -->
+            <div class="row g-4 mt-4">
+                <div class="col-12">
+                    {{ features|safe }}
+                </div>
+            </div>
+
+            <!-- Back Button -->
+            {{ back_btn|safe }}
+        </div>
+    </section>
+</div>
+{% endblock %}

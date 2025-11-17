@@ -43,6 +43,15 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'channels',
     'djust',
+    # New organized apps
+    'djust_shared',      # Shared components and base classes
+    'djust_homepage',    # Landing page and navigation
+    'djust_demos',       # Feature demonstrations
+    'djust_forms',       # Forms demonstrations
+    'djust_tests',       # Test views
+    'djust_docs',        # Documentation views
+    'djust_rentals',     # Rental property management app
+    # Old app (will be phased out)
     'demo_app',
 ]
 
@@ -123,15 +132,20 @@ CHANNEL_LAYERS = {
 
 # LiveView WebSocket Security
 # List of module prefixes allowed for WebSocket view mounting
-LIVEVIEW_ALLOWED_MODULES = [
-    'demo_app.views',  # Allow all views in demo_app.views module
-]
-
 # LiveView Configuration
 LIVEVIEW_CONFIG = {
     'use_websocket': True,  # Use HTTP-only mode (disable WebSocket)
     'debug_vdom': False,  # Enable detailed VDOM patch logging
 }
+
+# Security: Whitelist allowed modules for LiveView
+# Only views from these modules can be mounted via WebSocket
+LIVEVIEW_ALLOWED_MODULES = [
+    'demo_app.views',
+    'djust_demos.views',
+    'djust_shared.views',
+    'djust_rentals.views',
+]
 
 # djust State Backend Configuration
 # Controls where LiveView session state is stored

@@ -20,8 +20,8 @@ async def test_cache():
         page.on("console", lambda msg: console_logs.append(msg.text))
 
         # Navigate to cache test page
-        print("📄 Loading cache test page: http://localhost:8002/demos/cache-test/")
-        await page.goto("http://localhost:8002/demos/cache-test/", wait_until="domcontentloaded")
+        print("📄 Loading cache test page: http://localhost:8002/tests/cache/")
+        await page.goto("http://localhost:8002/tests/cache/", wait_until="domcontentloaded")
 
         # Enable debug mode
         await page.evaluate("window.djustDebug = true")

@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Product DataTable Demo - djust</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Shared Theme System -->
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/utilities.css">
+
+    <!-- Tailwind for utility classes -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+
+    <style>
+        /* Override Bootstrap table CSS variables for dark mode */
+        .datatable-container .table {
+            --bs-table-color: var(--color-text);
+            --bs-table-bg: transparent;
+            --bs-table-border-color: var(--color-border);
+            --bs-table-striped-bg: transparent;
+            --bs-table-striped-color: var(--color-text);
+            --bs-table-hover-bg: var(--color-bg-elevated);
+            --bs-table-hover-color: var(--color-text);
+            --bs-table-active-bg: var(--color-bg-elevated);
+            --bs-table-active-color: var(--color-text);
+        }
+
+        .datatable-container {
+            background: transparent;
+            border: none;
+            border-radius: 0;
+            overflow: visible;
+        }
+        .datatable-filter {
+            padding: 1rem;
+            border-bottom: 1px solid var(--color-border);
+            background: transparent;
+            margin-bottom: 0;
+        }
+        .datatable-filter input {
+            background: var(--color-bg) !important;
+            border: 1px solid var(--color-border) !important;
+            color: var(--color-text) !important;
+            padding: 0.5rem 0.75rem !important;
+            border-radius: var(--radius-sm) !important;
+            width: 100%;
+        }
+        .datatable-filter input:focus {
+            outline: none !important;
+            border-color: var(--color-accent) !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+        }
+        .datatable-container .table-responsive {
+            border-top: 1px solid var(--color-border);
+            border-bottom: 1px solid var(--color-border);
+            background: transparent !important;
+        }
+        .datatable-container .table {
+            color: var(--color-text) !important;
+            margin: 0;
+            background: transparent;
+        }
+        .datatable-container .table thead {
+            background: var(--color-bg) !important;
+            border-bottom: 2px solid var(--color-border);
+        }
+        .datatable-container .table tbody {
+            background: transparent !important;
+        }
+        .datatable-container .table th {
+            border: none !important;
+            border-bottom: 2px solid var(--color-border) !important;
+            color: var(--color-text) !important;
+            font-weight: 600;
+            padding: 1rem 0.75rem !important;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            user-select: none;
+        }
+        .datatable-container .table th:hover {
+            background: var(--color-bg-elevated) !important;
+        }
+        .datatable-container .table td {
+            border: none !important;
+            border-bottom: 1px solid var(--color-border) !important;
+            color: var(--color-text) !important;
+            padding: 1rem 0.75rem !important;
+            vertical-align: middle;
+        }
+        .datatable-container .table-hover tbody tr {
+            transition: background-color var(--transition-fast);
+        }
+        .datatable-container .table-hover tbody tr:hover {
+            background: var(--color-bg-elevated) !important;
+        }
+        .datatable-container .table-striped tbody tr:nth-of-type(odd) {
+            background: transparent !important;
+        }
+        .datatable-container .table-striped tbody tr:nth-of-type(even) {
+            background: transparent !important;
+        }
+        .datatable-container .text-center {
+            color: var(--color-text-muted);
+            padding: 3rem 1rem !important;
+        }
+        .datatable-container .text-muted {
+            color: var(--color-text-muted) !important;
+        }
+        .datatable-pagination {
+            padding: 1rem;
+            border-top: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+            background: transparent !important;
+        }
+        .pagination-info {
+            color: var(--color-text-muted) !important;
+            font-size: 0.875rem;
+        }
+        .pagination-controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+        .pagination-controls .form-control,
+        .pagination-controls select {
+            background: var(--color-bg) !important;
+            border: 1px solid var(--color-border) !important;
+            color: var(--color-text) !important;
+            padding: 0.375rem 0.75rem !important;
+            border-radius: var(--radius-sm) !important;
+        }
+        .pagination-controls .form-control:focus,
+        .pagination-controls select:focus {
+            outline: none !important;
+            border-color: var(--color-accent) !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+        }
+        .pagination-controls select option {
+            background: var(--color-bg) !important;
+            color: var(--color-text) !important;
+        }
+        .datatable-container .pagination {
+            margin: 0;
+        }
+        .datatable-container .page-item {
+            background: transparent !important;
+        }
+        .datatable-container .page-link {
+            background: var(--color-bg) !important;
+            border-color: var(--color-border) !important;
+            color: var(--color-text) !important;
+        }
+        .datatable-container .page-link:hover {
+            background: var(--color-bg-elevated) !important;
+            border-color: var(--color-border-hover) !important;
+        }
+        .datatable-container .page-item.active .page-link {
+            background: var(--color-accent) !important;
+            border-color: var(--color-accent) !important;
+            color: white !important;
+        }
+        .datatable-container .page-item.disabled .page-link {
+            opacity: 0.5;
+        }
+        .price {
+            color: var(--color-success);
+            font-weight: 600;
+            font-size: 0.9375rem;
+        }
+        .stock {
+            padding: 0.375rem 0.75rem;
+            border-radius: var(--radius-md);
+            font-size: 0.8125rem;
+            font-weight: 600;
+            display: inline-block;
+            min-width: 60px;
+            text-align: center;
+        }
+        .stock.high {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--color-success);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+        .stock.medium {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--color-warning);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+        .stock.low {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--color-error);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+        .badge-success {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--color-success);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            padding: 0.375rem 0.75rem;
+            border-radius: var(--radius-md);
+            font-size: 0.8125rem;
+            font-weight: 600;
+            display: inline-block;
+        }
+        .badge-danger {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--color-error);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            padding: 0.375rem 0.75rem;
+            border-radius: var(--radius-md);
+            font-size: 0.8125rem;
+            font-weight: 600;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+    <div data-liveview-root>
+    <!-- Navbar Component -->
+    {{ navbar.render }}
+
+    <!-- Theme Toggle -->
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+        <svg class="theme-icon-dark" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+        <svg class="theme-icon-light" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="display: none;">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+    </button>
+
+    <!-- Hero Section -->
+    <section class="hero-section" style="padding: 4rem 0 2rem;">
+        <div class="container mx-auto px-4">
+            <div class="max-w-4xl mx-auto text-center">
+                <div class="flex items-center justify-center gap-3 mb-4">
+                    <div class="text-5xl">📊</div>
+                    <h1 class="hero-title" style="font-size: 2.5rem; margin-bottom: 0;">Product DataTable Demo</h1>
+                </div>
+                <p class="hero-subtitle">
+                    Hybrid LiveView + React DataTable with sorting, filtering, and pagination
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Demo Section -->
+    <section class="section-modern" style="padding: 2rem 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 1400px;">
+            <div class="row g-4">
+                <!-- Stats & Controls -->
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(16, 185, 129, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Live Stats</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Real-time product inventory statistics
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            <!-- Stats Grid -->
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                                <div class="text-center p-4" style="background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md);">
+                                    <div style="font-size: 2rem; font-weight: 800; color: var(--color-accent);" id="stat-total">{{ total_products }}</div>
+                                    <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-top: 0.25rem;">Total Products</div>
+                                </div>
+                                <div class="text-center p-4" style="background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md);">
+                                    <div style="font-size: 2rem; font-weight: 800; color: var(--color-success);" id="stat-active">{{ active_products }}</div>
+                                    <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-top: 0.25rem;">Active</div>
+                                </div>
+                                <div class="text-center p-4" style="background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md);">
+                                    <div style="font-size: 2rem; font-weight: 800; color: var(--color-accent);" id="stat-value">${{ total_value }}</div>
+                                    <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-top: 0.25rem;">Total Value</div>
+                                </div>
+                                <div class="text-center p-4" style="background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md);">
+                                    <div style="font-size: 2rem; font-weight: 800; color: var(--color-error);" id="stat-low-stock">{{ low_stock_count }}</div>
+                                    <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-top: 0.25rem;">Low Stock</div>
+                                </div>
+                            </div>
+
+                            <!-- Actions -->
+                            <div class="flex gap-2 flex-wrap">
+                                <button onclick="handleAction('add_sample_products')" class="btn-primary-modern">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                                    </svg>
+                                    <span>Add Sample Products</span>
+                                </button>
+                                <button onclick="handleAction('clear_products')" class="btn-secondary-modern" style="border-color: var(--color-error); color: var(--color-error);">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                    </svg>
+                                    <span>Clear All</span>
+                                </button>
+                                <button onclick="handleAction('toggle_inactive')" class="btn-secondary-modern">
+                                    <span>Toggle Inactive</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- React DataTable -->
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(139, 92, 246, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Product Inventory</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Interactive table with sorting, filtering, and pagination
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            <div id="react-datatable-root" data-liveview-ignore></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Implementation Code -->
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Implementation</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Hybrid LiveView + React DataTable integration
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            <!-- Python Code -->
+                            <div class="mb-4">
+                                <div class="code-header-modern">
+                                    <span>views.py</span>
+                                    <span class="code-badge-modern">Python</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from djust import LiveView
+from django.http import JsonResponse
+
+class ProductDataTableView(LiveView):
+    """
+    Hybrid LiveView + React DataTable
+    Server manages data, React handles UI
+    """
+    use_dom_patching = False  # Use JSON
+
+    def mount(self, request, **kwargs):
+        self.products = self._generate_sample_products(20)
+
+    def post(self, request, *args, **kwargs):
+        """Return JSON instead of patches"""
+        data = json.loads(request.body)
+        event = data.get('event')
+
+        # Call event handler
+        handler = getattr(self, event, None)
+        if handler:
+            handler(**data.get('params', {}))
+
+        # Return updated data
+        return JsonResponse({
+            'products': self.products,
+            'stats': self._get_stats()
+        })</code></pre>
+                                </div>
+                            </div>
+
+                            <!-- React Code -->
+                            <div>
+                                <div class="code-header-modern">
+                                    <span>DataTable.jsx</span>
+                                    <span class="code-badge-modern">React</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-javascript">function DataTable({ data, columns }) {
+  const [sortCol, setSortCol] = useState(null);
+  const [sortDir, setSortDir] = useState('asc');
+  const [filter, setFilter] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  // Sort data
+  const sortedData = useMemo(() => {
+    if (!sortCol) return data;
+    return [...data].sort((a, b) => {
+      const comparison = a[sortCol] < b[sortCol] ? -1 : 1;
+      return sortDir === 'asc' ? comparison : -comparison;
+    });
+  }, [data, sortCol, sortDir]);
+
+  // Filter data
+  const filteredData = useMemo(() => {
+    if (!filter) return sortedData;
+    return sortedData.filter(row =>
+      columns.some(col =>
+        String(row[col.key]).toLowerCase()
+          .includes(filter.toLowerCase())
+      )
+    );
+  }, [sortedData, filter]);
+
+  // Paginate
+  const paginatedData = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filteredData.slice(start, start + pageSize);
+  }, [filteredData, page, pageSize]);
+
+  return (...);
+}</code></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Features Section -->
+            <div class="row g-4 mt-4">
+                <div class="col-12">
+                    <div class="feature-card-modern p-4">
+                        <h3 class="text-lg font-bold mb-3" style="color: var(--color-text);">How It Works</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <div class="text-2xl mb-2">🗄️</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">Server Data Management</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    Python manages product data state and business logic
+                                </p>
+                            </div>
+                            <div>
+                                <div class="text-2xl mb-2">⚛️</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">React UI Components</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    React handles sorting, filtering, pagination on client-side
+                                </p>
+                            </div>
+                            <div>
+                                <div class="text-2xl mb-2">🔄</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">JSON API</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    Custom POST handler returns JSON instead of DOM patches
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Back Button -->
+            <div class="text-center mt-4">
+                <a href="/demos/" class="btn-secondary-modern">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                    </svg>
+                    <span>Back to Demos</span>
+                </a>
+            </div>
+        </div>
+    </section>
+    </div>
+
+    <!-- React and Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Initial data from server -->
+    <script>
+        window.INITIAL_PRODUCTS = {{ products_json|safe }};
+    </script>
+
+    <!-- DataTable Component -->
+    <script type="text/babel">
+        {% verbatim %}
+        const { useState, useEffect, useMemo } = React;
+
+        function DataTable({ data, columns, onEvent }) {
+            const [sortColumn, setSortColumn] = useState(null);
+            const [sortDirection, setSortDirection] = useState('asc');
+            const [filterText, setFilterText] = useState('');
+            const [currentPage, setCurrentPage] = useState(1);
+            const [pageSize, setPageSize] = useState(10);
+
+            // Sort
+            const sortedData = useMemo(() => {
+                if (!sortColumn) return data;
+                return [...data].sort((a, b) => {
+                    const aVal = a[sortColumn];
+                    const bVal = b[sortColumn];
+                    if (aVal === bVal) return 0;
+                    const comparison = aVal < bVal ? -1 : 1;
+                    return sortDirection === 'asc' ? comparison : -comparison;
+                });
+            }, [data, sortColumn, sortDirection]);
+
+            // Filter
+            const filteredData = useMemo(() => {
+                if (!filterText) return sortedData;
+                const lowerFilter = filterText.toLowerCase();
+                return sortedData.filter(row => {
+                    return columns.some(col => {
+                        const value = String(row[col.key] || '').toLowerCase();
+                        return value.includes(lowerFilter);
+                    });
+                });
+            }, [sortedData, filterText, columns]);
+
+            // Paginate
+            const paginatedData = useMemo(() => {
+                const start = (currentPage - 1) * pageSize;
+                return filteredData.slice(start, start + pageSize);
+            }, [filteredData, currentPage, pageSize]);
+
+            const totalPages = Math.ceil(filteredData.length / pageSize);
+
+            const handleSort = (columnKey) => {
+                if (sortColumn === columnKey) {
+                    setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+                } else {
+                    setSortColumn(columnKey);
+                    setSortDirection('asc');
+                }
+            };
+
+            const thStyle = { cursor: 'pointer', userSelect: 'none' };
+            const rowStyle = { cursor: 'pointer' };
+
+            return React.createElement('div', { className: 'datatable-container' },
+                // Filter section
+                React.createElement('div', { className: 'datatable-filter' },
+                    React.createElement('input', {
+                        type: 'text',
+                        className: 'form-control',
+                        placeholder: 'Search products...',
+                        value: filterText,
+                        onChange: (e) => {
+                            setFilterText(e.target.value);
+                            setCurrentPage(1);
+                        }
+                    })
+                ),
+
+                // Table
+                React.createElement('div', { className: 'table-responsive' },
+                    React.createElement('table', { className: 'table table-striped table-hover' },
+                        // Thead
+                        React.createElement('thead', null,
+                            React.createElement('tr', null,
+                                columns.map((col) =>
+                                    React.createElement('th', {
+                                        key: col.key,
+                                        onClick: () => handleSort(col.key),
+                                        style: thStyle
+                                    },
+                                        col.label,
+                                        sortColumn === col.key && (sortDirection === 'asc' ? ' ▲' : ' ▼')
+                                    )
+                                )
+                            )
+                        ),
+                        // Tbody
+                        React.createElement('tbody', null,
+                            paginatedData.length === 0
+                                ? React.createElement('tr', null,
+                                    React.createElement('td', {
+                                        colSpan: columns.length,
+                                        className: 'text-center text-muted'
+                                    }, 'No products found')
+                                  )
+                                : paginatedData.map((row, idx) =>
+                                    React.createElement('tr', { key: row.id || idx, style: rowStyle },
+                                        columns.map((col) =>
+                                            React.createElement('td', { key: col.key },
+                                                col.render ? col.render(row[col.key], row) : row[col.key]
+                                            )
+                                        )
+                                    )
+                                  )
+                        )
+                    )
+                ),
+
+                // Pagination
+                React.createElement('div', { className: 'datatable-pagination' },
+                    React.createElement('div', { className: 'pagination-info' },
+                        `Showing ${(currentPage - 1) * pageSize + 1} to ${Math.min(currentPage * pageSize, filteredData.length)} of ${filteredData.length} entries${filterText ? ` (filtered from ${data.length} total)` : ''}`
+                    ),
+                    React.createElement('div', { className: 'pagination-controls' },
+                        React.createElement('select', {
+                            className: 'form-control form-control-sm',
+                            value: pageSize,
+                            onChange: (e) => {
+                                setPageSize(Number(e.target.value));
+                                setCurrentPage(1);
+                            }
+                        },
+                            React.createElement('option', { value: '10' }, '10'),
+                            React.createElement('option', { value: '25' }, '25'),
+                            React.createElement('option', { value: '50' }, '50')
+                        ),
+                        React.createElement('nav', null,
+                            React.createElement('ul', { className: 'pagination pagination-sm mb-0' },
+                                React.createElement('li', { className: `page-item ${currentPage === 1 ? 'disabled' : ''}` },
+                                    React.createElement('button', {
+                                        className: 'page-link',
+                                        onClick: () => setCurrentPage(Math.max(1, currentPage - 1))
+                                    }, 'Previous')
+                                ),
+                                [...Array(Math.min(5, totalPages))].map((_, i) => {
+                                    let pageNum = i + 1;
+                                    if (totalPages > 5 && currentPage > 3) {
+                                        pageNum = currentPage - 2 + i;
+                                    }
+                                    if (pageNum > totalPages) return null;
+                                    return React.createElement('li', {
+                                        key: pageNum,
+                                        className: `page-item ${currentPage === pageNum ? 'active' : ''}`
+                                    },
+                                        React.createElement('button', {
+                                            className: 'page-link',
+                                            onClick: () => setCurrentPage(pageNum)
+                                        }, pageNum)
+                                    );
+                                }),
+                                React.createElement('li', { className: `page-item ${currentPage === totalPages ? 'disabled' : ''}` },
+                                    React.createElement('button', {
+                                        className: 'page-link',
+                                        onClick: () => setCurrentPage(Math.min(totalPages, currentPage + 1))
+                                    }, 'Next')
+                                )
+                            )
+                        )
+                    )
+                )
+            );
+        }
+
+        function LiveViewDataTable({ initialData }) {
+            const [data, setData] = useState(initialData || []);
+
+            useEffect(() => {
+                window.reactSetData = setData;
+            }, []);
+
+            const columns = [
+                { key: 'id', label: 'ID' },
+                { key: 'name', label: 'Product Name' },
+                { key: 'category', label: 'Category' },
+                {
+                    key: 'price',
+                    label: 'Price',
+                    render: (value) => React.createElement('span', { className: 'price' }, '$' + value)
+                },
+                {
+                    key: 'stock',
+                    label: 'Stock',
+                    render: (value) => {
+                        const className = value < 10 ? 'stock low' : value < 50 ? 'stock medium' : 'stock high';
+                        return React.createElement('span', { className: className }, value);
+                    }
+                },
+                {
+                    key: 'is_active',
+                    label: 'Status',
+                    render: (value) =>
+                        React.createElement('span', {
+                            className: value ? 'badge-success' : 'badge-danger'
+                        }, value ? 'Active' : 'Inactive')
+                }
+            ];
+
+            return React.createElement(DataTable, { data: data, columns: columns });
+        }
+
+        // Render function
+        function renderDataTable() {
+            const rootElement = document.getElementById('react-datatable-root');
+
+            if (!rootElement) {
+                console.error('[DataTable] Root element not found!');
+                return;
+            }
+
+            try {
+                // Try React 18 createRoot API
+                if (ReactDOM.createRoot) {
+                    const root = ReactDOM.createRoot(rootElement);
+                    const element = React.createElement(LiveViewDataTable, {
+                        initialData: window.INITIAL_PRODUCTS
+                    });
+                    root.render(element);
+                } else {
+                    // Fallback to legacy render
+                    ReactDOM.render(
+                        React.createElement(LiveViewDataTable, { initialData: window.INITIAL_PRODUCTS }),
+                        rootElement
+                    );
+                }
+            } catch (error) {
+                console.error('[DataTable] Render error:', error);
+            }
+        }
+
+        // Run immediately if DOM is ready, otherwise wait
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', renderDataTable);
+        } else {
+            renderDataTable();
+        }
+        {% endverbatim %}
+    </script>
+
+    <!-- Handle server actions -->
+    <script>
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                const cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+
+        async function handleAction(action) {
+            try {
+                const response = await fetch(window.location.href, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken'),
+                    },
+                    body: JSON.stringify({
+                        event: action,
+                        params: {}
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+
+                    // Update stats
+                    if (data.stats) {
+                        document.getElementById('stat-total').textContent = data.stats.total_products;
+                        document.getElementById('stat-active').textContent = data.stats.active_products;
+                        document.getElementById('stat-value').textContent = '$' + data.stats.total_value;
+                        document.getElementById('stat-low-stock').textContent = data.stats.low_stock_count;
+                    }
+
+                    // Update React table
+                    if (data.products && window.reactSetData) {
+                        window.reactSetData(data.products);
+                    }
+                }
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+    </script>
+
+    <!-- LiveView Client -->
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>hljs.highlightAll();</script>
+
+    <!-- Theme Switcher -->
+    <script src="/static/js/theme-switcher.js"></script>
+</body>
+</html>

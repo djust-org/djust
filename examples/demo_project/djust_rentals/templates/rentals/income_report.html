@@ -1,0 +1,12 @@
+{% extends "rentals/base.html" %}
+{% block title %}Income Report{% endblock %}
+{% block extra_head %}<script src="https://cdn.tailwindcss.com"></script><style>body{background:#020617;color:#f8fafc}.card{background:#0f172a;border:1px solid #1e293b;border-radius:.5rem;padding:1.5rem;margin-bottom:1.5rem}</style>{% endblock %}
+{% block content %}
+<div data-liveview-root class="min-h-screen bg-slate-950 py-6">
+  <div class="container mx-auto px-4 max-w-7xl">
+    <h1 class="text-3xl font-bold mb-6">💵 Income Report</h1>
+    <div class="card mb-6"><h2 class="text-xl font-semibold mb-4">Monthly Income Trend</h2><div class="space-y-2">{% for month in monthly_income %}<div class="flex justify-between items-center p-3 bg-slate-900 rounded"><p>{{month.month}}</p><p class="text-emerald-400 font-bold text-xl">${{month.total}}</p></div>{% endfor %}</div></div>
+    <div class="card"><h2 class="text-xl font-semibold mb-4">Recent Payments</h2><table class="w-full"><thead class="bg-slate-900"><tr><th class="p-3 text-left">Date</th><th class="p-3 text-left">Property</th><th class="p-3 text-left">Tenant</th><th class="p-3 text-left">Method</th><th class="p-3 text-left">Amount</th></tr></thead><tbody>{% for payment in recent_payments %}<tr class="border-t border-slate-800"><td class="p-3">{{payment.payment_date}}</td><td class="p-3">{{payment.lease.property.name}}</td><td class="p-3">{{payment.lease.tenant.user.get_full_name}}</td><td class="p-3 text-sm text-slate-400">{{payment.get_payment_method_display}}</td><td class="p-3 text-emerald-400 font-semibold">${{payment.amount}}</td></tr>{% endfor %}</tbody></table></div>
+  </div>
+</div>
+{% endblock %}

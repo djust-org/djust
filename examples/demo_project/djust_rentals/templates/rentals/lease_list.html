@@ -1,0 +1,12 @@
+{% extends "rentals/base.html" %}
+{% block title %}Leases{% endblock %}
+{% block extra_head %}<script src="https://cdn.tailwindcss.com"></script><style>body{background:#020617;color:#f8fafc}.card{background:#0f172a;border:1px solid #1e293b;border-radius:.5rem;padding:1.5rem}</style>{% endblock %}
+{% block content %}
+<div data-liveview-root class="min-h-screen bg-slate-950 py-6">
+  <div class="container mx-auto px-4 max-w-7xl">
+    <div class="flex justify-between mb-6"><h1 class="text-3xl font-bold">📄 Leases</h1><a href="{% url 'rentals:lease-add' %}" class="bg-blue-600 text-white px-4 py-2 rounded">+ New Lease</a></div>
+    <div class="card mb-6"><div class="flex gap-4"><select @change="filter_by_status" class="bg-slate-900 border border-slate-700 rounded px-4 py-2"><option value="all">All Statuses</option>{% for val,label in status_choices %}<option value="{{val}}" {% if filter_status == val %}selected{% endif %}>{{label}}</option>{% endfor %}</select></div></div>
+    <div class="card overflow-hidden"><table class="w-full"><thead class="bg-slate-900"><tr><th class="p-3 text-left">Property</th><th class="p-3 text-left">Tenant</th><th class="p-3 text-left">Dates</th><th class="p-3 text-left">Rent</th><th class="p-3 text-left">Status</th><th class="p-3 text-left">Actions</th></tr></thead><tbody>{% for data in lease_data %}<tr class="border-t border-slate-800 hover:bg-slate-900/50"><td class="p-3">{{data.lease.property.name}}</td><td class="p-3">{{data.lease.tenant.user.get_full_name}}</td><td class="p-3 text-sm">{{data.lease.start_date}} to {{data.lease.end_date}}{% if data.days_left %}<br><span class="text-slate-400">{{data.days_left}} days left</span>{% endif %}</td><td class="p-3 text-emerald-400 font-semibold">${{data.lease.monthly_rent}}</td><td class="p-3"><span class="px-2 py-1 rounded text-xs {% if data.lease.status == "active" %}bg-green-900/30 text-green-400{% else %}bg-slate-800 text-slate-400{% endif %}">{{data.lease.get_status_display}}</span></td><td class="p-3"><a href="{% url 'rentals:lease-detail' data.lease.pk %}" class="text-blue-400">View</a></td></tr>{% empty %}<tr><td colspan="6" class="p-8 text-center text-slate-400">No leases found.</td></tr>{% endfor %}</tbody></table></div>
+  </div>
+</div>
+{% endblock %}

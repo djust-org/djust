@@ -1,0 +1,31 @@
+{% extends "rentals/base.html" %}
+{% block title %}{% if is_edit %}Edit{% else %}Add{% endif %} Tenant{% endblock %}
+{% block extra_head %}<script src="https://cdn.tailwindcss.com"></script>
+<style>body{background:#020617;color:#f8fafc}.card{background:#0f172a;border:1px solid #1e293b;border-radius:.5rem;padding:1.5rem}.input{background:#1e293b;border:1px solid #334155;border-radius:.375rem;padding:.5rem .75rem;color:#f8fafc;width:100%}</style>
+{% endblock %}
+{% block content %}
+<div data-liveview-root class="min-h-screen bg-slate-950 py-6">
+  <div class="container mx-auto px-4 max-w-3xl">
+    <h1 class="text-3xl font-bold mb-6">{% if is_edit %}Edit Tenant{% else %}Add New Tenant{% endif %}</h1>
+    {% if success_message %}<div class="bg-green-900/20 border border-green-500 text-green-400 px-4 py-3 rounded mb-4">{{ success_message }}</div>{% endif %}
+    {% if error_message %}<div class="bg-red-900/20 border border-red-500 text-red-400 px-4 py-3 rounded mb-4">{{ error_message }}</div>{% endif %}
+    <form @submit="save_tenant" class="card space-y-4">
+      <div class="grid md:grid-cols-2 gap-4">
+        <div><label class="block text-sm text-slate-400 mb-2">First Name *</label><input type="text" name="first_name" class="input" value="{% if tenant %}{{ tenant.user.first_name }}{% endif %}" required></div>
+        <div><label class="block text-sm text-slate-400 mb-2">Last Name *</label><input type="text" name="last_name" class="input" value="{% if tenant %}{{ tenant.user.last_name }}{% endif %}" required></div>
+        <div><label class="block text-sm text-slate-400 mb-2">Email *</label><input type="email" name="email" class="input" value="{% if tenant %}{{ tenant.user.email }}{% endif %}" required {% if tenant %}readonly{% endif %}></div>
+        <div><label class="block text-sm text-slate-400 mb-2">Phone *</label><input type="tel" name="phone" class="input" value="{% if tenant %}{{ tenant.phone }}{% endif %}" required></div>
+        <div><label class="block text-sm text-slate-400 mb-2">Emergency Contact</label><input type="text" name="emergency_contact_name" class="input" value="{% if tenant %}{{ tenant.emergency_contact_name }}{% endif %}"></div>
+        <div><label class="block text-sm text-slate-400 mb-2">Emergency Phone</label><input type="tel" name="emergency_contact_phone" class="input" value="{% if tenant %}{{ tenant.emergency_contact_phone }}{% endif %}"></div>
+        <div><label class="block text-sm text-slate-400 mb-2">Employer</label><input type="text" name="employer" class="input" value="{% if tenant %}{{ tenant.employer }}{% endif %}"></div>
+        <div><label class="block text-sm text-slate-400 mb-2">Monthly Income</label><input type="number" name="monthly_income" class="input" value="{% if tenant %}{{ tenant.monthly_income }}{% endif %}"></div>
+        <div class="md:col-span-2"><label class="block text-sm text-slate-400 mb-2">Notes</label><textarea name="notes" class="input" rows="3">{% if tenant %}{{ tenant.notes }}{% endif %}</textarea></div>
+      </div>
+      <div class="flex gap-3 pt-4">
+        <button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded">Save Tenant</button>
+        <a href="{% url 'rentals:tenant-list' %}" class="bg-slate-700 text-white px-6 py-2 rounded">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Component Showcase - djust</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Shared Theme System -->
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/utilities.css">
+
+    <!-- Tailwind for utility classes -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+</head>
+<body>
+    <div data-liveview-root>
+    <!-- Navbar Component -->
+    {{ navbar_example.render }}
+
+    <!-- Theme Toggle -->
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+        <svg class="theme-icon-dark" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+        <svg class="theme-icon-light" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="display: none;">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+    </button>
+
+    <!-- Hero Section -->
+    <section class="hero-section">
+        <div class="container mx-auto px-4">
+            <div class="max-w-4xl mx-auto text-center">
+                <h1 class="hero-title fade-in-modern">
+                    Component <span class="hero-gradient-text">Library</span>
+                </h1>
+                <p class="hero-subtitle fade-in-modern">
+                    26 production-ready components with automatic Rust optimization.
+                    Build beautiful, interactive UIs with pure Python.
+                </p>
+
+                <!-- Stats Row -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 fade-in-modern">
+                    <div class="p-4 rounded-lg" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                        <div class="text-3xl font-bold" style="color: var(--color-accent);">26</div>
+                        <div class="text-sm" style="color: var(--color-text-muted);">Components</div>
+                    </div>
+                    <div class="p-4 rounded-lg" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                        <div class="text-3xl font-bold" style="color: var(--color-success);">13</div>
+                        <div class="text-sm" style="color: var(--color-text-muted);">Pure Rust</div>
+                    </div>
+                    <div class="p-4 rounded-lg" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                        <div class="text-3xl font-bold" style="color: var(--color-warning);">200+</div>
+                        <div class="text-sm" style="color: var(--color-text-muted);">Tests</div>
+                    </div>
+                    <div class="p-4 rounded-lg" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                        <div class="text-3xl font-bold" style="color: var(--color-accent);">6</div>
+                        <div class="text-sm" style="color: var(--color-text-muted);">Categories</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Components Section -->
+    <section class="section-modern" style="padding-top: 2rem;">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+
+            <!-- Interactive Demo Section -->
+            <div class="demo-card-modern mb-6 fade-in-modern">
+                <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.03);">
+                    <div class="flex items-center gap-3 mb-2">
+                        <div class="text-3xl">⚡</div>
+                        <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Interactive Demos</h3>
+                    </div>
+                    <p class="text-sm m-0" style="color: var(--color-text-muted);">
+                        Try these live examples to see djust's real-time reactivity in action.
+                    </p>
+                </div>
+                <div class="p-4" style="background: var(--color-bg-elevated);">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <!-- Counter Demo -->
+                        <div class="p-4 rounded-lg text-center" style="background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.2);">
+                            <h5 class="font-bold mb-3" style="color: var(--color-accent);">Counter</h5>
+                            <div class="text-4xl font-bold mb-3" style="color: var(--color-text);">{{ counter }}</div>
+                            <div class="flex gap-2 justify-center">
+                                <button class="btn btn-sm btn-primary" @click="decrement">-</button>
+                                <button class="btn btn-sm btn-primary" @click="increment">+</button>
+                            </div>
+                        </div>
+
+                        <!-- Switch Demo -->
+                        <div class="p-4 rounded-lg text-center" style="background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.2);">
+                            <h5 class="font-bold mb-3" style="color: var(--color-success);">Toggle Switch</h5>
+                            <div class="text-3xl mb-3">{% if switch_enabled %}✅{% else %}⭕{% endif %}</div>
+                            <button class="btn btn-sm btn-success" @click="toggle_switch">Toggle</button>
+                            <div class="mt-2 text-sm" style="color: var(--color-text-muted);">
+                                State: <strong>{% if switch_enabled %}ON{% else %}OFF{% endif %}</strong>
+                            </div>
+                        </div>
+
+                        <!-- String Length Demo -->
+                        <div class="p-4 rounded-lg text-center" style="background: rgba(139, 92, 246, 0.05); border: 1px solid rgba(139, 92, 246, 0.2);">
+                            <h5 class="font-bold mb-3" style="color: #a78bfa;">Live Updates</h5>
+                            <div class="text-4xl font-bold mb-3" style="color: var(--color-text);">{{ counter }}</div>
+                            <div class="text-sm" style="color: var(--color-text-muted);">
+                                Updates in real-time via WebSocket
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Display Components -->
+            <div class="mb-6 fade-in-modern">
+                <h2 class="section-title-modern mb-4">
+                    <span class="text-3xl mr-2">🎨</span> Display Components
+                </h2>
+                <div class="row g-4">
+                    <!-- Alert -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Alert</h5>
+                                    <span class="badge bg-success">Rust ~0.5μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Contextual feedback messages</p>
+                                {{ alert_success.render }}
+                                {{ alert_warning.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Alert("Success!", variant="success")</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Avatar -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Avatar</h5>
+                                    <span class="badge bg-success">Rust ~0.5μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">User profile images with status</p>
+                                <div class="flex gap-3">
+                                    {{ avatar_image.render }}
+                                    {{ avatar_initials.render }}
+                                </div>
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Avatar(src="...", status="online")</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Badge -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Badge</h5>
+                                    <span class="badge bg-success">Rust ~0.4μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Small labels and counts</p>
+                                <div class="flex gap-2">
+                                    {{ badge_primary.render }}
+                                    {{ badge_success.render }}
+                                    {{ badge_danger.render }}
+                                </div>
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Badge("New", variant="primary")</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Button -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Button</h5>
+                                    <span class="badge bg-success">Rust ~0.4μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Interactive buttons with variants</p>
+                                <div class="flex gap-2 flex-wrap">
+                                    {{ button_primary.render }}
+                                    {{ button_outline.render }}
+                                    {{ button_lg.render }}
+                                </div>
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Button("Click", variant="primary")</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Card -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Card</h5>
+                                    <span class="badge bg-success">Rust ~0.5μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Content containers</p>
+                                {{ card_simple.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Card(header="Title", body="...")</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Spinner -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Spinner</h5>
+                                    <span class="badge bg-success">Rust ~0.3μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Loading indicators</p>
+                                <div class="flex gap-3">
+                                    {{ spinner_border.render }}
+                                    {{ spinner_grow.render }}
+                                </div>
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Spinner(variant="primary")</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Progress -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Progress</h5>
+                                    <span class="badge bg-success">Rust ~0.5μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Progress bars</p>
+                                {{ progress_75.render }}
+                                <div class="mt-2"></div>
+                                {{ progress_animated.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Progress(value=75, show_label=True)</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tooltip -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Tooltip</h5>
+                                    <span class="badge bg-success">Rust ~0.4μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Contextual help text</p>
+                                {{ tooltip_example.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Tooltip("Hover", text="Help!")</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Toast -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Toast</h5>
+                                    <span class="badge bg-success">Rust ~0.7μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Notification messages</p>
+                                {{ toast_success.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Toast("Success", message="...")</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Divider -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Divider</h5>
+                                    <span class="badge bg-success">Rust ~1μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Section separators</p>
+                                {{ divider_simple.render }}
+                                {{ divider_text.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Divider(text="OR")</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Icon -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Icon</h5>
+                                    <span class="badge bg-success">Rust ~1μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Icon rendering</p>
+                                <div class="flex gap-3">
+                                    {{ icon_star.render }}
+                                    {{ icon_check.render }}
+                                </div>
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Icon(name="star-fill", library="bootstrap")</code></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Form Components -->
+            <div class="mb-6 fade-in-modern">
+                <h2 class="section-title-modern mb-4">
+                    <span class="text-3xl mr-2">📝</span> Form Components
+                </h2>
+                <div class="row g-4">
+                    <!-- Input -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Input</h5>
+                                    <span class="badge bg-info">Python ~50μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Text input fields</p>
+                                {{ input_text.render }}
+                                <div class="mt-2"></div>
+                                {{ input_email.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Input(name="email", type="email")</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Select -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Select</h5>
+                                    <span class="badge bg-info">Python ~50μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Dropdown selections</p>
+                                {{ select_country.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Select(name="country", options=[...])</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Checkbox -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Checkbox</h5>
+                                    <span class="badge bg-info">Python ~50μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Boolean selections</p>
+                                {{ checkbox_terms.render }}
+                                {{ checkbox_newsletter.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Checkbox(name="terms", label="I agree")</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TextArea -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">TextArea</h5>
+                                    <span class="badge bg-success">Rust ~1.1μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Multi-line text input</p>
+                                {{ textarea_bio.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>TextArea(name="bio", rows=4)</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Radio -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Radio</h5>
+                                    <span class="badge bg-info">Python ~50μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Single choice from options</p>
+                                {{ radio_size.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Radio(name="size", options=[...])</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Switch -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Switch</h5>
+                                    <span class="badge bg-success">Rust ~1μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Toggle switches</p>
+                                {{ switch_notifications.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Switch(name="notifications", checked=True)</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Range -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Range</h5>
+                                    <span class="badge bg-success">Rust ~1μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Slider inputs</p>
+                                {{ range_volume.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Range(name="volume", value=50, show_value=True)</code></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Container Components -->
+            <div class="mb-6 fade-in-modern">
+                <h2 class="section-title-modern mb-4">
+                    <span class="text-3xl mr-2">📦</span> Container Components
+                </h2>
+                <div class="row g-4">
+                    <!-- Modal -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Modal</h5>
+                                    <span class="badge bg-success">Rust ~0.5μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Dialog overlays</p>
+                                <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#exampleModal">
+                                    Open Modal
+                                </button>
+                                {{ modal_example.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Modal(title="...", body="...")</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tabs -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Tabs</h5>
+                                    <span class="badge bg-warning">Hybrid ~10μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Tabbed interfaces</p>
+                                {{ tabs_example.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Tabs(tabs=[{'title': '...', 'content': '...'}])</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Accordion -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Accordion</h5>
+                                    <span class="badge bg-info">Python ~50μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Collapsible sections</p>
+                                {{ accordion_example.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Accordion(items=[{'title': '...', 'content': '...'}])</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Offcanvas -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Offcanvas</h5>
+                                    <span class="badge bg-warning">Hybrid ~10μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Sidebar drawers</p>
+                                <button type="button" class="btn btn-primary" data-bs-toggle="offcanvas" data-bs-target="#offcanvasExample">
+                                    Open Offcanvas
+                                </button>
+                                {{ offcanvas_example.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Offcanvas(title="...", body="...")</code></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Navigation Components -->
+            <div class="mb-6 fade-in-modern">
+                <h2 class="section-title-modern mb-4">
+                    <span class="text-3xl mr-2">🧭</span> Navigation Components
+                </h2>
+                <div class="row g-4">
+                    <!-- Breadcrumb -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Breadcrumb</h5>
+                                    <span class="badge bg-info">Python ~50μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Navigation trail</p>
+                                {{ breadcrumb_example.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Breadcrumb(items=[{'label': '...', 'url': '...'}])</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Pagination -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Pagination</h5>
+                                    <span class="badge bg-info">Python ~50μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Page navigation</p>
+                                {{ pagination_example.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Pagination(current_page=5, total_pages=10)</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Dropdown -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Dropdown</h5>
+                                    <span class="badge bg-info">Python ~50μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Button menus</p>
+                                {{ dropdown_example.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Dropdown(label="Actions", items=[...])</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- NavBar -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">NavBar</h5>
+                                    <span class="badge bg-info">Python ~50μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Top navigation bars</p>
+                                <p class="text-sm" style="color: var(--color-text-muted);">See the navbar at the top of this page!</p>
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>NavBar(brand={'text': 'djust', 'url': '/'}, items=[...])</code></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Layout Components -->
+            <div class="mb-6 fade-in-modern">
+                <h2 class="section-title-modern mb-4">
+                    <span class="text-3xl mr-2">🏗️</span> Layout Components
+                </h2>
+                <div class="row g-4">
+                    <!-- ButtonGroup -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">ButtonGroup</h5>
+                                    <span class="badge bg-info">Python ~50μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Grouped buttons</p>
+                                {{ button_group_example.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>ButtonGroup(buttons=[{'label': '...', 'variant': '...'}])</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ListGroup -->
+                    <div class="col-md-6">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">ListGroup</h5>
+                                    <span class="badge bg-info">Python ~50μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Vertical lists</p>
+                                {{ list_group_example.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>ListGroup(items=[{'label': '...', 'url': '...'}])</code></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Data Components -->
+            <div class="mb-6 fade-in-modern">
+                <h2 class="section-title-modern mb-4">
+                    <span class="text-3xl mr-2">📊</span> Data Components
+                </h2>
+                <div class="row g-4">
+                    <!-- Table -->
+                    <div class="col-md-12">
+                        <div class="demo-card-modern">
+                            <div class="p-3 border-b" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                                <div class="flex items-center justify-between">
+                                    <h5 class="font-bold m-0" style="color: var(--color-text);">Table</h5>
+                                    <span class="badge bg-info">Python ~200μs</span>
+                                </div>
+                            </div>
+                            <div class="p-3" style="background: var(--color-bg);">
+                                <p class="text-sm mb-3" style="color: var(--color-text-muted);">Data tables with sorting and styling</p>
+                                {{ table_example.render }}
+                                <pre class="mt-2 p-2 rounded text-xs" style="background: rgba(0,0,0,0.05);"><code>Table(columns=[...], data=[...], striped=True, hover=True)</code></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    </div>
+
+    <!-- LiveView Client -->
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Theme Switcher -->
+    <script src="/static/js/theme-switcher.js"></script>
+
+    <!-- Initialize tooltips -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+            var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+                return new bootstrap.Tooltip(tooltipTriggerEl)
+            })
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{% extends "rentals/base.html" %}
+{% block title %}Expense Report{% endblock %}
+{% block extra_head %}<script src="https://cdn.tailwindcss.com"></script><style>body{background:#020617;color:#f8fafc}.card{background:#0f172a;border:1px solid #1e293b;border-radius:.5rem;padding:1.5rem;margin-bottom:1.5rem}</style>{% endblock %}
+{% block content %}
+<div data-liveview-root class="min-h-screen bg-slate-950 py-6">
+  <div class="container mx-auto px-4 max-w-7xl">
+    <h1 class="text-3xl font-bold mb-6">💸 Expense Report</h1>
+    <div class="card mb-6"><h2 class="text-xl font-semibold mb-4">Expenses by Category</h2><div class="grid grid-cols-2 md:grid-cols-3 gap-4">{% for cat in category_totals %}<div class="p-4 bg-slate-900 rounded text-center"><p class="text-sm text-slate-400">{{cat.category}}</p><p class="text-2xl font-bold text-red-400">${{cat.total}}</p></div>{% endfor %}</div></div>
+    <div class="card"><h2 class="text-xl font-semibold mb-4">Recent Expenses</h2><table class="w-full"><thead class="bg-slate-900"><tr><th class="p-3 text-left">Date</th><th class="p-3 text-left">Property</th><th class="p-3 text-left">Category</th><th class="p-3 text-left">Description</th><th class="p-3 text-left">Amount</th></tr></thead><tbody>{% for expense in recent_expenses %}<tr class="border-t border-slate-800"><td class="p-3">{{expense.date}}</td><td class="p-3">{{expense.property.name}}</td><td class="p-3 text-sm">{{expense.get_category_display}}</td><td class="p-3 text-sm text-slate-400">{{expense.description|truncatewords:5}}</td><td class="p-3 text-red-400 font-semibold">${{expense.amount}}</td></tr>{% endfor %}</tbody></table></div>
+  </div>
+</div>
+{% endblock %}

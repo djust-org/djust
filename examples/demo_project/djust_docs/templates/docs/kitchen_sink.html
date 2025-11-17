@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Component Kitchen Sink - djust</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Shared Theme System -->
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/utilities.css">
+
+    <!-- Tailwind for utility classes -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+
+    <style>
+        /* Bootstrap Component Dark Mode Overrides */
+
+        /* Force immediate browser repaint for modal - fixes cursor-dependent visibility bug */
+        @keyframes forceRepaint {
+            0% { transform: translate3d(0, 0, 0) scale(1); opacity: 1; }
+            100% { transform: translate3d(0, 0, 0) scale(1); opacity: 1; }
+        }
+
+        /* Modal - Force complete visibility when shown + GPU acceleration */
+        .modal {
+            z-index: 10000 !important;
+        }
+
+        /* Remove fade transitions completely - they interfere with rendering */
+        .modal.fade {
+            transition: none !important;
+        }
+
+        .modal.show {
+            animation: forceRepaint 0.01s linear forwards !important;
+        }
+
+        /* Aggressive visibility forcing + hardware acceleration */
+        .modal.show,
+        .modal.show.fade,
+        body .modal.show,
+        html body .modal.show {
+            display: block !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            overflow: hidden auto !important;
+            outline: 0 !important;
+            /* Force GPU acceleration and new compositing layer */
+            transform: translate3d(0, 0, 0) !important;
+            will-change: transform, opacity !important;
+            backface-visibility: visible !important;
+            perspective: 1000px !important;
+            /* Force compositor to create a layer immediately */
+            filter: brightness(1) !important;
+            isolation: isolate !important;
+        }
+
+        .modal-backdrop {
+            z-index: 9999 !important;
+            background-color: rgba(0, 0, 0, 0.5) !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            pointer-events: none !important; /* Don't block clicks */
+        }
+
+        .modal-backdrop.show {
+            opacity: 0.5 !important;
+            visibility: visible !important;
+        }
+
+        .modal-dialog {
+            position: relative !important;
+            margin: 1.75rem auto !important;
+            pointer-events: auto !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            z-index: 10001 !important; /* Higher than modal container */
+            transform: none !important;
+        }
+
+        .modal-content {
+            background-color: var(--color-bg-elevated) !important;
+            border-color: var(--color-border) !important;
+            color: var(--color-text) !important;
+            pointer-events: auto !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+        }
+
+        .modal-header {
+            background-color: var(--color-bg) !important;
+            border-bottom-color: var(--color-border) !important;
+        }
+        .modal-title {
+            color: var(--color-text) !important;
+        }
+        .modal-body {
+            color: var(--color-text) !important;
+        }
+        .modal-footer {
+            background-color: var(--color-bg) !important;
+            border-top-color: var(--color-border) !important;
+        }
+        .btn-close {
+            filter: invert(1) grayscale(100%) brightness(200%);
+        }
+
+        /* Dropdown */
+        .dropdown-menu {
+            background-color: var(--color-bg-elevated) !important;
+            border-color: var(--color-border) !important;
+        }
+        .dropdown-item {
+            color: var(--color-text) !important;
+        }
+        .dropdown-item:hover,
+        .dropdown-item:focus {
+            background-color: var(--color-bg) !important;
+            color: var(--color-text) !important;
+        }
+        .dropdown-divider {
+            border-top-color: var(--color-border) !important;
+        }
+
+        /* Cards */
+        .card {
+            background-color: var(--color-bg-elevated) !important;
+            border-color: var(--color-border) !important;
+            color: var(--color-text) !important;
+        }
+        .card-header {
+            background-color: var(--color-bg) !important;
+            border-bottom-color: var(--color-border) !important;
+            color: var(--color-text) !important;
+        }
+        .card-footer {
+            background-color: var(--color-bg) !important;
+            border-top-color: var(--color-border) !important;
+            color: var(--color-text-muted) !important;
+        }
+        .card-body {
+            color: var(--color-text) !important;
+        }
+        .card-title {
+            color: var(--color-text) !important;
+        }
+        .card-text {
+            color: var(--color-text) !important;
+        }
+
+        /* Alerts */
+        .alert {
+            border-color: var(--color-border) !important;
+        }
+        .alert-success {
+            background-color: rgba(16, 185, 129, 0.1) !important;
+            color: var(--color-success) !important;
+            border-color: rgba(16, 185, 129, 0.3) !important;
+        }
+        .alert-info {
+            background-color: rgba(59, 130, 246, 0.1) !important;
+            color: var(--color-accent) !important;
+            border-color: rgba(59, 130, 246, 0.3) !important;
+        }
+        .alert-warning {
+            background-color: rgba(245, 158, 11, 0.1) !important;
+            color: var(--color-warning) !important;
+            border-color: rgba(245, 158, 11, 0.3) !important;
+        }
+        .alert-danger {
+            background-color: rgba(239, 68, 68, 0.1) !important;
+            color: var(--color-error) !important;
+            border-color: rgba(239, 68, 68, 0.3) !important;
+        }
+
+        /* Progress Bars */
+        .progress {
+            background-color: var(--color-bg) !important;
+            border: 1px solid var(--color-border);
+        }
+
+        /* Tabs */
+        .nav-tabs {
+            border-bottom-color: var(--color-border) !important;
+        }
+        .nav-tabs .nav-link {
+            color: var(--color-text-muted) !important;
+            border-color: transparent !important;
+        }
+        .nav-tabs .nav-link:hover {
+            color: var(--color-text) !important;
+            border-color: var(--color-border) var(--color-border) transparent !important;
+        }
+        .nav-tabs .nav-link.active {
+            color: var(--color-text) !important;
+            background-color: var(--color-bg-elevated) !important;
+            border-color: var(--color-border) var(--color-border) transparent !important;
+        }
+        .tab-content {
+            background-color: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-top: none;
+            padding: 1rem;
+            color: var(--color-text);
+        }
+
+        /* Tables */
+        .table {
+            color: var(--color-text) !important;
+            border-color: var(--color-border) !important;
+        }
+        .table thead th {
+            background-color: var(--color-bg) !important;
+            color: var(--color-text) !important;
+            border-color: var(--color-border) !important;
+        }
+        .table tbody td {
+            border-color: var(--color-border) !important;
+            color: var(--color-text) !important;
+        }
+        .table-striped tbody tr:nth-of-type(odd) {
+            background-color: rgba(255, 255, 255, 0.02) !important;
+        }
+        .table-hover tbody tr:hover {
+            background-color: var(--color-bg) !important;
+        }
+
+        /* Pagination */
+        .pagination .page-link {
+            background-color: var(--color-bg) !important;
+            border-color: var(--color-border) !important;
+            color: var(--color-text) !important;
+        }
+        .pagination .page-link:hover {
+            background-color: var(--color-bg-elevated) !important;
+            border-color: var(--color-border-hover) !important;
+            color: var(--color-text) !important;
+        }
+        .pagination .page-item.active .page-link {
+            background-color: var(--color-accent) !important;
+            border-color: var(--color-accent) !important;
+            color: white !important;
+        }
+        .pagination .page-item.disabled .page-link {
+            background-color: var(--color-bg) !important;
+            border-color: var(--color-border) !important;
+            color: var(--color-text-muted) !important;
+        }
+
+        /* Badges */
+        .badge {
+            border: 1px solid transparent;
+        }
+
+        /* Spinners - ensure they're visible in dark mode */
+        .spinner-border,
+        .spinner-grow {
+            opacity: 1;
+        }
+
+        /* Component Demo Containers */
+        .component-demo {
+            background: var(--color-bg);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-md);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .demo-label {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--color-text-muted);
+            margin-bottom: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .component-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+        }
+        .badge-container {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .btn-interactive {
+            margin: 0.5rem 0.5rem 0.5rem 0;
+        }
+        :not(pre) > code {
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            color: var(--color-accent);
+        }
+        pre {
+            border-radius: var(--radius-md);
+            margin: 0;
+        }
+        .section-divider {
+            margin: 2rem 0;
+            border-top: 2px solid var(--color-border);
+        }
+    </style>
+</head>
+<body>
+    <div data-liveview-root>
+    <!-- Navbar Component -->
+    {{ navbar.render }}
+
+    <!-- Theme Toggle -->
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+        <svg class="theme-icon-dark" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+        <svg class="theme-icon-light" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="display: none;">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+    </button>
+
+    <!-- Hero Section -->
+    <section class="hero-section" style="padding: 4rem 0 2rem;">
+        <div class="container mx-auto px-4">
+            <div class="max-w-4xl mx-auto text-center">
+                <div class="flex items-center justify-center gap-3 mb-4">
+                    <div class="text-5xl">🎨</div>
+                    <h1 class="hero-title" style="font-size: 2.5rem; margin-bottom: 0;">Component Kitchen Sink</h1>
+                </div>
+                <p class="hero-subtitle">
+                    Explore all djust components with live, interactive examples. All components support Bootstrap 5, Tailwind CSS, and plain HTML rendering.
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Component Sections -->
+    <section class="section-modern" style="padding: 2rem 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 1400px;">
+
+            <!-- UI COMPONENTS -->
+            <div class="row g-4 mb-4">
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(139, 92, 246, 0.03);">
+                            <h2 class="text-2xl font-bold m-0" style="color: var(--color-text);">UI Components</h2>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Core interactive components for building modern user interfaces
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+
+                            <!-- Alerts -->
+                            <h3 class="text-lg font-bold mb-3" style="color: var(--color-text);">Alerts & Notifications</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Alert Components</div>
+                                {{ alert_success.render }}
+                                {{ alert_info.render }}
+                                {{ alert_warning.render }}
+                            </div>
+
+                            <!-- Buttons -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Buttons</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Button Variants</div>
+                                <div class="flex flex-wrap gap-2">
+                                    {{ button_primary.render }}
+                                    {{ button_secondary.render }}
+                                    {{ button_success.render }}
+                                    {{ button_danger.render }}
+                                </div>
+                            </div>
+
+                            <!-- Badges -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Badges</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Badge Styles</div>
+                                <div class="badge-container">
+                                    {{ badge_primary.render }}
+                                    {{ badge_success.render }}
+                                    {{ badge_warning.render }}
+                                    {{ badge_dismissible.render }}
+                                </div>
+                            </div>
+
+                            <!-- Dropdowns -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Dropdowns</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Dropdown Menus</div>
+                                <div class="flex flex-wrap gap-2">
+                                    {{ dropdown_actions.render }}
+                                    {{ dropdown_split.render }}
+                                </div>
+                            </div>
+
+                            <!-- Cards -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Cards</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Card Components</div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {{ card_basic.render }}
+                                    {{ card_with_footer.render }}
+                                </div>
+                            </div>
+
+                            <!-- Modal -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Modals</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Modal Dialogs</div>
+                                <button @click="show_modal" class="btn-primary-modern">
+                                    <span>Show Modal</span>
+                                </button>
+                                {{ modal_example.render }}
+                            </div>
+
+                            <!-- Progress Bars -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Progress Bars</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Progress Indicators</div>
+                                <div class="space-y-3">
+                                    {{ progress_simple.render }}
+                                    {{ progress_striped.render }}
+                                    {{ progress_custom.render }}
+                                </div>
+                                <div class="flex gap-2 mt-3">
+                                    <button @click="increment_progress" class="btn-primary-modern">
+                                        <span>Increment</span>
+                                    </button>
+                                    <button @click="reset_progress" class="btn-secondary-modern">
+                                        <span>Reset</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Spinners -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Spinners</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Loading Spinners</div>
+                                <div class="flex gap-4 items-center">
+                                    {{ spinner_border.render }}
+                                    {{ spinner_grow.render }}
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LAYOUT COMPONENTS -->
+            <div class="row g-4 mb-4">
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(16, 185, 129, 0.03);">
+                            <h2 class="text-2xl font-bold m-0" style="color: var(--color-text);">Layout Components</h2>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Components for organizing and structuring your application layout
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+
+                            <!-- Tabs -->
+                            <h3 class="text-lg font-bold mb-3" style="color: var(--color-text);">Tabs</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Tab Navigation</div>
+                                {{ tabs_example.render }}
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- DATA COMPONENTS -->
+            <div class="row g-4 mb-4">
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.03);">
+                            <h2 class="text-2xl font-bold m-0" style="color: var(--color-text);">Data Components</h2>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Components for displaying and manipulating data tables and lists
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+
+                            <!-- Tables -->
+                            <h3 class="text-lg font-bold mb-3" style="color: var(--color-text);">Tables</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Data Tables (Sortable, Striped, Hoverable)</div>
+                                {{ table_users.render }}
+                            </div>
+
+                            <!-- Pagination -->
+                            <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Pagination</h3>
+                            <div class="component-demo">
+                                <div class="demo-label">Page Navigation</div>
+                                {{ pagination_basic.render }}
+                                <div class="mt-3"></div>
+                                {{ pagination_large.render }}
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- USAGE EXAMPLES -->
+            <div class="row g-4 mb-4">
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(245, 158, 11, 0.03);">
+                            <h2 class="text-2xl font-bold m-0" style="color: var(--color-text);">Usage Examples</h2>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Complete code examples showing how to use djust components
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+
+                            <!-- Basic Counter Example -->
+                            <div class="mb-4">
+                                <div class="code-header-modern">
+                                    <span>Basic Counter Example</span>
+                                    <span class="code-badge-modern">Python</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from djust import LiveView
+
+class CounterView(LiveView):
+    template_name = "counter.html"
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    def increment(self):
+        self.count += 1
+
+    def decrement(self):
+        self.count -= 1</code></pre>
+                                </div>
+                            </div>
+
+                            <!-- Template Example -->
+                            <div class="mb-4">
+                                <div class="code-header-modern">
+                                    <span>Template with Event Handlers</span>
+                                    <span class="code-badge-modern">HTML</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-html">&lt;div data-liveview-root&gt;
+  &lt;h1&gt;Count: &#123;&#123; count &#125;&#125;&lt;/h1&gt;
+  &lt;button @click="increment"&gt;+&lt;/button&gt;
+  &lt;button @click="decrement"&gt;-&lt;/button&gt;
+&lt;/div&gt;
+
+&lt;script src="/static/djust/client.js"&gt;&lt;/script&gt;</code></pre>
+                                </div>
+                            </div>
+
+                            <!-- Form Validation -->
+                            <div class="mb-4">
+                                <div class="code-header-modern">
+                                    <span>Real-time Form Validation</span>
+                                    <span class="code-badge-modern">Python</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from djust import LiveView
+
+class FormView(LiveView):
+    template_name = "form.html"
+
+    def mount(self, request, **kwargs):
+        self.email = ""
+        self.error = ""
+
+    def validate_email(self, value=""):
+        self.email = value
+        if "@" not in value:
+            self.error = "Invalid email"
+        else:
+            self.error = ""</code></pre>
+                                </div>
+                            </div>
+
+                            <!-- URL Configuration -->
+                            <div>
+                                <div class="code-header-modern">
+                                    <span>URL Configuration</span>
+                                    <span class="code-badge-modern">Python</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from django.urls import path
+from .views import CounterView
+
+urlpatterns = [
+    path('counter/', CounterView.as_view(), name='counter'),
+]</code></pre>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Features Section -->
+            <div class="row g-4 mt-4">
+                <div class="col-12">
+                    <div class="feature-card-modern p-4">
+                        <h3 class="text-lg font-bold mb-3" style="color: var(--color-text);">Component Features</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <div class="text-2xl mb-2">🎨</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">Style-Independent</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    Works with Bootstrap 5, Tailwind CSS, or plain HTML/CSS
+                                </p>
+                            </div>
+                            <div>
+                                <div class="text-2xl mb-2">⚡</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">Server-Rendered</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    All components rendered server-side using Rust for maximum performance
+                                </p>
+                            </div>
+                            <div>
+                                <div class="text-2xl mb-2">🔄</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">Real-time Updates</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    Instant reactivity via WebSocket with minimal DOM updates
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Back Button -->
+            <div class="text-center mt-4">
+                <a href="/" class="btn-secondary-modern">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                    </svg>
+                    <span>Back to Home</span>
+                </a>
+            </div>
+
+        </div>
+    </section>
+    </div>
+
+    <!-- LiveView Client -->
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>
+        // Highlight code blocks
+        hljs.highlightAll();
+
+        // Re-highlight after LiveView updates (for dynamic content)
+        if (window.MutationObserver) {
+            const observer = new MutationObserver(() => {
+                document.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
+                    hljs.highlightElement(block);
+                });
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+        }
+
+        // Fix modal visibility issue - ensure modals are always visible when shown
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Kitchen Sink: Setting up modal visibility fixes');
+
+            // Flag to prevent infinite loops in MutationObserver
+            let isForcing = false;
+
+            // Force immediate display of any modal with 'show' class
+            function forceModalVisible(modal) {
+                // Prevent re-entry
+                if (isForcing) return;
+
+                console.log('Forcing modal visible:', modal);
+                isForcing = true;
+
+                // Use requestAnimationFrame to ensure browser paints in next frame
+                requestAnimationFrame(function() {
+                    // Remove fade class to eliminate animation interference
+                    modal.classList.remove('fade');
+
+                    // Set all visibility properties + GPU acceleration
+                    modal.style.display = 'block';
+                    modal.style.visibility = 'visible';
+                    modal.style.opacity = '1';
+                    modal.style.zIndex = '10000';
+                    modal.style.pointerEvents = 'auto';
+                    modal.style.transform = 'translate3d(0, 0, 0)';
+                    modal.style.willChange = 'transform, opacity';
+                    modal.style.backfaceVisibility = 'visible';
+
+                    // Force reflow
+                    void modal.offsetHeight;
+
+                    // Double RAF to ensure compositor has processed
+                    requestAnimationFrame(function() {
+                        modal.style.opacity = '1';
+                        void modal.offsetHeight;
+
+                        // Also ensure backdrop is visible
+                        const backdrop = document.querySelector('.modal-backdrop');
+                        if (backdrop) {
+                            console.log('Forcing backdrop visible');
+                            backdrop.classList.remove('fade');
+                            backdrop.style.display = 'block';
+                            backdrop.style.visibility = 'visible';
+                            backdrop.style.opacity = '0.5';
+                            backdrop.style.transform = 'translate3d(0, 0, 0)';
+                            void backdrop.offsetHeight;
+                        }
+
+                        // Reset flag after a short delay
+                        setTimeout(function() {
+                            isForcing = false;
+                        }, 50);
+                    });
+                });
+            }
+
+            // Watch for modal show events
+            const modals = document.querySelectorAll('.modal');
+            console.log('Found', modals.length, 'modals');
+
+            modals.forEach(function(modal) {
+                modal.addEventListener('show.bs.modal', function(e) {
+                    console.log('show.bs.modal event fired', e);
+                    forceModalVisible(this);
+                });
+
+                modal.addEventListener('shown.bs.modal', function(e) {
+                    console.log('shown.bs.modal event fired', e);
+                    forceModalVisible(this);
+                });
+            });
+
+            // Watch for DOM mutations - LiveView updates (only for new nodes)
+            const bodyObserver = new MutationObserver(function(mutations) {
+                mutations.forEach(function(mutation) {
+                    // Only check newly added nodes, not attribute changes
+                    mutation.addedNodes.forEach(function(node) {
+                        if (node.classList && node.classList.contains('modal')) {
+                            console.log('MutationObserver detected new modal node');
+                            if (node.classList.contains('show')) {
+                                forceModalVisible(node);
+                            }
+                        }
+                    });
+                });
+            });
+            bodyObserver.observe(document.body, {
+                childList: true,
+                subtree: true
+                // Removed: attributes and attributeFilter to prevent loop
+            });
+
+            // Poll every 200ms to check for modals with 'show' class
+            setInterval(function() {
+                if (isForcing) return; // Skip if already forcing
+
+                const modals = document.querySelectorAll('.modal.show');
+                if (modals.length > 0) {
+                    modals.forEach(function(modal) {
+                        // Only force if not already visible
+                        const isVisible = modal.style.display === 'block' &&
+                                        modal.style.visibility === 'visible' &&
+                                        modal.style.opacity === '1';
+                        if (!isVisible) {
+                            console.log('Poll detected invisible modal with show class');
+                            forceModalVisible(modal);
+                        }
+                    });
+                }
+            }, 200);
+        });
+    </script>
+
+    <!-- Theme Switcher -->
+    <script src="/static/js/theme-switcher.js"></script>
+</body>
+</html>

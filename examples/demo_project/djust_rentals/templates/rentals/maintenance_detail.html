@@ -1,0 +1,12 @@
+{% extends "rentals/base.html" %}
+{% block title %}Maintenance Request{% endblock %}
+{% block extra_head %}<script src="https://cdn.tailwindcss.com"></script><style>body{background:#020617;color:#f8fafc}.card{background:#0f172a;border:1px solid #1e293b;border-radius:.5rem;padding:1.5rem;margin-bottom:1.5rem}</style>{% endblock %}
+{% block content %}
+<div data-liveview-root class="min-h-screen bg-slate-950 py-6">
+  <div class="container mx-auto px-4 max-w-6xl">
+    {% if error_message %}<div class="bg-red-900/20 border border-red-500 text-red-400 px-4 py-3 rounded mb-6">{{error_message}}</div>{% else %}
+    <div class="flex justify-between mb-6"><div><h1 class="text-3xl font-bold">{{request.title}}</h1><p class="text-slate-400">{{request.property.name}}</p></div><a href="{% url 'rentals:maintenance-update' request.pk %}" class="bg-blue-600 text-white px-4 py-2 rounded">Update Status</a></div>
+    <div class="grid md:grid-cols-3 gap-6"><div class="md:col-span-2 space-y-6"><div class="card"><h2 class="text-xl font-semibold mb-4">Request Details</h2><div class="space-y-3"><div><p class="text-sm text-slate-400">Description</p><p>{{request.description}}</p></div><div class="grid grid-cols-2 gap-4"><div><p class="text-sm text-slate-400">Priority</p><p><span class="px-2 py-1 rounded text-xs {% if request.priority == "urgent" %}bg-red-900/30 text-red-400{% elif request.priority == "high" %}bg-orange-900/30 text-orange-400{% else %}bg-yellow-900/30 text-yellow-400{% endif %}">{{request.get_priority_display}}</span></p></div><div><p class="text-sm text-slate-400">Status</p><p>{{request.get_status_display}}</p></div><div><p class="text-sm text-slate-400">Created</p><p>{{request.created_at|date:"M d, Y"}}</p></div><div><p class="text-sm text-slate-400">Days Open</p><p>{{days_open}} days</p></div></div></div></div></div><div><div class="card"><h3 class="font-semibold mb-4">Cost</h3><div class="space-y-3"><div><p class="text-sm text-slate-400">Estimated</p><p class="text-xl">{% if request.estimated_cost %} ${{request.estimated_cost}}{% else %}TBD{% endif %}</p></div><div><p class="text-sm text-slate-400">Actual</p><p class="text-xl">{% if request.actual_cost %}${{request.actual_cost}}{% else %}TBD{% endif %}</p></div></div></div></div></div>{% endif %}
+  </div>
+</div>
+{% endblock %}

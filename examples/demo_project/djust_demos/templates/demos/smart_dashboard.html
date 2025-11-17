@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Dashboard Demo - djust</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Shared Theme System -->
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/utilities.css">
+
+    <!-- Tailwind for utility classes -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+
+    <style>
+        .dashboard-panel {
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-md);
+            padding: 1.5rem;
+            height: 100%;
+        }
+        .dashboard-panel h3 {
+            color: var(--color-text);
+            margin: 0 0 1rem 0;
+            font-size: 1.125rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .climate-display {
+            font-size: 3rem;
+            font-weight: 800;
+            color: var(--color-accent);
+            text-align: center;
+            margin: 1rem 0;
+        }
+        .device-card {
+            background: var(--color-bg);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-sm);
+            padding: 0.75rem;
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            transition: all 0.2s;
+        }
+        .device-card:hover {
+            border-color: var(--color-accent);
+        }
+        .device-icon {
+            font-size: 2rem;
+        }
+        .device-info {
+            flex: 1;
+        }
+        .device-name {
+            color: var(--color-text);
+            font-weight: 500;
+            margin: 0;
+        }
+        .device-room {
+            color: var(--color-text-muted);
+            font-size: 0.875rem;
+        }
+        .stat-card {
+            background: var(--color-bg);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-sm);
+            padding: 1rem;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--color-accent);
+        }
+        .stat-label {
+            color: var(--color-text-muted);
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+        }
+        .slider-container {
+            margin: 1.5rem 0;
+        }
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+        }
+        .slider-label span:first-child {
+            color: var(--color-text);
+            font-weight: 500;
+        }
+        .slider-label span:last-child {
+            color: var(--color-accent);
+            font-weight: 700;
+        }
+        .range-slider {
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: var(--color-border);
+            outline: none;
+            -webkit-appearance: none;
+        }
+        .range-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: var(--color-accent);
+            cursor: pointer;
+        }
+        .range-slider::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: var(--color-accent);
+            cursor: pointer;
+            border: none;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .status-active {
+            background: rgba(34, 197, 94, 0.1);
+            color: rgb(34, 197, 94);
+        }
+        .status-offline {
+            background: rgba(239, 68, 68, 0.1);
+            color: rgb(239, 68, 68);
+        }
+    </style>
+</head>
+<body>
+    <div data-liveview-root>
+    <!-- Navbar Component -->
+    {{ navbar.render }}
+
+    <!-- Theme Toggle -->
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+        <svg class="theme-icon-dark" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+        <svg class="theme-icon-light" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="display: none;">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+    </button>
+
+    <!-- Hero Section -->
+    <section class="hero-section" style="padding: 4rem 0 2rem;">
+        <div class="container mx-auto px-4">
+            <div class="max-w-4xl mx-auto text-center">
+                <div class="flex items-center justify-center gap-3 mb-4">
+                    <div class="text-5xl">🏠</div>
+                    <h1 class="hero-title" style="font-size: 2.5rem; margin-bottom: 0;">Smart IoT Dashboard</h1>
+                </div>
+                <p class="hero-subtitle">
+                    4 coordinated panels powered by @client_state + StateBus (NO JAVASCRIPT!)
+                </p>
+                <div class="mt-3" style="color: var(--color-text-muted);">
+                    Demonstrates: @client_state • @optimistic • @throttle • @debounce • @cache
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Dashboard Section -->
+    <section class="section-modern" style="padding: 2rem 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 1400px;">
+            <!-- 4-Panel Grid -->
+            <div class="row g-4">
+                <!-- Panel 1: Climate Controls -->
+                <div class="col-lg-6">
+                    <div class="dashboard-panel">
+                        <h3>
+                            <span>🌡️</span>
+                            <span>Climate Controls</span>
+                        </h3>
+                        <p style="color: var(--color-text-muted); font-size: 0.875rem; margin-bottom: 0.5rem;">
+                            Drag sliders to adjust climate settings. Uses @optimistic + @throttle + @client_state for real-time updates.
+                        </p>
+                        <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-sm); padding: 0.75rem; margin-bottom: 1.5rem;">
+                            <div style="color: var(--color-text); font-size: 0.875rem;">
+                                <strong>🔒 Try Server Validation:</strong> Drag sliders to extremes (temp < 65°F or > 80°F, humidity < 30% or > 70%).
+                                Watch @optimistic show your value instantly, then auto-revert when server rejects it!
+                            </div>
+                        </div>
+
+                        <!-- Temperature Slider -->
+                        <div class="slider-container">
+                            <div class="slider-label">
+                                <span>Temperature</span>
+                                <span data-subscribe="temperature">{{ temperature }}°F</span>
+                            </div>
+                            <input
+                                type="range"
+                                class="range-slider"
+                                name="temperature"
+                                min="60"
+                                max="85"
+                                step="0.1"
+                                value="{{ temperature }}"
+                                @input="set_temperature"
+                            />
+                        </div>
+
+                        <!-- Humidity Slider -->
+                        <div class="slider-container">
+                            <div class="slider-label">
+                                <span>Humidity</span>
+                                <span data-subscribe="humidity">{{ humidity }}%</span>
+                            </div>
+                            <input
+                                type="range"
+                                class="range-slider"
+                                name="humidity"
+                                min="20"
+                                max="80"
+                                step="0.1"
+                                value="{{ humidity }}"
+                                @input="set_humidity"
+                            />
+                        </div>
+
+                        <!-- Simulated Sensor Updates -->
+                        <div class="mt-4 pt-3" style="border-top: 1px solid var(--color-border);">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <div style="color: var(--color-text); font-weight: 500;">Simulated Sensor Updates</div>
+                                    <div style="color: var(--color-text-muted); font-size: 0.875rem;">Uses @throttle for real-time simulation (2s interval)</div>
+                                </div>
+                                <button
+                                    @click="simulate_sensor"
+                                    class="btn-secondary-modern"
+                                    style="padding: 0.5rem 1rem;"
+                                >
+                                    Simulate Update
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Panel 2: Temperature Chart -->
+                <div class="col-lg-6">
+                    <div class="dashboard-panel">
+                        <h3>
+                            <span>📊</span>
+                            <span>Climate Display</span>
+                        </h3>
+                        <p style="color: var(--color-text-muted); font-size: 0.875rem; margin-bottom: 1.5rem;">
+                            Real-time display updates automatically via StateBus when controls change.
+                        </p>
+
+                        <div class="row g-3">
+                            <div class="col-6">
+                                <div class="stat-card">
+                                    <div class="text-3xl mb-2">🌡️</div>
+                                    <div class="stat-value" data-subscribe="temperature">{{ temperature }}°F</div>
+                                    <div class="stat-label">Actual Temp</div>
+                                    <div style="color: var(--color-accent); font-size: 0.875rem; margin-top: 0.25rem;">{{ temperature_celsius }}°C (Server Calc)</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="stat-card">
+                                    <div class="text-3xl mb-2">💧</div>
+                                    <div class="stat-value" data-subscribe="humidity">{{ humidity }}%</div>
+                                    <div class="stat-label">Humidity</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="stat-card" style="background: rgba(255, 152, 0, 0.05);">
+                                    <div class="text-3xl mb-2">🔥</div>
+                                    <div class="stat-value" style="color: #ff9800;">{{ heat_index }}°F</div>
+                                    <div class="stat-label">Feels Like (Server Calc)</div>
+                                    <div style="color: #ff9800; font-size: 0.875rem; margin-top: 0.25rem;">{{ heat_index_celsius }}°C</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="stat-card" style="background: rgba(76, 175, 80, 0.05);">
+                                    <div class="text-3xl mb-2">😊</div>
+                                    <div class="stat-value" style="color: #4caf50; font-size: 1.5rem;">{{ comfort_level }}</div>
+                                    <div class="stat-label">Comfort (Server Calc)</div>
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <div class="stat-card" style="background: rgba(33, 150, 243, 0.05);">
+                                    <div class="text-3xl mb-2">💰</div>
+                                    <div class="stat-value" style="color: #2196f3;">${{ energy_cost }}/hr</div>
+                                    <div class="stat-label">Estimated Cost (Server Calc)</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mt-4 p-3" style="background: rgba(99, 179, 237, 0.1); border-radius: var(--radius-sm);">
+                            <div style="color: var(--color-text); font-size: 0.875rem;">
+                                <strong>💡 How it works:</strong> When you adjust sliders, the server calculates Heat Index, Comfort Level, and Energy Cost in real-time.
+                                These computed values are broadcast via @client_state and this panel updates instantly via StateBus!
+                            </div>
+                        </div>
+                        <div class="mt-3 p-3" style="background: rgba(156, 39, 176, 0.1); border-radius: var(--radius-sm);">
+                            <div style="color: var(--color-text); font-size: 0.875rem;">
+                                <strong>🖥️ Server Calculations:</strong>
+                                <ul style="margin: 0.5rem 0 0 0; padding-left: 1.5rem;">
+                                    <li><strong>Celsius Conversion:</strong> (F - 32) × 5/9 computed server-side</li>
+                                    <li><strong>Heat Index:</strong> Complex formula using temp + humidity (try 80°F + 70% humidity!)</li>
+                                    <li><strong>Comfort:</strong> Business logic based on optimal ranges</li>
+                                    <li><strong>Energy Cost:</strong> Each degree from 72°F changes cost</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Panel 3: Device Management -->
+                <div class="col-lg-6">
+                    <div class="dashboard-panel">
+                        <h3>
+                            <span>💡</span>
+                            <span>Smart Devices</span>
+                        </h3>
+                        <p style="color: var(--color-text-muted); font-size: 0.875rem; margin-bottom: 1rem;">
+                            Toggle devices with @optimistic for instant UI updates. Filter updates via @debounce + @client_state.
+                        </p>
+
+                        <!-- Filter -->
+                        <div class="mb-3">
+                            <select
+                                class="form-select"
+                                name="filter"
+                                @change="update_filter"
+                                style="background: var(--color-bg); border: 1px solid var(--color-border); color: var(--color-text);"
+                            >
+                                <option value="all" {% if filter == "all" %}selected{% endif %}>All Devices</option>
+                                <option value="active" {% if filter == "active" %}selected{% endif %}>Active Only</option>
+                                <option value="offline" {% if filter == "offline" %}selected{% endif %}>Offline Only</option>
+                            </select>
+                        </div>
+
+                        <!-- Device List -->
+                        <div style="max-height: 400px; overflow-y: auto;" data-subscribe="devices">
+                            {% for device in filtered_devices %}
+                            <div class="device-card">
+                                <div class="device-icon">{{ device.icon }}</div>
+                                <div class="device-info">
+                                    <div class="device-name">{{ device.name }}</div>
+                                    <div class="device-room">{{ device.room }}</div>
+                                </div>
+                                <span class="status-badge {% if device.active %}status-active{% else %}status-offline{% endif %}">
+                                    {% if device.active %}Active{% else %}Offline{% endif %}
+                                </span>
+                                <input
+                                    type="checkbox"
+                                    class="form-check-input"
+                                    style="width: 20px; height: 20px; cursor: pointer;"
+                                    {% if device.active %}checked{% endif %}
+                                    @change="toggle_device"
+                                    data-device-id="{{ device.id }}"
+                                />
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Panel 4: Statistics -->
+                <div class="col-lg-6">
+                    <div class="dashboard-panel">
+                        <h3>
+                            <span>📈</span>
+                            <span>System Statistics</span>
+                        </h3>
+                        <p style="color: var(--color-text-muted); font-size: 0.875rem; margin-bottom: 1.5rem;">
+                            Stats update automatically when devices toggle or filter changes (via StateBus).
+                        </p>
+
+                        <div class="row g-3" data-subscribe="devices">
+                            <div class="col-12">
+                                <div class="stat-card" style="padding: 1.5rem;">
+                                    <div class="text-4xl mb-2">🏠</div>
+                                    <div class="stat-value">{{ total_count }}</div>
+                                    <div class="stat-label">Total Devices</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="stat-card">
+                                    <div class="text-3xl mb-2">✅</div>
+                                    <div class="stat-value" style="color: rgb(34, 197, 94);">{{ active_count }}</div>
+                                    <div class="stat-label">Active</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="stat-card">
+                                    <div class="text-3xl mb-2">❌</div>
+                                    <div class="stat-value" style="color: rgb(239, 68, 68);">{{ offline_count }}</div>
+                                    <div class="stat-label">Offline</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mt-4 p-3" style="background: rgba(34, 197, 94, 0.1); border-radius: var(--radius-sm);">
+                            <div style="color: var(--color-text); font-size: 0.875rem;">
+                                <strong>⚡ Performance:</strong> All 4 panels coordinate in real-time with zero manual JavaScript. Toggle a device to see instant updates across both Device List and Stats panels!
+                            </div>
+                        </div>
+
+                        <div class="mt-3 p-3" style="background: rgba(99, 179, 237, 0.1); border-radius: var(--radius-sm);">
+                            <div style="color: var(--color-text); font-size: 0.875rem;">
+                                <strong>🎯 Try this:</strong> Filter to "Active Only" and toggle a device off. Watch the device disappear from the list AND stats update - all coordinated via @client_state!
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Implementation Code -->
+            <div class="row g-4 mt-4">
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(99, 179, 237, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Implementation</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Complete source code - notice how little code is needed for complex coordination!
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            <!-- Python Code -->
+                            <div class="mb-4">
+                                <div class="code-header-modern">
+                                    <span>views/smart_dashboard.py</span>
+                                    <span class="code-badge-modern">Python</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from djust import LiveView
+from djust.decorators import client_state, optimistic, debounce, throttle
+
+class SmartDashboardView(LiveView):
+    template_name = 'demos/smart_dashboard.html'
+
+    def mount(self, request, **kwargs):
+        self.temperature = 72
+        self.humidity = 45
+        self.devices = self._init_devices()
+
+    @client_state(keys=["temperature"])
+    @debounce(wait=0.5)
+    def set_temperature(self, temperature: int = 72, **kwargs):
+        """
+        Publishes to StateBus → All subscribed panels update!
+        """
+        self.temperature = max(60, min(85, int(temperature)))
+
+    @client_state(keys=["devices"])
+    @optimistic
+    def toggle_device(self, device_id: int = None, **kwargs):
+        """
+        Instant UI update + server validation
+        """
+        device = next((d for d in self.devices
+                      if d['id'] == int(device_id)), None)
+        if device:
+            device['active'] = not device['active']</code></pre>
+                                </div>
+                            </div>
+
+                            <!-- Template Code -->
+                            <div>
+                                <div class="code-header-modern">
+                                    <span>smart_dashboard.html</span>
+                                    <span class="code-badge-modern">HTML</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-html">&lt;!-- Climate Controls Panel --&gt;
+&lt;input type="range" min="60" max="85"
+       @input="set_temperature"
+       value="&#123;&#123; temperature &#125;&#125;" /&gt;
+
+&lt;!-- Chart Panel (auto-updates via StateBus) --&gt;
+&lt;div class="stat-value" data-subscribe="temperature"&gt;
+  &#123;&#123; temperature &#125;&#125;°F
+&lt;/div&gt;
+
+&lt;!-- Device Panel --&gt;
+&lt;input type="checkbox" @change="toggle_device"
+       data-device-id="&#123;&#123; device.id &#125;&#125;" /&gt;
+
+&lt;!-- Stats Panel (auto-updates when devices change) --&gt;
+&lt;div data-subscribe="devices"&gt;
+  Active: &#123;&#123; active_count &#125;&#125;
+&lt;/div&gt;</code></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Features Section -->
+            <div class="row g-4 mt-4">
+                <div class="col-12">
+                    <div class="feature-card-modern p-4">
+                        <h3 class="text-lg font-bold mb-3" style="color: var(--color-text);">State Management Magic ✨</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <div class="text-2xl mb-2">🔄</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">@client_state</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    Publishes state updates to StateBus. All panels with data-subscribe auto-update. Zero manual JavaScript!
+                                </p>
+                            </div>
+                            <div>
+                                <div class="text-2xl mb-2">⚡</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">@optimistic</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    Device toggles update UI instantly, server validates in background. Best UX + data integrity.
+                                </p>
+                            </div>
+                            <div>
+                                <div class="text-2xl mb-2">⏱️</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">@debounce + @throttle</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    Smooth slider UX with debouncing. Throttled sensor simulation for real-time feel without overwhelming server.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Back Button -->
+            <div class="text-center mt-4">
+                <a href="/demos/" class="btn-secondary-modern">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                    </svg>
+                    <span>Back to Demos</span>
+                </a>
+            </div>
+        </div>
+    </section>
+    </div>
+
+    <!-- LiveView Client -->
+    <script src="/static/djust/client.js?v=4"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>hljs.highlightAll();</script>
+
+    <!-- Theme Switcher -->
+    <script src="/static/js/theme-switcher.js"></script>
+</body>
+</html>

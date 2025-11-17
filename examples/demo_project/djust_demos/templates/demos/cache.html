@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block title %}Cache Demo - djust{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block content %}
+<div data-liveview-root>
+    <!-- Hero Section -->
+    {{ hero|safe }}
+
+    <!-- Demo Section -->
+    <section class="section-modern" style="padding: 2rem 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+            <div class="row g-4">
+                <!-- Live Demo Card -->
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Live Demo</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Search products - repeat searches are cached client-side for 5 minutes
+                            </p>
+                        </div>
+                        <div class="p-6" style="background: var(--color-bg-elevated);">
+                            <!-- Search Input -->
+                            <div class="mb-4">
+                                <label class="form-label fw-bold" style="color: var(--color-text);">Product Search</label>
+                                <input
+                                    type="text"
+                                    class="form-control form-control-lg"
+                                    @input="search"
+                                    placeholder="Try: laptop, mouse, keyboard..."
+                                    value="{{ query }}"
+                                    autocomplete="off"
+                                    style="background: var(--color-bg); color: var(--color-text); border-color: var(--color-border);"
+                                >
+                                <small style="color: var(--color-text-muted);">
+                                    Debounced (500ms) + Cached (5 min TTL)
+                                </small>
+                            </div>
+
+                            <!-- Stats -->
+                            <div class="row g-3 mb-4">
+                                <div class="col-md-3">
+                                    <div style="background: var(--color-accent-muted); border: 2px solid var(--color-accent); border-radius: var(--radius-lg); padding: 1.5rem;">
+                                        <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Server Calls</div>
+                                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--color-accent);">{{ server_calls }}</div>
+                                        <small style="color: var(--color-text-muted);">DB queries</small>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div style="background: rgba(16, 185, 129, 0.1); border: 2px solid rgb(16, 185, 129); border-radius: var(--radius-lg); padding: 1.5rem;">
+                                        <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Cache Efficiency</div>
+                                        <div style="font-size: 1.5rem; font-weight: 700; color: rgb(16, 185, 129);">{{ cache_efficiency }}%</div>
+                                        <small style="color: var(--color-text-muted);">Saved requests</small>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div style="background: var(--color-bg); border: 2px solid var(--color-border); border-radius: var(--radius-lg); padding: 1.5rem;">
+                                        <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Results</div>
+                                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--color-text);">{{ results|length }}</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div style="background: var(--color-bg); border: 2px solid var(--color-border); border-radius: var(--radius-lg); padding: 1.5rem;">
+                                        <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Last Query</div>
+                                        <div style="font-size: 1.25rem; font-weight: 700; color: var(--color-text);">{{ query|default:"(none)" }}</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Results -->
+                            {% if results %}
+                            <div class="mb-4">
+                                <h5 style="color: var(--color-text); margin-bottom: 0.75rem;">Search Results ({{ results|length }})</h5>
+                                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                    {% for product in results %}
+                                    <div style="background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 0.75rem 1rem; color: var(--color-text);">
+                                        📦 {{ product }}
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            {% elif query %}
+                            <div style="background: rgba(234, 179, 8, 0.1); border: 1px solid rgba(234, 179, 8, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
+                                <p style="color: var(--color-text); margin: 0;">
+                                    No products found for "{{ query }}"
+                                </p>
+                            </div>
+                            {% endif %}
+
+                            <!-- Instructions -->
+                            <div style="background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: var(--radius-md); padding: 1rem;">
+                                <h5 style="color: var(--color-text); margin-bottom: 0.75rem;">How to test caching:</h5>
+                                <ol style="color: var(--color-text-muted); margin-bottom: 0;">
+                                    <li>Open browser console and run: <code style="background: var(--color-bg); padding: 0.2rem 0.4rem; border-radius: 4px; color: var(--color-text);">window.djustDebug = true</code></li>
+                                    <li>Search for "laptop" - notice "Server Calls" increments</li>
+                                    <li>Clear the search and search for "laptop" again</li>
+                                    <li>Watch console - you'll see <code style="background: var(--color-bg); padding: 0.2rem 0.4rem; border-radius: 4px; color: var(--color-text);">[ResponseCache] Cache hit</code></li>
+                                    <li>Notice "Server Calls" does NOT increment (cache hit!)</li>
+                                    <li>Try different searches: "mouse", "keyboard", then repeat</li>
+                                    <li>Watch "Cache Efficiency" improve with repeat searches</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Implementation Code -->
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(16, 185, 129, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Implementation</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Full source code for this demo
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            {{ code|safe }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Features Section -->
+            <div class="row g-4 mt-4">
+                <div class="col-12">
+                    {{ features|safe }}
+                </div>
+            </div>
+
+            <!-- Back Button -->
+            {{ back_btn|safe }}
+        </div>
+    </section>
+</div>
+{% endblock %}

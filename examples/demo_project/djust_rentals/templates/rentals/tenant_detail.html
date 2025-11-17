@@ -1,0 +1,30 @@
+{% extends "rentals/base.html" %}
+{% block title %}{{ tenant.user.get_full_name }}{% endblock %}
+{% block extra_head %}<script src="https://cdn.tailwindcss.com"></script>
+<style>body{background:#020617;color:#f8fafc}.card{background:#0f172a;border:1px solid #1e293b;border-radius:.5rem;padding:1.5rem;margin-bottom:1.5rem}</style>
+{% endblock %}
+{% block content %}
+<div data-liveview-root class="min-h-screen bg-slate-950 py-6">
+  <div class="container mx-auto px-4 max-w-6xl">
+    {% if error_message %}<div class="bg-red-900/20 border border-red-500 text-red-400 px-4 py-3 rounded mb-6">{{ error_message }}</div>
+    {% else %}
+    <div class="flex justify-between mb-6">
+      <div><h1 class="text-3xl font-bold">{{ tenant.user.get_full_name }}</h1><p class="text-slate-400">{{ tenant.user.email }}</p></div>
+      <a href="{% url 'rentals:tenant-edit' tenant.pk %}" class="bg-blue-600 text-white px-4 py-2 rounded">Edit</a>
+    </div>
+    <div class="grid md:grid-cols-3 gap-6">
+      <div class="md:col-span-2 space-y-6">
+        <div class="card"><h2 class="text-xl font-semibold mb-4">Contact Information</h2>
+          <div class="grid grid-cols-2 gap-4"><div><p class="text-sm text-slate-400">Email</p><p>{{ tenant.user.email }}</p></div><div><p class="text-sm text-slate-400">Phone</p><p>{{ tenant.phone }}</p></div><div><p class="text-sm text-slate-400">Emergency Contact</p><p>{{ tenant.emergency_contact_name }}</p></div><div><p class="text-sm text-slate-400">Emergency Phone</p><p>{{ tenant.emergency_contact_phone }}</p></div></div>
+        </div>
+        {% if current_lease %}<div class="card"><h2 class="text-xl font-semibold mb-4">Current Lease</h2><p class="font-medium mb-2">{{ current_property.name }}</p><p class="text-sm text-slate-400">{{ current_lease.start_date }} - {{ current_lease.end_date }}</p><p class="text-emerald-400 font-bold mt-2">${{ current_lease.monthly_rent }}/month</p></div>{% endif %}
+        <div class="card"><h2 class="text-xl font-semibold mb-4">Payment History</h2>
+          {% for payment in payment_history|slice:":10" %}<div class="flex justify-between py-2 border-b border-slate-800"><div><p>{{ payment.payment_date }}</p><p class="text-sm text-slate-400">{{ payment.get_payment_method_display }}</p></div><p class="text-emerald-400 font-semibold">${{ payment.amount }}</p></div>{% endfor %}
+        </div>
+      </div>
+      <div><div class="card"><h3 class="font-semibold mb-4">Statistics</h3><div class="space-y-3"><div><p class="text-sm text-slate-400">Total Paid</p><p class="text-2xl font-bold text-emerald-400">${{ total_paid }}</p></div><div><p class="text-sm text-slate-400">Payments</p><p class="text-xl font-semibold">{{ payment_count }}</p></div></div></div></div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

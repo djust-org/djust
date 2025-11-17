@@ -1,0 +1,57 @@
+{% extends "rentals/base.html" %}
+{% block title %}Delete Property{% endblock %}
+{% block extra_head %}
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background-color: #020617; color: #f8fafc; }
+  .card { background-color: #0f172a; border: 1px solid #1e293b; border-radius: 0.5rem; padding: 2rem; }
+</style>
+{% endblock %}
+{% block content %}
+<div data-liveview-root class="min-h-screen bg-slate-950 py-12">
+  <div class="container mx-auto px-4 max-w-2xl">
+    {% if deleted %}
+    <div class="card text-center">
+      <h1 class="text-2xl font-bold text-green-400 mb-4">✓ Property Deleted</h1>
+      <p class="text-slate-300 mb-6">The property has been successfully deleted.</p>
+      <a href="{% url 'rentals:property-list' %}" class="inline-block bg-blue-600 text-white px-6 py-2 rounded">Back to Properties</a>
+    </div>
+    {% elif error_message %}
+    <div class="card">
+      <h1 class="text-2xl font-bold text-red-400 mb-4">Error</h1>
+      <p class="text-red-300 mb-6">{{ error_message }}</p>
+      <a href="{% url 'rentals:property-list' %}" class="inline-block bg-slate-700 text-white px-6 py-2 rounded">Back to Properties</a>
+    </div>
+    {% else %}
+    <div class="card">
+      <h1 class="text-2xl font-bold text-red-400 mb-4">⚠️ Delete Property</h1>
+      <p class="text-lg mb-4">Are you sure you want to delete <strong>{{ property.name }}</strong>?</p>
+      <p class="text-slate-400 mb-6">This action cannot be undone.</p>
+
+      {% if has_active_lease %}
+      <div class="bg-red-900/20 border border-red-500 text-red-400 px-4 py-3 rounded mb-6">
+        <strong>Warning:</strong> This property has an active lease. Please terminate the lease first.
+      </div>
+      {% endif %}
+
+      <div class="bg-slate-900 rounded p-4 mb-6">
+        <p class="text-sm text-slate-400 mb-2">This will also delete:</p>
+        <ul class="text-sm text-slate-300 space-y-1">
+          <li>• {{ lease_count }} lease record(s)</li>
+          <li>• {{ maintenance_count }} maintenance request(s)</li>
+        </ul>
+      </div>
+
+      <div class="flex gap-3">
+        {% if not has_active_lease %}
+        <button @click="confirm_delete" class="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded font-medium">
+          Delete Property
+        </button>
+        {% endif %}
+        <a href="{% url 'rentals:property-detail' property.pk %}" class="bg-slate-700 hover:bg-slate-600 text-white px-6 py-2 rounded">Cancel</a>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
