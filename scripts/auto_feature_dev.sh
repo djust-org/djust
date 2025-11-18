@@ -284,6 +284,39 @@ EOF
     log "✓ Found ${#PHASES[@]} phase(s): ${PHASES[*]} (format: $FEATURE_FORMAT)"
 }
 
+# Extract specific phase content from feature specification
+extract_phase_content() {
+    local feature_file="$1"
+    local phase_name="$2"
+    local format="$3"
+
+    # Extract phase number from phase_name (e.g., "phase-3" -> "3")
+    local phase_num="${phase_name#phase-}"
+
+    if [[ "$format" == "markdown" ]]; then
+        # For markdown: extract from "## Phase N:" to next "## Phase" or EOF
+        # Use awk with simpler logic that works on BSD awk (macOS)
+        awk -v phase="$phase_num" '
+            /^## Phase [0-9]+[:\-]/ {
+                # Extract phase number from current line
+                current_phase = $3
+                gsub(/[:\-].*/, "", current_phase)
+
+                if (current_phase == phase) {
+                    printing = 1
+                } else if (printing) {
+                    exit
+                }
+            }
+            printing { print }
+        ' "$feature_file"
+    else
+        # For YAML format, would need different extraction logic
+        # For now, fall back to entire file
+        cat "$feature_file"
+    fi
+}
+
 # Create comprehensive context for Claude (multi-phase aware)
 create_claude_context() {
     local feature_name="$1"
@@ -295,10 +328,15 @@ create_claude_context() {
 
     log "Creating context for $phase_name ($((phase_index + 1))/$total_phases)..."
 
-    # Load feature specification
+    # Load feature specification - EXTRACT ONLY THIS PHASE
     local feature_context=""
     if [ -f "$feature_spec" ]; then
-        feature_context=$(cat "$feature_spec")
+        feature_context=$(extract_phase_content "$feature_spec" "$phase_name" "$FEATURE_FORMAT")
+        if [ $? -ne 0 ] || [ -z "$feature_context" ]; then
+            error "Failed to extract phase $phase_name content from $feature_spec"
+            info "Falling back to full document"
+            feature_context=$(cat "$feature_spec")
+        fi
     fi
 
     # Load development process (if exists)
