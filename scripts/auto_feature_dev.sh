@@ -1135,14 +1135,20 @@ Options:
   -n, --dry-run        Only show planning, don't execute
   -b, --branch NAME    Custom branch name (default: auto-generated)
   -s, --single PHASE   Execute single phase only (specify phase name)
+  -r, --resume N       Resume from phase N through end (e.g., --resume 2)
   --start-phase PHASE  Start from specific phase and run to end
 
 Examples:
   $0 features/jit-serialization.yaml             # Execute all phases
   $0 --dry-run features/new-feature.yaml         # Preview only
   $0 --single phase-2 features/my-feat.yaml      # Execute one phase only
-  $0 --start-phase phase-2 features/my-feat.yaml # Start from phase-2 through end
+  $0 --resume 2 features/my-feat.yaml            # Resume from phase 2 through end
+  $0 --start-phase phase-2 features/my-feat.yaml # Same as --resume 2
   $0 --branch custom-name features/feat.yaml     # Custom branch
+
+Resume Usage:
+  If phase 1 is complete, use --resume 2 to continue from phase 2.
+  This is shorthand for --start-phase phase-2.
 
 Configuration:
   Create .claude/feature_config.yaml to customize:
@@ -1170,6 +1176,7 @@ DRY_RUN=false
 CUSTOM_BRANCH=""
 SINGLE_PHASE=""
 START_PHASE=""
+RESUME_PHASE_NUM=""
 FEATURE_SPEC=""
 
 while [[ $# -gt 0 ]]; do
@@ -1192,6 +1199,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --start-phase)
             START_PHASE="$2"
+            shift 2
+            ;;
+        -r|--resume)
+            RESUME_PHASE_NUM="$2"
             shift 2
             ;;
         *)
@@ -1237,6 +1248,25 @@ main() {
 
     # Parse feature specification
     parse_feature_spec "$FEATURE_SPEC"
+
+    # Handle resume by phase number (convert to --start-phase)
+    if [ -n "$RESUME_PHASE_NUM" ]; then
+        # Validate it's a number
+        if ! [[ "$RESUME_PHASE_NUM" =~ ^[0-9]+$ ]]; then
+            error "Resume phase must be a number: $RESUME_PHASE_NUM"
+            exit 1
+        fi
+
+        # Validate it's in valid range
+        if [ "$RESUME_PHASE_NUM" -lt 1 ] || [ "$RESUME_PHASE_NUM" -gt "${#PHASES[@]}" ]; then
+            error "Resume phase $RESUME_PHASE_NUM out of range (1-${#PHASES[@]})"
+            exit 1
+        fi
+
+        # Convert to phase name (phase-1, phase-2, etc.)
+        START_PHASE="phase-${RESUME_PHASE_NUM}"
+        info "Resume mode: Starting from phase $RESUME_PHASE_NUM ($START_PHASE)"
+    fi
 
     # Handle single phase execution
     if [ -n "$SINGLE_PHASE" ]; then
