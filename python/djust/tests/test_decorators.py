@@ -8,7 +8,183 @@ and metadata injection in rendered HTML.
 import json
 import pytest
 from djust import LiveView
-from djust.decorators import debounce, throttle, optimistic, cache, client_state
+from djust.decorators import (
+    event_handler,
+    event,
+    debounce,
+    throttle,
+    optimistic,
+    cache,
+    client_state,
+)
+
+
+class TestEventHandlerDecorator:
+    """Test enhanced @event_handler decorator with signature introspection."""
+
+    def test_event_handler_extracts_signature(self):
+        """Test that decorator extracts parameter information"""
+
+        @event_handler
+        def my_handler(self, value: str = "", count: int = 0):
+            pass
+
+        metadata = my_handler._djust_decorators["event_handler"]
+        assert len(metadata["params"]) == 2
+        assert metadata["params"][0]["name"] == "value"
+        assert metadata["params"][0]["type"] == "str"
+        assert metadata["params"][0]["required"] is False
+        assert metadata["params"][1]["name"] == "count"
+        assert metadata["params"][1]["type"] == "int"
+
+    def test_event_handler_with_required_params(self):
+        """Test required vs optional parameter detection"""
+
+        @event_handler
+        def my_handler(self, required: str, optional: str = "default"):
+            pass
+
+        metadata = my_handler._djust_decorators["event_handler"]
+        assert "required" in metadata["required"]
+        assert "optional" in metadata["optional"]
+
+    def test_event_handler_backward_compatible(self):
+        """Test that existing markers are still set"""
+
+        @event_handler
+        def my_handler(self):
+            pass
+
+        assert hasattr(my_handler, "_is_event_handler")
+        assert my_handler._is_event_handler is True
+        assert my_handler._event_name == "my_handler"
+
+    def test_event_handler_with_description(self):
+        """Test explicit description parameter"""
+
+        @event_handler(description="Custom description")
+        def my_handler(self, value: str):
+            """Original docstring"""
+            pass
+
+        metadata = my_handler._djust_decorators["event_handler"]
+        assert metadata["description"] == "Custom description"
+
+    def test_event_handler_uses_docstring(self):
+        """Test that docstring is used if no explicit description"""
+
+        @event_handler
+        def my_handler(self, value: str):
+            """Handler docstring"""
+            pass
+
+        metadata = my_handler._djust_decorators["event_handler"]
+        assert metadata["description"] == "Handler docstring"
+
+    def test_event_handler_with_kwargs(self):
+        """Test handler with **kwargs"""
+
+        @event_handler
+        def my_handler(self, value: str = "", **kwargs):
+            pass
+
+        metadata = my_handler._djust_decorators["event_handler"]
+        assert metadata["accepts_kwargs"] is True
+
+    def test_event_handler_without_kwargs(self):
+        """Test handler without **kwargs"""
+
+        @event_handler
+        def my_handler(self, value: str = ""):
+            pass
+
+        metadata = my_handler._djust_decorators["event_handler"]
+        assert metadata["accepts_kwargs"] is False
+
+    def test_event_handler_no_parentheses(self):
+        """Test @event_handler without parentheses"""
+
+        @event_handler
+        def my_handler(self, value: str):
+            """Test handler"""
+            pass
+
+        assert hasattr(my_handler, "_is_event_handler")
+        assert hasattr(my_handler, "_djust_decorators")
+        metadata = my_handler._djust_decorators["event_handler"]
+        assert metadata["description"] == "Test handler"
+
+    def test_event_handler_with_parentheses(self):
+        """Test @event_handler() with parentheses"""
+
+        @event_handler()
+        def my_handler(self, value: str):
+            """Test handler"""
+            pass
+
+        assert hasattr(my_handler, "_is_event_handler")
+        assert hasattr(my_handler, "_djust_decorators")
+
+    def test_event_alias(self):
+        """Test @event alias works"""
+
+        @event
+        def my_handler(self, value: str):
+            """Test handler"""
+            pass
+
+        assert hasattr(my_handler, "_is_event_handler")
+        assert my_handler._event_name == "my_handler"
+
+    def test_event_handler_metadata_structure(self):
+        """Test complete metadata structure"""
+
+        @event_handler
+        def search(self, value: str = "", count: int = 0, **kwargs):
+            """Search items"""
+            pass
+
+        metadata = search._djust_decorators["event_handler"]
+
+        # Check all required keys exist
+        assert "params" in metadata
+        assert "param_names" in metadata
+        assert "description" in metadata
+        assert "accepts_kwargs" in metadata
+        assert "required" in metadata
+        assert "optional" in metadata
+
+        # Check values
+        assert metadata["param_names"] == ["value", "count"]
+        assert metadata["description"] == "Search items"
+        assert metadata["accepts_kwargs"] is True
+        assert metadata["required"] == []
+        assert set(metadata["optional"]) == {"value", "count"}
+
+    def test_event_handler_with_multiple_decorators(self):
+        """Test @event_handler combines with other decorators"""
+
+        @event_handler
+        @debounce(wait=0.5)
+        @cache(ttl=60)
+        def my_handler(self, value: str = ""):
+            """Combined handler"""
+            pass
+
+        assert hasattr(my_handler, "_djust_decorators")
+        assert "event_handler" in my_handler._djust_decorators
+        assert "debounce" in my_handler._djust_decorators
+        assert "cache" in my_handler._djust_decorators
+
+    def test_event_handler_explicit_params(self):
+        """Test explicit params parameter"""
+
+        @event_handler(params=["custom", "params"])
+        def my_handler(self, value: str = ""):
+            pass
+
+        metadata = my_handler._djust_decorators["event_handler"]
+        assert metadata["param_names"] == ["custom", "params"]
 
 
 class TestDecoratorMetadata:
