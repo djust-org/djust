@@ -348,6 +348,48 @@ create_claude_context() {
             ;;
     esac
 
+    # Generate quality checks section (pre-generate to avoid bash 3.2 issues)
+    local quality_checks=""
+    case "$TECH_STACK" in
+        python)
+            quality_checks='```bash
+# Python checks
+ruff check .
+ruff format .
+pytest
+```'
+            ;;
+        rust)
+            quality_checks='```bash
+# Rust checks
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all
+```'
+            ;;
+        python-rust)
+            quality_checks='```bash
+# Rust checks
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all
+
+# Python checks
+ruff check python/
+ruff format python/
+pytest python/
+```'
+            ;;
+        nodejs|typescript)
+            quality_checks='```bash
+# Node.js checks
+npm run lint
+npm run format
+npm test
+```'
+            ;;
+    esac
+
     # Create comprehensive context file
     cat > "$TEMP_DIR/context.md" << EOF
 # Feature Development - Multi-Phase Implementation
@@ -405,45 +447,7 @@ $tech_guidelines
 
 Run these checks BEFORE staging any files:
 
-$(case "$TECH_STACK" in
-    python)
-        echo "\`\`\`bash"
-        echo "# Python checks"
-        echo "ruff check ."
-        echo "ruff format ."
-        echo "pytest"
-        echo "\`\`\`"
-        ;;
-    rust)
-        echo "\`\`\`bash"
-        echo "# Rust checks"
-        echo "cargo fmt --all"
-        echo "cargo clippy --all-targets --all-features -- -D warnings"
-        echo "cargo test --all"
-        echo "\`\`\`"
-        ;;
-    python-rust)
-        echo "\`\`\`bash"
-        echo "# Rust checks"
-        echo "cargo fmt --all"
-        echo "cargo clippy --all-targets --all-features -- -D warnings"
-        echo "cargo test --all"
-        echo ""
-        echo "# Python checks"
-        echo "ruff check python/"
-        echo "ruff format python/"
-        echo "pytest python/"
-        echo "\`\`\`"
-        ;;
-    nodejs|typescript)
-        echo "\`\`\`bash"
-        echo "# Node.js checks"
-        echo "npm run lint"
-        echo "npm run format"
-        echo "npm test"
-        echo "\`\`\`"
-        ;;
-esac)
+$quality_checks
 
 **If any check fails**: Fix immediately before proceeding.
 
