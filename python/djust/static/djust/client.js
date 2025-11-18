@@ -2809,12 +2809,17 @@ class DjustDebugPanel {
             const success = event.error ? 'error' : 'success';
             const eventId = `event-${i}`;
 
+            // Format duration
+            const durationText = event.duration !== undefined
+                ? `${event.duration.toFixed(1)}ms`
+                : 'N/A';
+
             html += `
                 <div class="event-item ${success} collapsed" data-event-id="${eventId}">
                     <div class="event-header" onclick="window.djustDebugPanel.toggleEvent('${eventId}')">
                         <span class="event-toggle">▶</span>
                         <span class="event-name">${event.name}</span>
-                        <span class="event-time">${timestamp}</span>
+                        <span class="event-time">${timestamp} • ${durationText}</span>
                     </div>
 
                     <div class="event-body">
@@ -2854,15 +2859,21 @@ class DjustDebugPanel {
             const entry = this.patchHistory[this.patchHistory.length - 1 - i];
             const patchId = `patch-${i}`;
 
+            // Format duration
+            const durationText = entry.duration !== undefined
+                ? `${entry.duration.toFixed(2)}ms`
+                : 'N/A';
+
             html += `
                 <div class="patch-item collapsed" data-patch-id="${patchId}">
                     <div class="patch-header" onclick="window.djustDebugPanel.togglePatch('${patchId}')">
                         <span class="patch-toggle">▶</span>
                         <span>${entry.count} patch${entry.count !== 1 ? 'es' : ''}</span>
-                        <span>${new Date(entry.timestamp).toLocaleTimeString()}</span>
+                        <span>${new Date(entry.timestamp).toLocaleTimeString()} • ${durationText}</span>
                     </div>
                     <div class="patch-body">
                         <pre>${JSON.stringify(entry.patches, null, 2)}</pre>
+                        ${entry.duration !== undefined ? `<p class="patch-stats">Applied in ${durationText}</p>` : ''}
                     </div>
                 </div>
             `;
@@ -2920,12 +2931,13 @@ class DjustDebugPanel {
         this.render();
     }
 
-    logEvent(eventName, params, result) {
+    logEvent(eventName, params, result, duration) {
         this.eventHistory.push({
             timestamp: Date.now(),
             name: eventName,
             params: params,
-            error: result && result.type === 'error' ? result.error : null
+            error: result && result.type === 'error' ? result.error : null,
+            duration: duration
         });
 
         // Keep last 50 events
@@ -2938,11 +2950,12 @@ class DjustDebugPanel {
         }
     }
 
-    logPatches(patches) {
+    logPatches(patches, duration) {
         this.patchHistory.push({
             timestamp: Date.now(),
             count: patches.length,
-            patches: patches
+            patches: patches,
+            duration: duration
         });
 
         if (this.patchHistory.length > this.maxHistory) {
@@ -2987,28 +3000,54 @@ if (typeof window.DJUST_DEBUG_INFO !== 'undefined') {
     // Store original handleEvent function
     const originalHandleEvent = handleEvent;
 
-    // Replace with wrapper that logs events
+    // Replace with wrapper that logs events with timing
     window.handleEvent = handleEvent = async function(eventName, params) {
-        // Log event to debug panel (skip internal/decorator events)
-        if (window.djustDebugPanel && !params._skipDecorators) {
-            window.djustDebugPanel.logEvent(eventName, params, null);
+        const startTime = performance.now();
+        let result = null;
+        let error = null;
+
+        try {
+            // Call original implementation
+            result = await originalHandleEvent(eventName, params);
+        } catch (e) {
+            error = e;
+            throw e;
+        } finally {
+            // Calculate duration
+            const duration = performance.now() - startTime;
+
+            // Log event to debug panel (skip internal/decorator events)
+            if (window.djustDebugPanel && !params._skipDecorators) {
+                window.djustDebugPanel.logEvent(
+                    eventName,
+                    params,
+                    error ? { type: 'error', error: error.message } : result,
+                    duration
+                );
+            }
         }
 
-        // Call original implementation
-        return await originalHandleEvent(eventName, params);
+        return result;
     };
 
     // Hook into patch application to log patches
     const originalApplyPatches = window.applyPatches || applyPatches;
 
-    // Replace with wrapper that logs patches
+    // Replace with wrapper that logs patches with timing
     window.applyPatches = applyPatches = function(patches) {
-        // Log patches to debug panel
-        if (window.djustDebugPanel && patches && patches.length > 0) {
-            window.djustDebugPanel.logPatches(patches);
-        }
+        const startTime = performance.now();
 
         // Call original implementation
-        return originalApplyPatches(patches);
+        const result = originalApplyPatches(patches);
+
+        // Calculate duration
+        const duration = performance.now() - startTime;
+
+        // Log patches to debug panel
+        if (window.djustDebugPanel && patches && patches.length > 0) {
+            window.djustDebugPanel.logPatches(patches, duration);
+        }
+
+        return result;
     };
 }
