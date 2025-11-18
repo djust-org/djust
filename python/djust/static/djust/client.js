@@ -230,7 +230,19 @@ class LiveViewWebSocket {
             case 'mounted':
                 this.viewMounted = true;
                 console.log('[LiveView] View mounted:', data.view);
-                if (data.html) {
+
+                // Initialize VDOM version from mount response (critical for patch generation)
+                if (data.version !== undefined) {
+                    clientVdomVersion = data.version;
+                    console.log('[LiveView] VDOM version initialized:', clientVdomVersion);
+                }
+
+                // OPTIMIZATION: Skip HTML replacement if content was pre-rendered via HTTP GET
+                if (this.skipMountHtml) {
+                    console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
+                    this.skipMountHtml = false; // Reset flag
+                    bindLiveViewEvents(); // Bind events to existing content
+                } else if (data.html) {
                     // Replace page content with server-rendered HTML
                     let container = document.querySelector('[data-live-view]');
                     if (!container) {
@@ -302,6 +314,17 @@ class LiveViewWebSocket {
         if (container) {
             const viewPath = container.dataset.liveView;
             if (viewPath) {
+                // OPTIMIZATION: Check if content was already rendered by HTTP GET
+                // We still send mount message (server needs to initialize session),
+                // but we'll skip applying the HTML response
+                const hasContent = container.innerHTML && container.innerHTML.trim().length > 0;
+
+                if (hasContent) {
+                    console.log('[LiveView] Content pre-rendered via HTTP - will skip HTML in mount response');
+                    this.skipMountHtml = true;
+                }
+
+                // Always send mount message to initialize server-side session
                 this.mount(viewPath);
             } else {
                 console.warn('[LiveView] Container found but no view path specified');
@@ -2396,7 +2419,216 @@ document.addEventListener('DOMContentLoaded', function() {
     initTodoItems();      // Initialize todo item checkboxes
     bindLiveViewEvents();
     initDraftMode();      // Initialize DraftModeMixin (Phase 5)
+    initTurboNavigation(); // Initialize Turbo-like navigation
 
     // Expose sendEvent globally for manual event handling (e.g., optimistic updates)
     window.sendEvent = handleEvent;
 });
+
+// ==============================================================================
+// TURBO-LIKE NAVIGATION
+// ==============================================================================
+// Provides instant page navigation without full page reloads, while maintaining
+// multi-page architecture benefits (SEO, deep linking, browser history).
+//
+// Features:
+// - Intercepts clicks on links with data-djust-navigate attribute
+// - Fetches pages via AJAX and replaces main content
+// - Updates browser history with pushState/popState
+// - Shows loading indicator during navigation
+// - Preserves scroll position
+// - Falls back to normal navigation on errors
+//
+// Usage:
+//   <a href="/rentals/properties/" data-djust-navigate>Properties</a>
+//
+// Configuration:
+//   data-djust-navigate="main" - Replace element with id="main"
+//   data-djust-navigate - Use default selector (main, [data-liveview-root], or body)
+// ==============================================================================
+
+function initTurboNavigation() {
+    let isNavigating = false;
+    const loadingBar = createLoadingBar();
+
+    // Intercept link clicks
+    document.addEventListener('click', function(e) {
+        // Find the link element (might be nested in other elements)
+        const link = e.target.closest('a[data-djust-navigate]');
+        if (!link) return;
+
+        // Ignore if:
+        // - Already navigating
+        // - Link has target="_blank" or similar
+        // - Modifier keys are pressed (ctrl/cmd/shift for new tab/window)
+        // - Not left click
+        if (isNavigating ||
+            link.target ||
+            e.ctrlKey ||
+            e.metaKey ||
+            e.shiftKey ||
+            e.button !== 0) {
+            return;
+        }
+
+        // Get the URL
+        const url = link.href;
+        if (!url || url === window.location.href) return;
+
+        // Same origin check
+        const linkUrl = new URL(url);
+        if (linkUrl.origin !== window.location.origin) return;
+
+        // Prevent default navigation
+        e.preventDefault();
+
+        // Perform turbo navigation
+        navigateTo(url, link.getAttribute('data-djust-navigate') || null);
+    });
+
+    // Handle browser back/forward buttons
+    window.addEventListener('popstate', function(e) {
+        if (e.state && e.state.turboNavigated) {
+            navigateTo(window.location.href, null, true);
+        }
+    });
+
+    async function navigateTo(url, targetSelector, skipHistory = false) {
+        if (isNavigating) return;
+
+        isNavigating = true;
+        showLoadingBar();
+
+        try {
+            // Fetch the new page
+            const response = await fetch(url, {
+                headers: {
+                    'X-Djust-Turbo': 'true' // Server can detect turbo navigation
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const html = await response.text();
+
+            // Parse the response
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+
+            // Determine what to replace
+            let newContent, oldContent;
+
+            if (targetSelector) {
+                // Use specific selector
+                newContent = doc.querySelector(targetSelector);
+                oldContent = document.querySelector(targetSelector);
+            } else {
+                // Auto-detect: try main, then [data-liveview-root], then body
+                const selectors = ['main', '[data-liveview-root]', 'body'];
+                for (const selector of selectors) {
+                    newContent = doc.querySelector(selector);
+                    oldContent = document.querySelector(selector);
+                    if (newContent && oldContent) break;
+                }
+            }
+
+            if (!newContent || !oldContent) {
+                throw new Error('Could not find content to replace');
+            }
+
+            // Save scroll position
+            const scrollPos = window.scrollY;
+
+            // Replace content
+            oldContent.innerHTML = newContent.innerHTML;
+
+            // Update title
+            if (doc.title) {
+                document.title = doc.title;
+            }
+
+            // Re-initialize LiveView events on new content
+            bindLiveViewEvents();
+
+            // Update browser history
+            if (!skipHistory) {
+                window.history.pushState(
+                    { turboNavigated: true },
+                    '',
+                    url
+                );
+            }
+
+            // Restore scroll position (or scroll to top for new pages)
+            if (skipHistory) {
+                window.scrollTo(0, scrollPos);
+            } else {
+                window.scrollTo(0, 0);
+            }
+
+            // Dispatch custom event for tracking/analytics
+            window.dispatchEvent(new CustomEvent('djust:navigate', {
+                detail: { url, turboNavigated: true }
+            }));
+
+        } catch (error) {
+            console.error('[Turbo] Navigation failed:', error);
+
+            // Fall back to normal navigation
+            window.location.href = url;
+        } finally {
+            isNavigating = false;
+            hideLoadingBar();
+        }
+    }
+
+    function createLoadingBar() {
+        const bar = document.createElement('div');
+        bar.id = 'djust-loading-bar';
+        bar.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+            transform: scaleX(0);
+            transform-origin: left;
+            transition: transform 0.3s ease;
+            z-index: 9999;
+            opacity: 0;
+        `;
+        document.body.appendChild(bar);
+        return bar;
+    }
+
+    function showLoadingBar() {
+        loadingBar.style.opacity = '1';
+        loadingBar.style.transform = 'scaleX(0.3)';
+
+        // Animate to 70% over 2 seconds
+        setTimeout(() => {
+            loadingBar.style.transition = 'transform 2s ease';
+            loadingBar.style.transform = 'scaleX(0.7)';
+        }, 100);
+    }
+
+    function hideLoadingBar() {
+        loadingBar.style.transition = 'transform 0.2s ease';
+        loadingBar.style.transform = 'scaleX(1)';
+
+        // Fade out
+        setTimeout(() => {
+            loadingBar.style.opacity = '0';
+            setTimeout(() => {
+                loadingBar.style.transform = 'scaleX(0)';
+            }, 200);
+        }, 200);
+    }
+
+    if (window.djustDebug) {
+        console.log('[Turbo] Navigation initialized');
+    }
+}

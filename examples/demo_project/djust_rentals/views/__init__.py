@@ -16,7 +16,7 @@ from .dashboard import RentalDashboardView
 from .properties import PropertyListView, PropertyDetailView, PropertyFormView, PropertyDeleteView
 from .tenants import TenantListView, TenantDetailView, TenantFormView
 from .leases import LeaseListView, LeaseDetailView, LeaseFormView
-from .maintenance import MaintenanceListView, MaintenanceDetailView, MaintenanceUpdateView
+from .maintenance import MaintenanceListView, MaintenanceDetailView, MaintenanceUpdateView, MaintenanceFormView, MaintenanceDeleteView
 from .financials import FinancialDashboardView, IncomeReportView, ExpenseReportView, ProfitLossView
 from .tenant_portal import TenantDashboardView, TenantMaintenanceListView, TenantMaintenanceCreateView, TenantPaymentsView
 
@@ -44,6 +44,8 @@ __all__ = [
     'MaintenanceListView',
     'MaintenanceDetailView',
     'MaintenanceUpdateView',
+    'MaintenanceFormView',
+    'MaintenanceDeleteView',
 
     # Financials
     'FinancialDashboardView',

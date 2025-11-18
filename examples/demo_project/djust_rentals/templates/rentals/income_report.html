@@ -1,12 +1,77 @@
 {% extends "rentals/base.html" %}
+
 {% block title %}Income Report{% endblock %}
-{% block extra_head %}<script src="https://cdn.tailwindcss.com"></script><style>body{background:#020617;color:#f8fafc}.card{background:#0f172a;border:1px solid #1e293b;border-radius:.5rem;padding:1.5rem;margin-bottom:1.5rem}</style>{% endblock %}
+
 {% block content %}
-<div data-liveview-root class="min-h-screen bg-slate-950 py-6">
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.financials.IncomeReportView">
   <div class="container mx-auto px-4 max-w-7xl">
-    <h1 class="text-3xl font-bold mb-6">💵 Income Report</h1>
-    <div class="card mb-6"><h2 class="text-xl font-semibold mb-4">Monthly Income Trend</h2><div class="space-y-2">{% for month in monthly_income %}<div class="flex justify-between items-center p-3 bg-slate-900 rounded"><p>{{month.month}}</p><p class="text-emerald-400 font-bold text-xl">${{month.total}}</p></div>{% endfor %}</div></div>
-    <div class="card"><h2 class="text-xl font-semibold mb-4">Recent Payments</h2><table class="w-full"><thead class="bg-slate-900"><tr><th class="p-3 text-left">Date</th><th class="p-3 text-left">Property</th><th class="p-3 text-left">Tenant</th><th class="p-3 text-left">Method</th><th class="p-3 text-left">Amount</th></tr></thead><tbody>{% for payment in recent_payments %}<tr class="border-t border-slate-800"><td class="p-3">{{payment.payment_date}}</td><td class="p-3">{{payment.lease.property.name}}</td><td class="p-3">{{payment.lease.tenant.user.get_full_name}}</td><td class="p-3 text-sm text-slate-400">{{payment.get_payment_method_display}}</td><td class="p-3 text-emerald-400 font-semibold">${{payment.amount}}</td></tr>{% endfor %}</tbody></table></div>
+    <!-- Page Header -->
+    {{ page_header|safe }}
+
+    <!-- Monthly Income Trend -->
+    <div class="bg-card border border-border rounded-lg p-6 mb-6">
+      <div class="flex items-center gap-2 mb-4">
+        <i data-lucide="trending-up" class="w-5 h-5 text-primary"></i>
+        <h2 class="text-xl font-semibold text-card-foreground">Monthly Income Trend</h2>
+      </div>
+      <div class="space-y-2">
+        {% for month in monthly_income %}
+        <div class="flex justify-between items-center p-3 bg-accent/50 rounded-md border border-border">
+          <p class="text-card-foreground font-medium">{{ month.month }}</p>
+          <p class="text-green-600 dark:text-green-400 font-bold text-xl">${{ month.total|floatformat:2 }}</p>
+        </div>
+        {% empty %}
+        <p class="text-muted-foreground text-center py-4">No income data available</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Recent Payments Table -->
+    <div class="bg-card border border-border rounded-lg p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <i data-lucide="receipt" class="w-5 h-5 text-primary"></i>
+        <h2 class="text-xl font-semibold text-card-foreground">Recent Payments</h2>
+      </div>
+
+      {% if recent_payments %}
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Date</th>
+              <th class="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Property</th>
+              <th class="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Tenant</th>
+              <th class="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Method</th>
+              <th class="text-right py-3 px-4 text-sm font-medium text-muted-foreground">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for payment in recent_payments %}
+            <tr class="border-b border-border hover:bg-accent/50 transition-colors">
+              <td class="py-3 px-4 text-card-foreground">{{ payment.payment_date|date:"M d, Y" }}</td>
+              <td class="py-3 px-4 text-card-foreground">{{ payment.lease.property.name }}</td>
+              <td class="py-3 px-4 text-card-foreground">{{ payment.lease.tenant.user.get_full_name }}</td>
+              <td class="py-3 px-4">
+                <span class="inline-flex items-center gap-1 text-sm text-muted-foreground">
+                  <i data-lucide="credit-card" class="w-3 h-3"></i>
+                  {{ payment.get_payment_method_display }}
+                </span>
+              </td>
+              <td class="py-3 px-4 text-right text-green-600 dark:text-green-400 font-semibold">
+                ${{ payment.amount|floatformat:2 }}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="text-center py-12">
+        <i data-lucide="inbox" class="w-12 h-12 mx-auto text-muted-foreground mb-3"></i>
+        <p class="text-muted-foreground">No payments found</p>
+      </div>
+      {% endif %}
+    </div>
   </div>
 </div>
 {% endblock %}

@@ -10,6 +10,7 @@ from djust_shared.components.ui import HeroSection
 from django.db.models import Q
 from django.contrib.auth.models import User
 from ..models import Tenant, Lease, MaintenanceRequest, Payment
+from ..components import StatCard, PageHeader, StatusBadge, DataTable
 
 
 class TenantListView(BaseViewWithNavbar):
@@ -29,19 +30,21 @@ class TenantListView(BaseViewWithNavbar):
         self.search_query = ""
         self.filter_status = "all"  # all, active, inactive
 
-        # Initialize hero
-        self.hero = HeroSection(
-            title="Tenants",
-            subtitle="Manage your tenants",
-            icon="👥"
-        )
-
         # Load tenants
         self._refresh_tenants()
 
     def _refresh_tenants(self):
         """Refresh tenant list based on current filters"""
-        tenants = Tenant.objects.select_related('user').all()
+        from django.db.models import Prefetch
+
+        # Optimize QuerySet with prefetch for current leases and their properties
+        tenants = Tenant.objects.select_related('user').prefetch_related(
+            Prefetch(
+                'lease_set',
+                queryset=Lease.objects.filter(status='active').select_related('property'),
+                to_attr='active_leases'
+            )
+        ).all()
 
         # Apply search
         if self.search_query:
@@ -62,7 +65,9 @@ class TenantListView(BaseViewWithNavbar):
             active_tenant_ids = Lease.objects.filter(status='active').values_list('tenant_id', flat=True)
             tenants = tenants.exclude(id__in=active_tenant_ids)
 
-        self.tenants = tenants.order_by('user__last_name', 'user__first_name')
+        # Store as private variable to avoid auto-JIT serialization
+        # We'll assign to self.tenants in get_context_data() instead
+        self._tenants = tenants.order_by('user__last_name', 'user__first_name')
 
     @debounce(wait=0.5)
     def search(self, query: str = "", **kwargs):
@@ -77,21 +82,72 @@ class TenantListView(BaseViewWithNavbar):
 
     def get_context_data(self, **kwargs):
         """Add tenant list context"""
+        # Store tenants as instance variable for JIT serialization
+        self.tenants = self._tenants
+
+        # Call parent - JIT serializes 'tenants' with Rust + auto-generates 'tenants_count'
         context = super().get_context_data(**kwargs)
 
-        # Get current property for each tenant
-        tenant_data = []
-        for tenant in self.tenants:
-            current_lease = tenant.get_current_lease()
-            tenant_data.append({
-                'tenant': tenant,
-                'current_lease': current_lease,
-                'current_property': current_lease.property if current_lease else None,
+        # Create page header (do this in get_context_data so it's available for every render)
+        page_header = PageHeader(
+            title="Tenants",
+            subtitle="Manage your tenants and their leases",
+            icon="users",
+            actions=[{
+                "label": "Add Tenant",
+                "url": "/rentals/tenants/add/",
+                "icon": "plus"
+            }]
+        )
+
+        # Calculate status counts
+        all_tenants = Tenant.objects.all()
+        total_count = all_tenants.count()
+        active_tenant_ids = Lease.objects.filter(status='active').values_list('tenant_id', flat=True).distinct()
+        active_count = all_tenants.filter(id__in=active_tenant_ids).count()
+        inactive_count = total_count - active_count
+
+        # Create StatCard components for status overview (render to HTML)
+        stat_cards_html = [
+            StatCard(label="Total Tenants", value=str(total_count), icon="users", color="primary").render(),
+            StatCard(label="Active Leases", value=str(active_count), icon="key", color="green").render(),
+            StatCard(label="Inactive", value=str(inactive_count), icon="user-x", color="gray").render(),
+        ]
+
+        # Create DataTable rows from tenants
+        table_rows = []
+        for tenant in self._tenants:
+            # Get current property
+            current_property = ""
+            if hasattr(tenant, 'active_leases') and tenant.active_leases:
+                property_name = tenant.active_leases[0].property.name
+                current_property = f'<span class="text-green-600 dark:text-green-400">{property_name}</span>'
+            else:
+                current_property = '<span class="text-muted-foreground">No active lease</span>'
+
+            table_rows.append({
+                "Name": tenant.user.get_full_name(),
+                "Email": f'<span class="text-muted-foreground">{tenant.user.email}</span>',
+                "Phone": tenant.phone,
+                "Current Property": current_property,
+                "Actions": f'<a href="/rentals/tenants/{tenant.pk}/" data-djust-navigate class="text-primary hover:underline text-sm inline-flex items-center gap-1"><i data-lucide="eye" class="w-3 h-3"></i> View</a> | <a href="/rentals/tenants/{tenant.pk}/edit/" data-djust-navigate class="text-muted-foreground hover:underline text-sm">Edit</a>'
             })
 
+        # Create DataTable component
+        tenant_table = DataTable(
+            headers=["Name", "Email", "Phone", "Current Property", "Actions"],
+            rows=table_rows,
+            empty_message="No tenants found. Try adjusting your filters or add a new tenant."
+        )
+
+        # Add non-model context
         context.update({
-            'tenant_data': tenant_data,
-            'total_count': self.tenants.count(),
+            # Components (rendered to HTML strings)
+            'page_header': page_header.render(),
+            'stat_cards': stat_cards_html,
+            'tenant_table': tenant_table.render(),
+
+            # Filter state
             'search_query': self.search_query,
             'filter_status': self.filter_status,
         })
@@ -135,13 +191,6 @@ class TenantDetailView(BaseViewWithNavbar):
             tenant=self.tenant
         ).order_by('-created_at')[:10]
 
-        # Initialize hero
-        self.hero = HeroSection(
-            title=self.tenant.user.get_full_name(),
-            subtitle=self.tenant.user.email,
-            icon="👤"
-        )
-
     def get_context_data(self, **kwargs):
         """Add tenant detail context"""
         context = super().get_context_data(**kwargs)
@@ -149,6 +198,21 @@ class TenantDetailView(BaseViewWithNavbar):
         if not self.tenant:
             context['error_message'] = self.error_message
             return context
+
+        # Create page header (do this in get_context_data so it's available for every render)
+        page_header = PageHeader(
+            title=self.tenant.user.get_full_name(),
+            subtitle=self.tenant.user.email,
+            icon="user",
+            actions=[
+                {
+                    "label": "Edit Tenant",
+                    "url": f"/rentals/tenants/{self.tenant.pk}/edit/",
+                    "icon": "edit",
+                    "variant": "secondary"
+                }
+            ]
+        )
 
         # Calculate payment statistics
         from django.db.models import Sum, Count
@@ -166,6 +230,10 @@ class TenantDetailView(BaseViewWithNavbar):
         }
 
         context.update({
+            # Components (rendered to HTML strings)
+            'page_header': page_header.render(),
+
+            # Tenant data
             'tenant': self.tenant,
             'current_lease': self.current_lease,
             'current_property': self.current_property,
@@ -212,14 +280,6 @@ class TenantFormView(BaseViewWithNavbar):
         self.success_message = ""
         self.error_message = ""
         self.validation_errors = {}
-
-        # Initialize hero
-        title = "Edit Tenant" if self.is_edit else "Add New Tenant"
-        self.hero = HeroSection(
-            title=title,
-            subtitle="Fill in tenant details",
-            icon="👤"
-        )
 
     def save_tenant(self, first_name="", last_name="", email="", phone="",
                    emergency_contact_name="", emergency_contact_phone="",
@@ -287,7 +347,20 @@ class TenantFormView(BaseViewWithNavbar):
         """Add form context"""
         context = super().get_context_data(**kwargs)
 
+        # Create page header
+        title = "Edit Tenant" if self.is_edit else "Add New Tenant"
+        subtitle = "Update tenant details" if self.is_edit else "Fill in tenant details"
+        page_header = PageHeader(
+            title=title,
+            subtitle=subtitle,
+            icon="user"
+        )
+
         context.update({
+            # Components (rendered to HTML strings)
+            'page_header': page_header.render(),
+
+            # Form data
             'tenant': self.tenant,
             'is_edit': self.is_edit,
             'success_message': self.success_message,

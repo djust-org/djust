@@ -9,13 +9,16 @@ import inspect
 from typing import List, Dict, Callable
 
 
-def generate_serializer_code(model_name: str, variable_paths: List[str]) -> str:
+def generate_serializer_code(
+    model_name: str, variable_paths: List[str], func_name: str = None
+) -> str:
     """
     Generate Python code for a custom serializer function.
 
     Args:
         model_name: Name of the model (e.g., "Lease")
         variable_paths: List of paths to serialize (e.g., ["property.name", "tenant.user.email"])
+        func_name: Optional function name to use (if None, generates one automatically)
 
     Returns:
         Python source code as string
@@ -33,9 +36,10 @@ def generate_serializer_code(model_name: str, variable_paths: List[str]) -> str:
             ...
             return result
     """
-    # Generate unique function name based on paths
-    func_hash = hashlib.sha256("".join(sorted(variable_paths)).encode()).hexdigest()[:6]
-    func_name = f"serialize_{model_name.lower()}_{func_hash}"
+    # Generate unique function name based on paths if not provided
+    if func_name is None:
+        func_hash = hashlib.sha256("".join(sorted(variable_paths)).encode()).hexdigest()[:6]
+        func_name = f"serialize_{model_name.lower()}_{func_hash}"
 
     lines = [
         f"def {func_name}(obj):",
@@ -61,7 +65,7 @@ def _build_path_tree(paths: List[str]) -> Dict:
     Build tree structure from flat paths for efficient code generation.
 
     Args:
-        paths: ["property.name", "property.address", "tenant.user.email"]
+        paths: ["property.name", "property.address", "tenant.user.email", "leases.0.property.name"]
 
     Returns:
         {
@@ -73,8 +77,18 @@ def _build_path_tree(paths: List[str]) -> Dict:
                 "user": {
                     "email": {}
                 }
+            },
+            "leases": {
+                "__list_item__": {
+                    "property": {
+                        "name": {}
+                    }
+                }
             }
         }
+
+    Note: Numeric indices (e.g., "leases.0.property") are converted to "__list_item__"
+    to indicate the serializer should iterate over the list.
     """
     tree = {}
 
@@ -82,10 +96,30 @@ def _build_path_tree(paths: List[str]) -> Dict:
         parts = path.split(".")
         current = tree
 
-        for part in parts:
+        i = 0
+        while i < len(parts):
+            part = parts[i]
+
+            # Check if next part is a numeric index
+            if i + 1 < len(parts) and parts[i + 1].isdigit():
+                # This is a list/queryset attribute (e.g., "leases" in "leases.0.property")
+                # Create entry for this attribute with __list_item__ for nested access
+                if part not in current:
+                    current[part] = {}
+
+                if "__list_item__" not in current[part]:
+                    current[part]["__list_item__"] = {}
+
+                # Skip the numeric index and continue with remaining parts
+                current = current[part]["__list_item__"]
+                i += 2  # Skip both attribute name and numeric index
+                continue
+
+            # Regular attribute access
             if part not in current:
                 current[part] = {}
             current = current[part]
+            i += 1
 
     return tree
 
@@ -152,6 +186,37 @@ def _generate_nested_access(
         return
 
     for attr_name, subtree in tree.items():
+        # Special handling for list iteration marker
+        if attr_name == "__list_item__":
+            # This is a list - iterate and extract nested fields from each item
+            # The subtree contains the fields to extract from each list item
+            obj_access = obj_var  # We're already at the list level
+
+            # Generate list iteration code
+            list_var = f"item_{indent}"
+            dict_path = _build_dict_path(result_var, current_path)
+            lines.append(f"{ind}try:")
+            lines.append(f"{ind}    {dict_path} = []")
+            lines.append(f"{ind}    for {list_var} in {obj_var}:")
+            lines.append(f"{ind}        item_result = {{}}")
+
+            # Generate code to extract fields from each list item
+            for nested_attr, nested_subtree in subtree.items():
+                _generate_nested_access(
+                    lines,
+                    [],  # Reset path for list item
+                    {nested_attr: nested_subtree},
+                    list_var,
+                    "item_result",
+                    None,
+                    indent + 2,
+                )
+
+            lines.append(f"{ind}        {dict_path}.append(item_result)")
+            lines.append(f"{ind}except (TypeError, AttributeError):")
+            lines.append(f"{ind}    pass  # Not iterable or access failed")
+            continue
+
         new_path = current_path + [attr_name]
         obj_access = f"{obj_var}.{attr_name}"
 
@@ -159,19 +224,34 @@ def _generate_nested_access(
         lines.append(f"{ind}if hasattr({obj_var}, '{attr_name}') and {obj_access} is not None:")
 
         if subtree:
-            # Has nested attributes - create nested dict and recurse
-            dict_path = _build_dict_path(result_var, current_path)
-            lines.append(f"{ind}    {dict_path}['{attr_name}'] = {{}}")
+            # Check if subtree contains list iteration marker
+            if "__list_item__" in subtree:
+                # This is a list/queryset attribute - handle specially
+                dict_path = _build_dict_path(result_var, current_path)
+                lines.append(f"{ind}    # List iteration for {attr_name}")
+                _generate_nested_access(
+                    lines,
+                    new_path,
+                    subtree,
+                    obj_access,
+                    result_var,
+                    None,
+                    indent + 1,
+                )
+            else:
+                # Has nested attributes - create nested dict and recurse
+                dict_path = _build_dict_path(result_var, current_path)
+                lines.append(f"{ind}    {dict_path}['{attr_name}'] = {{}}")
 
-            _generate_nested_access(
-                lines,
-                new_path,
-                subtree,
-                obj_access,
-                result_var,
-                None,
-                indent + 1,
-            )
+                _generate_nested_access(
+                    lines,
+                    new_path,
+                    subtree,
+                    obj_access,
+                    result_var,
+                    None,
+                    indent + 1,
+                )
         else:
             # Leaf node - final assignment
             dict_path_full = _build_dict_path(result_var, new_path[:-1])

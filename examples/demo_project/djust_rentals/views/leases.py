@@ -10,6 +10,7 @@ from djust_shared.components.ui import HeroSection
 from django.db.models import Q
 from datetime import date, timedelta
 from ..models import Lease, Property, Tenant
+from ..components import StatCard, PageHeader, StatusBadge, DataTable
 
 
 class LeaseListView(BaseViewWithNavbar):
@@ -30,13 +31,6 @@ class LeaseListView(BaseViewWithNavbar):
         self.search_query = ""
         self.filter_status = "active"  # all, active, expired, upcoming, terminated
         self.sort_by = "end_date"
-
-        # Initialize hero
-        self.hero = HeroSection(
-            title="Leases",
-            subtitle="Manage rental agreements",
-            icon="📄"
-        )
 
         # Load leases
         self._refresh_leases()
@@ -66,48 +60,110 @@ class LeaseListView(BaseViewWithNavbar):
         elif self.sort_by == "rent":
             leases = leases.order_by('-monthly_rent')
 
-        self.leases = leases
+        # Store as private variable to avoid auto-JIT serialization
+        # We'll create lease_data with computed fields instead
+        self._leases = leases
 
     @debounce(wait=0.5)
-    def search(self, query: str = "", **kwargs):
-        """Search leases with debouncing"""
-        self.search_query = query
+    def search(self, value: str = "", **kwargs):
+        """Search leases with debouncing - value parameter matches what @input sends"""
+        self.search_query = value
         self._refresh_leases()
 
-    def filter_by_status(self, status: str = "all", **kwargs):
-        """Filter leases by status"""
-        self.filter_status = status
+    def filter_by_status(self, value: str = "all", **kwargs):
+        """Filter leases by status - value parameter matches what @change sends"""
+        self.filter_status = value
         self._refresh_leases()
 
-    def sort_leases(self, sort: str = "end_date", **kwargs):
-        """Sort leases"""
-        self.sort_by = sort
+    def sort_leases(self, value: str = "end_date", **kwargs):
+        """Sort leases - value parameter matches what @change sends"""
+        self.sort_by = value
         self._refresh_leases()
 
     def get_context_data(self, **kwargs):
         """Add lease list context"""
+        # Store leases as instance variable for JIT serialization
+        self.leases = self._leases
+
+        # Call parent - JIT serializes 'leases' with Rust + auto-generates 'leases_count'
         context = super().get_context_data(**kwargs)
 
-        # Add expiration warnings
-        lease_data = []
-        for lease in self.leases:
-            days_left = lease.days_until_expiration()
-            warning = None
-            if days_left is not None:
-                if days_left <= 30:
-                    warning = "urgent"
-                elif days_left <= 60:
-                    warning = "soon"
+        # Create page header (do this in get_context_data so it's available for every render)
+        page_header = PageHeader(
+            title="Leases",
+            subtitle="Manage rental agreements and lease terms",
+            icon="file-text",
+            actions=[{
+                "label": "Create Lease",
+                "url": "/rentals/leases/add/",
+                "icon": "plus"
+            }]
+        )
 
-            lease_data.append({
-                'lease': lease,
-                'days_left': days_left,
-                'warning': warning,
+        # Calculate status counts
+        all_leases = Lease.objects.all()
+        total_count = all_leases.count()
+        active_count = all_leases.filter(status='active').count()
+        expired_count = all_leases.filter(status='expired').count()
+
+        # Count expiring soon (next 60 days)
+        sixty_days_from_now = date.today() + timedelta(days=60)
+        expiring_soon_count = all_leases.filter(
+            status='active',
+            end_date__lte=sixty_days_from_now
+        ).count()
+
+        # Create StatCard components for status overview (render to HTML)
+        stat_cards_html = [
+            StatCard(label="Total Leases", value=str(total_count), icon="file-text", color="primary").render(),
+            StatCard(label="Active", value=str(active_count), icon="check-circle", color="green").render(),
+            StatCard(label="Expired", value=str(expired_count), icon="x-circle", color="red").render(),
+            StatCard(label="Expiring Soon", value=str(expiring_soon_count), icon="alert-circle", color="yellow").render(),
+        ]
+
+        # Create DataTable rows from leases
+        table_rows = []
+        today = date.today()
+        for lease in self._leases:
+            # Calculate days left
+            days_left = (lease.end_date - today).days if lease.end_date >= today else 0
+
+            # Determine status badge
+            status_badge = StatusBadge(status=lease.status).render()
+
+            # Determine expiration warning
+            expiration_html = f"{lease.end_date}"
+            if lease.status == 'active' and days_left <= 60:
+                if days_left <= 30:
+                    expiration_html = f'<span class="text-red-600 dark:text-red-400 font-medium">{lease.end_date} ({days_left} days)</span>'
+                else:
+                    expiration_html = f'<span class="text-yellow-600 dark:text-yellow-400 font-medium">{lease.end_date} ({days_left} days)</span>'
+
+            table_rows.append({
+                "Property": lease.property.name,
+                "Tenant": lease.tenant.user.get_full_name(),
+                "Start Date": str(lease.start_date),
+                "End Date": expiration_html,
+                "Monthly Rent": f'<span class="text-green-600 dark:text-green-400 font-semibold">${lease.monthly_rent:,.0f}</span>',
+                "Status": status_badge,
+                "Actions": f'<a href="/rentals/leases/{lease.pk}/" data-djust-navigate class="text-primary hover:underline text-sm inline-flex items-center gap-1"><i data-lucide="eye" class="w-3 h-3"></i> View</a>'
             })
 
+        # Create DataTable component
+        lease_table = DataTable(
+            headers=["Property", "Tenant", "Start Date", "End Date", "Monthly Rent", "Status", "Actions"],
+            rows=table_rows,
+            empty_message="No leases found. Try adjusting your filters or create a new lease."
+        )
+
+        # Add non-model context
         context.update({
-            'lease_data': lease_data,
-            'total_count': self.leases.count(),
+            # Components (rendered to HTML strings)
+            'page_header': page_header.render(),
+            'stat_cards': stat_cards_html,
+            'lease_table': lease_table.render(),
+
+            # Filter state
             'search_query': self.search_query,
             'filter_status': self.filter_status,
             'sort_by': self.sort_by,
@@ -147,13 +203,6 @@ class LeaseDetailView(BaseViewWithNavbar):
         from ..models import Payment
         self.payments = Payment.objects.filter(lease=self.lease).order_by('-payment_date')
 
-        # Initialize hero
-        self.hero = HeroSection(
-            title=f"Lease: {self.lease.property.name}",
-            subtitle=f"{self.lease.tenant.user.get_full_name()} ({self.lease.start_date} - {self.lease.end_date})",
-            icon="📄"
-        )
-
     def get_context_data(self, **kwargs):
         """Add lease detail context"""
         context = super().get_context_data(**kwargs)
@@ -161,6 +210,24 @@ class LeaseDetailView(BaseViewWithNavbar):
         if not self.lease:
             context['error_message'] = self.error_message
             return context
+
+        # Create page header
+        page_header = PageHeader(
+            title=f"Lease: {self.lease.property.name}",
+            subtitle=f"{self.lease.tenant.user.get_full_name()} • {self.lease.start_date} - {self.lease.end_date}",
+            icon="file-text",
+            actions=[
+                {
+                    "label": "Edit Lease",
+                    "url": f"/rentals/leases/{self.lease.pk}/edit/",
+                    "icon": "edit",
+                    "variant": "secondary"
+                }
+            ]
+        )
+
+        # Create status badge
+        status_badge = StatusBadge(status=self.lease.status).render()
 
         # Calculate payment statistics
         from django.db.models import Sum, Count
@@ -171,7 +238,6 @@ class LeaseDetailView(BaseViewWithNavbar):
 
         # Calculate expected vs actual payments
         from datetime import date
-        from dateutil.relativedelta import relativedelta
 
         start_date = self.lease.start_date
         end_date = min(self.lease.end_date, date.today())
@@ -181,6 +247,11 @@ class LeaseDetailView(BaseViewWithNavbar):
         balance = expected_total - float(payment_stats['total_paid'] or 0)
 
         context.update({
+            # Components
+            'page_header': page_header.render(),
+            'status_badge': status_badge,
+
+            # Lease data
             'lease': self.lease,
             'payments': self.payments,
             'total_paid': payment_stats['total_paid'] or 0,
@@ -232,14 +303,6 @@ class LeaseFormView(BaseViewWithNavbar):
         # Load properties and tenants for dropdowns
         self.properties = Property.objects.all().order_by('name')
         self.tenants = Tenant.objects.select_related('user').all().order_by('user__last_name')
-
-        # Initialize hero
-        title = "Edit Lease" if self.is_edit else "Create New Lease"
-        self.hero = HeroSection(
-            title=title,
-            subtitle="Fill in lease details",
-            icon="📄"
-        )
 
     def save_lease(self, property_id=None, tenant_id=None, start_date=None,
                   end_date=None, monthly_rent=None, security_deposit=None,
@@ -306,7 +369,20 @@ class LeaseFormView(BaseViewWithNavbar):
         """Add form context"""
         context = super().get_context_data(**kwargs)
 
+        # Create page header
+        title = "Edit Lease" if self.is_edit else "Create New Lease"
+        subtitle = "Update lease details" if self.is_edit else "Fill in lease details"
+        page_header = PageHeader(
+            title=title,
+            subtitle=subtitle,
+            icon="file-text"
+        )
+
         context.update({
+            # Components (rendered to HTML strings)
+            'page_header': page_header.render(),
+
+            # Form data
             'lease': self.lease,
             'is_edit': self.is_edit,
             'properties': self.properties,

@@ -6,12 +6,12 @@ Income, expense, and profit/loss reporting.
 
 from djust_shared.views import BaseViewWithNavbar
 from djust.decorators import cache
-from djust_shared.components.ui import HeroSection
 from django.db.models import Sum, Count, Q
 from django.utils import timezone
 from datetime import timedelta, date
 from decimal import Decimal
 from ..models import Payment, Expense, Lease, Property
+from ..components import StatCard, PageHeader
 
 
 class FinancialDashboardView(BaseViewWithNavbar):
@@ -30,13 +30,6 @@ class FinancialDashboardView(BaseViewWithNavbar):
         """Initialize financial dashboard"""
         # Date range for analysis
         self.period = "month"  # month, quarter, year
-
-        # Initialize hero
-        self.hero = HeroSection(
-            title="Financial Dashboard",
-            subtitle="Income, expenses, and profitability analysis",
-            icon="💰"
-        )
 
         # Load financial data
         self._load_financial_data()
@@ -138,7 +131,49 @@ class FinancialDashboardView(BaseViewWithNavbar):
         """Add financial dashboard context"""
         context = super().get_context_data(**kwargs)
 
+        # Create page header (do this in get_context_data so it's available for every render)
+        page_header = PageHeader(
+            title="Financial Dashboard",
+            subtitle="Income, expenses, and profitability analysis",
+            icon="dollar-sign"
+        )
+
+        # Create StatCard components for key financial metrics (render to HTML)
+        stat_cards_html = [
+            StatCard(
+                label="Total Income",
+                value=f"${self.total_income:,.0f}",
+                icon="trending-up",
+                color="green",
+                trend=f"{self.payment_count} payments" if self.payment_count else None
+            ).render(),
+            StatCard(
+                label="Total Expenses",
+                value=f"${self.total_expenses:,.0f}",
+                icon="trending-down",
+                color="red",
+                trend=f"{self.expense_count} expenses" if self.expense_count else None
+            ).render(),
+            StatCard(
+                label="Net Profit",
+                value=f"${self.net_profit:,.0f}",
+                icon="dollar-sign",
+                color="green" if self.net_profit >= 0 else "red"
+            ).render(),
+            StatCard(
+                label="Profit Margin",
+                value=f"{self.profit_margin:.1f}%",
+                icon="percent",
+                color="primary"
+            ).render(),
+        ]
+
         context.update({
+            # Components (rendered to HTML strings)
+            'page_header': page_header.render(),
+            'stat_cards': stat_cards_html,
+
+            # Financial data
             'period': self.period,
             'start_date': self.start_date,
             'end_date': self.end_date,
@@ -170,13 +205,6 @@ class IncomeReportView(BaseViewWithNavbar):
 
     def mount(self, request, **kwargs):
         """Initialize income report"""
-        # Initialize hero
-        self.hero = HeroSection(
-            title="Income Report",
-            subtitle="Payment tracking and analysis",
-            icon="💵"
-        )
-
         # Load income data
         self.recent_payments = Payment.objects.filter(
             status='completed'
@@ -209,7 +237,15 @@ class IncomeReportView(BaseViewWithNavbar):
         """Add income report context"""
         context = super().get_context_data(**kwargs)
 
+        # Create page header
+        page_header = PageHeader(
+            title="Income Report",
+            subtitle="Payment tracking and analysis",
+            icon="dollar-sign"
+        )
+
         context.update({
+            'page_header': page_header.render(),
             'recent_payments': self.recent_payments,
             'monthly_income': self.monthly_income,
         })
@@ -231,13 +267,6 @@ class ExpenseReportView(BaseViewWithNavbar):
 
     def mount(self, request, **kwargs):
         """Initialize expense report"""
-        # Initialize hero
-        self.hero = HeroSection(
-            title="Expense Report",
-            subtitle="Cost tracking and analysis",
-            icon="💸"
-        )
-
         # Load expense data
         self.recent_expenses = Expense.objects.all().order_by('-date')[:50]
 
@@ -261,7 +290,15 @@ class ExpenseReportView(BaseViewWithNavbar):
         """Add expense report context"""
         context = super().get_context_data(**kwargs)
 
+        # Create page header
+        page_header = PageHeader(
+            title="Expense Report",
+            subtitle="Cost tracking and analysis",
+            icon="trending-down"
+        )
+
         context.update({
+            'page_header': page_header.render(),
             'recent_expenses': self.recent_expenses,
             'category_totals': self.category_totals,
         })
@@ -283,13 +320,6 @@ class ProfitLossView(BaseViewWithNavbar):
 
     def mount(self, request, **kwargs):
         """Initialize P&L view"""
-        # Initialize hero
-        self.hero = HeroSection(
-            title="Profit & Loss Statement",
-            subtitle="Profitability analysis",
-            icon="📊"
-        )
-
         # Calculate year-to-date P&L
         year_start = date.today().replace(month=1, day=1)
 
@@ -342,7 +372,15 @@ class ProfitLossView(BaseViewWithNavbar):
         """Add P&L context"""
         context = super().get_context_data(**kwargs)
 
+        # Create page header
+        page_header = PageHeader(
+            title="Profit & Loss Statement",
+            subtitle="Profitability analysis",
+            icon="bar-chart-2"
+        )
+
         context.update({
+            'page_header': page_header.render(),
             'ytd_income': self.ytd_income,
             'ytd_expenses': self.ytd_expenses,
             'ytd_profit': self.ytd_profit,

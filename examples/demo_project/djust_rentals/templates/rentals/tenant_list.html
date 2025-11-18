@@ -1,40 +1,58 @@
 {% extends "rentals/base.html" %}
-{% block title %}Tenants{% endblock %}
-{% block extra_head %}<script src="https://cdn.tailwindcss.com"></script>
-<style>body{background:#020617;color:#f8fafc}.card{background:#0f172a;border:1px solid #1e293b;border-radius:.5rem;padding:1.5rem}.input{background:#1e293b;border:1px solid #334155;border-radius:.375rem;padding:.5rem .75rem;color:#f8fafc;width:100%}.btn{padding:.5rem 1rem;border-radius:.375rem;font-weight:500}</style>
-{% endblock %}
+
+{% block title %}Tenants - Rental Management{% endblock %}
+
 {% block content %}
-<div data-liveview-root class="min-h-screen bg-slate-950 py-6">
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.tenants.TenantListView">
   <div class="container mx-auto px-4 max-w-7xl">
-    <div class="flex justify-between mb-6">
-      <h1 class="text-3xl font-bold">👥 Tenants</h1>
-      <a href="{% url 'rentals:tenant-add' %}" class="btn bg-blue-600 text-white">+ Add Tenant</a>
+    <!-- Page Header with Lucide Icon and Add Button -->
+    {{ page_header|safe }}
+
+    <!-- Search and Filters -->
+    <div class="bg-card border border-border rounded-lg p-6 mb-6">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- Search -->
+        <div>
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            <div class="flex items-center gap-1">
+              <i data-lucide="search" class="w-4 h-4"></i>
+              Search Tenants
+            </div>
+          </label>
+          <input type="text"
+                 @input="search"
+                 value="{{ search_query }}"
+                 placeholder="Search by name, email, or phone..."
+                 class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
+        </div>
+
+        <!-- Status Filter -->
+        <div>
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            <div class="flex items-center gap-1">
+              <i data-lucide="filter" class="w-4 h-4"></i>
+              Lease Status
+            </div>
+          </label>
+          <select @change="filter_by_status"
+                  class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
+            <option value="all" {% if filter_status == 'all' %}selected{% endif %}>All Tenants</option>
+            <option value="active" {% if filter_status == 'active' %}selected{% endif %}>Active Leases</option>
+            <option value="inactive" {% if filter_status == 'inactive' %}selected{% endif %}>No Active Lease</option>
+          </select>
+        </div>
+      </div>
     </div>
 
-    <div class="card mb-6">
-      <input type="text" @input="search" value="{{ search_query }}" placeholder="Search tenants..." class="input">
+    <!-- Summary Stats - Using StatCard Components -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      {% for stat_card in stat_cards %}
+        {{ stat_card|safe }}
+      {% endfor %}
     </div>
 
-    <div class="card overflow-hidden">
-      <table class="w-full">
-        <thead class="bg-slate-900">
-          <tr><th class="p-3 text-left">Name</th><th class="p-3 text-left">Email</th><th class="p-3 text-left">Phone</th><th class="p-3 text-left">Current Property</th><th class="p-3 text-left">Actions</th></tr>
-        </thead>
-        <tbody>
-          {% for data in tenant_data %}
-          <tr class="border-t border-slate-800 hover:bg-slate-900/50">
-            <td class="p-3">{{ data.tenant.user.get_full_name }}</td>
-            <td class="p-3 text-slate-400">{{ data.tenant.user.email }}</td>
-            <td class="p-3">{{ data.tenant.phone }}</td>
-            <td class="p-3">{% if data.current_property %}<span class="text-green-400">{{ data.current_property.name }}</span>{% else %}<span class="text-slate-500">No active lease</span>{% endif %}</td>
-            <td class="p-3"><a href="{% url 'rentals:tenant-detail' data.tenant.pk %}" class="text-blue-400">View</a> | <a href="{% url 'rentals:tenant-edit' data.tenant.pk %}" class="text-slate-400">Edit</a></td>
-          </tr>
-          {% empty %}
-          <tr><td colspan="5" class="p-8 text-center text-slate-400">No tenants found.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+    <!-- Tenants Table - Using DataTable Component -->
+    {{ tenant_table|safe }}
   </div>
 </div>
 {% endblock %}

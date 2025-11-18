@@ -6,6 +6,10 @@
 # This is a generic version that can be adapted to any project by providing
 # a configuration file (.claude/feature_config.yaml)
 #
+# NOTE: This script automatically unsets ANTHROPIC_API_KEY before invoking
+# Claude CLI to prevent authentication conflicts. The Claude CLI uses its own
+# authentication mechanism (configured via 'claude auth').
+#
 
 set -e  # Exit on error
 
@@ -571,6 +575,12 @@ run_phase_implementation() {
     echo ""
 
     cd "$REPO_ROOT"
+
+    # Unset ANTHROPIC_API_KEY to prevent conflicts with Claude CLI auth
+    if [ -n "$ANTHROPIC_API_KEY" ]; then
+        info "Unsetting ANTHROPIC_API_KEY to avoid auth conflicts with Claude CLI"
+        unset ANTHROPIC_API_KEY
+    fi
 
     # Run Claude with the context file
     claude -p "$(cat $TEMP_DIR/context.md)" \

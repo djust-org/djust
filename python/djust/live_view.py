@@ -16,6 +16,11 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils.decorators import method_decorator
 from django.db import models
 
+# Try to use orjson for faster JSON operations (2-3x faster than stdlib)
+import importlib.util
+
+HAS_ORJSON = importlib.util.find_spec("orjson") is not None
+
 # Configure logger
 logger = logging.getLogger(__name__)
 
@@ -129,11 +134,21 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
             # Include custom methods that don't start with _ and are callable
             # This allows model methods like get_status_display(), get_full_name(), etc.
+            # PERFORMANCE: Exclude auth-related methods that trigger database queries
+            excluded_methods = {
+                "get_all_permissions",
+                "get_user_permissions",
+                "get_group_permissions",
+                "get_session_auth_hash",
+            }
             for attr_name in dir(obj):
                 if not attr_name.startswith("_") and attr_name not in result:
                     attr = getattr(obj, attr_name, None)
                     # Include callable methods with no required parameters
                     if callable(attr) and attr_name.startswith("get_"):
+                        # Skip auth-related methods that cause N+1 queries
+                        if attr_name in excluded_methods:
+                            continue
                         try:
                             # Try calling with no args
                             value = attr()
@@ -548,9 +563,9 @@ class LiveView(View):
 
             # Check cache
             if cache_key in _jit_serializer_cache:
-                serializer, optimization = _jit_serializer_cache[cache_key]
+                paths_for_var, optimization = _jit_serializer_cache[cache_key]
                 print(
-                    f"[JIT] Cache HIT for '{variable_name}' - using cached serializer",
+                    f"[JIT] Cache HIT for '{variable_name}' - using cached paths: {paths_for_var}",
                     file=sys.stderr,
                 )
             else:
@@ -564,32 +579,39 @@ class LiveView(View):
                 )
                 if optimization:
                     print(
-                        f"[JIT] Query optimization: select_related={optimization.get('select_related', [])}, prefetch_related={optimization.get('prefetch_related', [])}",
+                        f"[JIT] Query optimization: select_related={sorted(optimization.select_related)}, prefetch_related={sorted(optimization.prefetch_related)}",
                         file=sys.stderr,
                     )
 
-                # Generate serializer code
-                code = generate_serializer_code(model_class.__name__, paths_for_var)
-                func_name = f"serialize_{variable_name}_{template_hash}"
-                serializer = compile_serializer(code, func_name)
-
-                # Cache for future use
-                _jit_serializer_cache[cache_key] = (serializer, optimization)
+                # Cache paths for Rust serializer
+                _jit_serializer_cache[cache_key] = (paths_for_var, optimization)
 
             # Optimize queryset
             if optimization:
                 queryset = optimize_queryset(queryset, optimization)
 
-            # Serialize all objects
-            count = queryset.count()
+            # Call Rust serializer (5-10x faster than Python!)
+            # Returns Python list of dicts directly (no JSON string intermediate!)
+            from djust._rust import serialize_queryset
+
+            result = serialize_queryset(list(queryset), paths_for_var)
+
+            # Log serialization results (using len() to avoid COUNT query)
             print(
-                f"[JIT] Serializing {count} {queryset.model.__name__} objects for '{variable_name}'",
+                f"[JIT] Serialized {len(result)} {queryset.model.__name__} objects for '{variable_name}' using Rust",
                 file=sys.stderr,
             )
-            return [serializer(obj) for obj in queryset]
+            print(f"[JIT DEBUG] Rust serializer returned {len(result)} items", file=sys.stderr)
+            if result:
+                print(f"[JIT DEBUG] First item keys: {list(result[0].keys())}", file=sys.stderr)
+            return result
 
         except Exception as e:
             # Fallback to default serialization on any error
+            import traceback
+
+            print(f"[JIT ERROR] Serialization failed for '{variable_name}': {e}", file=sys.stderr)
+            print(f"[JIT ERROR] Traceback:\n{traceback.format_exc()}", file=sys.stderr)
             logger.debug(f"JIT serialization failed for {variable_name}: {e}")
             return [json.loads(json.dumps(obj, cls=DjangoJSONEncoder)) for obj in queryset]
 
@@ -683,18 +705,39 @@ class LiveView(View):
                                 self._register_component(value)
                             context[key] = value
                         else:
-                            try:
-                                # Use custom Django encoder for better type support
-                                json.dumps(value, cls=DjangoJSONEncoder)
-                                context[key] = value
-                            except (TypeError, ValueError):
-                                # Skip non-serializable objects (like request, etc)
+                            # PERFORMANCE FIX: Don't test serializability by actually serializing!
+                            # The old approach (json.dumps() test) triggered expensive recursive
+                            # serialization with database queries for nested models (e.g., 402 queries
+                            # for tenant lists due to User → Groups → Permissions traversal).
+                            #
+                            # Instead, skip only known non-serializable types (functions, modules, etc.)
+                            # and let everything else through. JIT serialization and template rendering
+                            # will handle Django models/QuerySets appropriately.
+                            import types
+                            from django.http import HttpRequest
+
+                            if isinstance(
+                                value,
+                                (
+                                    types.FunctionType,
+                                    types.MethodType,
+                                    types.ModuleType,
+                                    type,
+                                    types.BuiltinFunctionType,
+                                    HttpRequest,  # Skip request objects
+                                ),
+                            ):
+                                # Skip non-serializable types
                                 pass
+                            else:
+                                # Include everything else (primitives, collections, models, etc.)
+                                context[key] = value
                 except (AttributeError, TypeError):
                     # Skip class-only methods and other inaccessible attributes
                     continue
 
         # JIT auto-serialization for QuerySets and Models (Phase 4)
+        jit_serialized_keys = set()  # Track which keys were JIT-serialized
         if JIT_AVAILABLE:
             try:
                 template_content = self._get_template_content()
@@ -703,15 +746,35 @@ class LiveView(View):
                     for key, value in list(context.items()):
                         if isinstance(value, QuerySet):
                             # Auto-serialize QuerySet with query optimization
-                            context[key] = self._jit_serialize_queryset(
-                                value, template_content, key
-                            )
+                            serialized = self._jit_serialize_queryset(value, template_content, key)
+                            context[key] = serialized
+                            jit_serialized_keys.add(key)
+
+                            # GENERIC OPTIMIZATION: Auto-add count using len() on serialized list
+                            # This avoids redundant COUNT(*) queries when views need totals
+                            if isinstance(serialized, list):
+                                count_key = f"{key}_count"
+                                if count_key not in context:
+                                    context[count_key] = len(serialized)
+
                         elif isinstance(value, models.Model):
                             # Auto-serialize Model instance
                             context[key] = self._jit_serialize_model(value, template_content, key)
+                            jit_serialized_keys.add(key)
             except Exception as e:
                 # Graceful fallback - log but continue with default serialization
                 logger.debug(f"JIT auto-serialization failed: {e}", exc_info=True)
+
+        # GENERIC OPTIMIZATION: Auto-add count for plain lists in context (Phase 4+)
+        # This handles cases where views create processed lists (not QuerySets)
+        for key, value in list(context.items()):
+            if isinstance(value, list) and not key.endswith("_count"):
+                count_key = f"{key}_count"
+                if count_key not in context:
+                    context[count_key] = len(value)
+
+        # Store JIT-serialized keys for debugging/optimization tracking
+        self._jit_serialized_keys = jit_serialized_keys
 
         return context
 
@@ -725,7 +788,35 @@ class LiveView(View):
 
         if self._rust_view is None:
             # Try to get from cache if we have a session
-            if request and hasattr(request, "session"):
+            # Prefer WebSocket session_id for consistency across mount + events
+            if hasattr(self, "_websocket_session_id") and self._websocket_session_id:
+                # WebSocket mode: use WebSocket session_id for consistent VDOM caching
+                view_key = "liveview_ws"
+                session_key = self._websocket_session_id
+
+                from .state_backend import get_backend
+
+                backend = get_backend()
+                self._cache_key = f"{session_key}_{view_key}"
+                print(
+                    f"[LiveView] Cache lookup (WebSocket): cache_key={self._cache_key}",
+                    file=sys.stderr,
+                )
+
+                # Try to get cached RustLiveView from backend
+                cached = backend.get(self._cache_key)
+                if cached:
+                    cached_view, timestamp = cached
+                    self._rust_view = cached_view
+                    print("[LiveView] Cache HIT! Using cached RustLiveView", file=sys.stderr)
+                    # Update timestamp on access
+
+                    backend.set(self._cache_key, cached_view)
+                    return
+                else:
+                    print("[LiveView] Cache MISS! Will create new RustLiveView", file=sys.stderr)
+            elif request and hasattr(request, "session"):
+                # HTTP mode: use Django session
                 view_key = f"liveview_{request.path}"
                 session_key = request.session.session_key
                 if not session_key:
@@ -736,7 +827,9 @@ class LiveView(View):
 
                 backend = get_backend()
                 self._cache_key = f"{session_key}_{view_key}"
-                print(f"[LiveView] Cache lookup: cache_key={self._cache_key}", file=sys.stderr)
+                print(
+                    f"[LiveView] Cache lookup (HTTP): cache_key={self._cache_key}", file=sys.stderr
+                )
 
                 # Try to get cached RustLiveView from backend
                 cached = backend.get(self._cache_key)
@@ -1217,10 +1310,14 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
     # FULL TEMPLATE RENDERING (with inheritance)
     # ============================================================================
 
-    def render_full_template(self, request=None) -> str:
+    def render_full_template(self, request=None, serialized_context=None) -> str:
         """
         Render the full template including base template inheritance.
         Used for initial GET requests when using template inheritance.
+
+        Args:
+            request: HTTP request object
+            serialized_context: Optional pre-serialized context dict (optimization to avoid re-serialization)
 
         Returns the complete HTML document (DOCTYPE, html, head, body, etc.)
         """
@@ -1231,22 +1328,26 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
             temp_rust = RustLiveView(self._full_template)
 
-            # Sync state to this temporary view
-            from .component import Component, LiveComponent
+            # Use pre-serialized context if provided (optimization for GET requests)
+            if serialized_context is not None:
+                json_compatible_context = serialized_context
+            else:
+                # Sync state to this temporary view
+                from .component import Component, LiveComponent
 
-            context = self.get_context_data()
+                context = self.get_context_data()
 
-            rendered_context = {}
-            for key, value in context.items():
-                if isinstance(value, (Component, LiveComponent)):
-                    rendered_context[key] = {"render": str(value.render())}
-                else:
-                    rendered_context[key] = value
+                rendered_context = {}
+                for key, value in context.items():
+                    if isinstance(value, (Component, LiveComponent)):
+                        rendered_context[key] = {"render": str(value.render())}
+                    else:
+                        rendered_context[key] = value
 
-            # Serialize and deserialize to ensure all types are JSON-compatible
-            # This converts Django models, QuerySets, UUIDs, datetimes, etc.
-            json_str = json.dumps(rendered_context, cls=DjangoJSONEncoder)
-            json_compatible_context = json.loads(json_str)
+                # Serialize and deserialize to ensure all types are JSON-compatible
+                # This converts Django models, QuerySets, UUIDs, datetimes, etc.
+                json_str = json.dumps(rendered_context, cls=DjangoJSONEncoder)
+                json_compatible_context = json.loads(json_str)
 
             temp_rust.update_state(json_compatible_context)
             html = temp_rust.render()
@@ -1454,6 +1555,73 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         request.session[f"{view_key}_components"] = component_state_serializable
         request.session.modified = True
 
+    def _lazy_serialize_context(self, context: dict) -> dict:
+        """
+        Lazy serialization: only serialize values that need conversion.
+
+        This is 2-3x faster than full JSON round-trip because:
+        - Simple types (str, int, float, bool, None) are left alone
+        - Lists and dicts are recursively processed
+        - Only Django models, Components, datetimes, etc. get serialized
+
+        Args:
+            context: Raw context dictionary
+
+        Returns:
+            JSON-compatible context dictionary
+        """
+        from .component import Component, LiveComponent
+        from django.db.models import Model
+        from datetime import datetime, date, time
+        from decimal import Decimal
+        from uuid import UUID
+
+        def serialize_value(value):
+            # Fast path: already JSON-compatible
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return value
+
+            # Lists: recursively process
+            if isinstance(value, (list, tuple)):
+                return [serialize_value(item) for item in value]
+
+            # Dicts: recursively process
+            if isinstance(value, dict):
+                return {k: serialize_value(v) for k, v in value.items()}
+
+            # Components: render to dict
+            if isinstance(value, (Component, LiveComponent)):
+                return {"render": str(value.render())}
+
+            # Django models: convert to dict (if needed)
+            # For now, just convert to string to avoid circular refs
+            if isinstance(value, Model):
+                return str(value)
+
+            # Datetime types: convert to ISO format
+            if isinstance(value, (datetime, date)):
+                return value.isoformat()
+
+            if isinstance(value, time):
+                return value.isoformat()
+
+            # Decimal/UUID: convert to string
+            if isinstance(value, (Decimal, UUID)):
+                return str(value)
+
+            # Fallback: use DjangoJSONEncoder for complex types
+            # This handles any remaining Django/Python types
+            try:
+                from django.core.serializers.json import DjangoJSONEncoder
+                import json
+
+                return json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+            except (TypeError, ValueError):
+                # Last resort: convert to string
+                return str(value)
+
+        return {k: serialize_value(v) for k, v in context.items()}
+
     @method_decorator(ensure_csrf_cookie)
     # ============================================================================
     # HTTP REQUEST HANDLERS
@@ -1461,30 +1629,49 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
     def get(self, request, *args, **kwargs):
         """Handle GET requests - initial page load"""
+        import time
+
+        t_start = time.perf_counter()
+
         # IMPORTANT: mount() must be called first to initialize clean state
+        t0 = time.perf_counter()
         self.mount(request, **kwargs)
+        t_mount = (time.perf_counter() - t0) * 1000
 
         # Automatically assign deterministic IDs to components based on variable names
+        t0 = time.perf_counter()
         self._assign_component_ids()
+        t_assign = (time.perf_counter() - t0) * 1000
 
-        # Ensure session exists and is saved
+        # OPTIMIZATION: On GET requests, serialize for rendering but skip session storage
+        # Session storage is only needed for POST events to restore state
+        # GET requests call mount() which creates fresh state anyway
+
+        # Ensure session exists
         if not request.session.session_key:
             request.session.create()
 
-        # Store initial state in session (exclude components)
-        view_key = f"liveview_{request.path}"
+        # Get context for rendering
+        t0 = time.perf_counter()
+        context = self.get_context_data()
+        t_get_context = (time.perf_counter() - t0) * 1000
+
+        # Serialize state for rendering (but don't store in session)
         from .component import LiveComponent
 
-        context = self.get_context_data()
         state = {k: v for k, v in context.items() if not isinstance(v, LiveComponent)}
 
-        # Serialize and deserialize to ensure session-compatible types (UUIDs, datetimes, etc.)
-        state_json = json.dumps(state, cls=DjangoJSONEncoder)
-        state_serializable = json.loads(state_json)
-        request.session[view_key] = state_serializable
+        t0 = time.perf_counter()
+        # OPTIMIZATION: JIT-serialized data is already JSON-compatible!
+        # Don't re-serialize it with serialize_context() as that destroys the nested structure
+        # The JIT serializer already created perfect nested dictionaries with method results
+        # Just use the context directly after JIT serialization
+        state_serializable = state
+        t_json = (time.perf_counter() - t0) * 1000
 
-        # Save component state to session (DRY helper method)
-        self._save_components_to_session(request, context)
+        # OPTIMIZATION: Skip session storage on GET (session populated on first POST)
+        # request.session[view_key] = state_serializable  # Skipped on GET
+        t_save_components = 0.0  # Skipped: no session storage on GET
 
         # NOTE: Don't clear the cache on GET! The cache persists across requests
         # to maintain VDOM state. Only clear if we detect the user explicitly
@@ -1496,35 +1683,29 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         #     self._rust_view = None
         #     self._cache_key = None
 
-        # Initialize and render the LiveView content
-        # For initial GET request, render the full template (with template inheritance)
-        # This ensures the browser gets the complete HTML (DOCTYPE, head, nav, etc.)
-        self._initialize_rust_view(request)
-
-        # CRITICAL: Reset VDOM state on GET requests (page loads/reloads)
-        # This ensures the client's fresh DOM matches the server's VDOM baseline.
-        # In HTTP-only mode, GET requests represent fresh page loads, so the VDOM
-        # should start from a clean state to match the client's newly rendered DOM.
-        if self._rust_view:
-            print(
-                "[LiveView] Resetting VDOM state on GET request (HTTP-only mode)", file=sys.stderr
-            )
-            self._rust_view.reset()
-
-        self._sync_state_to_rust()
+        # OPTIMIZATION: On GET requests, skip VDOM operations since we're just rendering initial HTML
+        # The VDOM baseline will be created on the first event (POST/WebSocket)
+        # This eliminates double rendering: render_with_diff() + render_full_template()
 
         # IMPORTANT: Always call get_template() on GET requests to set _full_template
-        # This is needed even if the Rust view is cached, because _full_template
-        # is used by render_full_template() to return the complete HTML document
+        # This is needed because _full_template is used by render_full_template()
+        t0 = time.perf_counter()
         self.get_template()
-
-        # Initialize baseline VDOM for future patches
-        # This establishes the initial VDOM state for diffing on subsequent renders
-        _, _, _ = self.render_with_diff(request)
+        t_get_template = (time.perf_counter() - t0) * 1000
 
         # Render full template for the browser (includes full HTML structure)
-        html = self.render_full_template(request)
+        # OPTIMIZATION: Pass the already-serialized context to avoid re-serialization
+        # render_full_template() creates its own temporary RustLiveView, so we don't
+        # need to initialize the cached one or sync state on GET requests
+        t0 = time.perf_counter()
+        html = self.render_full_template(request, serialized_context=state_serializable)
+        t_render_full = (time.perf_counter() - t0) * 1000
         liveview_content = html
+
+        # Mark skipped operations for timing output
+        t_init_rust = 0.0  # Skipped on GET
+        t_sync = 0.0  # Skipped on GET
+        t_render_diff = 0.0  # Skipped on GET
 
         # Wrap in Django template if wrapper_template is specified
         # (This is for the older wrapper pattern, not template inheritance)
@@ -1539,6 +1720,20 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         else:
             # No wrapper, return LiveView content directly
             html = liveview_content
+
+        t_total = (time.perf_counter() - t_start) * 1000
+        print("\n[LIVEVIEW GET TIMING]", file=sys.stderr)
+        print(f"  mount(): {t_mount:.2f}ms", file=sys.stderr)
+        print(f"  assign_component_ids(): {t_assign:.2f}ms", file=sys.stderr)
+        print(f"  get_context_data(): {t_get_context:.2f}ms", file=sys.stderr)
+        print(f"  JSON serialize/deserialize: {t_json:.2f}ms", file=sys.stderr)
+        print(f"  save_components_to_session(): {t_save_components:.2f}ms", file=sys.stderr)
+        print(f"  initialize_rust_view(): {t_init_rust:.2f}ms", file=sys.stderr)
+        print(f"  sync_state_to_rust(): {t_sync:.2f}ms", file=sys.stderr)
+        print(f"  get_template(): {t_get_template:.2f}ms", file=sys.stderr)
+        print(f"  render_with_diff(): {t_render_diff:.2f}ms", file=sys.stderr)
+        print(f"  render_full_template(): {t_render_full:.2f}ms", file=sys.stderr)
+        print(f"  TOTAL get(): {t_total:.2f}ms\n", file=sys.stderr)
 
         # Debug: Save the rendered HTML to a file for inspection
         if "registration" in request.path:

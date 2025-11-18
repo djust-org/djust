@@ -11,6 +11,7 @@ from django.db.models import Sum, Count, Q
 from django.utils import timezone
 from datetime import timedelta
 from ..models import Property, Tenant, Lease, MaintenanceRequest, Payment, Expense
+from ..components import StatCard, PageHeader, StatusBadge, DataTable
 
 
 class RentalDashboardView(BaseViewWithNavbar):
@@ -31,13 +32,6 @@ class RentalDashboardView(BaseViewWithNavbar):
         # Search and filter state
         self.search_query = ""
         self.filter_status = "all"  # all, active, maintenance, vacant
-
-        # Initialize hero component
-        self.hero = HeroSection(
-            title="Rental Property Dashboard",
-            subtitle="Manage your rental properties, tenants, and finances",
-            icon="🏠"
-        )
 
         # Load initial data
         self._refresh_data()
@@ -107,7 +101,12 @@ class RentalDashboardView(BaseViewWithNavbar):
 
     def get_context_data(self, **kwargs):
         """Add dashboard statistics to context"""
-        context = super().get_context_data(**kwargs)
+        # Create page header (do this in get_context_data so it's available for every render)
+        page_header = PageHeader(
+            title="Dashboard",
+            subtitle="Manage your rental properties, tenants, and finances",
+            icon="layout-dashboard"
+        )
 
         # Calculate key metrics
         total_properties = self.properties.count()
@@ -130,9 +129,6 @@ class RentalDashboardView(BaseViewWithNavbar):
         # Get maintenance by priority
         urgent_maintenance = self.pending_maintenance_qs.filter(priority='urgent').count()
         high_maintenance = self.pending_maintenance_qs.filter(priority='high').count()
-
-        # Get top 10 for display
-        pending_maintenance_display = self.pending_maintenance_qs[:10]
 
         # Recent activity (last 7 days)
         seven_days_ago = timezone.now() - timedelta(days=7)
@@ -167,42 +163,59 @@ class RentalDashboardView(BaseViewWithNavbar):
             end_date__lte=sixty_days_from_now
         ).order_by('end_date')[:5]
 
-        # Serialize properties for template
-        properties_list = []
-        for prop in self.properties[:10]:
-            properties_list.append({
-                'name': prop.name,
-                'address': prop.address,
-                'monthly_rent': prop.monthly_rent,
-                'status': prop.status,
-                'status_display': prop.get_status_display(),
-            })
+        # Store QuerySets as instance variables for JIT auto-serialization
+        # JIT will automatically extract paths from template and serialize:
+        # - properties: name, address, monthly_rent, status, status_display
+        # - pending_maintenance: title, property_name, priority, priority_display, created_at
+        # - expiring_soon: pk, property_name, tenant_name, end_date, days_until_expiration
+        self.properties = self.properties[:10]  # Top 10 properties
+        self.pending_maintenance = self.pending_maintenance_qs[:10]  # Top 10 maintenance
+        self.expiring_soon = expiring_soon
 
-        # Serialize maintenance requests
-        maintenance_list = []
-        for req in pending_maintenance_display:
-            maintenance_list.append({
-                'title': req.title,
-                'property_name': req.property.name,
-                'priority': req.priority,
-                'priority_display': req.get_priority_display(),
-                'created_at': req.created_at,
-            })
+        # Call parent - JIT serializes QuerySets with Rust + auto-generates counts
+        context = super().get_context_data(**kwargs)
 
-        # Serialize expiring leases
-        expiring_list = []
-        for lease in expiring_soon:
-            expiring_list.append({
-                'pk': lease.pk,
-                'property_name': lease.property.name,
-                'tenant_name': lease.tenant.user.get_full_name(),
-                'end_date': lease.end_date,
-                'days_until_expiration': lease.days_until_expiration(),
-            })
+        # Create StatCard components for key metrics (render to HTML)
+        stat_cards_html = [
+            StatCard(
+                label="Total Properties",
+                value=str(total_properties),
+                icon="home",
+                color="primary"
+            ).render(),
+            StatCard(
+                label="Active Tenants",
+                value=str(active_tenants),
+                icon="users",
+                color="primary"
+            ).render(),
+            StatCard(
+                label="Vacancy Rate",
+                value=f"{vacancy_rate}%",
+                icon="key",
+                color="yellow" if vacancy_rate > 20 else "primary"
+            ).render(),
+            StatCard(
+                label="Monthly Income",
+                value=f"${monthly_income:,.0f}",
+                icon="dollar-sign",
+                color="green"
+            ).render(),
+            StatCard(
+                label="Pending Maintenance",
+                value=str(pending_maintenance_count),
+                icon="wrench",
+                color="red" if urgent_maintenance > 0 else "yellow"
+            ).render(),
+        ]
 
-        # Update context
+        # Add non-model context
         context.update({
-            # Stats
+            # Components (rendered to HTML strings)
+            'page_header': page_header.render(),
+            'stat_cards': stat_cards_html,
+
+            # Stats (for backwards compatibility)
             'total_properties': total_properties,
             'active_tenants': active_tenants,
             'vacancy_rate': vacancy_rate,
@@ -220,11 +233,6 @@ class RentalDashboardView(BaseViewWithNavbar):
             'month_income': month_income,
             'month_expenses': month_expenses,
             'month_profit': month_profit,
-
-            # Lists (serialized)
-            'properties': properties_list,
-            'pending_maintenance': maintenance_list,
-            'expiring_soon': expiring_list,
 
             # Filter state
             'search_query': self.search_query,

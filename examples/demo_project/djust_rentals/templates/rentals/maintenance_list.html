@@ -1,13 +1,93 @@
 {% extends "rentals/base.html" %}
-{% block title %}Maintenance Requests{% endblock %}
-{% block extra_head %}<script src="https://cdn.tailwindcss.com"></script><style>body{background:#020617;color:#f8fafc}.card{background:#0f172a;border:1px solid #1e293b;border-radius:.5rem;padding:1.5rem}</style>{% endblock %}
+
+{% block title %}Maintenance Requests - Rental Management{% endblock %}
+
 {% block content %}
-<div data-liveview-root class="min-h-screen bg-slate-950 py-6">
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.maintenance.MaintenanceListView">
   <div class="container mx-auto px-4 max-w-7xl">
-    <h1 class="text-3xl font-bold mb-6">🔧 Maintenance Requests</h1>
-    <div class="card mb-6"><div class="flex gap-4"><input type="text" @input="search" value="{{search_query}}" placeholder="Search..." class="bg-slate-900 border border-slate-700 rounded px-4 py-2 flex-1"><select @change="filter_by_priority" class="bg-slate-900 border border-slate-700 rounded px-4 py-2"><option value="all">All Priorities</option>{% for val,label in priority_choices %}<option value="{{val}}" {% if filter_priority == val %}selected{% endif %}>{{label}}</option>{% endfor %}</select><select @change="filter_by_status" class="bg-slate-900 border border-slate-700 rounded px-4 py-2"><option value="all">All Statuses</option>{% for val,label in status_choices %}<option value="{{val}}" {% if filter_status == val %}selected{% endif %}>{{label}}</option>{% endfor %}</select></div></div>
-    <div class="grid grid-cols-4 gap-4 mb-6"><div class="card text-center"><p class="text-slate-400 text-sm">Open</p><p class="text-2xl font-bold text-yellow-400">{{status_counts.open}}</p></div><div class="card text-center"><p class="text-slate-400 text-sm">In Progress</p><p class="text-2xl font-bold text-blue-400">{{status_counts.in_progress}}</p></div><div class="card text-center"><p class="text-slate-400 text-sm">Urgent</p><p class="text-2xl font-bold text-red-400">{{priority_counts.urgent}}</p></div><div class="card text-center"><p class="text-slate-400 text-sm">Completed</p><p class="text-2xl font-bold text-green-400">{{status_counts.completed}}</p></div></div>
-    <div class="card overflow-hidden"><table class="w-full"><thead class="bg-slate-900"><tr><th class="p-3 text-left">Request</th><th class="p-3 text-left">Property</th><th class="p-3 text-left">Priority</th><th class="p-3 text-left">Status</th><th class="p-3 text-left">Created</th><th class="p-3 text-left">Actions</th></tr></thead><tbody>{% for req in requests %}<tr class="border-t border-slate-800 hover:bg-slate-900/50"><td class="p-3"><p class="font-medium">{{req.title}}</p><p class="text-sm text-slate-400">{{req.description|truncatewords:10}}</p></td><td class="p-3">{{req.property.name}}</td><td class="p-3"><span class="px-2 py-1 rounded text-xs {% if req.priority == "urgent" %}bg-red-900/30 text-red-400{% elif req.priority == "high" %}bg-orange-900/30 text-orange-400{% elif req.priority == "medium" %}bg-yellow-900/30 text-yellow-400{% else %}bg-green-900/30 text-green-400{% endif %}">{{req.get_priority_display}}</span></td><td class="p-3"><span class="px-2 py-1 rounded text-xs bg-slate-800 text-slate-300">{{req.get_status_display}}</span></td><td class="p-3 text-sm">{{req.created_at|date:"M d, Y"}}</td><td class="p-3"><a href="{% url 'rentals:maintenance-detail' req.pk %}" class="text-blue-400">View</a></td></tr>{% empty %}<tr><td colspan="6" class="p-8 text-center text-slate-400">No requests found.</td></tr>{% endfor %}</tbody></table></div>
+    <!-- Page Header with Lucide Icon and Add Button -->
+    {{ page_header|safe }}
+
+    <!-- Search and Filters -->
+    <div class="bg-card border border-border rounded-lg p-6 mb-6">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <!-- Search -->
+        <div>
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            <div class="flex items-center gap-1">
+              <i data-lucide="search" class="w-4 h-4"></i>
+              Search Requests
+            </div>
+          </label>
+          <input type="text"
+                 @input="search"
+                 value="{{ search_query }}"
+                 placeholder="Search by title, description, or property..."
+                 class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
+        </div>
+
+        <!-- Priority Filter -->
+        <div>
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            <div class="flex items-center gap-1">
+              <i data-lucide="alert-triangle" class="w-4 h-4"></i>
+              Priority
+            </div>
+          </label>
+          <select @change="filter_by_priority"
+                  class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
+            <option value="all" {% if filter_priority == 'all' %}selected{% endif %}>All Priorities</option>
+            {% for val, label in priority_choices %}
+            <option value="{{ val }}" {% if filter_priority == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <!-- Status Filter -->
+        <div>
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            <div class="flex items-center gap-1">
+              <i data-lucide="filter" class="w-4 h-4"></i>
+              Status
+            </div>
+          </label>
+          <select @change="filter_by_status"
+                  class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
+            <option value="pending" {% if filter_status == 'pending' %}selected{% endif %}>Pending (Open + In Progress)</option>
+            <option value="all" {% if filter_status == 'all' %}selected{% endif %}>All Statuses</option>
+            {% for val, label in status_choices %}
+            <option value="{{ val }}" {% if filter_status == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <!-- Sort By -->
+        <div>
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            <div class="flex items-center gap-1">
+              <i data-lucide="arrow-up-down" class="w-4 h-4"></i>
+              Sort By
+            </div>
+          </label>
+          <select @change="sort_requests"
+                  class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
+            <option value="created" {% if sort_by == 'created' %}selected{% endif %}>Date Created</option>
+            <option value="priority" {% if sort_by == 'priority' %}selected{% endif %}>Priority</option>
+            <option value="property" {% if sort_by == 'property' %}selected{% endif %}>Property</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Summary Stats - Using StatCard Components -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      {% for stat_card in stat_cards %}
+        {{ stat_card|safe }}
+      {% endfor %}
+    </div>
+
+    <!-- Maintenance Requests Table - Using DataTable Component -->
+    {{ maintenance_table|safe }}
   </div>
 </div>
 {% endblock %}

@@ -45,7 +45,7 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
         }
 
         Node::For {
-            var_name,
+            var_names,
             iterable,
             reversed,
             nodes,
@@ -71,7 +71,34 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
                     };
 
                     for item in iter {
-                        ctx.set(var_name.clone(), item);
+                        // Handle tuple unpacking: {% for a, b in items %}
+                        if var_names.len() == 1 {
+                            // Single variable: {% for item in items %}
+                            ctx.set(var_names[0].clone(), item);
+                        } else {
+                            // Multiple variables: {% for key, value in items %}
+                            // Expect item to be a list/tuple
+                            match &item {
+                                Value::List(tuple_items) => {
+                                    // Unpack tuple items into separate variables
+                                    for (i, var_name) in var_names.iter().enumerate() {
+                                        if i < tuple_items.len() {
+                                            ctx.set(var_name.clone(), tuple_items[i].clone());
+                                        } else {
+                                            // If tuple has fewer items than var names, set to Null
+                                            ctx.set(var_name.clone(), Value::Null);
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    // If item is not a list, set all vars to Null except first
+                                    ctx.set(var_names[0].clone(), item.clone());
+                                    for var_name in &var_names[1..] {
+                                        ctx.set(var_name.clone(), Value::Null);
+                                    }
+                                }
+                            }
+                        }
                         output.push_str(&render_nodes(nodes, &ctx)?);
                     }
 

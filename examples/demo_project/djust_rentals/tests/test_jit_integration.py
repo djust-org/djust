@@ -339,7 +339,7 @@ class MaintenanceRequestJITTestCase(TestCase):
 
             # Access property for each (future: should use select_related)
             for req in requests:
-                _ = req.property.name
+                _ = req.rental_property.name
                 _ = req.tenant.user.email if req.tenant else None
 
         query_count = len(ctx.captured_queries)
