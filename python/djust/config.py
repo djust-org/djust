@@ -35,6 +35,7 @@ class LiveViewConfig:
         # Debug settings
         "debug_vdom": False,  # Enable detailed VDOM patching debug logs
         "debug_components": False,  # Enable component lifecycle debug logs
+        "debug_panel_max_history": 50,  # Maximum number of events/patches to keep in debug panel history
         # JIT Serialization (Phase 5)
         "jit_serialization": True,  # Enable/disable JIT auto-serialization
         "jit_debug": False,  # Debug logging for JIT serialization

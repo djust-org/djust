@@ -2012,11 +2012,17 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     # Skip attributes that can't be represented
                     pass
 
+        # Get debug panel configuration
+        from .config import config
+
+        max_history = config.get("debug_panel_max_history", 50)
+
         return {
             "view_class": self.__class__.__name__,
             "handlers": handlers,
             "variables": variables,
             "template": self.template_name if hasattr(self, "template_name") else None,
+            "config": {"maxHistory": max_history},
         }
 
     def _hydrate_react_components(self, html: str) -> str:

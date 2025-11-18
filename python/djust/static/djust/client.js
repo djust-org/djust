@@ -2643,7 +2643,10 @@ class DjustDebugPanel {
         this.currentTab = 'handlers';
         this.eventHistory = [];
         this.patchHistory = [];
-        this.maxHistory = 50;
+
+        // Get max history from config (default: 50)
+        const debugInfo = window.DJUST_DEBUG_INFO || {};
+        this.maxHistory = (debugInfo.config && debugInfo.config.maxHistory) || 50;
 
         this.createUI();
         this.setupKeyboardShortcut();
@@ -2789,7 +2792,15 @@ class DjustDebugPanel {
             return '<p class="empty">No events captured yet. Interact with the page to see events here.</p>';
         }
 
-        let html = '<div class="event-history">';
+        let html = `
+            <div class="event-history">
+                <div class="history-toolbar">
+                    <button onclick="window.djustDebugPanel.exportEventHistory()" class="export-btn">
+                        📥 Export All Events
+                    </button>
+                    <span class="history-count">${this.eventHistory.length} event(s)</span>
+                </div>
+        `;
 
         // Reverse to show newest first
         for (const event of [...this.eventHistory].reverse()) {
@@ -2909,6 +2920,30 @@ class DjustDebugPanel {
         if (this.visible && this.currentTab === 'patches') {
             this.render();
         }
+    }
+
+    exportEventHistory() {
+        // Create export data
+        const exportData = {
+            exported_at: new Date().toISOString(),
+            view_class: (window.DJUST_DEBUG_INFO || {}).view_class || 'Unknown',
+            event_count: this.eventHistory.length,
+            events: this.eventHistory
+        };
+
+        // Convert to JSON
+        const jsonString = JSON.stringify(exportData, null, 2);
+
+        // Create download link
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `djust-events-${Date.now()}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
     }
 }
 
