@@ -1063,6 +1063,192 @@ async function handleEvent(eventName, params = {}) {
     }
 }
 
+// === VDOM Patch Application ===
+
+function getNodeByPath(path) {
+    let node = getLiveViewRoot();
+
+    if (path.length === 0) {
+        return node;
+    }
+
+    for (let i = 0; i < path.length; i++) {
+        const index = path[i];
+        const children = Array.from(node.childNodes).filter(child => {
+            if (child.nodeType === Node.ELEMENT_NODE) return true;
+            if (child.nodeType === Node.TEXT_NODE) {
+                return child.textContent.trim().length > 0;
+            }
+            return false;
+        });
+
+        if (index >= children.length) {
+            console.warn(`[LiveView] Path traversal failed at index ${index}, only ${children.length} children`);
+            return null;
+        }
+
+        node = children[index];
+    }
+
+    return node;
+}
+
+function createNodeFromVNode(vnode) {
+    if (vnode.tag === '#text') {
+        return document.createTextNode(vnode.text || '');
+    }
+
+    const elem = document.createElement(vnode.tag);
+
+    if (vnode.attrs) {
+        for (const [key, value] of Object.entries(vnode.attrs)) {
+            if (key.startsWith('@')) {
+                const eventName = key.substring(1);
+                elem.addEventListener(eventName, (e) => {
+                    e.preventDefault();
+                    const params = {};
+                    Array.from(elem.attributes).forEach(attr => {
+                        if (attr.name.startsWith('data-') && !attr.name.startsWith('data-liveview')) {
+                            const key = attr.name.substring(5).replace(/-/g, '_');
+                            params[key] = attr.value;
+                        }
+                    });
+
+                    let currentElement = elem;
+                    while (currentElement && currentElement !== document.body) {
+                        if (currentElement.dataset.componentId) {
+                            params.component_id = currentElement.dataset.componentId;
+                            break;
+                        }
+                        currentElement = currentElement.parentElement;
+                    }
+
+                    handleEvent(value, params);
+                });
+            } else {
+                if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
+                    elem.value = value;
+                }
+                elem.setAttribute(key, value);
+            }
+        }
+    }
+
+    if (vnode.children) {
+        for (const child of vnode.children) {
+            elem.appendChild(createNodeFromVNode(child));
+        }
+    }
+
+    return elem;
+}
+
+function applyPatches(patches) {
+    if (!patches || patches.length === 0) {
+        return true;
+    }
+
+    // Sort patches to ensure RemoveChild operations are applied in descending order
+    patches.sort((a, b) => {
+        if (a.type === 'RemoveChild' && b.type === 'RemoveChild') {
+            const pathA = JSON.stringify(a.path);
+            const pathB = JSON.stringify(b.path);
+            if (pathA === pathB) {
+                return b.index - a.index;
+            }
+        }
+        return 0;
+    });
+
+    let failedCount = 0;
+    let successCount = 0;
+
+    for (const patch of patches) {
+        const node = getNodeByPath(patch.path);
+        if (!node) {
+            failedCount++;
+            console.warn(`[LiveView] Failed to find node at path:`, patch.path);
+            continue;
+        }
+
+        successCount++;
+
+        try {
+            if (patch.type === 'Replace') {
+                const newNode = createNodeFromVNode(patch.node);
+                node.parentNode.replaceChild(newNode, node);
+            } else if (patch.type === 'SetText') {
+                node.textContent = patch.text;
+            } else if (patch.type === 'SetAttr') {
+                if (patch.key === 'value' && (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA')) {
+                    if (document.activeElement !== node) {
+                        node.value = patch.value;
+                    }
+                    node.setAttribute(patch.key, patch.value);
+                } else {
+                    node.setAttribute(patch.key, patch.value);
+                }
+            } else if (patch.type === 'RemoveAttr') {
+                node.removeAttribute(patch.key);
+            } else if (patch.type === 'InsertChild') {
+                const newChild = createNodeFromVNode(patch.node);
+                const children = Array.from(node.childNodes).filter(child => {
+                    if (child.nodeType === Node.ELEMENT_NODE) return true;
+                    if (child.nodeType === Node.TEXT_NODE) {
+                        return child.textContent.trim().length > 0;
+                    }
+                    return false;
+                });
+                const refChild = children[patch.index];
+                if (refChild) {
+                    node.insertBefore(newChild, refChild);
+                } else {
+                    node.appendChild(newChild);
+                }
+            } else if (patch.type === 'RemoveChild') {
+                const children = Array.from(node.childNodes).filter(child => {
+                    if (child.nodeType === Node.ELEMENT_NODE) return true;
+                    if (child.nodeType === Node.TEXT_NODE) {
+                        return child.textContent.trim().length > 0;
+                    }
+                    return false;
+                });
+                const child = children[patch.index];
+                if (child) {
+                    node.removeChild(child);
+                }
+            } else if (patch.type === 'MoveChild') {
+                const children = Array.from(node.childNodes).filter(child => {
+                    if (child.nodeType === Node.ELEMENT_NODE) return true;
+                    if (child.nodeType === Node.TEXT_NODE) {
+                        return child.textContent.trim().length > 0;
+                    }
+                    return false;
+                });
+                const child = children[patch.from];
+                if (child) {
+                    const refChild = children[patch.to];
+                    if (refChild) {
+                        node.insertBefore(child, refChild);
+                    } else {
+                        node.appendChild(child);
+                    }
+                }
+            }
+        } catch (error) {
+            failedCount++;
+            console.error(`[LiveView] Error applying patch:`, patch, error);
+        }
+    }
+
+    if (failedCount > 0) {
+        console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
+        return false;
+    }
+
+    return true;
+}
+
 // Initialize on load
 document.addEventListener('DOMContentLoaded', () => {
     console.log('[LiveView] Initializing...');
