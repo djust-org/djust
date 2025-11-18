@@ -1708,9 +1708,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         #     self._rust_view = None
         #     self._cache_key = None
 
-        # OPTIMIZATION: On GET requests, skip VDOM operations since we're just rendering initial HTML
-        # The VDOM baseline will be created on the first event (POST/WebSocket)
-        # This eliminates double rendering: render_with_diff() + render_full_template()
+        # OPTIMIZATION: On GET requests, render full HTML for the browser
+        # Then establish VDOM baseline for future PATCH responses
+        # This allows subsequent POST events to return minimal patches instead of full HTML
 
         # IMPORTANT: Always call get_template() on GET requests to set _full_template
         # This is needed because _full_template is used by render_full_template()
@@ -1727,10 +1727,22 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         t_render_full = (time.perf_counter() - t0) * 1000
         liveview_content = html
 
-        # Mark skipped operations for timing output
-        t_init_rust = 0.0  # Skipped on GET
-        t_sync = 0.0  # Skipped on GET
-        t_render_diff = 0.0  # Skipped on GET
+        # CRITICAL: Establish VDOM baseline for subsequent PATCH responses
+        # Even though we rendered full HTML above, we need to initialize the RustLiveView
+        # with the initial state so that future POST requests can generate patches
+        t0 = time.perf_counter()
+        self._initialize_rust_view(request)
+        t_init_rust = (time.perf_counter() - t0) * 1000
+
+        t0 = time.perf_counter()
+        self._sync_state_to_rust()
+        t_sync = (time.perf_counter() - t0) * 1000
+
+        # Establish VDOM baseline by calling render_with_diff() once
+        # This first call returns no patches but sets up the baseline for future diffs
+        t0 = time.perf_counter()
+        _, _, _ = self.render_with_diff(request)
+        t_render_diff = (time.perf_counter() - t0) * 1000
 
         # Wrap in Django template if wrapper_template is specified
         # (This is for the older wrapper pattern, not template inheritance)
