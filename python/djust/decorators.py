@@ -29,21 +29,89 @@ def _add_decorator_metadata(func: Callable, key: str, value: Any) -> None:
     func._djust_decorators[key] = value  # type: ignore
 
 
-def event_handler(func: F) -> F:
+def event_handler(params: Optional[List[str]] = None, description: str = "") -> Callable[[F], F]:
     """
-    Mark a method as an event handler.
+    Mark method as event handler with automatic signature introspection.
+
+    Auto-extracts parameter names, types, and descriptions from function signature.
+    Stores metadata in _djust_decorators for validation and debug panel.
+
+    Args:
+        params: Optional explicit parameter list (overrides auto-extraction)
+        description: Human-readable description (overrides docstring)
 
     Usage:
-        class MyView(LiveView):
-            @event_handler
-            def on_click(self, event_data):
-                self.counter += 1
+        @event_handler
+        def search(self, value: str = "", **kwargs):
+            '''Search leases with debouncing'''
+            self.search_query = value
+            self._refresh_leases()
+
+        @event_handler(description="Update item quantity")
+        def update_item(self, item_id: int, quantity: int, **kwargs):
+            self.items[item_id].quantity = quantity
+
+    Metadata Structure:
+        The decorator stores comprehensive metadata in func._djust_decorators["event_handler"]:
+        {
+            "params": [{"name": "value", "type": "str", "required": False, "default": ""}],
+            "param_names": ["value"],
+            "description": "Search items",
+            "accepts_kwargs": True,
+            "required": [],
+            "optional": ["value"]
+        }
 
     Note: You can also use the shorter @event alias.
     """
-    func._is_event_handler = True  # type: ignore
-    func._event_name = func.__name__  # type: ignore
-    return func
+
+    def decorator(func: F) -> F:
+        # Import here to avoid circular dependency
+        from djust.validation import get_handler_signature_info
+
+        # Extract comprehensive signature information
+        sig_info = get_handler_signature_info(func)
+
+        # Use explicit params if provided, otherwise use extracted
+        if params is not None:
+            param_names = params
+        else:
+            param_names = [p["name"] for p in sig_info["params"]]
+
+        # Use explicit description if provided, otherwise use docstring
+        final_description = description or sig_info["description"]
+
+        # Store comprehensive metadata
+        _add_decorator_metadata(
+            func,
+            "event_handler",
+            {
+                "params": sig_info["params"],  # Full param info with types
+                "param_names": param_names,  # Just names for quick lookup
+                "description": final_description,
+                "accepts_kwargs": sig_info["accepts_kwargs"],
+                "required": [p["name"] for p in sig_info["params"] if p["required"]],
+                "optional": [p["name"] for p in sig_info["params"] if not p["required"]],
+            },
+        )
+
+        # Keep existing markers for backward compatibility
+        func._is_event_handler = True  # type: ignore
+        func._event_name = func.__name__  # type: ignore
+
+        return cast(F, func)
+
+    # Support both @event_handler and @event_handler() syntaxes
+    # This enables flexible usage: @event_handler vs @event_handler(description="...")
+    if callable(params):
+        # Called as @event_handler (no parentheses)
+        # In this case, 'params' is actually the function being decorated
+        func = params
+        params = None
+        return decorator(func)
+
+    # Called as @event_handler() or @event_handler(params=..., description=...)
+    return decorator
 
 
 # Shorter alias for event_handler

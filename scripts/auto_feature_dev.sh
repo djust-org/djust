@@ -796,7 +796,11 @@ EOF
 )
 
     # Run Claude to update documentation
-    echo "$docs_context" | claude --permission-mode acceptEdits
+    # Write context to temp file and invoke claude with /dev/tty for stdin
+    local temp_file=$(mktemp)
+    echo "$docs_context" > "$temp_file"
+    claude "$temp_file" --permission-mode acceptEdits < /dev/tty
+    rm -f "$temp_file"
 
     # Check if any changes were made
     if git diff --quiet && git diff --cached --quiet; then
@@ -878,6 +882,13 @@ create_phase_pr() {
     fi
 
     log "Creating PR for phase $phase_num/$total_phases with $commit_count commit(s)..."
+
+    # Push branch to remote first
+    log "Pushing branch to remote..."
+    git push -u origin HEAD || {
+        error "Failed to push branch"
+        return 1
+    }
 
     # Create PR with detailed title and body
     local pr_title="feat(phase-$phase_num): $phase_name"
@@ -965,7 +976,11 @@ EOF
 )
 
     # Run Claude to self-review
-    echo "$review_context" | claude --permission-mode acceptEdits
+    # Write context to temp file and invoke claude with /dev/tty for stdin
+    local temp_file=$(mktemp)
+    echo "$review_context" > "$temp_file"
+    claude "$temp_file" --permission-mode acceptEdits < /dev/tty
+    rm -f "$temp_file"
 
     log "✓ Self-review complete"
 }
@@ -1030,7 +1045,11 @@ EOF
 )
 
     # Run Claude to resolve comments
-    echo "$resolve_context" | claude --permission-mode acceptEdits
+    # Write context to temp file and invoke claude with /dev/tty for stdin
+    local temp_file=$(mktemp)
+    echo "$resolve_context" > "$temp_file"
+    claude "$temp_file" --permission-mode acceptEdits < /dev/tty
+    rm -f "$temp_file"
 
     log "✓ Review comments addressed"
 }
