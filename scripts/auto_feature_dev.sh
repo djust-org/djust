@@ -796,7 +796,7 @@ EOF
 )
 
     # Run Claude to update documentation
-    echo "$docs_context" | claude --dangerously-skip-user-approval-for-tools
+    echo "$docs_context" | claude --permission-mode acceptEdits
 
     # Check if any changes were made
     if git diff --quiet && git diff --cached --quiet; then
@@ -897,10 +897,12 @@ This PR implements Phase $phase_num of the multi-phase feature.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 
-    gh pr create --title "$pr_title" --body "$pr_body" --label "enhancement"
+    # Create PR and capture URL
+    local pr_url=$(gh pr create --title "$pr_title" --body "$pr_body" --label "enhancement" 2>&1 | tail -1)
 
-    local pr_number=$(gh pr view --json number -q .number 2>/dev/null || echo "")
-    local pr_url=$(gh pr view --json url -q .url 2>/dev/null || echo "")
+    # Get current branch to query PR info
+    local current_branch=$(git branch --show-current)
+    local pr_number=$(gh pr list --head "$current_branch" --json number -q '.[0].number' 2>/dev/null || echo "")
 
     if [ -n "$pr_url" ]; then
         highlight "✓ PR Created: $pr_url (PR #$pr_number)"
@@ -963,7 +965,7 @@ EOF
 )
 
     # Run Claude to self-review
-    echo "$review_context" | claude --dangerously-skip-user-approval-for-tools
+    echo "$review_context" | claude --permission-mode acceptEdits
 
     log "✓ Self-review complete"
 }
@@ -1028,7 +1030,7 @@ EOF
 )
 
     # Run Claude to resolve comments
-    echo "$resolve_context" | claude --dangerously-skip-user-approval-for-tools
+    echo "$resolve_context" | claude --permission-mode acceptEdits
 
     log "✓ Review comments addressed"
 }
