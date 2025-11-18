@@ -782,6 +782,16 @@ class LiveView(View):
                 if count_key not in context:
                     context[count_key] = len(value)
 
+        # Fallback serialization for Model instances that weren't JIT-serialized
+        # This handles cases where:
+        # 1. No template is defined
+        # 2. Variable is not accessed in template
+        for key, value in list(context.items()):
+            if key not in jit_serialized_keys and isinstance(value, models.Model):
+                # Serialize using DjangoJSONEncoder
+                serialized = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+                context[key] = serialized
+
         # Store JIT-serialized keys for debugging/optimization tracking
         self._jit_serialized_keys = jit_serialized_keys
 
@@ -879,16 +889,22 @@ class LiveView(View):
         """Sync Python state to Rust backend"""
         if self._rust_view:
             from .component import Component, LiveComponent
+            from django import forms
 
             context = self.get_context_data()
 
             # Pre-render components since Rust can't call Python methods
+            # Also exclude Django Form instances which aren't JSON serializable
             rendered_context = {}
             for key, value in context.items():
                 if isinstance(value, (Component, LiveComponent)):
                     # Create a dict with the pre-rendered HTML so {{ component.render }} works
                     rendered_html = str(value.render())
                     rendered_context[key] = {"render": rendered_html}
+                elif isinstance(value, forms.Form):
+                    # Skip Form instances - they're not JSON serializable
+                    # Form state is managed separately via form_data, form_errors, etc.
+                    continue
                 else:
                     rendered_context[key] = value
 
@@ -1999,6 +2015,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 and not hasattr(attr, "__module__")
             ):
                 try:
+                    # Skip Django Form instances - they're not useful in debug panel
+                    from django import forms
+
+                    if isinstance(attr, forms.Form):
+                        continue
+
                     # Get type name
                     type_name = type(attr).__name__
 
