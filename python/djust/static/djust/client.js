@@ -2803,32 +2803,37 @@ class DjustDebugPanel {
         `;
 
         // Reverse to show newest first
-        for (const event of [...this.eventHistory].reverse()) {
+        for (let i = 0; i < this.eventHistory.length; i++) {
+            const event = this.eventHistory[this.eventHistory.length - 1 - i];
             const timestamp = new Date(event.timestamp).toLocaleTimeString();
             const success = event.error ? 'error' : 'success';
+            const eventId = `event-${i}`;
 
             html += `
-                <div class="event-item ${success}">
-                    <div class="event-header">
+                <div class="event-item ${success} collapsed" data-event-id="${eventId}">
+                    <div class="event-header" onclick="window.djustDebugPanel.toggleEvent('${eventId}')">
+                        <span class="event-toggle">▶</span>
                         <span class="event-name">${event.name}</span>
                         <span class="event-time">${timestamp}</span>
                     </div>
 
-                    <div class="event-params">
-                        <strong>Parameters:</strong>
-                        <pre>${JSON.stringify(event.params, null, 2)}</pre>
-                    </div>
-
-                    ${event.error ? `
-                        <div class="event-error">
-                            <strong>Error:</strong> ${event.error}
+                    <div class="event-body">
+                        <div class="event-params">
+                            <strong>Parameters:</strong>
+                            <pre>${JSON.stringify(event.params, null, 2)}</pre>
                         </div>
-                    ` : ''}
 
-                    <div class="event-actions">
-                        <button onclick="navigator.clipboard.writeText('${JSON.stringify(event).replace(/'/g, "\\'")}')">
-                            Copy JSON
-                        </button>
+                        ${event.error ? `
+                            <div class="event-error">
+                                <strong>Error:</strong> ${event.error}
+                            </div>
+                        ` : ''}
+
+                        <div class="event-actions">
+                            <button onclick="navigator.clipboard.writeText('${JSON.stringify(event).replace(/'/g, "\\'")}')">
+                                Copy JSON
+                            </button>
+                        </div>
                     </div>
                 </div>
             `;
@@ -2845,21 +2850,48 @@ class DjustDebugPanel {
 
         let html = '<div class="patch-history">';
 
-        for (const entry of [...this.patchHistory].reverse()) {
+        for (let i = 0; i < this.patchHistory.length; i++) {
+            const entry = this.patchHistory[this.patchHistory.length - 1 - i];
+            const patchId = `patch-${i}`;
+
             html += `
-                <div class="patch-item">
-                    <div class="patch-header">
-                        <span>${entry.count} patches</span>
+                <div class="patch-item collapsed" data-patch-id="${patchId}">
+                    <div class="patch-header" onclick="window.djustDebugPanel.togglePatch('${patchId}')">
+                        <span class="patch-toggle">▶</span>
+                        <span>${entry.count} patch${entry.count !== 1 ? 'es' : ''}</span>
                         <span>${new Date(entry.timestamp).toLocaleTimeString()}</span>
                     </div>
-                    <pre>${JSON.stringify(entry.patches.slice(0, 5), null, 2)}</pre>
-                    ${entry.patches.length > 5 ? `<p>... and ${entry.patches.length - 5} more</p>` : ''}
+                    <div class="patch-body">
+                        <pre>${JSON.stringify(entry.patches, null, 2)}</pre>
+                    </div>
                 </div>
             `;
         }
 
         html += '</div>';
         return html;
+    }
+
+    togglePatch(patchId) {
+        const patchItem = this.panel.querySelector(`[data-patch-id="${patchId}"]`);
+        if (patchItem) {
+            patchItem.classList.toggle('collapsed');
+            const toggle = patchItem.querySelector('.patch-toggle');
+            if (toggle) {
+                toggle.textContent = patchItem.classList.contains('collapsed') ? '▶' : '▼';
+            }
+        }
+    }
+
+    toggleEvent(eventId) {
+        const eventItem = this.panel.querySelector(`[data-event-id="${eventId}"]`);
+        if (eventItem) {
+            eventItem.classList.toggle('collapsed');
+            const toggle = eventItem.querySelector('.event-toggle');
+            if (toggle) {
+                toggle.textContent = eventItem.classList.contains('collapsed') ? '▶' : '▼';
+            }
+        }
     }
 
     renderVariables(variables) {

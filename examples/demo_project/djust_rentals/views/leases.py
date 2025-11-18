@@ -5,7 +5,7 @@ CRUD operations for leases with filtering and expiration tracking.
 """
 
 from djust_shared.views import BaseViewWithNavbar
-from djust.decorators import debounce
+from djust.decorators import debounce, event_handler
 from djust_shared.components.ui import HeroSection
 from django.db.models import Q
 from datetime import date, timedelta
@@ -64,17 +64,20 @@ class LeaseListView(BaseViewWithNavbar):
         # We'll create lease_data with computed fields instead
         self._leases = leases
 
+    @event_handler()
     @debounce(wait=0.5)
     def search(self, value: str = "", **kwargs):
         """Search leases with debouncing - value parameter matches what @input sends"""
         self.search_query = value
         self._refresh_leases()
 
+    @event_handler()
     def filter_by_status(self, value: str = "all", **kwargs):
         """Filter leases by status - value parameter matches what @change sends"""
         self.filter_status = value
         self._refresh_leases()
 
+    @event_handler()
     def sort_leases(self, value: str = "end_date", **kwargs):
         """Sort leases - value parameter matches what @change sends"""
         self.sort_by = value
