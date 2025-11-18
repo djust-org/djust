@@ -2952,17 +2952,31 @@ if (typeof window.DJUST_DEBUG_INFO !== 'undefined') {
     window.djustDebugPanel = new DjustDebugPanel();
 
     // Hook into event sending to log events
-    const originalSendEvent = LiveView.prototype.sendEvent;
-    LiveView.prototype.sendEvent = function(eventName, params) {
-        const result = originalSendEvent.call(this, eventName, params);
-        window.djustDebugPanel.logEvent(eventName, params, null);
-        return result;
+    // Store original handleEvent function
+    const originalHandleEvent = handleEvent;
+
+    // Replace with wrapper that logs events
+    window.handleEvent = handleEvent = async function(eventName, params) {
+        // Log event to debug panel (skip internal/decorator events)
+        if (window.djustDebugPanel && !params._skipDecorators) {
+            window.djustDebugPanel.logEvent(eventName, params, null);
+        }
+
+        // Call original implementation
+        return await originalHandleEvent(eventName, params);
     };
 
     // Hook into patch application to log patches
-    const originalApplyPatches = applyPatches;
-    applyPatches = function(patches) {
-        window.djustDebugPanel.logPatches(patches);
+    const originalApplyPatches = window.applyPatches || applyPatches;
+
+    // Replace with wrapper that logs patches
+    window.applyPatches = applyPatches = function(patches) {
+        // Log patches to debug panel
+        if (window.djustDebugPanel && patches && patches.length > 0) {
+            window.djustDebugPanel.logPatches(patches);
+        }
+
+        // Call original implementation
         return originalApplyPatches(patches);
     };
 }
