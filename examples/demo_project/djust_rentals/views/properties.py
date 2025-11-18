@@ -5,7 +5,7 @@ CRUD operations for rental properties with search, filter, and real-time updates
 """
 
 from djust_shared.views import BaseViewWithNavbar
-from djust.decorators import debounce, optimistic
+from djust.decorators import debounce, optimistic, event_handler
 from djust_shared.components.ui import HeroSection
 from django.db.models import Q
 from ..models import Property, Lease, MaintenanceRequest
@@ -69,22 +69,26 @@ class PropertyListView(BaseViewWithNavbar):
         # We'll assign to self.properties in get_context_data() instead
         self._properties = properties
 
+    @event_handler()
     @debounce(wait=0.5)
     def search(self, query: str = "", **kwargs):
         """Search properties with debouncing"""
         self.search_query = query
         self._refresh_properties()
 
+    @event_handler()
     def filter_by_status(self, status: str = "all", **kwargs):
         """Filter properties by status"""
         self.filter_status = status
         self._refresh_properties()
 
+    @event_handler()
     def filter_by_type(self, property_type: str = "all", **kwargs):
         """Filter properties by type"""
         self.filter_type = property_type
         self._refresh_properties()
 
+    @event_handler()
     def sort_properties(self, sort: str = "name", **kwargs):
         """Sort properties"""
         self.sort_by = sort
@@ -298,6 +302,7 @@ class PropertyFormView(BaseViewWithNavbar):
         self.error_message = ""
         self.validation_errors = {}
 
+    @event_handler()
     def save_property(self, **form_data):
         """Save property (create or update)"""
         try:
@@ -385,6 +390,7 @@ class PropertyDeleteView(BaseViewWithNavbar):
         self.deleted = False
         self.error_message = ""
 
+    @event_handler()
     @optimistic
     def confirm_delete(self):
         """Delete the property"""

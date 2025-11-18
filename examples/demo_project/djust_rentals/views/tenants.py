@@ -5,7 +5,7 @@ CRUD operations for tenants with search and filtering.
 """
 
 from djust_shared.views import BaseViewWithNavbar
-from djust.decorators import debounce
+from djust.decorators import debounce, event_handler
 from djust_shared.components.ui import HeroSection
 from django.db.models import Q
 from django.contrib.auth.models import User
@@ -69,12 +69,14 @@ class TenantListView(BaseViewWithNavbar):
         # We'll assign to self.tenants in get_context_data() instead
         self._tenants = tenants.order_by('user__last_name', 'user__first_name')
 
+    @event_handler()
     @debounce(wait=0.5)
     def search(self, query: str = "", **kwargs):
         """Search tenants with debouncing"""
         self.search_query = query
         self._refresh_tenants()
 
+    @event_handler()
     def filter_by_status(self, status: str = "all", **kwargs):
         """Filter tenants by lease status"""
         self.filter_status = status
@@ -281,6 +283,7 @@ class TenantFormView(BaseViewWithNavbar):
         self.error_message = ""
         self.validation_errors = {}
 
+    @event_handler()
     def save_tenant(self, first_name="", last_name="", email="", phone="",
                    emergency_contact_name="", emergency_contact_phone="",
                    employer="", monthly_income=None, notes="", **kwargs):
