@@ -680,7 +680,7 @@ function initReactCounters() {
         let props = {};
         try {
             props = JSON.parse(propsJson.replace(/&quot;/g, '"'));
-        } catch(e) {}
+        } catch (e) { }
 
         let count = props.initialCount || 0;
         const display = container.querySelector('.counter-display');
@@ -801,34 +801,11 @@ function bindLiveViewEvents() {
         if (changeHandler && !element.dataset.liveviewChangeBound) {
             element.dataset.liveviewChangeBound = 'true';
             element.addEventListener('change', async (e) => {
-                const params = {};
-
-                // For checkboxes/radios, send the checked state
-                if (e.target.type === 'checkbox' || e.target.type === 'radio') {
-                    params.checked = e.target.checked;
-                    params.value = e.target.checked;
-                } else {
-                    // For other inputs, send the value
-                    params.value = e.target.value;
-                }
-
-                // Extract all data-* attributes
-                Array.from(e.target.attributes).forEach(attr => {
-                    if (attr.name.startsWith('data-') && !attr.name.startsWith('data-liveview')) {
-                        // Convert data-foo-bar to foo_bar
-                        const key = attr.name.substring(5).replace(/-/g, '_');
-                        params[key] = attr.value;
-                    }
-                });
-
-                // Auto-extract field name from element attributes
                 const fieldName = getFieldName(e.target);
-                if (fieldName) {
-                    params.field_name = fieldName;
-                    // Also set the parameter with the field name for cache key generation
-                    // This allows @cache(key_params=["query"]) to work correctly
-                    params[fieldName] = params.value;
-                }
+                const params = {
+                    value: e.target.type === 'checkbox' ? e.target.checked : e.target.value,
+                    field: fieldName
+                };
 
                 // Phase 4: Check if event is from a component (walk up DOM tree)
                 let currentElement = e.target;
@@ -839,48 +816,35 @@ function bindLiveViewEvents() {
                     }
                     currentElement = currentElement.parentElement;
                 }
-
-                // Pass target element for optimistic updates (Phase 3)
-                params._targetElement = e.target;
 
                 await handleEvent(changeHandler, params);
             });
         }
 
-        // Handle @input events (real-time typing)
+        // Handle @input events (with smart debouncing/throttling)
         const inputHandler = element.getAttribute('@input');
         if (inputHandler && !element.dataset.liveviewInputBound) {
             element.dataset.liveviewInputBound = 'true';
 
-            // Create the base handler function
-            const baseHandler = async (e) => {
-                const params = {};
+            // Determine rate limit strategy
+            const inputType = element.type || element.tagName.toLowerCase();
+            const rateLimit = DEFAULT_RATE_LIMITS[inputType] || { type: 'debounce', ms: 300 };
 
-                // For checkboxes, send the checked state
-                if (e.target.type === 'checkbox') {
-                    params.value = e.target.checked;
-                } else {
-                    // For other inputs, send the value
-                    params.value = e.target.value;
-                }
+            // Check for explicit overrides
+            if (element.hasAttribute('data-debounce')) {
+                rateLimit.type = 'debounce';
+                rateLimit.ms = parseInt(element.getAttribute('data-debounce'));
+            } else if (element.hasAttribute('data-throttle')) {
+                rateLimit.type = 'throttle';
+                rateLimit.ms = parseInt(element.getAttribute('data-throttle'));
+            }
 
-                // Extract all data-* attributes
-                Array.from(e.target.attributes).forEach(attr => {
-                    if (attr.name.startsWith('data-') && !attr.name.startsWith('data-liveview')) {
-                        // Convert data-foo-bar to foo_bar
-                        const key = attr.name.substring(5).replace(/-/g, '_');
-                        params[key] = attr.value;
-                    }
-                });
-
-                // Auto-extract field name from element attributes
+            const handler = async (e) => {
                 const fieldName = getFieldName(e.target);
-                if (fieldName) {
-                    params.field_name = fieldName;
-                    // Also set the parameter with the field name for cache key generation
-                    // This allows @cache(key_params=["query"]) to work correctly
-                    params[fieldName] = params.value;
-                }
+                const params = {
+                    value: e.target.value,
+                    field: fieldName
+                };
 
                 // Phase 4: Check if event is from a component (walk up DOM tree)
                 let currentElement = e.target;
@@ -892,246 +856,98 @@ function bindLiveViewEvents() {
                     currentElement = currentElement.parentElement;
                 }
 
-                // Pass target element for optimistic updates (Phase 3)
-                params._targetElement = e.target;
-
                 await handleEvent(inputHandler, params);
             };
 
-            // Determine rate limiting strategy (priority order):
-            // 1. Explicit data-throttle or data-debounce attribute
-            // 2. Smart default based on input type
-            // 3. No rate limiting (immediate)
-            let rateLimitedHandler = baseHandler;
-
-            if (element.dataset.throttle) {
-                // Explicit throttle attribute
-                const ms = parseInt(element.dataset.throttle);
-                rateLimitedHandler = throttle(baseHandler, ms);
-            } else if (element.dataset.debounce) {
-                // Explicit debounce attribute
-                const ms = parseInt(element.dataset.debounce);
-                rateLimitedHandler = debounce(baseHandler, ms);
+            // Apply rate limiting wrapper
+            let wrappedHandler;
+            if (rateLimit.type === 'throttle') {
+                wrappedHandler = throttle(handler, rateLimit.ms);
             } else {
-                // Check for smart defaults
-                const inputType = element.tagName.toLowerCase() === 'textarea'
-                    ? 'textarea'
-                    : (element.type || 'text');
-                const defaultLimit = DEFAULT_RATE_LIMITS[inputType];
+                wrappedHandler = debounce(handler, rateLimit.ms);
+            }
 
-                if (defaultLimit) {
-                    if (defaultLimit.type === 'throttle') {
-                        rateLimitedHandler = throttle(baseHandler, defaultLimit.ms);
-                    } else if (defaultLimit.type === 'debounce') {
-                        rateLimitedHandler = debounce(baseHandler, defaultLimit.ms);
+            element.addEventListener('input', wrappedHandler);
+        }
+
+        // Handle @blur events
+        const blurHandler = element.getAttribute('@blur');
+        if (blurHandler && !element.dataset.liveviewBlurBound) {
+            element.dataset.liveviewBlurBound = 'true';
+            element.addEventListener('blur', async (e) => {
+                const fieldName = getFieldName(e.target);
+                const params = {
+                    value: e.target.value,
+                    field: fieldName
+                };
+
+                // Phase 4: Check if event is from a component (walk up DOM tree)
+                let currentElement = e.target;
+                while (currentElement && currentElement !== document.body) {
+                    if (currentElement.dataset.componentId) {
+                        params.component_id = currentElement.dataset.componentId;
+                        break;
                     }
-                }
-            }
-
-            // Create optimistic UI handler for immediate feedback
-            // This runs immediately (not rate-limited) to update display
-            const optimisticHandler = (e) => {
-                // Optimistic UI update for high-frequency inputs
-                if (e.target.type === 'range' || e.target.type === 'number' || e.target.type === 'color') {
-                    updateDisplayValue(e.target);
+                    currentElement = currentElement.parentElement;
                 }
 
-                // Then call rate-limited server update
-                rateLimitedHandler(e);
-            };
-
-            element.addEventListener('input', optimisticHandler);
+                await handleEvent(blurHandler, params);
+            });
         }
 
-        // Phase 5: Register elements with @loading attributes
-        // This enables Phoenix LiveView-style loading indicators (disable, show, hide, class)
-        const hasLoadingAttr = Array.from(element.attributes).some(attr =>
-            attr.name.startsWith('@loading.')
-        );
+        // Handle @focus events
+        const focusHandler = element.getAttribute('@focus');
+        if (focusHandler && !element.dataset.liveviewFocusBound) {
+            element.dataset.liveviewFocusBound = 'true';
+            element.addEventListener('focus', async (e) => {
+                const fieldName = getFieldName(e.target);
+                const params = {
+                    value: e.target.value,
+                    field: fieldName
+                };
 
-        if (hasLoadingAttr && !element.dataset.loadingRegistered) {
-            element.dataset.loadingRegistered = 'true';
-
-            // ============================================================
-            // Event Name Discovery: Two Strategies
-            // ============================================================
-            // We need to associate this @loading element with an event name
-            // so we know when to apply/remove loading state.
-            //
-            // Strategy 1: Element has its own event handler
-            //   Example: <button @click="save" @loading.disable>
-            //   → Register for "save" event
-            //
-            // Strategy 2: Sibling has event handler (for spinners/indicators)
-            //   Example:
-            //     <div class="d-flex">
-            //       <button @click="save">Save</button>
-            //       <div @loading.show>Spinner</div>
-            //     </div>
-            //   → Spinner registers for "save" event from sibling button
-            //
-            // This allows flexible UI patterns without requiring the event
-            // handler to be on the loading element itself.
-            // ============================================================
-
-            let eventName = element.getAttribute('@click') ||
-                           element.getAttribute('@submit') ||
-                           element.getAttribute('@change') ||
-                           element.getAttribute('@input');
-
-            // Strategy 2: Sibling event detection
-            if (!eventName && element.parentElement) {
-                const siblings = Array.from(element.parentElement.children);
-                for (const sibling of siblings) {
-                    const siblingEvent = sibling.getAttribute('@click') ||
-                                       sibling.getAttribute('@submit') ||
-                                       sibling.getAttribute('@change') ||
-                                       sibling.getAttribute('@input');
-                    if (siblingEvent) {
-                        eventName = siblingEvent;
-                        break; // Use first event found in siblings
+                // Phase 4: Check if event is from a component (walk up DOM tree)
+                let currentElement = e.target;
+                while (currentElement && currentElement !== document.body) {
+                    if (currentElement.dataset.componentId) {
+                        params.component_id = currentElement.dataset.componentId;
+                        break;
                     }
+                    currentElement = currentElement.parentElement;
                 }
-            }
 
-            if (eventName) {
-                globalLoadingManager.register(element, eventName);
-
-                if (globalThis.djustDebug) {
-                    console.log(`[Loading] Registered element for "${eventName}"`, element);
-                }
-            }
-        }
-    });
-}
-
-// DOM patching utilities
-// Find the root LiveView container
-function getLiveViewRoot() {
-    // First, look for explicit LiveView container (used with template inheritance)
-    const liveviewContainer = document.querySelector('[data-liveview-root]');
-    if (liveviewContainer) {
-        return liveviewContainer;
-    }
-
-    // Fallback: first content element, skipping <link>, <style>, <script>
-    const NON_CONTENT_TAGS = ['LINK', 'STYLE', 'SCRIPT'];
-    for (const child of document.body.childNodes) {
-        if (child.nodeType === Node.ELEMENT_NODE && !NON_CONTENT_TAGS.includes(child.tagName)) {
-            return child;
-        }
-    }
-    return document.body;
-}
-
-function getNodeByPath(path) {
-    // The Rust VDOM root matches getLiveViewRoot() (first content element)
-    // Path [0] = first child of root, [0,0] = first child of that, etc.
-    let node = getLiveViewRoot();
-
-    // DEBUG: Log root info
-    if (path.length > 0) {
-        console.log(`[DEBUG-ROOT] Starting traversal from <${node.tagName}>, path length=${path.length}, path=${JSON.stringify(path)}`);
-    }
-
-    // Empty path means the root itself
-    if (path.length === 0) {
-        return node;
-    }
-
-    // Traverse the path directly - no adjustment needed since roots are aligned
-    for (let i = 0; i < path.length; i++) {
-        const index = path[i];
-
-        // Get children - Rust DOES filter whitespace-only text nodes
-        // The parser.rs code filters with: if !text.trim().is_empty()
-        // So we should do the same here
-        const children = Array.from(node.childNodes).filter(child => {
-            // Keep element nodes
-            if (child.nodeType === Node.ELEMENT_NODE) return true;
-            // Keep text nodes that have non-whitespace content
-            if (child.nodeType === Node.TEXT_NODE) {
-                return child.textContent.trim().length > 0;
-            }
-            return false;
-        });
-
-        // DEBUG: Log at first few iterations
-        if (i < 3) {
-            console.log(`[DEBUG-PATH] Step ${i}: index=${index}, children=${children.length}, node=<${node.tagName || node.nodeName}>`);
-            if (children.length === 0) {
-                console.log(`[DEBUG-PATH] ZERO CHILDREN! node.childNodes.length=${node.childNodes.length}`);
-                for (let j = 0; j < node.childNodes.length; j++) {
-                    const child = node.childNodes[j];
-                    console.log(`  Raw child[${j}]: type=${child.nodeType}, tag=${child.tagName || child.nodeName}`);
-                }
-            }
+                await handleEvent(focusHandler, params);
+            });
         }
 
-        // DEBUG: Log when accessing the form's parent (card-body)
-        if (i === 4 && path[0] === 0 && path[1] === 0 && path[2] === 0 && path[3] === 1 && path[4] === 2 && path.length > 5) {
-            console.log(`[DEBUG] About to descend into child[${index}] of card-body`);
-            console.log(`[DEBUG] card-body has ${children.length} children, about to access index ${index}`);
-            if (index < children.length && children[index].nodeType === Node.ELEMENT_NODE) {
-                const target = children[index];
-                console.log(`[DEBUG] Target is <${target.tagName.toLowerCase()}>`);
-                // Now show what THIS element's children are
-                const targetChildren = Array.from(target.childNodes).filter(child => {
-                    if (child.nodeType === Node.ELEMENT_NODE) return true;
-                    if (child.nodeType === Node.TEXT_NODE) {
-                        return child.textContent.trim().length > 0;
+        // Handle @keydown / @keyup events
+        ['keydown', 'keyup'].forEach(eventType => {
+            const keyHandler = element.getAttribute(`@${eventType}`);
+            if (keyHandler && !element.dataset[`liveview${eventType}Bound`]) {
+                element.dataset[`liveview${eventType}Bound`] = 'true';
+                element.addEventListener(eventType, async (e) => {
+                    // Check for key modifiers (e.g. @keydown.enter)
+                    const modifiers = keyHandler.split('.');
+                    const handlerName = modifiers[0];
+                    const requiredKey = modifiers.length > 1 ? modifiers[1] : null;
+
+                    if (requiredKey) {
+                        if (requiredKey === 'enter' && e.key !== 'Enter') return;
+                        if (requiredKey === 'escape' && e.key !== 'Escape') return;
+                        if (requiredKey === 'space' && e.key !== ' ') return;
+                        // Add more key mappings as needed
                     }
-                    return false;
-                });
-                console.log(`[DEBUG] This element has ${targetChildren.length} filtered children`);
-                targetChildren.forEach((child, idx) => {
-                    if (child.nodeType === Node.ELEMENT_NODE) {
-                        console.log(`  [${idx}] <${child.tagName.toLowerCase()} class="${child.className || ''}">`);
-                    }
-                });
-            }
-        }
 
-        if (index >= children.length) {
-            console.warn(`[LiveView] Index ${index} out of bounds, only ${children.length} children at path`, path.slice(0, i+1));
-            return null;
-        }
-
-        node = children[index];
-    }
-    return node;
-}
-
-function createNodeFromVNode(vnode) {
-    // VNode structure from Rust: { tag, text?, attrs, children, key? }
-    // Text nodes have tag === "#text" and a text field
-    if (vnode.tag === '#text') {
-        return document.createTextNode(vnode.text || '');
-    }
-
-    // Element nodes
-    const elem = document.createElement(vnode.tag);
-
-    // Set attributes and handle events
-    if (vnode.attrs) {
-        for (const [key, value] of Object.entries(vnode.attrs)) {
-            // Handle LiveView event attributes (@click, @change, etc.)
-            if (key.startsWith('@')) {
-                const eventName = key.substring(1);
-                elem.addEventListener(eventName, (e) => {
-                    e.preventDefault();
-
-                    // Extract data-* attributes just like bindLiveViewEvents() does
-                    const params = {};
-                    Array.from(elem.attributes).forEach(attr => {
-                        if (attr.name.startsWith('data-') && !attr.name.startsWith('data-liveview')) {
-                            const key = attr.name.substring(5).replace(/-/g, '_');
-                            params[key] = attr.value;
-                        }
-                    });
+                    const fieldName = getFieldName(e.target);
+                    const params = {
+                        key: e.key,
+                        code: e.code,
+                        value: e.target.value,
+                        field: fieldName
+                    };
 
                     // Phase 4: Check if event is from a component (walk up DOM tree)
-                    let currentElement = elem;
+                    let currentElement = e.target;
                     while (currentElement && currentElement !== document.body) {
                         if (currentElement.dataset.componentId) {
                             params.component_id = currentElement.dataset.componentId;
@@ -1140,1620 +956,393 @@ function createNodeFromVNode(vnode) {
                         currentElement = currentElement.parentElement;
                     }
 
-                    handleEvent(value, params);
+                    await handleEvent(handlerName, params);
                 });
-            } else {
-                // Special handling for input value property
-                if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
-                    elem.value = value;
-                }
-                // Regular HTML attributes
-                elem.setAttribute(key, value);
             }
-        }
-    }
-
-    // Add children recursively
-    if (vnode.children && vnode.children.length > 0) {
-        for (const child of vnode.children) {
-            const childNode = createNodeFromVNode(child);
-            if (childNode) {
-                elem.appendChild(childNode);
-            }
-        }
-    }
-
-    return elem;
-}
-
-// Debug helper: log DOM structure
-function debugNode(node, prefix = '') {
-    const children = Array.from(node.childNodes).filter(child => {
-        if (child.nodeType === Node.ELEMENT_NODE) return true;
-        if (child.nodeType === Node.TEXT_NODE) {
-            return child.textContent.trim().length > 0;
-        }
-        return false;
-    });
-
-    return {
-        tag: node.tagName || 'TEXT',
-        text: node.nodeType === Node.TEXT_NODE ? node.textContent.substring(0, 20) : null,
-        childCount: children.length,
-        children: children.slice(0, 3).map((c, i) => `[${i}]: ${c.tagName || 'TEXT'}`)
-    };
-}
-
-function applyPatches(patches) {
-    // patches is already a JavaScript array (parsed by response.json())
-    if (window.DJUST_DEBUG_VDOM) {
-        console.log('[LiveView] Applying', patches.length, 'patches');
-    }
-
-    // Sort patches to ensure RemoveChild operations are applied in descending index order
-    // within the same path. This prevents index invalidation when removing multiple children.
-    patches.sort((a, b) => {
-        // RemoveChild patches should come before other types at the same path
-        if (a.type === 'RemoveChild' && b.type === 'RemoveChild') {
-            // Same path? Sort by index descending (higher indices first)
-            const pathA = JSON.stringify(a.path);
-            const pathB = JSON.stringify(b.path);
-            if (pathA === pathB) {
-                return b.index - a.index; // Descending order
-            }
-        }
-        return 0; // Maintain relative order for other patches
-    });
-
-    // Debug: log patch types for small patch sets
-    if (window.DJUST_DEBUG_VDOM && patches.length > 0 && patches.length <= 20) {
-        console.log('[LiveView] Patch count:', patches.length);
-        for (let i = 0; i < Math.min(5, patches.length); i++) {
-            console.log('  Patch', i, ':', patches[i].type, 'at', patches[i].path);
-        }
-    }
-
-    let failedCount = 0;
-    let successCount = 0;
-    for (const patch of patches) {
-        const node = getNodeByPath(patch.path);
-        if (!node) {
-            failedCount++;
-            if (failedCount <= 3) {
-                // Log first 3 failures in detail
-                const patchType = Object.keys(patch).filter(k => k !== 'path')[0];
-                console.warn(`[LiveView] Failed patch #${failedCount} at path:`, patch.path);
-                console.warn('Patch type:', patchType, patch[patchType]);
-
-                // Try to traverse as far as we can to see where it breaks
-                let debugNode = getLiveViewRoot();
-
-                for (let i = 0; i < patch.path.length; i++) {
-                    const children = Array.from(debugNode.childNodes).filter(child => {
-                        if (child.nodeType === Node.ELEMENT_NODE) return true;
-                        if (child.nodeType === Node.TEXT_NODE) return child.textContent.trim().length > 0;
-                        return false;
-                    });
-
-                    console.warn(`  Path[${i}] = ${patch.path[i]}, available children:`, children.length,
-                        children.map((c,idx) => `[${idx}]=${c.tagName||'TEXT'}`).join(', '));
-
-                    if (patch.path[i] >= children.length) {
-                        console.warn(`  FAILED: Index ${patch.path[i]} out of bounds (only ${children.length} children)`);
-                        console.warn(`  Current node HTML (first 500 chars):`);
-                        console.warn(debugNode.outerHTML ? debugNode.outerHTML.substring(0, 500) : 'N/A');
-                        break;
-                    }
-
-                    debugNode = children[patch.path[i]];
-
-                    // After moving to the next node, show what it contains
-                    if (i === 3) { // At the critical failing level [3, 0, 2, 1]
-                        console.warn(`  >>> At critical path[3], showing node details:`);
-                        console.warn(`      Tag: ${debugNode.tagName}, ID: ${debugNode.id || 'none'}, Class: ${debugNode.className || 'none'}`);
-                        console.warn(`      HTML (first 800 chars): ${debugNode.outerHTML ? debugNode.outerHTML.substring(0, 800) : 'N/A'}`);
-                    }
-                }
-            }
-            continue;
-        }
-
-        successCount++;
-
-        if (patch.type === 'Replace') {
-            const newNode = createNodeFromVNode(patch.node);
-            node.parentNode.replaceChild(newNode, node);
-        } else if (patch.type === 'SetText') {
-            node.textContent = patch.text;
-        } else if (patch.type === 'SetAttr') {
-            // Special handling for input value to preserve user input
-            if (patch.key === 'value' && (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA')) {
-                // Only update if the element is not currently focused (user is typing)
-                if (document.activeElement !== node) {
-                    node.value = patch.value;
-                }
-                // Always update the attribute for consistency
-                node.setAttribute(patch.key, patch.value);
-            } else {
-                node.setAttribute(patch.key, patch.value);
-            }
-        } else if (patch.type === 'RemoveAttr') {
-            if (window.DJUST_DEBUG_VDOM) {
-                console.log(`[LiveView] Patch RemoveAttr '${patch.key}' at path (${patch.path.length}) [${patch.path.join(', ')}]`);
-                console.log(`[LiveView]   Target element: <${node.tagName || 'unknown'}> with ${(node.children || []).length} children`);
-                if (node.id) console.log(`[LiveView]     id="${node.id}"`);
-                if (node.className) console.log(`[LiveView]     class="${node.className}"`);
-            }
-            node.removeAttribute(patch.key);
-        } else if (patch.type === 'InsertChild') {
-            const newChild = createNodeFromVNode(patch.node);
-            // Use filtered children to match path traversal
-            const children = Array.from(node.childNodes).filter(child => {
-                if (child.nodeType === Node.ELEMENT_NODE) return true;
-                if (child.nodeType === Node.TEXT_NODE) {
-                    return child.textContent.trim().length > 0;
-                }
-                return false;
-            });
-            const refChild = children[patch.index];
-            if (refChild) {
-                node.insertBefore(newChild, refChild);
-            } else {
-                node.appendChild(newChild);
-            }
-        } else if (patch.type === 'RemoveChild') {
-            // Use filtered children to match path traversal
-            const children = Array.from(node.childNodes).filter(child => {
-                if (child.nodeType === Node.ELEMENT_NODE) return true;
-                if (child.nodeType === Node.TEXT_NODE) {
-                    return child.textContent.trim().length > 0;
-                }
-                return false;
-            });
-            const child = children[patch.index];
-            if (child) {
-                node.removeChild(child);
-            }
-        } else if (patch.type === 'MoveChild') {
-            // Use filtered children to match path traversal
-            const children = Array.from(node.childNodes).filter(child => {
-                if (child.nodeType === Node.ELEMENT_NODE) return true;
-                if (child.nodeType === Node.TEXT_NODE) {
-                    return child.textContent.trim().length > 0;
-                }
-                return false;
-            });
-            const child = children[patch.from];
-            if (child) {
-                const refChild = children[patch.to];
-                if (refChild) {
-                    node.insertBefore(child, refChild);
-                } else {
-                    node.appendChild(child);
-                }
-            }
-        }
-    }
-
-    if (window.DJUST_DEBUG_VDOM) {
-        console.log(`[LiveView] Patch summary: ${successCount} succeeded, ${failedCount} failed`);
-    }
-
-    // If any patches failed, return false to trigger page reload
-    if (failedCount > 0) {
-        console.error(`[LiveView] ${failedCount} patches failed, page will reload`);
-        return false;
-    }
-
-    return true; // All patches applied successfully
-}
-
-// Throttle utility: Limits function calls to at most once per interval
-// Guarantees the last call will always execute (trailing edge)
-function throttle(func, interval) {
-    let lastCall = 0;
-    let timeout = null;
-
-    return function(...args) {
-        const now = Date.now();
-        const timeSinceLastCall = now - lastCall;
-
-        if (timeSinceLastCall >= interval) {
-            // Enough time has passed, execute immediately
-            lastCall = now;
-            func.apply(this, args);
-        } else {
-            // Too soon, schedule for later (ensures last value is sent)
-            clearTimeout(timeout);
-            timeout = setTimeout(() => {
-                lastCall = Date.now();
-                func.apply(this, args);
-            }, interval - timeSinceLastCall);
-        }
-    };
-}
-
-// Debounce utility: Delays function call until after wait period of inactivity
-// Resets timer on each call (only executes after user stops)
-function debounce(func, wait) {
-    let timeout = null;
-
-    return function(...args) {
-        clearTimeout(timeout);
-        timeout = setTimeout(() => {
-            func.apply(this, args);
-        }, wait);
-    };
-}
-
-// Optimistic UI update: Immediately update display elements
-// This provides instant visual feedback before server responds
-function updateDisplayValue(inputElement) {
-    const value = inputElement.value;
-    let updated = false;
-
-    // Strategy 1: Check for explicit data-display-target attribute
-    const targetId = inputElement.dataset.displayTarget;
-    if (targetId) {
-        const targetElement = document.getElementById(targetId);
-        if (targetElement) {
-            targetElement.textContent = value;
-            updated = true;
-        }
-    }
-
-    // Strategy 2: Find nearby <output> element (semantic HTML)
-    const outputElement = inputElement.parentElement?.querySelector('output');
-    if (outputElement) {
-        outputElement.textContent = value;
-        updated = true;
-    }
-
-    // Strategy 3: Find badge in sibling label (Range component pattern)
-    // Range structure: <label>Volume <span class="badge">50</span></label><input>
-    const parentDiv = inputElement.parentElement;
-    if (parentDiv) {
-        // Find label sibling
-        const label = parentDiv.querySelector('label');
-        if (label) {
-            const badge = label.querySelector('.badge');
-            if (badge) {
-                badge.textContent = value;
-                updated = true;
-            }
-        }
-    }
-
-    // Strategy 4: Find nearby <strong> element (percentage display)
-    // Look in parent and grandparent for <strong> elements
-    const searchContainers = [
-        inputElement.parentElement,
-        inputElement.parentElement?.parentElement
-    ];
-
-    for (const container of searchContainers) {
-        if (container) {
-            const strongElements = container.querySelectorAll('strong');
-            strongElements.forEach(strong => {
-                // Check if it contains a number (likely our display)
-                if (strong.textContent.match(/\d+/)) {
-                    // Update with or without % suffix based on original content
-                    if (strong.textContent.includes('%')) {
-                        strong.textContent = `${value}%`;
-                    } else {
-                        strong.textContent = value;
-                    }
-                    updated = true;
-                }
-            });
-        }
-    }
-
-    // Strategy 5: Find sibling <span> or <div> with .value or .display class
-    if (!updated && parentDiv) {
-        const displayElement =
-            parentDiv.querySelector('.value') ||
-            parentDiv.querySelector('.display') ||
-            parentDiv.querySelector('span[class*="value"]');
-
-        if (displayElement) {
-            displayElement.textContent = value;
-            updated = true;
-        }
-    }
-}
-
-// ============================================================================
-// Decorator Functions (Phase 2: Debounce/Throttle, Phase 3: Optimistic)
-// ============================================================================
-
-/**
- * Debounce an event - delay until user stops triggering events
- */
-function debounceEvent(eventName, eventData, config) {
-    const { wait, max_wait } = config;
-    const now = Date.now();
-
-    // Get or create state
-    let state = debounceTimers.get(eventName);
-    if (!state) {
-        state = { timerId: null, firstCallTime: now };
-        debounceTimers.set(eventName, state);
-    }
-
-    // Clear existing timer
-    if (state.timerId) {
-        clearTimeout(state.timerId);
-    }
-
-    // Check if we've exceeded max_wait
-    if (max_wait && (now - state.firstCallTime) >= (max_wait * 1000)) {
-        // Force execution - max wait exceeded
-        sendEventImmediate(eventName, eventData);
-        debounceTimers.delete(eventName);
-        if (window.djustDebug) {
-            console.log(`[LiveView:debounce] Force executing ${eventName} (max_wait exceeded)`);
-        }
-        return;
-    }
-
-    // Set new timer
-    state.timerId = setTimeout(() => {
-        sendEventImmediate(eventName, eventData);
-        debounceTimers.delete(eventName);
-        if (window.djustDebug) {
-            console.log(`[LiveView:debounce] Executing ${eventName} after ${wait}s wait`);
-        }
-    }, wait * 1000);
-
-    if (window.djustDebug) {
-        console.log(`[LiveView:debounce] Debouncing ${eventName} (wait: ${wait}s, max_wait: ${max_wait || 'none'})`);
-    }
-}
-
-/**
- * Throttle an event - limit execution frequency
- */
-function throttleEvent(eventName, eventData, config) {
-    const { interval, leading, trailing } = config;
-    const now = Date.now();
-
-    if (!throttleState.has(eventName)) {
-        // First call - execute immediately if leading=true
-        if (leading) {
-            sendEventImmediate(eventName, eventData);
-            if (window.djustDebug) {
-                console.log(`[LiveView:throttle] Executing ${eventName} (leading edge)`);
-            }
-        }
-
-        // Set up state
-        const state = {
-            lastCall: leading ? now : 0,
-            timeoutId: null,
-            pendingData: null
-        };
-
-        throttleState.set(eventName, state);
-
-        // Schedule trailing call if needed
-        if (trailing && !leading) {
-            state.pendingData = eventData;
-            state.timeoutId = setTimeout(() => {
-                sendEventImmediate(eventName, state.pendingData);
-                throttleState.delete(eventName);
-                if (window.djustDebug) {
-                    console.log(`[LiveView:throttle] Executing ${eventName} (trailing edge - no leading)`);
-                }
-            }, interval * 1000);
-        }
-
-        return;
-    }
-
-    const state = throttleState.get(eventName);
-    const elapsed = now - state.lastCall;
-
-    if (elapsed >= (interval * 1000)) {
-        // Enough time has passed - execute now
-        sendEventImmediate(eventName, eventData);
-        state.lastCall = now;
-        state.pendingData = null;
-
-        // Clear any pending trailing call
-        if (state.timeoutId) {
-            clearTimeout(state.timeoutId);
-            state.timeoutId = null;
-        }
-
-        if (window.djustDebug) {
-            console.log(`[LiveView:throttle] Executing ${eventName} (interval elapsed: ${elapsed}ms)`);
-        }
-    } else if (trailing) {
-        // Update pending data and reschedule trailing call
-        state.pendingData = eventData;
-
-        if (state.timeoutId) {
-            clearTimeout(state.timeoutId);
-        }
-
-        const remaining = (interval * 1000) - elapsed;
-        state.timeoutId = setTimeout(() => {
-            if (state.pendingData) {
-                sendEventImmediate(eventName, state.pendingData);
-                if (window.djustDebug) {
-                    console.log(`[LiveView:throttle] Executing ${eventName} (trailing edge)`);
-                }
-            }
-            throttleState.delete(eventName);
-        }, remaining);
-
-        if (window.djustDebug) {
-            console.log(`[LiveView:throttle] Throttled ${eventName} (${remaining}ms until trailing)`);
-        }
-    } else {
-        if (window.djustDebug) {
-            console.log(`[LiveView:throttle] Dropped ${eventName} (within interval, no trailing)`);
-        }
-    }
-}
-
-/**
- * Send event immediately (bypassing decorators)
- */
-async function sendEventImmediate(eventName, params) {
-    // This function delegates to the main handleEvent flow
-    // Called after debounce/throttle timers fire
-
-    // Check for cache decorator before sending
-    // Cache should work even with debounce/throttle
-    const metadata = window.handlerMetadata?.[eventName];
-    if (metadata?.cache) {
-        // Apply cache - it will handle sending if needed
-        await cacheEvent(eventName, params, metadata.cache, async (evName, evParams) => {
-            evParams._skipDecorators = true;
-            await handleEvent(evName, evParams);
         });
-        return;
-    }
-
-    // No cache - send immediately
-    params._skipDecorators = true;
-    await handleEvent(eventName, params);
-}
-
-/**
- * Apply optimistic DOM updates before server validation
- */
-function applyOptimisticUpdate(eventName, params, targetElement) {
-    if (!targetElement) {
-        return;
-    }
-
-    // Save original state before update
-    saveOptimisticState(eventName, targetElement);
-
-    // Apply update based on element type
-    if (targetElement.type === 'checkbox' || targetElement.type === 'radio') {
-        optimisticToggle(targetElement, params);
-    } else if (targetElement.tagName === 'INPUT' || targetElement.tagName === 'TEXTAREA') {
-        optimisticInputUpdate(targetElement, params);
-    } else if (targetElement.tagName === 'SELECT') {
-        optimisticSelectUpdate(targetElement, params);
-    } else if (targetElement.tagName === 'BUTTON') {
-        optimisticButtonUpdate(targetElement, params);
-    }
-
-    // Add loading indicator
-    targetElement.classList.add('optimistic-pending');
-    pendingEvents.add(eventName);
-
-    if (window.djustDebug) {
-        console.log('[LiveView:optimistic] Applied optimistic update:', eventName);
-    }
-}
-
-function saveOptimisticState(eventName, element) {
-    const originalState = {};
-
-    if (element.type === 'checkbox' || element.type === 'radio') {
-        originalState.checked = element.checked;
-    }
-    if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.tagName === 'SELECT') {
-        originalState.value = element.value;
-    }
-    if (element.tagName === 'BUTTON') {
-        originalState.disabled = element.disabled;
-        originalState.text = element.textContent;
-    }
-
-    optimisticUpdates.set(eventName, {
-        element: element,
-        originalState: originalState
     });
 }
 
-function clearOptimisticState(eventName) {
-    if (optimisticUpdates.has(eventName)) {
-        const { element, originalState } = optimisticUpdates.get(eventName);
+// Helper: Debounce function
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
 
-        // Remove loading indicator
-        element.classList.remove('optimistic-pending');
-
-        // Restore original button state (if button)
-        if (element.tagName === 'BUTTON') {
-            if (originalState.disabled !== undefined) {
-                element.disabled = originalState.disabled;
-            }
-            if (originalState.text !== undefined) {
-                element.textContent = originalState.text;
-            }
+// Helper: Throttle function
+function throttle(func, limit) {
+    let inThrottle;
+    return function (...args) {
+        if (!inThrottle) {
+            func(...args);
+            inThrottle = true;
+            setTimeout(() => inThrottle = false, limit);
         }
+    }
+}
 
+// Helper: Get LiveView root element
+function getLiveViewRoot() {
+    return document.querySelector('[data-liveview-root]') || document.body;
+}
+
+// Helper: Clear optimistic state
+function clearOptimisticState(eventName) {
+    if (eventName && optimisticUpdates.has(eventName)) {
+        const { element, originalState } = optimisticUpdates.get(eventName);
+        // Restore original state if needed (e.g. on error)
+        // For now, we just clear the tracking
         optimisticUpdates.delete(eventName);
     }
-    pendingEvents.delete(eventName);
 }
 
-function revertOptimisticUpdate(eventName) {
-    if (!optimisticUpdates.has(eventName)) {
-        return;
-    }
-
-    const { element, originalState } = optimisticUpdates.get(eventName);
-
-    // Restore original state
-    if (originalState.checked !== undefined) {
-        element.checked = originalState.checked;
-    }
-    if (originalState.value !== undefined) {
-        element.value = originalState.value;
-    }
-    if (originalState.disabled !== undefined) {
-        element.disabled = originalState.disabled;
-    }
-    if (originalState.text !== undefined) {
-        element.textContent = originalState.text;
-    }
-
-    // Add error indicator
-    element.classList.remove('optimistic-pending');
-    element.classList.add('optimistic-error');
-    setTimeout(() => element.classList.remove('optimistic-error'), 2000);
-
-    clearOptimisticState(eventName);
-
-    if (window.djustDebug) {
-        console.log('[LiveView:optimistic] Reverted optimistic update:', eventName);
-    }
-}
-
-function optimisticToggle(element, params) {
-    if (params.checked !== undefined) {
-        element.checked = params.checked;
-    } else {
-        element.checked = !element.checked;
-    }
-}
-
-function optimisticInputUpdate(element, params) {
-    if (params.value !== undefined) {
-        element.value = params.value;
-    }
-}
-
-function optimisticSelectUpdate(element, params) {
-    if (params.value !== undefined) {
-        element.value = params.value;
-    }
-}
-
-function optimisticButtonUpdate(element, params) {
-    element.disabled = true;
-    if (element.hasAttribute('data-loading-text')) {
-        element.textContent = element.getAttribute('data-loading-text');
-    }
-}
-
-// ============================================================================
-// Cache Decorator (Phase 5)
-// ============================================================================
-
-async function cacheEvent(eventName, eventData, config, sendFn) {
-    const { ttl = 60, key_params = [] } = config;
-
-    // Generate cache key from handler + params
-    const cacheKey = generateCacheKey(eventName, eventData, key_params);
-
-    // Check cache
-    const cached = resultCache.get(cacheKey);
-    if (cached && Date.now() < cached.expiresAt) {
-        // Cache hit - apply cached patches without server call
-        if (globalThis.djustDebug) {
-            const remainingTtl = Math.round((cached.expiresAt - Date.now()) / 1000);
-            console.log(`[LiveView:cache] Cache hit: ${cacheKey} (TTL: ${remainingTtl}s remaining)`);
+// Global Loading Manager (Phase 5)
+const globalLoadingManager = {
+    startLoading(eventName, triggerElement) {
+        if (triggerElement) {
+            triggerElement.classList.add('djust-loading');
+            triggerElement.disabled = true;
         }
-        // Apply cached patches directly
-        applyPatches(cached.patches);
-        return;
-    }
+        document.body.classList.add('djust-global-loading');
+    },
 
-    // Cache miss - send event to server and cache the patches
-    if (globalThis.djustDebug) {
-        console.log(`[LiveView:cache] Cache miss: ${cacheKey} (calling server)`);
-    }
-
-    // Generate unique request ID to track this cache request
-    const requestId = `${eventName}_${Date.now()}_${Math.random()}`;
-
-    // Mark this request as pending cache
-    pendingCacheRequests.set(requestId, { cacheKey, ttl });
-
-    // Add request ID to event data so we can match patches to this request
-    eventData._cacheRequestId = requestId;
-
-    // Send event to server
-    await sendFn(eventName, eventData);
-}
-
-function generateCacheKey(eventName, eventData, keyParams) {
-    if (keyParams.length === 0) {
-        return eventName;
-    }
-
-    const paramValues = keyParams.map(param => {
-        const value = eventData[param];
-        if (value === undefined || value === null) {
-            return '';
+    stopLoading(eventName, triggerElement) {
+        if (triggerElement) {
+            triggerElement.classList.remove('djust-loading');
+            triggerElement.disabled = false;
         }
-        return String(value);
-    }).join(':');
-
-    return `${eventName}:${paramValues}`;
-}
-
-function clearCache(eventName) {
-    if (!eventName) {
-        // Clear all cache
-        resultCache.clear();
-        if (globalThis.djustDebug) {
-            console.log('[LiveView:cache] Cleared all cache entries');
-        }
-        return;
+        document.body.classList.remove('djust-global-loading');
     }
+};
 
-    // Clear specific event (all keys starting with eventName)
-    let cleared = 0;
-    for (const key of resultCache.keys()) {
-        if (key === eventName || key.startsWith(eventName + ':')) {
-            resultCache.delete(key);
-            cleared++;
-        }
-    }
+// Main Event Handler
+async function handleEvent(eventName, params = {}) {
+    console.log(`[LiveView] Handling event: ${eventName}`, params);
 
-    if (globalThis.djustDebug) {
-        console.log(`[LiveView:cache] Cleared ${cleared} cache entries for ${eventName}`);
-    }
-}
-
-function cleanupExpiredCache() {
-    const now = Date.now();
-    let cleaned = 0;
-
-    for (const [key, entry] of resultCache.entries()) {
-        if (now >= entry.expiresAt) {
-            resultCache.delete(key);
-            cleaned++;
-        }
-    }
-
-    if (globalThis.djustDebug && cleaned > 0) {
-        console.log(`[LiveView:cache] Cleaned up ${cleaned} expired cache entries`);
-    }
-
-    return cleaned;
-}
-
-// ============================================================================
-// Client State Decorator (Phase 5)
-// ============================================================================
-
-function clientStateEvent(eventName, eventData, config, sendFn) {
-    const { state_key } = config;
-
-    if (!state_key) {
-        console.error('[LiveView:client_state] Missing state_key in config');
-        return sendFn(eventName, eventData);
-    }
-
-    // Extract state value from event data
-    const stateValue = eventData.value !== undefined ? eventData.value :
-                       eventData.checked !== undefined ? eventData.checked :
-                       eventData;
-
-    if (globalThis.djustDebug) {
-        console.log(`[LiveView:client_state] Setting ${state_key} =`, stateValue);
-    }
-
-    // Update StateBus (this will notify all subscribers)
-    globalStateBus.set(state_key, stateValue);
-
-    // Call server to persist state
-    return sendFn(eventName, eventData);
-}
-
-// ============================================================================
-// Loading Attribute Support (Phase 5)
-// ============================================================================
-
-class LoadingManager {
-    constructor() {
-        this.loadingElements = new Map();
-        this.pendingEvents = new Set();
-    }
-
-    register(element, eventName) {
-        // Check if element is already registered - preserve original state if so
-        const existingConfig = this.loadingElements.get(element);
-        const preservedOriginalState = existingConfig?.originalState || {};
-
-        const attributes = element.attributes;
-        const loadingConfig = {
-            eventName,
-            modifiers: [],
-            originalState: {}
-        };
-
-        for (let i = 0; i < attributes.length; i++) {
-            const attr = attributes[i];
-            const match = attr.name.match(/^@loading\.(.+)$/);
-            if (match) {
-                const modifier = match[1];
-
-                if (modifier === 'disable') {
-                    loadingConfig.modifiers.push({ type: 'disable' });
-                    // Preserve original state if already registered, otherwise capture current
-                    loadingConfig.originalState.disabled = preservedOriginalState.disabled !== undefined
-                        ? preservedOriginalState.disabled
-                        : element.disabled;
-                } else if (modifier === 'show') {
-                    loadingConfig.modifiers.push({ type: 'show' });
-                    loadingConfig.originalState.display = preservedOriginalState.display !== undefined
-                        ? preservedOriginalState.display
-                        : element.style.display;
-                } else if (modifier === 'hide') {
-                    loadingConfig.modifiers.push({ type: 'hide' });
-                    loadingConfig.originalState.display = preservedOriginalState.display !== undefined
-                        ? preservedOriginalState.display
-                        : element.style.display;
-                } else if (modifier === 'class') {
-                    const className = attr.value;
-                    if (className) {
-                        loadingConfig.modifiers.push({ type: 'class', value: className });
-                    }
-                }
-            }
-        }
-
-        if (loadingConfig.modifiers.length > 0) {
-            this.loadingElements.set(element, loadingConfig);
-
-            if (globalThis.djustDebug) {
-                console.log(`[Loading] Registered modifiers for "${eventName}":`,
-                    loadingConfig.modifiers, element);
-            }
-        }
-    }
-
-    startLoading(eventName, triggerElement = null) {
-        this.pendingEvents.add(eventName);
-
-        if (globalThis.djustDebug) {
-            console.log(`[Loading] Started: ${eventName}`, triggerElement);
-        }
-
-        this.loadingElements.forEach((config, element) => {
-            if (config.eventName === eventName) {
-                // Only apply loading state if element is related to the trigger
-                if (this.isRelatedElement(element, triggerElement)) {
-                    this.applyLoadingState(element, config);
-                }
-            }
-        });
-    }
-
-    stopLoading(eventName, triggerElement = null) {
-        this.pendingEvents.delete(eventName);
-
-        if (globalThis.djustDebug) {
-            console.log(`[Loading] Stopped: ${eventName}`, triggerElement);
-        }
-
-        this.loadingElements.forEach((config, element) => {
-            if (config.eventName === eventName) {
-                // Only remove loading state if element is related to the trigger
-                if (this.isRelatedElement(element, triggerElement)) {
-                    this.removeLoadingState(element, config);
-                }
-            }
-        });
-    }
-    /**
-     * Check if an element is related to the trigger element.
-     *
-     * This method implements scoped loading state to prevent cross-button
-     * contamination when multiple buttons share the same event handler.
-     *
-     * Scoping Rules:
-     * 1. The trigger element itself is ALWAYS affected
-     * 2. Siblings are ONLY affected if they're in an explicit grouping container
-     *
-     * Grouping Containers (Bootstrap-oriented):
-     * - d-flex: Flexbox layouts (common for button + spinner)
-     * - btn-group: Button groups
-     * - input-group: Input groups with buttons
-     * - form-group: Form field groups
-     * - btn-toolbar: Button toolbars
-     *
-     * Why these specific classes?
-     * - They indicate intentional UI grouping in Bootstrap (most common framework)
-     * - They're semantically meaningful (not just styling classes)
-     * - They provide a clear developer signal that elements should coordinate
-     *
-     * Examples:
-     *
-     * ✅ INDEPENDENT (no grouping):
-     *   <div class="card-body">
-     *     <button @click="save" @loading.disable>Save A</button>
-     *     <button @click="save" @loading.disable>Save B</button>
-     *   </div>
-     *   → Clicking Save A only affects Save A
-     *
-     * ✅ GROUPED (d-flex):
-     *   <div class="d-flex gap-2">
-     *     <button @click="save">Save</button>
-     *     <div @loading.show>Spinner</div>
-     *   </div>
-     *   → Clicking Save affects both button and spinner
-     *
-     * Note: This list is hardcoded for Bootstrap compatibility.
-     * Future enhancement: Make configurable via config.
-     *
-     * @param {HTMLElement} element - Element with @loading attribute
-     * @param {HTMLElement} triggerElement - Element that triggered the event
-     * @returns {boolean} True if element should receive loading state
-     */
-    isRelatedElement(element, triggerElement) {
-        if (!triggerElement) {
-            // No trigger specified, apply to all (legacy behavior)
-            return true;
-        }
-
-        // Always match the trigger element itself
-        if (element === triggerElement) {
-            return true;
-        }
-
-        // Only match siblings if they're in an explicit grouping container
-        if (element.parentElement && triggerElement.parentElement &&
-            element.parentElement === triggerElement.parentElement) {
-
-
-            // Check if parent has a grouping class (configurable via LIVEVIEW_CONFIG)
-            const groupingClasses = window.DJUST_LOADING_GROUPING_CLASSES || ['d-flex', 'btn-group', 'input-group', 'form-group', 'btn-toolbar'];
-            const parentClasses = element.parentElement.className || '';
-
-            // Allow sibling matching only for explicitly grouped containers
-            return groupingClasses.some(cls => parentClasses.includes(cls));
-        }
-
-        return false;
-    }
-
-    applyLoadingState(element, config) {
-        if (globalThis.djustDebug) {
-            console.log(`[Loading] Applying state to element:`, element, 'modifiers:', config.modifiers);
-        }
-
-        config.modifiers.forEach(modifier => {
-            if (modifier.type === 'disable') {
-                element.disabled = true;
-                if (globalThis.djustDebug) {
-                    console.log(`[Loading] Applied disable to element`);
-                }
-            } else if (modifier.type === 'show') {
-                element.style.display = element.getAttribute('data-loading-display') || 'block';
-                if (globalThis.djustDebug) {
-                    console.log(`[Loading] Applied show to element`);
-                }
-            } else if (modifier.type === 'hide') {
-                element.style.display = 'none';
-                if (globalThis.djustDebug) {
-                    console.log(`[Loading] Applied hide to element`);
-                }
-            } else if (modifier.type === 'class') {
-                element.classList.add(modifier.value);
-                if (globalThis.djustDebug) {
-                    console.log(`[Loading] Applied class "${modifier.value}" to element`);
-                }
-            }
-        });
-    }
-
-    removeLoadingState(element, config) {
-        config.modifiers.forEach(modifier => {
-            if (modifier.type === 'disable') {
-                element.disabled = config.originalState.disabled || false;
-            } else if (modifier.type === 'show' || modifier.type === 'hide') {
-                element.style.display = config.originalState.display || '';
-            } else if (modifier.type === 'class') {
-                element.classList.remove(modifier.value);
-            }
-        });
-
-        // Also remove optimistic-pending class (from @optimistic decorator)
-        // This is needed because VDOM patches may replace elements before clearOptimisticState runs
-        element.classList.remove('optimistic-pending');
-    }
-
-    isLoading(eventName) {
-        return this.pendingEvents.has(eventName);
-    }
-
-    clear() {
-        this.loadingElements.clear();
-        this.pendingEvents.clear();
-    }
-}
-
-const globalLoadingManager = new LoadingManager();
-
-// ============================================================================
-// Event Handling
-// ============================================================================
-
-async function handleEvent(eventName, params) {
-    console.log('[LiveView] Event:', eventName, params);
-
-    // Skip decorator checks if this is an immediate send (from decorator)
-    if (!params._skipDecorators) {
-        // Check for handler metadata (decorators)
-        const metadata = window.handlerMetadata?.[eventName];
-
-        // Warn if multiple decorators present (ambiguous behavior)
-        if (metadata?.debounce && metadata?.throttle) {
-            console.warn(
-                `[LiveView] Handler '${eventName}' has both @debounce and @throttle decorators. ` +
-                `Applying @debounce only. Use one decorator per handler.`
-            );
-        }
-
-        // Apply optimistic update FIRST (Phase 3)
-        // This happens immediately, regardless of debounce/throttle
-        if (metadata?.optimistic && params._targetElement) {
-            applyOptimisticUpdate(eventName, params, params._targetElement);
-        }
-
-        // Apply debounce if configured (Phase 2)
-        if (metadata?.debounce) {
-            debounceEvent(eventName, params, metadata.debounce);
-            return; // Don't send immediately
-        }
-
-        // Apply throttle if configured (Phase 2)
-        if (metadata?.throttle) {
-            throttleEvent(eventName, params, metadata.throttle);
-            return; // Don't send immediately
-        }
-
-        // Apply cache if configured (Phase 5)
-        if (metadata?.cache) {
-            // Cache wraps the actual send - check cache first, call server on miss
-            await cacheEvent(eventName, params, metadata.cache, async (evName, evParams) => {
-                evParams._skipDecorators = true;
-                await handleEvent(evName, evParams);
-            });
-            return; // Cache handled it
-        }
-    }
-
-    // Phase 5: Start loading state (pass trigger element for scoping)
+    // Start loading state
     const triggerElement = params._targetElement;
     globalLoadingManager.startLoading(eventName, triggerElement);
 
-    // Store trigger element for WebSocket flow (stopLoading will need it)
-    if (liveViewWS) {
-        liveViewWS.lastTriggerElement = triggerElement;
-    }
-
-    // Remove internal flags before sending
-    delete params._skipDecorators;
-    delete params._targetElement;
-
     // Try WebSocket first
     if (liveViewWS && liveViewWS.sendEvent(eventName, params)) {
-        console.log('[LiveView] Event sent via WebSocket');
-        return;  // WebSocket handled it
+        return;
     }
 
     // Fallback to HTTP
-    console.log('[LiveView] Using HTTP fallback');
+    console.log('[LiveView] WebSocket unavailable, falling back to HTTP');
+
     try {
-        const response = await fetch(window.location.href.split('?')[0], {
+        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value;
+        const response = await fetch(window.location.href, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-CSRFToken': getCookie('csrftoken'),
+                'X-CSRFToken': csrfToken,
+                'X-Djust-Event': eventName
             },
-            body: JSON.stringify({
-                event: eventName,
-                params: params
-            })
+            body: JSON.stringify(params)
         });
 
-        if (response.ok) {
-            const data = await response.json();
-
-            // Use centralized response handler
-            handleServerResponse(data, eventName, triggerElement);
-        } else {
-            // Handle HTTP errors (500, 404, etc.)
-            const errorData = await response.json().catch(() => ({}));
-
-            console.error('[LiveView] Server Error:', {
-                status: response.status,
-                statusText: response.statusText,
-                error: errorData
-            });
-
-            // Revert optimistic update on error (Phase 3)
-            revertOptimisticUpdate(eventName);
-
-            // Phase 5: Stop loading state on error
-            globalLoadingManager.stopLoading(eventName, triggerElement);
-
-            // Show user-friendly error notification
-            showErrorNotification(errorData, response.status);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
         }
+
+        const data = await response.json();
+        handleServerResponse(data, eventName, triggerElement);
+
     } catch (error) {
-        console.error('[LiveView] Network Error:', error);
-
-        // Revert optimistic update on network error (Phase 3)
-        revertOptimisticUpdate(eventName);
-
-        // Phase 5: Stop loading state on network error
+        console.error('[LiveView] HTTP fallback failed:', error);
         globalLoadingManager.stopLoading(eventName, triggerElement);
-
-        showErrorNotification({ error: 'Network error occurred. Please check your connection.' }, 0);
     }
 }
 
-function showErrorNotification(errorData, statusCode) {
-    // Create error notification element
-    const notification = document.createElement('div');
-    notification.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        max-width: 500px;
-        background: #dc3545;
-        color: white;
-        padding: 16px 20px;
-        border-radius: 8px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        z-index: 10000;
-        animation: slideIn 0.3s ease-out;
-    `;
+// Initialize on load
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('[LiveView] Initializing...');
 
-    // Build error message
-    let message = '';
-    if (errorData.error) {
-        message = `<strong>Error:</strong> ${escapeHtml(errorData.error)}`;
+    // Initialize WebSocket
+    liveViewWS = new LiveViewWebSocket();
+    liveViewWS.connect();
 
-        // Show detailed error info if available (DEBUG mode)
-        if (errorData.type) {
-            message += `<br><small><strong>${escapeHtml(errorData.type)}</strong></small>`;
-        }
-        if (errorData.event) {
-            message += `<br><small>Event: <code style="background: rgba(0,0,0,0.2); padding: 2px 4px; border-radius: 3px;">${escapeHtml(errorData.event)}</code></small>`;
-        }
-        if (errorData.traceback) {
-            message += `<br><details style="margin-top: 8px; cursor: pointer;">
-                <summary style="font-size: 12px;">Show Traceback</summary>
-                <pre style="font-size: 11px; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; overflow-x: auto; margin-top: 4px;">${escapeHtml(errorData.traceback)}</pre>
-            </details>`;
-        }
-    } else {
-        message = `<strong>Error ${statusCode}:</strong> An error occurred while processing your request.`;
-    }
+    // Initialize React counters (if any)
+    initReactCounters();
 
-    notification.innerHTML = `
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;">
-            <div style="flex: 1;">${message}</div>
-            <button onclick="this.parentElement.parentElement.remove()"
-                    style="background: none; border: none; color: white; font-size: 20px;
-                           cursor: pointer; padding: 0; line-height: 1; opacity: 0.8;"
-                    title="Close">×</button>
-        </div>
-    `;
-
-    // Add animation styles
-    const style = document.createElement('style');
-    style.textContent = `
-        @keyframes slideIn {
-            from { transform: translateX(400px); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
-        }
-    `;
-    if (!document.querySelector('style[data-liveview-error-styles]')) {
-        style.setAttribute('data-liveview-error-styles', '');
-        document.head.appendChild(style);
-    }
-
-    document.body.appendChild(notification);
-
-    // Auto-remove after 10 seconds
-    setTimeout(() => {
-        notification.style.animation = 'slideIn 0.3s ease-out reverse';
-        setTimeout(() => notification.remove(), 300);
-    }, 10000);
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-function getCookie(name) {
-    let cookieValue = null;
-    if (document.cookie && document.cookie !== '') {
-        const cookies = document.cookie.split(';');
-        for (let i = 0; i < cookies.length; i++) {
-            const cookie = cookies[i].trim();
-            if (cookie.substring(0, name.length + 1) === (name + '=')) {
-                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-                break;
-            }
-        }
-    }
-    return cookieValue;
-}
-
-// Client-side TodoItem interactions (only for React demo TodoItems)
-function initTodoItems() {
-    // Handle checkbox changes for .todo-checkbox (React demo TodoItems)
-    document.querySelectorAll('.todo-checkbox').forEach(checkbox => {
-        if (!checkbox.dataset.reactInitialized) {
-            checkbox.dataset.reactInitialized = 'true';
-            checkbox.addEventListener('change', function() {
-                const todoItem = this.closest('.todo-item');
-                if (this.checked) {
-                    todoItem.classList.add('completed');
-                } else {
-                    todoItem.classList.remove('completed');
-                }
-            });
-        }
-    });
-
-    // Handle delete button clicks for React demo TodoItems
-    document.querySelectorAll('.todo-delete').forEach(button => {
-        if (!button.dataset.reactInitialized) {
-            button.dataset.reactInitialized = 'true';
-            button.addEventListener('click', async function() {
-                const todoText = this.dataset.todoText;
-                await handleEvent('delete_todo_item', { text: todoText });
-            });
-        }
-    });
-}
-
-// Inject CSS styles for optimistic updates (Phase 3)
-function injectOptimisticStyles() {
-    if (document.getElementById('djust-optimistic-styles')) {
-        return; // Already injected
-    }
-
-    const styles = `
-        /* Optimistic update loading indicators */
-        .optimistic-pending {
-            opacity: 0.6;
-            cursor: wait !important;
-            position: relative;
-        }
-
-        .optimistic-pending::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(255, 255, 255, 0.1);
-            pointer-events: none;
-        }
-
-        .optimistic-error {
-            animation: djust-shake 0.5s;
-            border-color: #dc3545 !important;
-        }
-
-        @keyframes djust-shake {
-            0%, 100% { transform: translateX(0); }
-            25% { transform: translateX(-5px); }
-            75% { transform: translateX(5px); }
-        }
-    `;
-
-    const styleElement = document.createElement('style');
-    styleElement.id = 'djust-optimistic-styles';
-    styleElement.textContent = styles;
-    document.head.appendChild(styleElement);
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('[LiveView] Initialized with Rust-powered rendering');
-
-    // Expose handleEvent globally for custom scripts (e.g., throttle/debounce demos)
-    window.djustHandleEvent = handleEvent;
-
-    // Inject optimistic update CSS (Phase 3)
-    injectOptimisticStyles();
-
-    // Check if WebSocket is enabled (can be disabled via config)
-    const useWebSocket = window.DJUST_USE_WEBSOCKET !== false;
-
-    if (useWebSocket) {
-        // Initialize WebSocket connection
-        console.log('[LiveView] Using WebSocket mode');
-        liveViewWS = new LiveViewWebSocket();
-        liveViewWS.connect();
-        liveViewWS.startHeartbeat();
-    } else {
-        // HTTP-only mode (no WebSocket)
-        console.log('[LiveView] Using HTTP-only mode (WebSocket disabled)');
-    }
-
-    initReactCounters();  // Initialize client-side React components
-    initTodoItems();      // Initialize todo item checkboxes
+    // Bind initial events
     bindLiveViewEvents();
-    initDraftMode();      // Initialize DraftModeMixin (Phase 5)
-    initTurboNavigation(); // Initialize Turbo-like navigation
 
-    // Expose sendEvent globally for manual event handling (e.g., optimistic updates)
-    window.sendEvent = handleEvent;
+    // Initialize Draft Mode
+    initDraftMode();
+
+    // Start heartbeat
+    liveViewWS.startHeartbeat();
 });
 
-// ==============================================================================
-// TURBO-LIKE NAVIGATION
-// ==============================================================================
-// Provides instant page navigation without full page reloads, while maintaining
-// multi-page architecture benefits (SEO, deep linking, browser history).
-//
-// Features:
-// - Intercepts clicks on links with data-djust-navigate attribute
-// - Fetches pages via AJAX and replaces main content
-// - Updates browser history with pushState/popState
-// - Shows loading indicator during navigation
-// - Preserves scroll position
-// - Falls back to normal navigation on errors
-//
-// Usage:
-//   <a href="/rentals/properties/" data-djust-navigate>Properties</a>
-//
-// Configuration:
-//   data-djust-navigate="main" - Replace element with id="main"
-//   data-djust-navigate - Use default selector (main, [data-liveview-root], or body)
-// ==============================================================================
+// === Debug Panel Implementation ===
 
-function initTurboNavigation() {
-    let isNavigating = false;
-    const loadingBar = createLoadingBar();
-
-    // Intercept link clicks
-    document.addEventListener('click', function(e) {
-        // Find the link element (might be nested in other elements)
-        const link = e.target.closest('a[data-djust-navigate]');
-        if (!link) return;
-
-        // Ignore if:
-        // - Already navigating
-        // - Link has target="_blank" or similar
-        // - Modifier keys are pressed (ctrl/cmd/shift for new tab/window)
-        // - Not left click
-        if (isNavigating ||
-            link.target ||
-            e.ctrlKey ||
-            e.metaKey ||
-            e.shiftKey ||
-            e.button !== 0) {
-            return;
-        }
-
-        // Get the URL
-        const url = link.href;
-        if (!url || url === window.location.href) return;
-
-        // Same origin check
-        const linkUrl = new URL(url);
-        if (linkUrl.origin !== window.location.origin) return;
-
-        // Prevent default navigation
-        e.preventDefault();
-
-        // Perform turbo navigation
-        navigateTo(url, link.getAttribute('data-djust-navigate') || null);
-    });
-
-    // Handle browser back/forward buttons
-    window.addEventListener('popstate', function(e) {
-        if (e.state && e.state.turboNavigated) {
-            navigateTo(window.location.href, null, true);
-        }
-    });
-
-    async function navigateTo(url, targetSelector, skipHistory = false) {
-        if (isNavigating) return;
-
-        isNavigating = true;
-        showLoadingBar();
-
-        try {
-            // Fetch the new page
-            const response = await fetch(url, {
-                headers: {
-                    'X-Djust-Turbo': 'true' // Server can detect turbo navigation
-                }
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-
-            const html = await response.text();
-
-            // Parse the response
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-
-            // Determine what to replace
-            let newContent, oldContent;
-
-            if (targetSelector) {
-                // Use specific selector
-                newContent = doc.querySelector(targetSelector);
-                oldContent = document.querySelector(targetSelector);
-            } else {
-                // Auto-detect: try main, then [data-liveview-root], then body
-                const selectors = ['main', '[data-liveview-root]', 'body'];
-                for (const selector of selectors) {
-                    newContent = doc.querySelector(selector);
-                    oldContent = document.querySelector(selector);
-                    if (newContent && oldContent) break;
-                }
-            }
-
-            if (!newContent || !oldContent) {
-                throw new Error('Could not find content to replace');
-            }
-
-            // Save scroll position
-            const scrollPos = window.scrollY;
-
-            // Replace content
-            oldContent.innerHTML = newContent.innerHTML;
-
-            // Update title
-            if (doc.title) {
-                document.title = doc.title;
-            }
-
-            // Re-initialize LiveView events on new content
-            bindLiveViewEvents();
-
-            // Update browser history
-            if (!skipHistory) {
-                window.history.pushState(
-                    { turboNavigated: true },
-                    '',
-                    url
-                );
-            }
-
-            // Restore scroll position (or scroll to top for new pages)
-            if (skipHistory) {
-                window.scrollTo(0, scrollPos);
-            } else {
-                window.scrollTo(0, 0);
-            }
-
-            // Dispatch custom event for tracking/analytics
-            window.dispatchEvent(new CustomEvent('djust:navigate', {
-                detail: { url, turboNavigated: true }
-            }));
-
-        } catch (error) {
-            console.error('[Turbo] Navigation failed:', error);
-
-            // Fall back to normal navigation
-            window.location.href = url;
-        } finally {
-            isNavigating = false;
-            hideLoadingBar();
-        }
-    }
-
-    function createLoadingBar() {
-        const bar = document.createElement('div');
-        bar.id = 'djust-loading-bar';
-        bar.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 3px;
-            background: linear-gradient(90deg, #3b82f6, #8b5cf6);
-            transform: scaleX(0);
-            transform-origin: left;
-            transition: transform 0.3s ease;
-            z-index: 9999;
-            opacity: 0;
-        `;
-        document.body.appendChild(bar);
-        return bar;
-    }
-
-    function showLoadingBar() {
-        loadingBar.style.opacity = '1';
-        loadingBar.style.transform = 'scaleX(0.3)';
-
-        // Animate to 70% over 2 seconds
-        setTimeout(() => {
-            loadingBar.style.transition = 'transform 2s ease';
-            loadingBar.style.transform = 'scaleX(0.7)';
-        }, 100);
-    }
-
-    function hideLoadingBar() {
-        loadingBar.style.transition = 'transform 0.2s ease';
-        loadingBar.style.transform = 'scaleX(1)';
-
-        // Fade out
-        setTimeout(() => {
-            loadingBar.style.opacity = '0';
-            setTimeout(() => {
-                loadingBar.style.transform = 'scaleX(0)';
-            }, 200);
-        }, 200);
-    }
-
-    if (window.djustDebug) {
-        console.log('[Turbo] Navigation initialized');
-    }
-}
-
-// ============================================================================
-// Developer Debug Panel
-// ============================================================================
+// === Debug Panel Implementation ===
 
 class DjustDebugPanel {
     constructor() {
-        this.visible = false;
-        this.currentTab = 'handlers';
+        this.panel = null;
+        this.isVisible = false;
+        this.activeTab = 'history';
         this.eventHistory = [];
         this.patchHistory = [];
 
-        // Get max history from config (default: 50)
+        // Initialize from server-provided debug info
         const debugInfo = window.DJUST_DEBUG_INFO || {};
-        this.maxHistory = (debugInfo.config && debugInfo.config.maxHistory) || 50;
+        this.handlers = debugInfo.handlers || {};
+        this.variables = debugInfo.variables || {};
 
-        this.createUI();
-        this.setupKeyboardShortcut();
+        this.maxHistory = 50; // Configurable limit
+
+        this.init();
     }
 
-    createUI() {
-        // Create floating button (only visible in DEBUG mode)
-        if (typeof window.DJUST_DEBUG_INFO === 'undefined') {
-            return; // Not in debug mode
-        }
+    init() {
+        // Create container
+        this.container = document.createElement('div');
+        this.container.id = 'djust-debug-root';
+        document.body.appendChild(this.container);
+        this.render();
 
-        // Floating button
-        this.button = document.createElement('button');
-        this.button.className = 'djust-debug-button';
-        this.button.innerHTML = '🔧';
-        this.button.title = 'Open djust Debug Panel (Ctrl+Shift+D)';
-        this.button.onclick = () => this.toggle();
-        document.body.appendChild(this.button);
-
-        // Panel container
-        this.panel = document.createElement('div');
-        this.panel.className = 'djust-debug-panel';
-        this.panel.style.display = 'none';
-        document.body.appendChild(this.panel);
-    }
-
-    setupKeyboardShortcut() {
+        // Bind keyboard shortcut (Ctrl+Shift+D)
         document.addEventListener('keydown', (e) => {
             if (e.ctrlKey && e.shiftKey && e.key === 'D') {
-                e.preventDefault();
                 this.toggle();
             }
         });
     }
 
     toggle() {
-        this.visible = !this.visible;
+        this.isVisible = !this.isVisible;
+        this.render();
+    }
 
-        if (this.visible) {
-            this.render();
-            this.panel.style.display = 'block';
-            this.button.classList.add('active');
-        } else {
-            this.panel.style.display = 'none';
-            this.button.classList.remove('active');
+    setTab(tab) {
+        this.activeTab = tab;
+        this.render();
+    }
+
+    setLimit(limit) {
+        this.maxHistory = parseInt(limit);
+        // Trim existing history if needed
+        if (this.eventHistory.length > this.maxHistory) {
+            this.eventHistory = this.eventHistory.slice(this.eventHistory.length - this.maxHistory);
         }
+        if (this.patchHistory.length > this.maxHistory) {
+            this.patchHistory = this.patchHistory.slice(this.patchHistory.length - this.maxHistory);
+        }
+        this.render();
+    }
+
+    getErrorCount() {
+        return this.eventHistory.filter(e => e.error).length;
+    }
+
+    exportData() {
+        const data = {
+            timestamp: new Date().toISOString(),
+            events: this.eventHistory,
+            patches: this.patchHistory,
+            handlers: this.handlers,
+            variables: this.variables
+        };
+
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `djust-debug-${new Date().toISOString()}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     }
 
     render() {
-        const debugInfo = window.DJUST_DEBUG_INFO || {};
+        const errorCount = this.getErrorCount();
+        const errorBadge = errorCount > 0 ? `<span class="tab-badge error">${errorCount}</span>` : '';
+        const handlerCount = Object.keys(this.handlers).length;
 
-        this.panel.innerHTML = `
-            <div class="djust-debug-header">
-                <h3>djust Debug Panel</h3>
-                <button onclick="window.djustDebugPanel.toggle()">✕</button>
-            </div>
+        const html = `
+            <button class="djust-debug-button ${this.isVisible ? 'active' : ''}" onclick="window.djustDebugPanel.toggle()">
+                🐞
+            </button>
 
-            <div class="djust-debug-tabs">
-                <button class="${this.currentTab === 'handlers' ? 'active' : ''}"
-                        onclick="window.djustDebugPanel.switchTab('handlers')">
-                    Event Handlers
-                </button>
-                <button class="${this.currentTab === 'history' ? 'active' : ''}"
-                        onclick="window.djustDebugPanel.switchTab('history')">
-                    Event History (${this.eventHistory.length})
-                </button>
-                <button class="${this.currentTab === 'patches' ? 'active' : ''}"
-                        onclick="window.djustDebugPanel.switchTab('patches')">
-                    VDOM Patches
-                </button>
-                <button class="${this.currentTab === 'variables' ? 'active' : ''}"
-                        onclick="window.djustDebugPanel.switchTab('variables')">
-                    Variables
-                </button>
-            </div>
+            <div class="djust-debug-panel ${this.isVisible ? 'visible' : ''}">
+                <div class="djust-debug-sidebar">
+                    <div class="djust-debug-header">
+                        <h3>DJUST TOOLS</h3>
+                    </div>
+                    <div class="djust-debug-tabs">
+                        <button class="djust-debug-tab ${this.activeTab === 'history' ? 'active' : ''}" onclick="window.djustDebugPanel.setTab('history')">
+                            <span>Event History</span>
+                            ${errorBadge}
+                        </button>
+                        <button class="djust-debug-tab ${this.activeTab === 'patches' ? 'active' : ''}" onclick="window.djustDebugPanel.setTab('patches')">
+                            <span>VDOM Patches</span>
+                            <span class="tab-badge">${this.patchHistory.length}</span>
+                        </button>
+                        <button class="djust-debug-tab ${this.activeTab === 'handlers' ? 'active' : ''}" onclick="window.djustDebugPanel.setTab('handlers')">
+                            <span>Handlers</span>
+                            <span class="tab-badge">${handlerCount}</span>
+                        </button>
+                        <button class="djust-debug-tab ${this.activeTab === 'variables' ? 'active' : ''}" onclick="window.djustDebugPanel.setTab('variables')">
+                            <span>Variables</span>
+                        </button>
+                    </div>
+                </div>
 
-            <div class="djust-debug-content">
-                ${this.renderTabContent()}
+                <div class="djust-debug-content">
+                    ${this.renderContent()}
+                </div>
+
+                <div class="djust-status-bar">
+                    <div class="status-item">
+                        <div class="status-dot connected"></div>
+                        <span>Connected</span>
+                    </div>
+                    <div class="status-item">
+                        <span>v${clientVdomVersion || '0.0.0'}</span>
+                    </div>
+                    <div style="flex:1"></div>
+                    <div class="status-item">
+                        <span>${navigator.userAgent.includes('Mac') ? 'Cmd+Shift+D' : 'Ctrl+Shift+D'} to toggle</span>
+                    </div>
+                </div>
             </div>
         `;
+
+        this.container.innerHTML = html;
+        this.panel = this.container.querySelector('.djust-debug-panel');
     }
 
-    renderTabContent() {
-        const debugInfo = window.DJUST_DEBUG_INFO || {};
-
-        switch (this.currentTab) {
-            case 'handlers':
-                return this.renderHandlers(debugInfo.handlers || {});
+    renderContent() {
+        switch (this.activeTab) {
             case 'history':
-                return this.renderEventHistory();
+                return this.renderHistory();
             case 'patches':
-                return this.renderPatchHistory();
+                return this.renderPatches();
+            case 'handlers':
+                return this.renderHandlers();
             case 'variables':
-                return this.renderVariables(debugInfo.variables || {});
+                return this.renderVariables(this.variables);
             default:
                 return '';
         }
     }
 
-    renderHandlers(handlers) {
-        if (Object.keys(handlers).length === 0) {
-            return '<p class="empty">No event handlers found</p>';
+    renderHistory() {
+        let html = `
+            <div class="djust-toolbar">
+                <span class="toolbar-title">Event Log</span>
+                <div class="toolbar-actions">
+                    <span class="history-count">Last ${this.maxHistory}</span>
+                    <button class="btn-xs" onclick="window.djustDebugPanel.exportData()">Export</button>
+                    <button class="btn-xs" onclick="window.djustDebugPanel.clearHistory()">Clear</button>
+                </div>
+            </div>
+            <div class="debug-list">
+        `;
+
+        if (this.eventHistory.length === 0) {
+            return html + '<p class="empty">No events recorded yet</p></div>';
         }
 
-        let html = '<div class="handler-list">';
+        for (let i = 0; i < this.eventHistory.length; i++) {
+            const entry = this.eventHistory[this.eventHistory.length - 1 - i];
+            const eventId = `evt-${i}`;
+            const isError = !!entry.error;
 
-        for (const [name, info] of Object.entries(handlers)) {
+            // Format duration
+            const durationText = entry.duration !== undefined
+                ? `${entry.duration.toFixed(2)}ms`
+                : 'N/A';
+
+            html += `
+                <div class="event-item ${isError ? 'error' : ''}" id="${eventId}">
+                    <div class="event-header" onclick="window.djustDebugPanel.toggleItem('${eventId}')">
+                        <span style="margin-right: 8px; font-size: 10px;">▶</span>
+                        <span class="event-name">${entry.name}</span>
+                        <span class="event-meta">${durationText} • ${new Date(entry.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                    <div class="event-body" style="display: none;">
+                        <div class="event-params">
+                            <strong>Params:</strong>
+                            <pre>${JSON.stringify(entry.params, null, 2)}</pre>
+                        </div>
+                        ${isError ? `<div class="event-error"><strong>Error:</strong> ${entry.error}</div>` : ''}
+                    </div>
+                </div>
+            `;
+        }
+        return html + '</div>';
+    }
+
+    renderPatches() {
+        let html = `
+            <div class="djust-toolbar">
+                <span class="toolbar-title">VDOM Patches</span>
+                <div class="toolbar-actions">
+                    <button class="btn-xs" onclick="window.djustDebugPanel.clearPatches()">Clear</button>
+                </div>
+            </div>
+            <div class="debug-list">
+        `;
+
+        if (this.patchHistory.length === 0) {
+            return html + '<p class="empty">No VDOM patches applied yet</p></div>';
+        }
+
+        for (let i = 0; i < this.patchHistory.length; i++) {
+            const entry = this.patchHistory[this.patchHistory.length - 1 - i];
+            const patchId = `patch-${i}`;
+
+            // Format duration
+            const durationText = entry.duration !== undefined
+                ? `${entry.duration.toFixed(2)}ms`
+                : 'N/A';
+
+            html += `
+                <div class="patch-item" id="${patchId}">
+                    <div class="patch-header" onclick="window.djustDebugPanel.toggleItem('${patchId}')">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 10px;">▶</span>
+                            <span class="patch-count">${entry.count} patch${entry.count !== 1 ? 'es' : ''}</span>
+                        </div>
+                        <span>${durationText} • ${new Date(entry.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                    <div class="event-body" style="display: none;">
+                        <pre>${JSON.stringify(entry.patches, null, 2)}</pre>
+                    </div>
+                </div>
+            `;
+        }
+        return html + '</div>';
+    }
+
+    renderHandlers() {
+        let html = `
+            <div class="djust-toolbar">
+                <span class="toolbar-title">Registered Handlers</span>
+            </div>
+            <div class="debug-list">
+        `;
+
+        const handlerNames = Object.keys(this.handlers);
+        if (handlerNames.length === 0) {
+            return html + '<p class="empty">No event handlers found in debug info</p></div>';
+        }
+
+        for (const [name, info] of Object.entries(this.handlers)) {
             const params = info.params || [];
             const decorators = Object.keys(info.decorators || {}).filter(d => d !== 'event_handler');
 
@@ -2768,7 +1357,7 @@ class DjustDebugPanel {
                             <div class="param">
                                 <code>${p.name}</code>:
                                 <span class="type">${p.type}</span>
-                                ${!p.required ? ` = <span class="default">${p.default}</span>` : '<span class="required">*required</span>'}
+                                ${!p.required ? ` = <span class="default">${p.default}</span>` : '<span class="required">*</span>'}
                             </div>
                         `).join('') : '<span class="empty">No parameters</span>'}
                         ${info.accepts_kwargs ? '<div class="param"><code>**kwargs</code></div>' : ''}
@@ -2783,151 +1372,61 @@ class DjustDebugPanel {
             `;
         }
 
-        html += '</div>';
-        return html;
-    }
-
-    renderEventHistory() {
-        if (this.eventHistory.length === 0) {
-            return '<p class="empty">No events captured yet. Interact with the page to see events here.</p>';
-        }
-
-        let html = `
-            <div class="event-history">
-                <div class="history-toolbar">
-                    <button onclick="window.djustDebugPanel.exportEventHistory()" class="export-btn">
-                        📥 Export All Events
-                    </button>
-                    <span class="history-count">${this.eventHistory.length} event(s)</span>
-                </div>
-        `;
-
-        // Reverse to show newest first
-        for (let i = 0; i < this.eventHistory.length; i++) {
-            const event = this.eventHistory[this.eventHistory.length - 1 - i];
-            const timestamp = new Date(event.timestamp).toLocaleTimeString();
-            const success = event.error ? 'error' : 'success';
-            const eventId = `event-${i}`;
-
-            // Format duration
-            const durationText = event.duration !== undefined
-                ? `${event.duration.toFixed(1)}ms`
-                : 'N/A';
-
-            html += `
-                <div class="event-item ${success} collapsed" data-event-id="${eventId}">
-                    <div class="event-header" onclick="window.djustDebugPanel.toggleEvent('${eventId}')">
-                        <span class="event-toggle">▶</span>
-                        <span class="event-name">${event.name}</span>
-                        <span class="event-time">${timestamp} • ${durationText}</span>
-                    </div>
-
-                    <div class="event-body">
-                        <div class="event-params">
-                            <strong>Parameters:</strong>
-                            <pre>${JSON.stringify(event.params, null, 2)}</pre>
-                        </div>
-
-                        ${event.error ? `
-                            <div class="event-error">
-                                <strong>Error:</strong> ${event.error}
-                            </div>
-                        ` : ''}
-
-                        <div class="event-actions">
-                            <button onclick="navigator.clipboard.writeText('${JSON.stringify(event).replace(/'/g, "\\'")}')">
-                                Copy JSON
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        html += '</div>';
-        return html;
-    }
-
-    renderPatchHistory() {
-        if (this.patchHistory.length === 0) {
-            return '<p class="empty">No patches captured yet.</p>';
-        }
-
-        let html = '<div class="patch-history">';
-
-        for (let i = 0; i < this.patchHistory.length; i++) {
-            const entry = this.patchHistory[this.patchHistory.length - 1 - i];
-            const patchId = `patch-${i}`;
-
-            // Format duration
-            const durationText = entry.duration !== undefined
-                ? `${entry.duration.toFixed(2)}ms`
-                : 'N/A';
-
-            html += `
-                <div class="patch-item collapsed" data-patch-id="${patchId}">
-                    <div class="patch-header" onclick="window.djustDebugPanel.togglePatch('${patchId}')">
-                        <span class="patch-toggle">▶</span>
-                        <span>${entry.count} patch${entry.count !== 1 ? 'es' : ''}</span>
-                        <span>${new Date(entry.timestamp).toLocaleTimeString()} • ${durationText}</span>
-                    </div>
-                    <div class="patch-body">
-                        <pre>${JSON.stringify(entry.patches, null, 2)}</pre>
-                        ${entry.duration !== undefined ? `<p class="patch-stats">Applied in ${durationText}</p>` : ''}
-                    </div>
-                </div>
-            `;
-        }
-
-        html += '</div>';
-        return html;
-    }
-
-    togglePatch(patchId) {
-        const patchItem = this.panel.querySelector(`[data-patch-id="${patchId}"]`);
-        if (patchItem) {
-            patchItem.classList.toggle('collapsed');
-            const toggle = patchItem.querySelector('.patch-toggle');
-            if (toggle) {
-                toggle.textContent = patchItem.classList.contains('collapsed') ? '▶' : '▼';
-            }
-        }
-    }
-
-    toggleEvent(eventId) {
-        const eventItem = this.panel.querySelector(`[data-event-id="${eventId}"]`);
-        if (eventItem) {
-            eventItem.classList.toggle('collapsed');
-            const toggle = eventItem.querySelector('.event-toggle');
-            if (toggle) {
-                toggle.textContent = eventItem.classList.contains('collapsed') ? '▶' : '▼';
-            }
-        }
+        return html + '</div>';
     }
 
     renderVariables(variables) {
-        if (Object.keys(variables).length === 0) {
-            return '<p class="empty">No public variables found</p>';
-        }
+        let html = `
+            <div class="djust-toolbar">
+                <span class="toolbar-title">Variables</span>
+            </div>
+            <div class="debug-list">
+        `;
 
-        let html = '<div class="variable-list">';
+        if (Object.keys(variables).length === 0) {
+            return html + '<p class="empty">No public variables found</p></div>';
+        }
 
         for (const [name, info] of Object.entries(variables)) {
             html += `
                 <div class="variable-item">
                     <div class="variable-name">${name}</div>
                     <div class="variable-type">${info.type}</div>
-                    <div class="variable-value"><code>${info.value}</code></div>
+                    <div class="variable-value">
+                        Current: <code>${info.value}</code>
+                    </div>
                 </div>
             `;
         }
-
-        html += '</div>';
-        return html;
+        return html + '</div>';
     }
 
-    switchTab(tab) {
-        this.currentTab = tab;
+    toggleItem(id) {
+        const el = document.getElementById(id);
+        if (el) {
+            const body = el.querySelector('.event-body');
+            const header = el.querySelector('.event-header, .patch-header');
+            const chevron = header ? header.querySelector('span:first-child') : null;
+
+            if (body) {
+                const isExpanded = body.style.display !== 'none';
+                body.style.display = isExpanded ? 'none' : 'block';
+
+                // Rotate chevron
+                if (chevron && (chevron.textContent === '▶' || chevron.textContent === '▼')) {
+                    chevron.textContent = isExpanded ? '▶' : '▼';
+                }
+            }
+        }
+    }
+
+    clearHistory() {
+        this.eventHistory = [];
+        this.render();
+    }
+
+    clearPatches() {
+        this.patchHistory = [];
         this.render();
     }
 
@@ -2940,12 +1439,12 @@ class DjustDebugPanel {
             duration: duration
         });
 
-        // Keep last 50 events
+        // Keep last N events
         if (this.eventHistory.length > this.maxHistory) {
             this.eventHistory.shift();
         }
 
-        if (this.visible && this.currentTab === 'history') {
+        if (this.isVisible) {
             this.render();
         }
     }
@@ -2962,33 +1461,9 @@ class DjustDebugPanel {
             this.patchHistory.shift();
         }
 
-        if (this.visible && this.currentTab === 'patches') {
+        if (this.isVisible) {
             this.render();
         }
-    }
-
-    exportEventHistory() {
-        // Create export data
-        const exportData = {
-            exported_at: new Date().toISOString(),
-            view_class: (window.DJUST_DEBUG_INFO || {}).view_class || 'Unknown',
-            event_count: this.eventHistory.length,
-            events: this.eventHistory
-        };
-
-        // Convert to JSON
-        const jsonString = JSON.stringify(exportData, null, 2);
-
-        // Create download link
-        const blob = new Blob([jsonString], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `djust-events-${Date.now()}.json`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
     }
 }
 
@@ -3001,7 +1476,7 @@ if (typeof window.DJUST_DEBUG_INFO !== 'undefined') {
     const originalHandleEvent = handleEvent;
 
     // Replace with wrapper that logs events with timing
-    window.handleEvent = handleEvent = async function(eventName, params) {
+    window.handleEvent = handleEvent = async function (eventName, params) {
         const startTime = performance.now();
         let result = null;
         let error = null;
@@ -3031,23 +1506,28 @@ if (typeof window.DJUST_DEBUG_INFO !== 'undefined') {
     };
 
     // Hook into patch application to log patches
-    const originalApplyPatches = window.applyPatches || applyPatches;
+    // Ensure applyPatches exists before hooking
+    if (typeof applyPatches !== 'undefined' || typeof window.applyPatches !== 'undefined') {
+        const originalApplyPatches = window.applyPatches || applyPatches;
 
-    // Replace with wrapper that logs patches with timing
-    window.applyPatches = applyPatches = function(patches) {
-        const startTime = performance.now();
+        // Replace with wrapper that logs patches with timing
+        window.applyPatches = applyPatches = function (patches) {
+            const startTime = performance.now();
 
-        // Call original implementation
-        const result = originalApplyPatches(patches);
+            // Call original implementation
+            const result = originalApplyPatches(patches);
 
-        // Calculate duration
-        const duration = performance.now() - startTime;
+            // Calculate duration
+            const duration = performance.now() - startTime;
 
-        // Log patches to debug panel
-        if (window.djustDebugPanel && patches && patches.length > 0) {
-            window.djustDebugPanel.logPatches(patches, duration);
-        }
+            // Log patches to debug panel
+            if (window.djustDebugPanel && patches && patches.length > 0) {
+                window.djustDebugPanel.logPatches(patches, duration);
+            }
 
-        return result;
-    };
+            return result;
+        };
+    } else {
+        console.warn('[djust] applyPatches not found - patch logging disabled');
+    }
 }
