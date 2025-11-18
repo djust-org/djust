@@ -124,15 +124,17 @@ impl InheritanceChain {
                 false_nodes: self.apply_block_overrides(false_nodes),
             },
             Node::For {
-                var_name,
+                var_names,
                 iterable,
                 reversed,
                 nodes,
+                empty_nodes,
             } => Node::For {
-                var_name: var_name.clone(),
+                var_names: var_names.clone(),
                 iterable: iterable.clone(),
                 reversed: *reversed,
                 nodes: self.apply_block_overrides(nodes),
+                empty_nodes: self.apply_block_overrides(empty_nodes),
             },
             Node::With { assignments, nodes } => Node::With {
                 assignments: assignments.clone(),
@@ -331,17 +333,23 @@ fn node_to_template_string(node: &Node) -> String {
             result
         }
         Node::For {
-            var_name,
+            var_names,
             iterable,
             reversed,
             nodes,
+            empty_nodes,
         } => {
-            let mut result = format!("{{% for {var_name} in {iterable}");
+            let var_names_str = var_names.join(", ");
+            let mut result = format!("{{% for {var_names_str} in {iterable}");
             if *reversed {
                 result.push_str(" reversed");
             }
             result.push_str(" %}");
             result.push_str(&nodes_to_template_string(nodes));
+            if !empty_nodes.is_empty() {
+                result.push_str("{% empty %}");
+                result.push_str(&nodes_to_template_string(empty_nodes));
+            }
             result.push_str("{% endfor %}");
             result
         }
@@ -530,10 +538,11 @@ mod tests {
     #[test]
     fn test_nodes_to_template_string_for_loop() {
         let nodes = vec![Node::For {
-            var_name: "item".to_string(),
+            var_names: vec!["item".to_string()],
             iterable: "items".to_string(),
             reversed: false,
             nodes: vec![Node::Variable("item.name".to_string(), vec![])],
+            empty_nodes: vec![],
         }];
 
         let result = nodes_to_template_string(&nodes);
@@ -546,10 +555,11 @@ mod tests {
     #[test]
     fn test_nodes_to_template_string_for_loop_reversed() {
         let nodes = vec![Node::For {
-            var_name: "item".to_string(),
+            var_names: vec!["item".to_string()],
             iterable: "items".to_string(),
             reversed: true,
             nodes: vec![Node::Text("Item".to_string())],
+            empty_nodes: vec![],
         }];
 
         let result = nodes_to_template_string(&nodes);
@@ -603,7 +613,7 @@ mod tests {
             nodes: vec![Node::If {
                 condition: "items".to_string(),
                 true_nodes: vec![Node::For {
-                    var_name: "item".to_string(),
+                    var_names: vec!["item".to_string()],
                     iterable: "items".to_string(),
                     reversed: false,
                     nodes: vec![
@@ -611,6 +621,7 @@ mod tests {
                         Node::Variable("item.name".to_string(), vec![("upper".to_string(), None)]),
                         Node::Text("</li>".to_string()),
                     ],
+                    empty_nodes: vec![],
                 }],
                 false_nodes: vec![Node::Text("<p>No items</p>".to_string())],
             }],

@@ -6,9 +6,9 @@ Tenant-facing views for lease info, payments, and maintenance requests.
 
 from djust_shared.views import BaseViewWithNavbar
 from djust.decorators import debounce
-from djust_shared.components.ui import HeroSection
 from django.utils import timezone
 from ..models import Tenant, Lease, Payment, MaintenanceRequest, Property
+from ..components import PageHeader
 
 
 class TenantDashboardView(BaseViewWithNavbar):
@@ -69,14 +69,6 @@ class TenantDashboardView(BaseViewWithNavbar):
             tenant=self.tenant
         ).order_by('-created_at')[:5] if self.tenant else []
 
-        # Initialize hero
-        title = f"Welcome, {self.tenant.user.get_full_name()}" if self.tenant else "Tenant Portal"
-        self.hero = HeroSection(
-            title=title,
-            subtitle="Your rental information and services",
-            icon="🏡"
-        )
-
     def get_context_data(self, **kwargs):
         """Add tenant dashboard context"""
         context = super().get_context_data(**kwargs)
@@ -84,6 +76,14 @@ class TenantDashboardView(BaseViewWithNavbar):
         if not self.tenant:
             context['error_message'] = self.error_message
             return context
+
+        # Create page header
+        title = f"Welcome, {self.tenant.user.get_full_name()}" if self.tenant else "Tenant Portal"
+        page_header = PageHeader(
+            title=title,
+            subtitle="Your rental information and services",
+            icon="home"
+        )
 
         # Count maintenance by status
         maintenance_stats = {
@@ -93,6 +93,7 @@ class TenantDashboardView(BaseViewWithNavbar):
         }
 
         context.update({
+            'page_header': page_header.render(),
             'tenant': self.tenant,
             'current_lease': self.current_lease,
             'current_property': self.current_property,
@@ -130,13 +131,6 @@ class TenantMaintenanceListView(BaseViewWithNavbar):
         # Filter state
         self.filter_status = "all"
 
-        # Initialize hero
-        self.hero = HeroSection(
-            title="My Maintenance Requests",
-            subtitle="Track your maintenance requests",
-            icon="🔧"
-        )
-
         # Load requests
         self._refresh_requests()
 
@@ -169,7 +163,15 @@ class TenantMaintenanceListView(BaseViewWithNavbar):
             context['error_message'] = self.error_message
             return context
 
+        # Create page header
+        page_header = PageHeader(
+            title="My Maintenance Requests",
+            subtitle="Track your maintenance requests",
+            icon="wrench"
+        )
+
         context.update({
+            'page_header': page_header.render(),
             'requests': self.requests,
             'total_count': self.requests.count() if self.requests else 0,
             'filter_status': self.filter_status,
@@ -206,13 +208,6 @@ class TenantMaintenanceCreateView(BaseViewWithNavbar):
         self.success_message = ""
         self.error_message = ""
 
-        # Initialize hero
-        self.hero = HeroSection(
-            title="Submit Maintenance Request",
-            subtitle="Report an issue with your property",
-            icon="🔧"
-        )
-
     def submit_request(self, title="", description="", priority="medium", **kwargs):
         """Submit new maintenance request"""
         if not self.tenant or not self.current_property:
@@ -244,7 +239,19 @@ class TenantMaintenanceCreateView(BaseViewWithNavbar):
             context['error_message'] = self.error_message
             return context
 
+        # Create page header
+        from ..components import PageHeader
+        page_header = PageHeader(
+            title="Submit Maintenance Request",
+            subtitle=f"Report an issue with {self.current_property.name if self.current_property else 'your property'}",
+            icon="wrench"
+        )
+
         context.update({
+            # Components (rendered to HTML strings)
+            'page_header': page_header.render(),
+
+            # Form data
             'tenant': self.tenant,
             'current_property': self.current_property,
             'success_message': self.success_message,
@@ -287,13 +294,6 @@ class TenantPaymentsView(BaseViewWithNavbar):
         else:
             self.payments = []
 
-        # Initialize hero
-        self.hero = HeroSection(
-            title="Payment History",
-            subtitle="View your rent payments",
-            icon="💳"
-        )
-
     def get_context_data(self, **kwargs):
         """Add payments context"""
         context = super().get_context_data(**kwargs)
@@ -301,6 +301,13 @@ class TenantPaymentsView(BaseViewWithNavbar):
         if not self.tenant:
             context['error_message'] = self.error_message
             return context
+
+        # Create page header
+        page_header = PageHeader(
+            title="Payment History",
+            subtitle="View your rent payments",
+            icon="credit-card"
+        )
 
         # Calculate payment statistics
         from django.db.models import Sum, Count
@@ -327,6 +334,7 @@ class TenantPaymentsView(BaseViewWithNavbar):
             balance = 0
 
         context.update({
+            'page_header': page_header.render(),
             'tenant': self.tenant,
             'current_lease': self.current_lease,
             'payments': self.payments,

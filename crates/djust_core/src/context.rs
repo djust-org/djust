@@ -52,11 +52,23 @@ impl Context {
             let mut current = current?;
 
             for part in &parts[1..] {
-                match current {
-                    Value::Object(obj) => {
-                        current = obj.get(*part)?;
+                // Check if this part is a numeric index (for list access)
+                if let Ok(index) = part.parse::<usize>() {
+                    // Try to access as list index
+                    match current {
+                        Value::List(list) => {
+                            current = list.get(index)?;
+                        }
+                        _ => return None,
                     }
-                    _ => return None,
+                } else {
+                    // Regular object field access
+                    match current {
+                        Value::Object(obj) => {
+                            current = obj.get(*part)?;
+                        }
+                        _ => return None,
+                    }
                 }
             }
 

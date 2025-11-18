@@ -81,6 +81,11 @@ class Property(models.Model):
         """Check if property is currently occupied"""
         return self.status == 'occupied' and self.get_current_lease() is not None
 
+    @property
+    def status_display(self):
+        """Expose get_status_display() as property for JIT serialization"""
+        return self.get_status_display()
+
 
 class Tenant(models.Model):
     """
@@ -128,6 +133,9 @@ class Lease(models.Model):
     """
     Lease model - represents a rental agreement
     """
+    # Save reference to built-in property before field definition shadows it
+    _property = property
+
     STATUS_CHOICES = [
         ('active', 'Active'),
         ('expired', 'Expired'),
@@ -136,7 +144,7 @@ class Lease(models.Model):
     ]
 
     # Relationships
-    property = models.ForeignKey(Property, on_delete=models.CASCADE)
+    property = models.ForeignKey(Property, on_delete=models.CASCADE, related_name='leases')
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE)
 
     # Lease Terms
@@ -181,11 +189,46 @@ class Lease(models.Model):
             return 0
         return (self.end_date - today).days
 
+    @_property
+    def days_left(self):
+        """Alias for days_until_expiration for template use"""
+        return self.days_until_expiration()
+
+    @_property
+    def warning(self):
+        """Get warning level based on days until expiration"""
+        days = self.days_left
+        if days is None:
+            return None
+        if days <= 30:
+            return "urgent"
+        elif days <= 60:
+            return "soon"
+        return None
+
+    @_property
+    def property_name(self):
+        """Property name for JIT serialization"""
+        return self.property.name
+
+    @_property
+    def tenant_name(self):
+        """Tenant full name for JIT serialization"""
+        return self.tenant.user.get_full_name()
+
+    @_property
+    def rental_property(self):
+        """Alias for property field for backwards compatibility"""
+        return self.property
+
 
 class MaintenanceRequest(models.Model):
     """
     Maintenance request model - tracks property maintenance issues
     """
+    # Save reference to built-in property before field definition shadows it
+    _property = property
+
     PRIORITY_CHOICES = [
         ('low', 'Low'),
         ('medium', 'Medium'),
@@ -237,6 +280,24 @@ class MaintenanceRequest(models.Model):
         self.status = 'completed'
         self.completed_at = timezone.now()
         self.save()
+
+    # Can't use @property decorator here because we have a field named 'property'
+    # which shadows Python's built-in 'property' decorator.
+    # Use _property reference saved at class level instead.
+    def get_priority_display_prop(self):
+        """Expose get_priority_display() for JIT serialization"""
+        return self.get_priority_display()
+    priority_display = _property(get_priority_display_prop)
+
+    def get_property_name_prop(self):
+        """Property name for JIT serialization"""
+        return self.property.name
+    property_name = _property(get_property_name_prop)
+
+    def get_rental_property_prop(self):
+        """Alias for property field for consistency with Lease model"""
+        return self.property
+    rental_property = _property(get_rental_property_prop)
 
 
 class Payment(models.Model):

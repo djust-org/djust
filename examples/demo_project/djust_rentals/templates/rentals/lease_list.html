@@ -1,12 +1,75 @@
 {% extends "rentals/base.html" %}
-{% block title %}Leases{% endblock %}
-{% block extra_head %}<script src="https://cdn.tailwindcss.com"></script><style>body{background:#020617;color:#f8fafc}.card{background:#0f172a;border:1px solid #1e293b;border-radius:.5rem;padding:1.5rem}</style>{% endblock %}
+
+{% block title %}Leases - Rental Management{% endblock %}
+
 {% block content %}
-<div data-liveview-root class="min-h-screen bg-slate-950 py-6">
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.leases.LeaseListView">
   <div class="container mx-auto px-4 max-w-7xl">
-    <div class="flex justify-between mb-6"><h1 class="text-3xl font-bold">📄 Leases</h1><a href="{% url 'rentals:lease-add' %}" class="bg-blue-600 text-white px-4 py-2 rounded">+ New Lease</a></div>
-    <div class="card mb-6"><div class="flex gap-4"><select @change="filter_by_status" class="bg-slate-900 border border-slate-700 rounded px-4 py-2"><option value="all">All Statuses</option>{% for val,label in status_choices %}<option value="{{val}}" {% if filter_status == val %}selected{% endif %}>{{label}}</option>{% endfor %}</select></div></div>
-    <div class="card overflow-hidden"><table class="w-full"><thead class="bg-slate-900"><tr><th class="p-3 text-left">Property</th><th class="p-3 text-left">Tenant</th><th class="p-3 text-left">Dates</th><th class="p-3 text-left">Rent</th><th class="p-3 text-left">Status</th><th class="p-3 text-left">Actions</th></tr></thead><tbody>{% for data in lease_data %}<tr class="border-t border-slate-800 hover:bg-slate-900/50"><td class="p-3">{{data.lease.property.name}}</td><td class="p-3">{{data.lease.tenant.user.get_full_name}}</td><td class="p-3 text-sm">{{data.lease.start_date}} to {{data.lease.end_date}}{% if data.days_left %}<br><span class="text-slate-400">{{data.days_left}} days left</span>{% endif %}</td><td class="p-3 text-emerald-400 font-semibold">${{data.lease.monthly_rent}}</td><td class="p-3"><span class="px-2 py-1 rounded text-xs {% if data.lease.status == "active" %}bg-green-900/30 text-green-400{% else %}bg-slate-800 text-slate-400{% endif %}">{{data.lease.get_status_display}}</span></td><td class="p-3"><a href="{% url 'rentals:lease-detail' data.lease.pk %}" class="text-blue-400">View</a></td></tr>{% empty %}<tr><td colspan="6" class="p-8 text-center text-slate-400">No leases found.</td></tr>{% endfor %}</tbody></table></div>
+    <!-- Page Header with Lucide Icon and Add Button -->
+    {{ page_header|safe }}
+
+    <!-- Search and Filters -->
+    <div class="bg-card border border-border rounded-lg p-6 mb-6">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <!-- Search -->
+        <div>
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            <div class="flex items-center gap-1">
+              <i data-lucide="search" class="w-4 h-4"></i>
+              Search Leases
+            </div>
+          </label>
+          <input type="text"
+                 @input="search"
+                 value="{{ search_query }}"
+                 placeholder="Search by property or tenant..."
+                 class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
+        </div>
+
+        <!-- Status Filter -->
+        <div>
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            <div class="flex items-center gap-1">
+              <i data-lucide="filter" class="w-4 h-4"></i>
+              Status
+            </div>
+          </label>
+          <select @change="filter_by_status"
+                  class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
+            <option value="all" {% if filter_status == 'all' %}selected{% endif %}>All Statuses</option>
+            {% for val, label in status_choices %}
+            <option value="{{ val }}" {% if filter_status == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <!-- Sort By -->
+        <div>
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            <div class="flex items-center gap-1">
+              <i data-lucide="arrow-up-down" class="w-4 h-4"></i>
+              Sort By
+            </div>
+          </label>
+          <select @change="sort_leases"
+                  class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
+            <option value="end_date" {% if sort_by == 'end_date' %}selected{% endif %}>End Date</option>
+            <option value="start_date" {% if sort_by == 'start_date' %}selected{% endif %}>Start Date</option>
+            <option value="rent" {% if sort_by == 'rent' %}selected{% endif %}>Monthly Rent</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Summary Stats - Using StatCard Components -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      {% for stat_card in stat_cards %}
+        {{ stat_card|safe }}
+      {% endfor %}
+    </div>
+
+    <!-- Leases Table - Using DataTable Component -->
+    {{ lease_table|safe }}
   </div>
 </div>
 {% endblock %}

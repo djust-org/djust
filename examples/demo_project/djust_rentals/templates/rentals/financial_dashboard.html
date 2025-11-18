@@ -1,12 +1,94 @@
 {% extends "rentals/base.html" %}
-{% block title %}Financial Dashboard{% endblock %}
-{% block extra_head %}<script src="https://cdn.tailwindcss.com"></script><style>body{background:#020617;color:#f8fafc}.card{background:#0f172a;border:1px solid #1e293b;border-radius:.5rem;padding:1.5rem;margin-bottom:1.5rem}</style>{% endblock %}
+
+{% block title %}Financial Dashboard - Rental Management{% endblock %}
+
 {% block content %}
-<div data-liveview-root class="min-h-screen bg-slate-950 py-6">
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.financials.FinancialDashboardView">
   <div class="container mx-auto px-4 max-w-7xl">
-    <div class="flex justify-between mb-6"><h1 class="text-3xl font-bold">💰 Financial Dashboard</h1><div class="flex gap-2"><button @click="change_period" data-period="month" class="px-4 py-2 rounded {% if period == "month" %}bg-blue-600 text-white{% else %}bg-slate-800 text-slate-300{% endif %}">Month</button><button @click="change_period" data-period="quarter" class="px-4 py-2 rounded {% if period == "quarter" %}bg-blue-600 text-white{% else %}bg-slate-800 text-slate-300{% endif %}">Quarter</button><button @click="change_period" data-period="year" class="px-4 py-2 rounded {% if period == "year" %}bg-blue-600 text-white{% else %}bg-slate-800 text-slate-300{% endif %}">Year</button></div></div>
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6"><div class="card text-center"><p class="text-slate-400 text-sm">Total Income</p><p class="text-3xl font-bold text-emerald-400">${{total_income}}</p></div><div class="card text-center"><p class="text-slate-400 text-sm">Total Expenses</p><p class="text-3xl font-bold text-red-400">${{total_expenses}}</p></div><div class="card text-center"><p class="text-slate-400 text-sm">Net Profit</p><p class="text-3xl font-bold {% if net_profit >= 0 %}text-emerald-400{% else %}text-red-400{% endif %}">${{net_profit}}</p></div><div class="card text-center"><p class="text-slate-400 text-sm">Profit Margin</p><p class="text-3xl font-bold">{{profit_margin}}%</p></div></div>
-    <div class="grid md:grid-cols-2 gap-6"><div class="card"><h2 class="text-xl font-semibold mb-4">Income by Property</h2>{% for item in income_by_property %}<div class="flex justify-between py-2 border-b border-slate-800"><p>{{item.property.name}}</p><p class="text-emerald-400 font-semibold">${{item.income}}</p></div>{% endfor %}</div><div class="card"><h2 class="text-xl font-semibold mb-4">Expenses by Category</h2>{% for item in expenses_by_category %}<div class="flex justify-between py-2 border-b border-slate-800"><p>{{item.category}}</p><p class="text-red-400 font-semibold">${{item.total}}</p></div>{% endfor %}</div></div>
+    <!-- Page Header with Lucide Icon -->
+    {{ page_header|safe }}
+
+    <!-- Period Selector -->
+    <div class="bg-card border border-border rounded-lg p-6 mb-6">
+      <div class="flex items-center justify-between">
+        <div>
+          <h3 class="text-sm font-medium text-muted-foreground mb-1">Analysis Period</h3>
+          <p class="text-foreground">{{ start_date|date:"M d, Y" }} - {{ end_date|date:"M d, Y" }}</p>
+        </div>
+        <div class="flex gap-2">
+          <button @click="change_period" data-period="month"
+                  class="px-4 py-2 rounded-md text-sm font-medium transition-colors {% if period == 'month' %}bg-primary text-primary-foreground{% else %}bg-muted text-muted-foreground hover:bg-accent{% endif %}">
+            Month
+          </button>
+          <button @click="change_period" data-period="quarter"
+                  class="px-4 py-2 rounded-md text-sm font-medium transition-colors {% if period == 'quarter' %}bg-primary text-primary-foreground{% else %}bg-muted text-muted-foreground hover:bg-accent{% endif %}">
+            Quarter
+          </button>
+          <button @click="change_period" data-period="year"
+                  class="px-4 py-2 rounded-md text-sm font-medium transition-colors {% if period == 'year' %}bg-primary text-primary-foreground{% else %}bg-muted text-muted-foreground hover:bg-accent{% endif %}">
+            Year
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Key Metrics - Using StatCard Components -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      {% for stat_card in stat_cards %}
+        {{ stat_card|safe }}
+      {% endfor %}
+    </div>
+
+    <!-- Two Column Layout -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- Income by Property -->
+      <div class="bg-card border border-border rounded-lg p-6">
+        <div class="flex items-center gap-2 mb-4">
+          <i data-lucide="home" class="w-5 h-5 text-primary"></i>
+          <h2 class="text-xl font-semibold text-card-foreground">Income by Property</h2>
+        </div>
+
+        {% if income_by_property %}
+        <div class="space-y-3">
+          {% for item in income_by_property %}
+          <div class="flex justify-between items-center py-2 border-b border-border last:border-0">
+            <p class="text-card-foreground">{{ item.property.name }}</p>
+            <p class="text-green-600 dark:text-green-400 font-semibold">${{ item.income|floatformat:0 }}</p>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-center py-8">
+          <i data-lucide="inbox" class="w-12 h-12 mx-auto mb-3 text-muted-foreground"></i>
+          <p class="text-muted-foreground">No income data for this period</p>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Expenses by Category -->
+      <div class="bg-card border border-border rounded-lg p-6">
+        <div class="flex items-center gap-2 mb-4">
+          <i data-lucide="receipt" class="w-5 h-5 text-primary"></i>
+          <h2 class="text-xl font-semibold text-card-foreground">Expenses by Category</h2>
+        </div>
+
+        {% if expenses_by_category %}
+        <div class="space-y-3">
+          {% for item in expenses_by_category %}
+          <div class="flex justify-between items-center py-2 border-b border-border last:border-0">
+            <p class="text-card-foreground">{{ item.category }}</p>
+            <p class="text-red-600 dark:text-red-400 font-semibold">${{ item.total|floatformat:0 }}</p>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-center py-8">
+          <i data-lucide="inbox" class="w-12 h-12 mx-auto mb-3 text-muted-foreground"></i>
+          <p class="text-muted-foreground">No expense data for this period</p>
+        </div>
+        {% endif %}
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}

@@ -256,6 +256,39 @@ class MyFormView(FormMixin, LiveView):
         self.error_message = "Fix errors"
 ```
 
+### JIT Serialization Pattern
+
+⚡ **IMPORTANT**: When passing Django QuerySets to templates, follow the **JIT Serialization Pattern** for optimal performance (10-100x faster serialization via Rust).
+
+**Quick Pattern:**
+```python
+def _refresh_items(self):
+    """Build QuerySet with filters"""
+    items = MyModel.objects.all()
+    # ... apply filters, sorting ...
+    self._items = items  # Store in PRIVATE variable
+
+def get_context_data(self, **kwargs):
+    """Expose for JIT serialization"""
+    self.items = self._items  # Assign to PUBLIC variable
+    context = super().get_context_data(**kwargs)  # Triggers Rust JIT serialization
+    context.update({...})  # Add non-model context
+    return context
+```
+
+**📖 Complete Documentation**: See [`docs/JIT_SERIALIZATION_PATTERN.md`](docs/JIT_SERIALIZATION_PATTERN.md) for:
+- Detailed implementation guide
+- Real-world examples from the rentals app
+- Common mistakes to avoid
+- Performance benchmarks
+- Debugging tips
+
+**Key Benefits:**
+- ✅ 10-100x faster serialization (Rust vs Python)
+- ✅ Automatic query optimization (no N+1 queries)
+- ✅ Auto-generated count variables (e.g., `items_count`)
+- ✅ Sub-millisecond VDOM diffing
+
 ### Template Event Binding
 
 ```html

@@ -9,6 +9,7 @@ from djust.decorators import debounce, optimistic
 from djust_shared.components.ui import HeroSection
 from django.db.models import Q
 from ..models import Property, Lease, MaintenanceRequest
+from ..components import StatCard, PageHeader, StatusBadge, DataTable
 
 
 class PropertyListView(BaseViewWithNavbar):
@@ -30,13 +31,6 @@ class PropertyListView(BaseViewWithNavbar):
         self.filter_status = "all"
         self.filter_type = "all"
         self.sort_by = "name"
-
-        # Initialize hero
-        self.hero = HeroSection(
-            title="Properties",
-            subtitle="Manage your rental properties",
-            icon="🏘️"
-        )
 
         # Load properties
         self._refresh_properties()
@@ -71,7 +65,9 @@ class PropertyListView(BaseViewWithNavbar):
         elif self.sort_by == "bedrooms":
             properties = properties.order_by('-bedrooms')
 
-        self.properties = properties
+        # Store as private variable to avoid auto-JIT serialization
+        # We'll assign to self.properties in get_context_data() instead
+        self._properties = properties
 
     @debounce(wait=0.5)
     def search(self, query: str = "", **kwargs):
@@ -96,17 +92,71 @@ class PropertyListView(BaseViewWithNavbar):
 
     def get_context_data(self, **kwargs):
         """Add property list context"""
+        # Store properties as instance variable for JIT serialization
+        # JIT will extract ALL paths from template including computed properties
+        # and auto-apply select_related optimizations
+        self.properties = self._properties
+
+        # Call parent - JIT serializes 'properties' with Rust + auto-generates 'properties_count'
         context = super().get_context_data(**kwargs)
+
+        # Create page header (do this in get_context_data so it's available for every render)
+        page_header = PageHeader(
+            title="Properties",
+            subtitle="Manage your rental properties",
+            icon="home",
+            actions=[{
+                "label": "Add Property",
+                "url": "/rentals/properties/add/",
+                "icon": "plus"
+            }]
+        )
 
         # Calculate status counts
         all_properties = Property.objects.all()
+        total_count = all_properties.count()
         occupied_count = all_properties.filter(status='occupied').count()
         available_count = all_properties.filter(status='available').count()
         maintenance_count = all_properties.filter(status='maintenance').count()
 
+        # Create StatCard components for status overview (render to HTML)
+        stat_cards_html = [
+            StatCard(label="Total Properties", value=str(total_count), icon="home", color="primary").render(),
+            StatCard(label="Occupied", value=str(occupied_count), icon="key", color="green").render(),
+            StatCard(label="Available", value=str(available_count), icon="home", color="blue").render(),
+            StatCard(label="Maintenance", value=str(maintenance_count), icon="wrench", color="yellow").render(),
+        ]
+
+        # Create DataTable rows from properties
+        table_rows = []
+        for prop in self._properties:
+            status_badge = StatusBadge(status=prop.status)
+            table_rows.append({
+                "Property": prop.name,
+                "Address": prop.address,
+                "Type": prop.get_property_type_display(),
+                "Beds/Baths": f"{prop.bedrooms} / {prop.bathrooms}",
+                "Rent": f"${prop.monthly_rent:,.0f}",
+                "Status": status_badge.render(),
+                "Actions": f'<a href="/rentals/properties/{prop.pk}/" data-djust-navigate class="text-primary hover:underline text-sm inline-flex items-center gap-1"><i data-lucide="eye" class="w-3 h-3"></i> View</a>'
+            })
+
+        # Create DataTable component
+        property_table = DataTable(
+            headers=["Property", "Address", "Type", "Beds/Baths", "Rent", "Status", "Actions"],
+            rows=table_rows,
+            empty_message="No properties found. Try adjusting your filters."
+        )
+
+        # Add non-model context
         context.update({
-            'properties': self.properties,
-            'total_count': self.properties.count(),
+            # Components (rendered to HTML strings)
+            'page_header': page_header.render(),
+            'stat_cards': stat_cards_html,
+            'property_table': property_table.render(),
+
+            # NOTE: Don't add 'properties' - parent already serialized it via JIT!
+            # GENERIC OPTIMIZATION: Parent auto-generates 'properties_count' from len(properties)
             'occupied_count': occupied_count,
             'available_count': available_count,
             'maintenance_count': maintenance_count,
@@ -155,13 +205,6 @@ class PropertyDetailView(BaseViewWithNavbar):
             property=self.property
         ).order_by('-created_at')[:10]
 
-        # Initialize hero
-        self.hero = HeroSection(
-            title=self.property.name,
-            subtitle=self.property.address,
-            icon="🏠"
-        )
-
     def get_context_data(self, **kwargs):
         """Add property detail context"""
         context = super().get_context_data(**kwargs)
@@ -169,6 +212,30 @@ class PropertyDetailView(BaseViewWithNavbar):
         if not self.property:
             context['error_message'] = self.error_message
             return context
+
+        # Create page header (do this in get_context_data so it's available for every render)
+        page_header = PageHeader(
+            title=self.property.name,
+            subtitle=self.property.address,
+            icon="home",
+            actions=[
+                {
+                    "label": "Edit Property",
+                    "url": f"/rentals/properties/{self.property.pk}/edit/",
+                    "icon": "edit",
+                    "variant": "secondary"
+                },
+                {
+                    "label": "Delete",
+                    "url": f"/rentals/properties/{self.property.pk}/delete/",
+                    "icon": "trash-2",
+                    "variant": "destructive"
+                }
+            ]
+        )
+
+        # Create status badge
+        status_badge = StatusBadge(status=self.property.status).render()
 
         # Calculate financial metrics
         from django.db.models import Sum
@@ -180,6 +247,11 @@ class PropertyDetailView(BaseViewWithNavbar):
         amenities_list = [a.strip() for a in self.property.amenities.split(',') if a.strip()]
 
         context.update({
+            # Components (rendered to HTML strings)
+            'page_header': page_header.render(),
+            'status_badge': status_badge,
+
+            # Property data
             'property': self.property,
             'current_lease': self.current_lease,
             'current_tenant': self.current_tenant,
@@ -226,14 +298,6 @@ class PropertyFormView(BaseViewWithNavbar):
         self.error_message = ""
         self.validation_errors = {}
 
-        # Initialize hero
-        title = "Edit Property" if self.is_edit else "Add New Property"
-        self.hero = HeroSection(
-            title=title,
-            subtitle="Fill in property details",
-            icon="🏠"
-        )
-
     def save_property(self, **form_data):
         """Save property (create or update)"""
         try:
@@ -261,7 +325,20 @@ class PropertyFormView(BaseViewWithNavbar):
         """Add form context"""
         context = super().get_context_data(**kwargs)
 
+        # Create page header
+        title = "Edit Property" if self.is_edit else "Add New Property"
+        subtitle = "Update property details" if self.is_edit else "Fill in property details"
+        page_header = PageHeader(
+            title=title,
+            subtitle=subtitle,
+            icon="home"
+        )
+
         context.update({
+            # Components (rendered to HTML strings)
+            'page_header': page_header.render(),
+
+            # Form data
             'property': self.property,
             'is_edit': self.is_edit,
             'success_message': self.success_message,

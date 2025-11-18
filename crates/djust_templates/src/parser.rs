@@ -13,10 +13,11 @@ pub enum Node {
         false_nodes: Vec<Node>,
     },
     For {
-        var_name: String,
+        var_names: Vec<String>, // Supports tuple unpacking: {% for a, b in items %}
         iterable: String,
         reversed: bool,
         nodes: Vec<Node>,
+        empty_nodes: Vec<Node>, // Rendered when iterable is empty
     },
     Block {
         name: String,
@@ -106,16 +107,57 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                 }
 
                 "for" => {
-                    if args.len() < 3 || args[1] != "in" {
+                    if args.len() < 3 {
                         return Err(DjangoRustError::TemplateError(
-                            "Invalid for tag syntax. Expected: {% for var in iterable %}"
+                            "Invalid for tag syntax. Expected: {% for var in iterable %} or {% for a, b in iterable %}"
                                 .to_string(),
                         ));
                     }
-                    let var_name = args[0].clone();
+
+                    // Parse variable names - support tuple unpacking
+                    //
+                    // IMPORTANT FOR JIT OPTIMIZATION:
+                    // Tuple unpacking ({% for val, label in STATUS_CHOICES %}) allows the JIT
+                    // serializer to understand which fields of each item are accessed in the loop.
+                    // For example, in {% for lease in leases %}{{ lease.tenant.name }}{% endfor %},
+                    // the loop variable "lease" must transfer its path context so that
+                    // "lease.tenant.name" is correctly identified for select_related() optimization.
+                    //
+                    // This parsing logic enables:
+                    // 1. Single variable: {% for item in items %} → var_names = ["item"]
+                    // 2. Tuple unpacking: {% for key, val in items %} → var_names = ["key", "val"]
+                    //
+                    // Find the "in" keyword to separate var names from iterable
+                    let in_pos = args.iter().position(|arg| arg == "in").ok_or_else(|| {
+                        DjangoRustError::TemplateError(
+                            "Invalid for tag syntax. Expected: {% for var in iterable %}"
+                                .to_string(),
+                        )
+                    })?;
+
+                    if in_pos == 0 {
+                        return Err(DjangoRustError::TemplateError(
+                            "For tag requires at least one variable name before 'in'".to_string(),
+                        ));
+                    }
+
+                    // Extract variable names before "in"
+                    // Remove commas and collect variable names
+                    // Note: Lexer splits on whitespace, so "{% for val, label %}" becomes ["val,", "label"]
+                    let var_names: Vec<String> = args[0..in_pos]
+                        .iter()
+                        .filter(|&arg| arg != ",") // Filter standalone commas
+                        .map(|s| s.trim_end_matches(',').to_string()) // Strip trailing commas
+                        .collect();
+
+                    if var_names.is_empty() {
+                        return Err(DjangoRustError::TemplateError(
+                            "For tag requires at least one variable name".to_string(),
+                        ));
+                    }
 
                     // Check if the last argument is "reversed"
-                    let mut iterable_parts: Vec<String> = args[2..].to_vec();
+                    let mut iterable_parts: Vec<String> = args[in_pos + 1..].to_vec();
                     let reversed = if iterable_parts.last().map(|s| s.as_str()) == Some("reversed")
                     {
                         iterable_parts.pop(); // Remove "reversed" from iterable
@@ -125,13 +167,14 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     };
 
                     let iterable = iterable_parts.join(" ");
-                    let (nodes, end_pos) = parse_for_block(tokens, *i + 1)?;
+                    let (nodes, empty_nodes, end_pos) = parse_for_block(tokens, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::For {
-                        var_name,
+                        var_names,
                         iterable,
                         reversed,
                         nodes,
+                        empty_nodes,
                     }))
                 }
 
@@ -362,19 +405,30 @@ fn parse_if_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, Vec<Node
     ))
 }
 
-fn parse_for_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)> {
+fn parse_for_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, Vec<Node>, usize)> {
     let mut nodes = Vec::new();
+    let mut empty_nodes = Vec::new();
+    let mut in_empty_block = false;
     let mut i = start;
 
     while i < tokens.len() {
         if let Token::Tag(name, _) = &tokens[i] {
             if name == "endfor" {
-                return Ok((nodes, i));
+                return Ok((nodes, empty_nodes, i));
+            } else if name == "empty" {
+                // Switch to parsing the empty block
+                in_empty_block = true;
+                i += 1;
+                continue;
             }
         }
 
         if let Some(node) = parse_token(tokens, &mut i)? {
-            nodes.push(node);
+            if in_empty_block {
+                empty_nodes.push(node);
+            } else {
+                nodes.push(node);
+            }
         }
         i += 1;
     }
@@ -524,15 +578,37 @@ fn extract_from_nodes(
                 extract_from_nodes(false_nodes, variables);
             }
             Node::For {
-                var_name: _,
+                var_names,
                 iterable,
                 nodes,
                 reversed: _,
+                empty_nodes,
             } => {
                 // Extract from iterable: {% for item in variable.path %}
                 extract_from_variable(iterable, variables);
                 // Recurse into for body
                 extract_from_nodes(nodes, variables);
+                // Recurse into empty block
+                extract_from_nodes(empty_nodes, variables);
+
+                // FIX: Transfer paths from loop variables to iterable
+                // Example: {% for property in properties %}{{ property.name }}{% endfor %}
+                // - Before: properties=[], property=[name, bedrooms, ...]
+                // - After:  properties=[name, bedrooms, ...], property removed
+                //
+                // For tuple unpacking: {% for val, label in status_choices %}{{ val }} {{ label }}{% endfor %}
+                // - Before: status_choices=[], val=[], label=[]
+                // - After:  status_choices=[0, 1], val and label removed
+                for var_name in var_names {
+                    if let Some(loop_var_paths) = variables.remove(var_name) {
+                        // Transfer paths from loop variable to iterable
+                        let iterable_name = iterable.split('.').next().unwrap_or(iterable);
+                        variables
+                            .entry(iterable_name.to_string())
+                            .or_default()
+                            .extend(loop_var_paths);
+                    }
+                }
             }
             Node::Block { nodes, name: _ } => {
                 // Recurse into block body

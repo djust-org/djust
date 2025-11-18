@@ -220,6 +220,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         try:
             self.view_instance = view_class()
 
+            # Store WebSocket session_id in view for consistent VDOM caching
+            # This ensures mount and all subsequent events use the same VDOM instance
+            self.view_instance._websocket_session_id = self.session_id
+
             # Check if view uses actor-based state management
             self.use_actors = getattr(view_class, "use_actors", False)
 
@@ -353,7 +357,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
             return
 
-        # Send success response with initial HTML
+        # Send success response with initial HTML and version
         logger.info(f"Successfully mounted view: {view_path}")
         await self.send_json(
             {
@@ -361,6 +365,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 "session_id": self.session_id,
                 "html": html,
                 "view": view_path,
+                "version": version,  # Include VDOM version for client sync
             }
         )
 
