@@ -7,6 +7,7 @@ import msgpack
 from typing import Dict, Any, Optional
 from channels.generic.websocket import AsyncWebsocketConsumer
 from .live_view import DjangoJSONEncoder
+from .validation import validate_handler_params
 
 try:
     from ._rust import create_session_actor, SessionActorHandle
@@ -508,6 +509,23 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     event_data = params.copy()
                     event_data.pop("component_id", None)
 
+                    # Validate parameters before calling handler
+                    validation = validate_handler_params(handler, event_data, event_name)
+                    if not validation["valid"]:
+                        logger.error(f"Parameter validation failed: {validation['error']}")
+                        await self.send_json(
+                            {
+                                "type": "error",
+                                "error": validation["error"],
+                                "validation_details": {
+                                    "expected_params": validation["expected"],
+                                    "provided_params": validation["provided"],
+                                    "type_errors": validation["type_errors"],
+                                },
+                            }
+                        )
+                        return
+
                     # Call component's event handler (needs sync_to_async)
                     # This may call send_parent() which triggers handle_component_event()
                     if event_data:
@@ -521,6 +539,23 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         error_msg = f"No handler found for event: {event_name}"
                         logger.warning(error_msg)
                         await self.send_json({"type": "error", "error": error_msg})
+                        return
+
+                    # Validate parameters before calling handler
+                    validation = validate_handler_params(handler, params, event_name)
+                    if not validation["valid"]:
+                        logger.error(f"Parameter validation failed: {validation['error']}")
+                        await self.send_json(
+                            {
+                                "type": "error",
+                                "error": validation["error"],
+                                "validation_details": {
+                                    "expected_params": validation["expected"],
+                                    "provided_params": validation["provided"],
+                                    "type_errors": validation["type_errors"],
+                                },
+                            }
+                        )
                         return
 
                     # Call handler (needs sync_to_async)

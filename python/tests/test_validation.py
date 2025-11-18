@@ -1,0 +1,364 @@
+"""
+Tests for event handler parameter validation.
+
+Tests cover:
+- Missing required parameters
+- Unexpected parameters
+- Type validation
+- **kwargs handling
+- Edge cases
+"""
+
+import pytest
+from djust.validation import (
+    validate_handler_params,
+    validate_parameter_types,
+    get_handler_signature_info,
+)
+
+
+# Test handlers for validation
+class MockView:
+    """Mock view class for testing event handlers"""
+
+    def handler_required_param(self, value: str):
+        """Handler with required parameter"""
+        pass
+
+    def handler_optional_param(self, value: str = ""):
+        """Handler with optional parameter"""
+        pass
+
+    def handler_mixed_params(self, required: str, optional: int = 0):
+        """Handler with mixed required and optional parameters"""
+        pass
+
+    def handler_with_kwargs(self, value: str = "", **kwargs):
+        """Handler accepting **kwargs"""
+        pass
+
+    def handler_typed(self, count: int, name: str = "default"):
+        """Handler with type hints"""
+        pass
+
+    def handler_no_params(self):
+        """Handler with no parameters"""
+        pass
+
+
+class TestValidateHandlerParams:
+    """Test validate_handler_params function"""
+
+    def test_missing_required_parameter(self):
+        """Test that missing required parameters are caught"""
+        view = MockView()
+        result = validate_handler_params(view.handler_required_param, {}, "test_event")
+        assert result["valid"] is False
+        assert "missing required parameters" in result["error"]
+        assert "value" in result["error"]
+        assert result["expected"] == ["value"]
+        assert result["provided"] == []
+
+    def test_valid_required_parameter(self):
+        """Test that providing required parameter passes validation"""
+        view = MockView()
+        result = validate_handler_params(
+            view.handler_required_param, {"value": "test"}, "test_event"
+        )
+        assert result["valid"] is True
+        assert result["error"] is None
+
+    def test_optional_parameter_omitted(self):
+        """Test that optional parameters can be omitted"""
+        view = MockView()
+        result = validate_handler_params(view.handler_optional_param, {}, "test_event")
+        assert result["valid"] is True
+        assert result["error"] is None
+
+    def test_optional_parameter_provided(self):
+        """Test that optional parameters can be provided"""
+        view = MockView()
+        result = validate_handler_params(
+            view.handler_optional_param, {"value": "test"}, "test_event"
+        )
+        assert result["valid"] is True
+        assert result["error"] is None
+
+    def test_unexpected_parameter_without_kwargs(self):
+        """Test that unexpected parameters are rejected when no **kwargs"""
+        view = MockView()
+        result = validate_handler_params(
+            view.handler_optional_param, {"value": "test", "unexpected": "bad"}, "test_event"
+        )
+        assert result["valid"] is False
+        assert "unexpected parameters" in result["error"]
+        assert "unexpected" in result["error"]
+        assert set(result["expected"]) == {"value"}
+        assert set(result["provided"]) == {"value", "unexpected"}
+
+    def test_unexpected_parameter_with_kwargs(self):
+        """Test that unexpected parameters are accepted with **kwargs"""
+        view = MockView()
+        result = validate_handler_params(
+            view.handler_with_kwargs,
+            {"value": "test", "any": "param", "works": "here"},
+            "test_event",
+        )
+        assert result["valid"] is True
+        assert result["error"] is None
+
+    def test_mixed_params_all_provided(self):
+        """Test mixed required and optional parameters all provided"""
+        view = MockView()
+        result = validate_handler_params(
+            view.handler_mixed_params, {"required": "test", "optional": 42}, "test_event"
+        )
+        assert result["valid"] is True
+        assert result["error"] is None
+
+    def test_mixed_params_only_required(self):
+        """Test mixed parameters with only required provided"""
+        view = MockView()
+        result = validate_handler_params(
+            view.handler_mixed_params, {"required": "test"}, "test_event"
+        )
+        assert result["valid"] is True
+        assert result["error"] is None
+
+    def test_mixed_params_missing_required(self):
+        """Test mixed parameters with required missing"""
+        view = MockView()
+        result = validate_handler_params(view.handler_mixed_params, {"optional": 42}, "test_event")
+        assert result["valid"] is False
+        assert "missing required parameters" in result["error"]
+        assert "required" in result["error"]
+
+    def test_no_params_handler_empty_params(self):
+        """Test handler with no parameters receives empty params"""
+        view = MockView()
+        result = validate_handler_params(view.handler_no_params, {}, "test_event")
+        assert result["valid"] is True
+        assert result["error"] is None
+
+    def test_no_params_handler_with_params(self):
+        """Test handler with no parameters rejects parameters"""
+        view = MockView()
+        result = validate_handler_params(
+            view.handler_no_params, {"unexpected": "value"}, "test_event"
+        )
+        assert result["valid"] is False
+        assert "unexpected parameters" in result["error"]
+
+
+class TestValidateParameterTypes:
+    """Test validate_parameter_types function"""
+
+    def test_type_validation_correct_types(self):
+        """Test that correct types pass validation"""
+        view = MockView()
+        errors = validate_parameter_types(view.handler_typed, {"count": 42, "name": "test"})
+        assert errors is None or len(errors) == 0
+
+    def test_type_validation_wrong_type(self):
+        """Test that wrong types are caught"""
+        view = MockView()
+        errors = validate_parameter_types(
+            view.handler_typed, {"count": "not_an_int", "name": "test"}
+        )
+        assert errors is not None
+        assert len(errors) == 1
+        assert errors[0]["param"] == "count"
+        assert errors[0]["expected"] == "int"
+        assert errors[0]["actual"] == "str"
+
+    def test_type_validation_multiple_wrong_types(self):
+        """Test that multiple type errors are caught"""
+        view = MockView()
+        errors = validate_parameter_types(view.handler_typed, {"count": "not_an_int", "name": 123})
+        assert errors is not None
+        assert len(errors) == 2
+        param_names = {err["param"] for err in errors}
+        assert param_names == {"count", "name"}
+
+    def test_type_validation_no_type_hints(self):
+        """Test that handlers without type hints skip validation"""
+
+        def handler_no_hints(self, value):
+            pass
+
+        errors = validate_parameter_types(handler_no_hints, {"value": "anything"})
+        # Should return None or empty list when no type hints
+        assert errors is None or len(errors) == 0
+
+
+class TestGetHandlerSignatureInfo:
+    """Test get_handler_signature_info function"""
+
+    def test_signature_info_basic(self):
+        """Test extracting basic signature information"""
+        view = MockView()
+        info = get_handler_signature_info(view.handler_optional_param)
+
+        assert len(info["params"]) == 1
+        assert info["params"][0]["name"] == "value"
+        assert info["params"][0]["type"] == "str"
+        assert info["params"][0]["required"] is False
+        assert info["params"][0]["default"] == ""
+        assert info["description"] == "Handler with optional parameter"
+        assert info["accepts_kwargs"] is False
+
+    def test_signature_info_with_kwargs(self):
+        """Test signature info for handler with **kwargs"""
+        view = MockView()
+        info = get_handler_signature_info(view.handler_with_kwargs)
+
+        assert len(info["params"]) == 1  # **kwargs not included in params
+        assert info["accepts_kwargs"] is True
+
+    def test_signature_info_required_params(self):
+        """Test signature info correctly identifies required parameters"""
+        view = MockView()
+        info = get_handler_signature_info(view.handler_mixed_params)
+
+        assert len(info["params"]) == 2
+        # Find the required param
+        required_param = next(p for p in info["params"] if p["name"] == "required")
+        assert required_param["required"] is True
+        assert required_param["default"] is None
+
+        # Find the optional param
+        optional_param = next(p for p in info["params"] if p["name"] == "optional")
+        assert optional_param["required"] is False
+        assert optional_param["default"] == "0"
+
+    def test_signature_info_no_params(self):
+        """Test signature info for handler with no parameters"""
+        view = MockView()
+        info = get_handler_signature_info(view.handler_no_params)
+
+        assert len(info["params"]) == 0
+        assert info["accepts_kwargs"] is False
+        assert info["description"] == "Handler with no parameters"
+
+
+class TestValidationIntegration:
+    """Integration tests combining validation functions"""
+
+    def test_full_validation_flow_success(self):
+        """Test complete validation flow for valid call"""
+        view = MockView()
+
+        # Get signature info
+        info = get_handler_signature_info(view.handler_mixed_params)
+        assert len(info["params"]) == 2
+
+        # Validate parameters
+        result = validate_handler_params(
+            view.handler_mixed_params, {"required": "test", "optional": 42}, "my_event"
+        )
+        assert result["valid"] is True
+
+    def test_full_validation_flow_type_error(self):
+        """Test complete validation flow with type error"""
+        view = MockView()
+
+        # Validate parameters with wrong type
+        result = validate_handler_params(
+            view.handler_typed, {"count": "not_an_int", "name": "test"}, "my_event"
+        )
+        assert result["valid"] is False
+        assert "wrong parameter types" in result["error"]
+        assert result["type_errors"] is not None
+        assert len(result["type_errors"]) == 1
+
+    def test_real_world_scenario_search_handler(self):
+        """Test validation for realistic search handler"""
+
+        class SearchView:
+            def search(self, value: str = ""):
+                """Search with debouncing (without **kwargs)"""
+                pass
+
+        view = SearchView()
+
+        # Common mistake: using 'query' instead of 'value'
+        result = validate_handler_params(view.search, {"query": "test"}, "search")
+        assert result["valid"] is False
+        assert "unexpected parameters" in result["error"]
+        assert "query" in result["error"]
+        assert "value" in result["expected"]
+
+        # Correct usage
+        result = validate_handler_params(view.search, {"value": "test"}, "search")
+        assert result["valid"] is True
+
+    def test_real_world_scenario_update_quantity(self):
+        """Test validation for realistic update handler with type checking"""
+
+        class ItemView:
+            def update_quantity(self, item_id: int, quantity: int = 1):
+                """Update item quantity"""
+                pass
+
+        view = ItemView()
+
+        # Type error: passing string for int
+        result = validate_handler_params(
+            view.update_quantity, {"item_id": "123", "quantity": 5}, "update_quantity"
+        )
+        assert result["valid"] is False
+        assert "wrong parameter types" in result["error"]
+        assert result["type_errors"][0]["param"] == "item_id"
+
+        # Correct usage
+        result = validate_handler_params(
+            view.update_quantity, {"item_id": 123, "quantity": 5}, "update_quantity"
+        )
+        assert result["valid"] is True
+
+
+class TestEdgeCases:
+    """Test edge cases and boundary conditions"""
+
+    def test_empty_params_dict(self):
+        """Test validation with empty parameters dict"""
+        view = MockView()
+        result = validate_handler_params(view.handler_optional_param, {}, "test_event")
+        assert result["valid"] is True
+
+    def test_none_parameter_value(self):
+        """Test that None parameter values are caught by type validation"""
+        view = MockView()
+        result = validate_handler_params(view.handler_optional_param, {"value": None}, "test_event")
+        # None fails type validation for str parameter
+        assert result["valid"] is False
+        assert "wrong parameter types" in result["error"]
+
+    def test_extra_params_with_kwargs(self):
+        """Test that many extra params work with **kwargs"""
+        view = MockView()
+        many_params = {f"param_{i}": f"value_{i}" for i in range(100)}
+        many_params["value"] = "test"
+
+        result = validate_handler_params(view.handler_with_kwargs, many_params, "test_event")
+        assert result["valid"] is True
+
+    def test_validation_details_structure(self):
+        """Test that validation result has correct structure"""
+        view = MockView()
+        result = validate_handler_params(view.handler_required_param, {}, "test_event")
+
+        # Verify structure
+        assert "valid" in result
+        assert "error" in result
+        assert "expected" in result
+        assert "provided" in result
+        assert "type_errors" in result
+
+        assert isinstance(result["valid"], bool)
+        assert isinstance(result["expected"], list)
+        assert isinstance(result["provided"], list)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

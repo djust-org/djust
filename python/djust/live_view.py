@@ -15,6 +15,7 @@ from django.views import View
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils.decorators import method_decorator
 from django.db import models
+from .validation import validate_handler_params
 
 # Try to use orjson for faster JSON operations (2-3x faster than stdlib)
 import importlib.util
@@ -1771,6 +1772,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
     def post(self, request, *args, **kwargs):
         """Handle POST requests - event handling"""
         from .component import Component, LiveComponent
+        import logging
+
+        logger = logging.getLogger(__name__)
 
         try:
             data = json.loads(request.body)
@@ -1817,6 +1821,23 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # Call the event handler
             handler = getattr(self, event_name, None)
             if handler and callable(handler):
+                # Validate parameters before calling handler
+                validation = validate_handler_params(handler, params, event_name)
+                if not validation["valid"]:
+                    logger.error(f"Parameter validation failed: {validation['error']}")
+                    return JsonResponse(
+                        {
+                            "type": "error",
+                            "error": validation["error"],
+                            "validation_details": {
+                                "expected_params": validation["expected"],
+                                "provided_params": validation["provided"],
+                                "type_errors": validation["type_errors"],
+                            },
+                        },
+                        status=400,
+                    )
+
                 if params:
                     handler(**params)
                 else:
