@@ -17,6 +17,7 @@ djust brings Phoenix LiveView-style reactive components to Django, with performa
 - 🌐 **WebSocket Updates** - Real-time DOM patches over WebSocket (with HTTP fallback)
 - 🎯 **Minimal Client Code** - Smart diffing sends only what changed
 - 🔒 **Type Safe** - Rust guarantees for core performance-critical code
+- 🐞 **Developer Debug Panel** - Interactive debugging with event history and VDOM inspection
 
 ## 🎯 Quick Example
 
@@ -486,6 +487,56 @@ class ProductSearchView(LiveView):
 - 🎯 **[Examples](docs/STATE_MANAGEMENT_EXAMPLES.md)** - Copy-paste ready code
 - 🔄 **[Migration Guide](docs/STATE_MANAGEMENT_MIGRATION.md)** - Convert JavaScript to Python
 - ⚖️ **[Framework Comparison](docs/STATE_MANAGEMENT_COMPARISON.md)** - vs Phoenix LiveView & Laravel Livewire
+
+### Developer Tooling
+
+#### Debug Panel
+
+Interactive debugging tool for LiveView development (DEBUG mode only):
+
+```python
+# In settings.py
+DEBUG = True  # Debug panel automatically enabled
+```
+
+**Open**: Press `Ctrl+Shift+D` (Windows/Linux) or `Cmd+Shift+D` (Mac), or click the 🐞 floating button
+
+**Features**:
+- 🔍 **Event Handlers** - Discover all handlers with parameters, types, and descriptions
+- 📊 **Event History** - Real-time log with timing metrics (e.g., `search • 45.2ms`)
+- ⚡ **VDOM Patches** - Monitor DOM updates with sub-millisecond precision
+- 🔬 **Variables** - Inspect current view state
+
+**Learn More**:
+- 📖 **[Debug Panel Guide](docs/DEBUG_PANEL.md)** - Complete user guide
+- 📝 **[Event Handler Best Practices](docs/EVENT_HANDLERS.md)** - Patterns and conventions
+
+#### Event Handlers
+
+Always use `@event_handler` decorator for auto-discovery and validation:
+
+```python
+from djust.decorators import event_handler
+
+@event_handler()
+def search(self, value: str = "", **kwargs):
+    """Search handler - description shown in debug panel"""
+    self.search_query = value
+```
+
+**Parameter Convention**: Use `value` for form inputs (`@input`, `@change` events):
+
+```python
+# ✅ Correct - matches what form events send
+@event_handler()
+def search(self, value: str = "", **kwargs):
+    self.search_query = value
+
+# ❌ Wrong - won't receive input value
+@event_handler()
+def search(self, query: str = "", **kwargs):
+    self.search_query = query  # Always "" (default)
+```
 
 ## 🏗️ Architecture
 
