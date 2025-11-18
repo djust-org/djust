@@ -51,6 +51,17 @@ def event_handler(params: Optional[List[str]] = None, description: str = "") -> 
         def update_item(self, item_id: int, quantity: int, **kwargs):
             self.items[item_id].quantity = quantity
 
+    Metadata Structure:
+        The decorator stores comprehensive metadata in func._djust_decorators["event_handler"]:
+        {
+            "params": [{"name": "value", "type": "str", "required": False, "default": ""}],
+            "param_names": ["value"],
+            "description": "Search items",
+            "accepts_kwargs": True,
+            "required": [],
+            "optional": ["value"]
+        }
+
     Note: You can also use the shorter @event alias.
     """
 
@@ -90,13 +101,16 @@ def event_handler(params: Optional[List[str]] = None, description: str = "") -> 
 
         return cast(F, func)
 
-    # Support both @event_handler and @event_handler()
+    # Support both @event_handler and @event_handler() syntaxes
+    # This enables flexible usage: @event_handler vs @event_handler(description="...")
     if callable(params):
         # Called as @event_handler (no parentheses)
+        # In this case, 'params' is actually the function being decorated
         func = params
         params = None
         return decorator(func)
 
+    # Called as @event_handler() or @event_handler(params=..., description=...)
     return decorator
 
 
