@@ -115,6 +115,18 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     }
 
                     // Parse variable names - support tuple unpacking
+                    //
+                    // IMPORTANT FOR JIT OPTIMIZATION:
+                    // Tuple unpacking ({% for val, label in STATUS_CHOICES %}) allows the JIT
+                    // serializer to understand which fields of each item are accessed in the loop.
+                    // For example, in {% for lease in leases %}{{ lease.tenant.name }}{% endfor %},
+                    // the loop variable "lease" must transfer its path context so that
+                    // "lease.tenant.name" is correctly identified for select_related() optimization.
+                    //
+                    // This parsing logic enables:
+                    // 1. Single variable: {% for item in items %} → var_names = ["item"]
+                    // 2. Tuple unpacking: {% for key, val in items %} → var_names = ["key", "val"]
+                    //
                     // Find the "in" keyword to separate var names from iterable
                     let in_pos = args.iter().position(|arg| arg == "in").ok_or_else(|| {
                         DjangoRustError::TemplateError(

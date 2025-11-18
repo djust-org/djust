@@ -62,7 +62,13 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
     # Class variable to track recursion depth
     _depth = 0
-    _max_depth = 3  # Limit to 3 levels of nested models (e.g., lease.tenant.user)
+
+    @staticmethod
+    def _get_max_depth():
+        """Get max depth from config (lazy load to avoid circular import)"""
+        from .config import config
+
+        return config.get("serialization_max_depth", 3)
 
     def default(self, obj):
         # Track recursion depth to prevent infinite loops
@@ -116,7 +122,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
                         result[field_name] = None
                     elif isinstance(value, models.Model):
                         # For ForeignKey/OneToOne, recursively serialize if under depth limit
-                        if DjangoJSONEncoder._depth < DjangoJSONEncoder._max_depth:
+                        if DjangoJSONEncoder._depth < DjangoJSONEncoder._get_max_depth():
                             # Recursively serialize the related object with full fields and methods
                             result[field_name] = json.loads(
                                 json.dumps(value, cls=DjangoJSONEncoder)
@@ -597,22 +603,24 @@ class LiveView(View):
             result = serialize_queryset(list(queryset), paths_for_var)
 
             # Log serialization results (using len() to avoid COUNT query)
-            print(
-                f"[JIT] Serialized {len(result)} {queryset.model.__name__} objects for '{variable_name}' using Rust",
-                file=sys.stderr,
-            )
-            print(f"[JIT DEBUG] Rust serializer returned {len(result)} items", file=sys.stderr)
-            if result:
-                print(f"[JIT DEBUG] First item keys: {list(result[0].keys())}", file=sys.stderr)
+            from .config import config
+
+            if config.get("jit_debug"):
+                logger.debug(
+                    f"[JIT] Serialized {len(result)} {queryset.model.__name__} objects for '{variable_name}' using Rust"
+                )
+                logger.debug(f"[JIT DEBUG] Rust serializer returned {len(result)} items")
+                if result:
+                    logger.debug(f"[JIT DEBUG] First item keys: {list(result[0].keys())}")
             return result
 
         except Exception as e:
             # Fallback to default serialization on any error
             import traceback
 
-            print(f"[JIT ERROR] Serialization failed for '{variable_name}': {e}", file=sys.stderr)
-            print(f"[JIT ERROR] Traceback:\n{traceback.format_exc()}", file=sys.stderr)
-            logger.debug(f"JIT serialization failed for {variable_name}: {e}")
+            logger.error(
+                f"[JIT ERROR] Serialization failed for '{variable_name}': {e}\nTraceback:\n{traceback.format_exc()}"
+            )
             return [json.loads(json.dumps(obj, cls=DjangoJSONEncoder)) for obj in queryset]
 
     def _jit_serialize_model(self, obj, template_content: str, variable_name: str) -> Dict:

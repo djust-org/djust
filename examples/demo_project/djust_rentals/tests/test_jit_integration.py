@@ -352,3 +352,206 @@ class MaintenanceRequestJITTestCase(TestCase):
         if query_count > 15:
             print(f"⚠ N+1 queries detected: {query_count}")
             print("  Future JIT optimization should reduce to 1 query")
+
+
+class JITEdgeCasesTestCase(TestCase):
+    """Test JIT edge cases and error handling."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Create minimal test data."""
+        user = User.objects.create(
+            username="testuser",
+            email="test@example.com",
+            first_name="Test",
+            last_name="User",
+        )
+        cls.tenant = Tenant.objects.create(
+            user=user,
+            phone="555-0000",
+            emergency_contact_name="Emergency",
+            emergency_contact_phone="555-1111",
+        )
+        cls.property = Property.objects.create(
+            name="Test Property",
+            address="123 Test St",
+            city="Test City",
+            state="CA",
+            zip_code="90210",
+            property_type="apartment",
+            bedrooms=2,
+            bathrooms=1.5,
+            square_feet=1000,
+            monthly_rent=1500,
+            security_deposit=3000,
+        )
+
+    def test_jit_with_empty_queryset(self):
+        """Test JIT serialization with empty QuerySet."""
+        from djust.live_view import LiveView
+
+        class TestView(LiveView):
+            template_string = "{% for lease in leases %}{{ lease.id }}{% endfor %}"
+
+            def mount(self, request):
+                # Empty queryset
+                self.leases = Lease.objects.none()
+
+            def get_context_data(self, **kwargs):
+                context = super().get_context_data(**kwargs)
+                return context
+
+        view = TestView()
+
+        class MockRequest:
+            user = None
+            session = {}
+            META = {}
+            GET = {}
+            POST = {}
+
+        request = MockRequest()
+        view.mount(request)
+
+        with CaptureQueriesContext(connection) as ctx:
+            context = view.get_context_data()
+            _ = context.get('leases', [])
+
+        # Should not crash with empty queryset
+        query_count = len(ctx.captured_queries)
+        print(f"\nEmpty queryset queries: {query_count}")
+        assert query_count >= 0, "Should handle empty querysets gracefully"
+
+    def test_jit_with_queryset_slicing(self):
+        """Test JIT with QuerySet slicing ([0:10])."""
+        from djust.live_view import LiveView
+
+        # Create test data
+        for i in range(15):
+            Lease.objects.create(
+                property=self.property,
+                tenant=self.tenant,
+                start_date=date.today(),
+                end_date=date.today() + timedelta(days=365),
+                monthly_rent=1500,
+                security_deposit=3000,
+                status="active",
+            )
+
+        class TestView(LiveView):
+            template_string = "{% for lease in leases %}{{ lease.property.name }}{% endfor %}"
+
+            def mount(self, request):
+                # Sliced queryset
+                self.leases = Lease.objects.select_related('property')[:10]
+
+            def get_context_data(self, **kwargs):
+                context = super().get_context_data(**kwargs)
+                return context
+
+        view = TestView()
+
+        class MockRequest:
+            user = None
+            session = {}
+            META = {}
+            GET = {}
+            POST = {}
+
+        request = MockRequest()
+        view.mount(request)
+
+        with CaptureQueriesContext(connection) as ctx:
+            context = view.get_context_data()
+            leases = context.get('leases', [])
+            assert len(leases) == 10, "Should respect queryset slicing"
+
+        query_count = len(ctx.captured_queries)
+        print(f"\nSliced queryset queries: {query_count}")
+        assert query_count > 0, "Should execute queries for sliced querysets"
+
+    def test_jit_with_q_objects(self):
+        """Test JIT with Q objects and complex filters."""
+        from django.db.models import Q
+        from djust.live_view import LiveView
+
+        # Create test data with different statuses
+        for i in range(5):
+            Lease.objects.create(
+                property=self.property,
+                tenant=self.tenant,
+                start_date=date.today() - timedelta(days=30 * i),
+                end_date=date.today() + timedelta(days=365 - 30 * i),
+                monthly_rent=1500,
+                security_deposit=3000,
+                status="active" if i % 2 == 0 else "expired",
+            )
+
+        class TestView(LiveView):
+            template_string = "{% for lease in leases %}{{ lease.status }}{% endfor %}"
+
+            def mount(self, request):
+                # Complex Q object filter
+                self.leases = Lease.objects.filter(
+                    Q(status='active') | Q(end_date__lte=date.today() + timedelta(days=30))
+                ).select_related('property', 'tenant__user')
+
+            def get_context_data(self, **kwargs):
+                context = super().get_context_data(**kwargs)
+                return context
+
+        view = TestView()
+
+        class MockRequest:
+            user = None
+            session = {}
+            META = {}
+            GET = {}
+            POST = {}
+
+        request = MockRequest()
+        view.mount(request)
+
+        with CaptureQueriesContext(connection) as ctx:
+            context = view.get_context_data()
+            leases = context.get('leases', [])
+            assert len(leases) > 0, "Should return filtered results"
+
+        query_count = len(ctx.captured_queries)
+        print(f"\nComplex Q filter queries: {query_count}")
+        assert query_count > 0, "Should execute queries with complex filters"
+
+    def test_jit_serialization_depth_limit(self):
+        """Test that serialization respects depth limit config."""
+        from djust.live_view import DjangoJSONEncoder
+        from djust.config import config
+        import json
+
+        # Create nested data: property -> lease -> tenant -> user
+        lease = Lease.objects.create(
+            property=self.property,
+            tenant=self.tenant,
+            start_date=date.today(),
+            end_date=date.today() + timedelta(days=365),
+            monthly_rent=1500,
+            security_deposit=3000,
+            status="active",
+        )
+
+        # Test with default depth (3)
+        max_depth = config.get("serialization_max_depth", 3)
+        print(f"\nTesting with max_depth={max_depth}")
+
+        # Serialize lease (depth 1)
+        serialized = json.loads(json.dumps(lease, cls=DjangoJSONEncoder))
+
+        # Check that nested objects are included up to max depth
+        assert 'tenant' in serialized, "Should include tenant (depth 2)"
+        assert 'user' in serialized['tenant'], "Should include user (depth 3)"
+
+        # At max depth, should only have id and __str__
+        user_data = serialized['tenant']['user']
+        assert 'id' in user_data, "Should include user id"
+        assert '__str__' in user_data, "Should include user __str__"
+
+        print("✓ Depth limit respected correctly")

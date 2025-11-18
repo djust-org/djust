@@ -41,6 +41,7 @@ class LiveViewConfig:
         "jit_cache_backend": "filesystem",  # 'filesystem' or 'redis'
         "jit_cache_dir": "__pycache__/djust_serializers",  # Filesystem cache directory
         "jit_redis_url": "redis://localhost:6379/0",  # Redis URL for production
+        "serialization_max_depth": 3,  # Max depth for nested model serialization (e.g., lease.tenant.user = 3 levels)
         # CSS Framework
         "css_framework": "bootstrap5",  # Options: 'bootstrap5', 'tailwind', None
         # Bootstrap 5 classes
