@@ -1131,16 +1131,18 @@ Feature Spec Format (YAML):
       dependencies: [phase-1]
 
 Options:
-  -h, --help        Show this help message
-  -n, --dry-run     Only show planning, don't execute
-  -b, --branch      Custom branch name (default: auto-generated)
-  -s, --single      Execute single phase only (specify phase name)
+  -h, --help           Show this help message
+  -n, --dry-run        Only show planning, don't execute
+  -b, --branch NAME    Custom branch name (default: auto-generated)
+  -s, --single PHASE   Execute single phase only (specify phase name)
+  --start-phase PHASE  Start from specific phase and run to end
 
 Examples:
-  $0 features/jit-serialization.yaml          # Execute all phases
-  $0 --dry-run features/new-feature.yaml      # Preview only
-  $0 --single phase-2 features/my-feat.yaml   # Execute one phase
-  $0 --branch custom-name features/feat.yaml  # Custom branch
+  $0 features/jit-serialization.yaml             # Execute all phases
+  $0 --dry-run features/new-feature.yaml         # Preview only
+  $0 --single phase-2 features/my-feat.yaml      # Execute one phase only
+  $0 --start-phase phase-2 features/my-feat.yaml # Start from phase-2 through end
+  $0 --branch custom-name features/feat.yaml     # Custom branch
 
 Configuration:
   Create .claude/feature_config.yaml to customize:
@@ -1167,6 +1169,7 @@ EOF
 DRY_RUN=false
 CUSTOM_BRANCH=""
 SINGLE_PHASE=""
+START_PHASE=""
 FEATURE_SPEC=""
 
 while [[ $# -gt 0 ]]; do
@@ -1185,6 +1188,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -s|--single)
             SINGLE_PHASE="$2"
+            shift 2
+            ;;
+        --start-phase)
+            START_PHASE="$2"
             shift 2
             ;;
         *)
@@ -1241,6 +1248,31 @@ main() {
         fi
         PHASES=("$SINGLE_PHASE")
         info "Single phase mode: $SINGLE_PHASE"
+    fi
+
+    # Handle start-phase execution (run from specific phase to end)
+    if [ -n "$START_PHASE" ]; then
+        # Find the index of START_PHASE
+        local start_index=-1
+        for i in "${!PHASES[@]}"; do
+            if [ "${PHASES[$i]}" = "$START_PHASE" ]; then
+                start_index=$i
+                break
+            fi
+        done
+
+        if [ $start_index -eq -1 ]; then
+            error "Start phase not found: $START_PHASE"
+            error "Available phases: ${PHASES[*]}"
+            exit 1
+        fi
+
+        # Create new array with phases from start_index onwards
+        local remaining_phases=("${PHASES[@]:$start_index}")
+        PHASES=("${remaining_phases[@]}")
+
+        info "Starting from phase $((start_index + 1)): $START_PHASE"
+        info "Will execute ${#PHASES[@]} phase(s): ${PHASES[*]}"
     fi
 
     # Generate branch name
