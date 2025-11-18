@@ -1934,6 +1934,91 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
     # POST-PROCESSING & CLIENT INJECTION
     # ============================================================================
 
+    def get_debug_info(self) -> Dict[str, Any]:
+        """
+        Get debug information about this LiveView instance.
+
+        Used by developer debug panel to show:
+        - Available event handlers with signatures
+        - Public variables and their current values
+        - Decorator metadata
+
+        Returns:
+            Dict with debug information containing:
+            - view_class: Name of the LiveView class
+            - handlers: Dict of event handlers with parameter info
+            - variables: Dict of public instance variables
+            - template: Template name if set
+
+        Example:
+            >>> class MyView(LiveView):
+            ...     template_name = 'my.html'
+            ...     count = 0
+            ...     @event_handler
+            ...     def increment(self, amount: int = 1):
+            ...         '''Increment the counter'''
+            ...         self.count += amount
+            >>> view = MyView()
+            >>> info = view.get_debug_info()
+            >>> assert 'increment' in info['handlers']
+            >>> assert info['handlers']['increment']['params'][0]['name'] == 'amount'
+        """
+        from .validation import get_handler_signature_info
+
+        handlers = {}
+        variables = {}
+
+        for name in dir(self):
+            # Skip private attributes
+            if name.startswith("_"):
+                continue
+
+            # Try to get attribute, skip if it raises AttributeError
+            # (e.g., Django's classonlymethod decorator)
+            try:
+                attr = getattr(self, name)
+            except AttributeError:
+                continue
+
+            # Collect event handlers
+            if callable(attr) and hasattr(attr, "_is_event_handler"):
+                sig_info = get_handler_signature_info(attr)
+
+                handlers[name] = {
+                    "name": name,
+                    "params": sig_info["params"],
+                    "description": sig_info["description"],
+                    "accepts_kwargs": sig_info["accepts_kwargs"],
+                    "decorators": getattr(attr, "_djust_decorators", {}),
+                }
+
+            # Collect public variables (not methods, not classes, not modules)
+            elif (
+                not callable(attr)
+                and not isinstance(attr, type)
+                and not hasattr(attr, "__module__")
+            ):
+                try:
+                    # Get type name
+                    type_name = type(attr).__name__
+
+                    # Truncate long values for display
+                    value_repr = repr(attr)
+                    if len(value_repr) > 100:
+                        value_repr = value_repr[:100] + "..."
+
+                    variables[name] = {"name": name, "type": type_name, "value": value_repr}
+                except Exception:
+                    # Skip attributes that can't be represented
+                    pass
+
+        return {
+            "view_class": self.__class__.__name__,
+            "handlers": handlers,
+            "variables": variables,
+            "template": self.template_name if hasattr(self, "template_name") else None,
+        }
+
     def _hydrate_react_components(self, html: str) -> str:
         """
         Post-process HTML to hydrate React component placeholders with server-rendered content.
@@ -1999,6 +2084,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
     def _inject_client_script(self, html: str) -> str:
         """Inject the LiveView client JavaScript into the HTML"""
         from .config import config
+        from django.conf import settings
         import json
         import os
 
@@ -2013,6 +2099,19 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # Convert Python list to JavaScript array
         loading_classes_js = json.dumps(loading_grouping_classes)
 
+        # Include debug info if Django DEBUG mode
+        debug_info_script = ""
+        debug_css_link = ""
+        if settings.DEBUG:
+            debug_info = self.get_debug_info()
+            debug_info_script = f"""
+            <script>
+                window.DJUST_DEBUG_INFO = {json.dumps(debug_info)};
+            </script>
+            """
+            # Add CSS link for debug panel
+            debug_css_link = '<link rel="stylesheet" href="/static/djust/debug-panel.css">'
+
         config_script = f"""
         <script>
             // djust configuration
@@ -2020,6 +2119,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             window.DJUST_DEBUG_VDOM = {str(debug_vdom).lower()};
             window.DJUST_LOADING_GROUPING_CLASSES = {loading_classes_js};
         </script>
+        {debug_info_script}
         """
 
         # Load client JavaScript from static file
@@ -2035,6 +2135,10 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         # Inject both config and main script
         full_script = config_script + script
+
+        # Inject debug CSS in <head> if present
+        if debug_css_link and "</head>" in html:
+            html = html.replace("</head>", f"{debug_css_link}</head>")
 
         if "</body>" in html:
             html = html.replace("</body>", f"{full_script}</body>")

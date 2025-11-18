@@ -2632,3 +2632,302 @@ function initTurboNavigation() {
         console.log('[Turbo] Navigation initialized');
     }
 }
+
+// ============================================================================
+// Developer Debug Panel
+// ============================================================================
+
+class DjustDebugPanel {
+    constructor() {
+        this.visible = false;
+        this.currentTab = 'handlers';
+        this.eventHistory = [];
+        this.patchHistory = [];
+        this.maxHistory = 50;
+
+        this.createUI();
+        this.setupKeyboardShortcut();
+    }
+
+    createUI() {
+        // Create floating button (only visible in DEBUG mode)
+        if (typeof window.DJUST_DEBUG_INFO === 'undefined') {
+            return; // Not in debug mode
+        }
+
+        // Floating button
+        this.button = document.createElement('button');
+        this.button.className = 'djust-debug-button';
+        this.button.innerHTML = '🔧';
+        this.button.title = 'Open djust Debug Panel (Ctrl+Shift+D)';
+        this.button.onclick = () => this.toggle();
+        document.body.appendChild(this.button);
+
+        // Panel container
+        this.panel = document.createElement('div');
+        this.panel.className = 'djust-debug-panel';
+        this.panel.style.display = 'none';
+        document.body.appendChild(this.panel);
+    }
+
+    setupKeyboardShortcut() {
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+                e.preventDefault();
+                this.toggle();
+            }
+        });
+    }
+
+    toggle() {
+        this.visible = !this.visible;
+
+        if (this.visible) {
+            this.render();
+            this.panel.style.display = 'block';
+            this.button.classList.add('active');
+        } else {
+            this.panel.style.display = 'none';
+            this.button.classList.remove('active');
+        }
+    }
+
+    render() {
+        const debugInfo = window.DJUST_DEBUG_INFO || {};
+
+        this.panel.innerHTML = `
+            <div class="djust-debug-header">
+                <h3>djust Debug Panel</h3>
+                <button onclick="window.djustDebugPanel.toggle()">✕</button>
+            </div>
+
+            <div class="djust-debug-tabs">
+                <button class="${this.currentTab === 'handlers' ? 'active' : ''}"
+                        onclick="window.djustDebugPanel.switchTab('handlers')">
+                    Event Handlers
+                </button>
+                <button class="${this.currentTab === 'history' ? 'active' : ''}"
+                        onclick="window.djustDebugPanel.switchTab('history')">
+                    Event History (${this.eventHistory.length})
+                </button>
+                <button class="${this.currentTab === 'patches' ? 'active' : ''}"
+                        onclick="window.djustDebugPanel.switchTab('patches')">
+                    VDOM Patches
+                </button>
+                <button class="${this.currentTab === 'variables' ? 'active' : ''}"
+                        onclick="window.djustDebugPanel.switchTab('variables')">
+                    Variables
+                </button>
+            </div>
+
+            <div class="djust-debug-content">
+                ${this.renderTabContent()}
+            </div>
+        `;
+    }
+
+    renderTabContent() {
+        const debugInfo = window.DJUST_DEBUG_INFO || {};
+
+        switch (this.currentTab) {
+            case 'handlers':
+                return this.renderHandlers(debugInfo.handlers || {});
+            case 'history':
+                return this.renderEventHistory();
+            case 'patches':
+                return this.renderPatchHistory();
+            case 'variables':
+                return this.renderVariables(debugInfo.variables || {});
+            default:
+                return '';
+        }
+    }
+
+    renderHandlers(handlers) {
+        if (Object.keys(handlers).length === 0) {
+            return '<p class="empty">No event handlers found</p>';
+        }
+
+        let html = '<div class="handler-list">';
+
+        for (const [name, info] of Object.entries(handlers)) {
+            const params = info.params || [];
+            const decorators = Object.keys(info.decorators || {}).filter(d => d !== 'event_handler');
+
+            html += `
+                <div class="handler-item">
+                    <div class="handler-name">${name}</div>
+                    ${info.description ? `<div class="handler-desc">${info.description}</div>` : ''}
+
+                    <div class="handler-signature">
+                        <strong>Parameters:</strong>
+                        ${params.length > 0 ? params.map(p => `
+                            <div class="param">
+                                <code>${p.name}</code>:
+                                <span class="type">${p.type}</span>
+                                ${!p.required ? ` = <span class="default">${p.default}</span>` : '<span class="required">*required</span>'}
+                            </div>
+                        `).join('') : '<span class="empty">No parameters</span>'}
+                        ${info.accepts_kwargs ? '<div class="param"><code>**kwargs</code></div>' : ''}
+                    </div>
+
+                    ${decorators.length > 0 ? `
+                        <div class="handler-decorators">
+                            <strong>Decorators:</strong> ${decorators.map(d => `<code>@${d}</code>`).join(', ')}
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+
+        html += '</div>';
+        return html;
+    }
+
+    renderEventHistory() {
+        if (this.eventHistory.length === 0) {
+            return '<p class="empty">No events captured yet. Interact with the page to see events here.</p>';
+        }
+
+        let html = '<div class="event-history">';
+
+        // Reverse to show newest first
+        for (const event of [...this.eventHistory].reverse()) {
+            const timestamp = new Date(event.timestamp).toLocaleTimeString();
+            const success = event.error ? 'error' : 'success';
+
+            html += `
+                <div class="event-item ${success}">
+                    <div class="event-header">
+                        <span class="event-name">${event.name}</span>
+                        <span class="event-time">${timestamp}</span>
+                    </div>
+
+                    <div class="event-params">
+                        <strong>Parameters:</strong>
+                        <pre>${JSON.stringify(event.params, null, 2)}</pre>
+                    </div>
+
+                    ${event.error ? `
+                        <div class="event-error">
+                            <strong>Error:</strong> ${event.error}
+                        </div>
+                    ` : ''}
+
+                    <div class="event-actions">
+                        <button onclick="navigator.clipboard.writeText('${JSON.stringify(event).replace(/'/g, "\\'")}')">
+                            Copy JSON
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        html += '</div>';
+        return html;
+    }
+
+    renderPatchHistory() {
+        if (this.patchHistory.length === 0) {
+            return '<p class="empty">No patches captured yet.</p>';
+        }
+
+        let html = '<div class="patch-history">';
+
+        for (const entry of [...this.patchHistory].reverse()) {
+            html += `
+                <div class="patch-item">
+                    <div class="patch-header">
+                        <span>${entry.count} patches</span>
+                        <span>${new Date(entry.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                    <pre>${JSON.stringify(entry.patches.slice(0, 5), null, 2)}</pre>
+                    ${entry.patches.length > 5 ? `<p>... and ${entry.patches.length - 5} more</p>` : ''}
+                </div>
+            `;
+        }
+
+        html += '</div>';
+        return html;
+    }
+
+    renderVariables(variables) {
+        if (Object.keys(variables).length === 0) {
+            return '<p class="empty">No public variables found</p>';
+        }
+
+        let html = '<div class="variable-list">';
+
+        for (const [name, info] of Object.entries(variables)) {
+            html += `
+                <div class="variable-item">
+                    <div class="variable-name">${name}</div>
+                    <div class="variable-type">${info.type}</div>
+                    <div class="variable-value"><code>${info.value}</code></div>
+                </div>
+            `;
+        }
+
+        html += '</div>';
+        return html;
+    }
+
+    switchTab(tab) {
+        this.currentTab = tab;
+        this.render();
+    }
+
+    logEvent(eventName, params, result) {
+        this.eventHistory.push({
+            timestamp: Date.now(),
+            name: eventName,
+            params: params,
+            error: result && result.type === 'error' ? result.error : null
+        });
+
+        // Keep last 50 events
+        if (this.eventHistory.length > this.maxHistory) {
+            this.eventHistory.shift();
+        }
+
+        if (this.visible && this.currentTab === 'history') {
+            this.render();
+        }
+    }
+
+    logPatches(patches) {
+        this.patchHistory.push({
+            timestamp: Date.now(),
+            count: patches.length,
+            patches: patches
+        });
+
+        if (this.patchHistory.length > this.maxHistory) {
+            this.patchHistory.shift();
+        }
+
+        if (this.visible && this.currentTab === 'patches') {
+            this.render();
+        }
+    }
+}
+
+// Initialize global debug panel
+if (typeof window.DJUST_DEBUG_INFO !== 'undefined') {
+    window.djustDebugPanel = new DjustDebugPanel();
+
+    // Hook into event sending to log events
+    const originalSendEvent = LiveView.prototype.sendEvent;
+    LiveView.prototype.sendEvent = function(eventName, params) {
+        const result = originalSendEvent.call(this, eventName, params);
+        window.djustDebugPanel.logEvent(eventName, params, null);
+        return result;
+    };
+
+    // Hook into patch application to log patches
+    const originalApplyPatches = applyPatches;
+    applyPatches = function(patches) {
+        window.djustDebugPanel.logPatches(patches);
+        return originalApplyPatches(patches);
+    };
+}
