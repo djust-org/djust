@@ -782,6 +782,16 @@ class LiveView(View):
                 if count_key not in context:
                     context[count_key] = len(value)
 
+        # Fallback serialization for Model instances that weren't JIT-serialized
+        # This handles cases where:
+        # 1. No template is defined
+        # 2. Variable is not accessed in template
+        for key, value in list(context.items()):
+            if key not in jit_serialized_keys and isinstance(value, models.Model):
+                # Serialize using DjangoJSONEncoder
+                serialized = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+                context[key] = serialized
+
         # Store JIT-serialized keys for debugging/optimization tracking
         self._jit_serialized_keys = jit_serialized_keys
 
@@ -879,16 +889,22 @@ class LiveView(View):
         """Sync Python state to Rust backend"""
         if self._rust_view:
             from .component import Component, LiveComponent
+            from django import forms
 
             context = self.get_context_data()
 
             # Pre-render components since Rust can't call Python methods
+            # Also exclude Django Form instances which aren't JSON serializable
             rendered_context = {}
             for key, value in context.items():
                 if isinstance(value, (Component, LiveComponent)):
                     # Create a dict with the pre-rendered HTML so {{ component.render }} works
                     rendered_html = str(value.render())
                     rendered_context[key] = {"render": rendered_html}
+                elif isinstance(value, forms.Form):
+                    # Skip Form instances - they're not JSON serializable
+                    # Form state is managed separately via form_data, form_errors, etc.
+                    continue
                 else:
                     rendered_context[key] = value
 
@@ -1692,9 +1708,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         #     self._rust_view = None
         #     self._cache_key = None
 
-        # OPTIMIZATION: On GET requests, skip VDOM operations since we're just rendering initial HTML
-        # The VDOM baseline will be created on the first event (POST/WebSocket)
-        # This eliminates double rendering: render_with_diff() + render_full_template()
+        # OPTIMIZATION: On GET requests, render full HTML for the browser
+        # Then establish VDOM baseline for future PATCH responses
+        # This allows subsequent POST events to return minimal patches instead of full HTML
 
         # IMPORTANT: Always call get_template() on GET requests to set _full_template
         # This is needed because _full_template is used by render_full_template()
@@ -1711,10 +1727,22 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         t_render_full = (time.perf_counter() - t0) * 1000
         liveview_content = html
 
-        # Mark skipped operations for timing output
-        t_init_rust = 0.0  # Skipped on GET
-        t_sync = 0.0  # Skipped on GET
-        t_render_diff = 0.0  # Skipped on GET
+        # CRITICAL: Establish VDOM baseline for subsequent PATCH responses
+        # Even though we rendered full HTML above, we need to initialize the RustLiveView
+        # with the initial state so that future POST requests can generate patches
+        t0 = time.perf_counter()
+        self._initialize_rust_view(request)
+        t_init_rust = (time.perf_counter() - t0) * 1000
+
+        t0 = time.perf_counter()
+        self._sync_state_to_rust()
+        t_sync = (time.perf_counter() - t0) * 1000
+
+        # Establish VDOM baseline by calling render_with_diff() once
+        # This first call returns no patches but sets up the baseline for future diffs
+        t0 = time.perf_counter()
+        _, _, _ = self.render_with_diff(request)
+        t_render_diff = (time.perf_counter() - t0) * 1000
 
         # Wrap in Django template if wrapper_template is specified
         # (This is for the older wrapper pattern, not template inheritance)
@@ -1999,6 +2027,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 and not hasattr(attr, "__module__")
             ):
                 try:
+                    # Skip Django Form instances - they're not useful in debug panel
+                    from django import forms
+
+                    if isinstance(attr, forms.Form):
+                        continue
+
                     # Get type name
                     type_name = type(attr).__name__
 

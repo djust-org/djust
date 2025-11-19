@@ -591,22 +591,28 @@ fn extract_from_nodes(
                 // Recurse into empty block
                 extract_from_nodes(empty_nodes, variables);
 
-                // FIX: Transfer paths from loop variables to iterable
+                // FIX: Transfer paths from loop variables to iterable AND keep loop variables
                 // Example: {% for property in properties %}{{ property.name }}{% endfor %}
                 // - Before: properties=[], property=[name, bedrooms, ...]
-                // - After:  properties=[name, bedrooms, ...], property removed
+                // - After:  properties=[name, bedrooms, ...], property=[name, bedrooms, ...]
                 //
                 // For tuple unpacking: {% for val, label in status_choices %}{{ val }} {{ label }}{% endfor %}
                 // - Before: status_choices=[], val=[], label=[]
-                // - After:  status_choices=[0, 1], val and label removed
+                // - After:  status_choices=[0, 1], val=[], label=[]
+                //
+                // Loop variables are kept for:
+                // - IDE autocomplete/type checking
+                // - Template debugging
+                // - Documentation generation
                 for var_name in var_names {
-                    if let Some(loop_var_paths) = variables.remove(var_name) {
-                        // Transfer paths from loop variable to iterable
+                    if let Some(loop_var_paths) = variables.get(var_name) {
+                        // Transfer paths from loop variable to iterable (but keep loop var)
                         let iterable_name = iterable.split('.').next().unwrap_or(iterable);
+                        let paths_clone = loop_var_paths.clone();
                         variables
                             .entry(iterable_name.to_string())
                             .or_default()
-                            .extend(loop_var_paths);
+                            .extend(paths_clone);
                     }
                 }
             }

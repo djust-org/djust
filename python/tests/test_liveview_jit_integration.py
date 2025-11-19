@@ -352,7 +352,10 @@ class TestJITSerializationGracefulFallback(TestCase):
     def test_fallback_on_missing_extract_function(self):
         """Test fallback when Rust extraction not available."""
         from djust.live_view import LiveView
-        from djust import live_view as lv_module
+        import sys
+
+        # Get the actual live_view module (not the decorator function)
+        lv_module = sys.modules["djust.live_view"]
 
         # Temporarily disable extract_template_variables
         original_extract = lv_module.extract_template_variables
@@ -379,13 +382,15 @@ class TestJITSerializationGracefulFallback(TestCase):
                         monthly_rent=1000,
                         security_deposit=1000,
                     )
+                    from datetime import date
+
                     self.lease = Lease.objects.create(
                         property=prop,
                         tenant=tenant,
                         monthly_rent=1000,
                         security_deposit=1000,
-                        start_date="2025-01-01",
-                        end_date="2025-12-31",
+                        start_date=date(2025, 1, 1),
+                        end_date=date(2025, 12, 31),
                     )
 
             view = TestView()

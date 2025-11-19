@@ -326,6 +326,110 @@ application = ProtocolTypeRouter({
 })
 ```
 
+## Developer Tooling
+
+djust provides comprehensive developer experience tools for debugging and introspection.
+
+### Debug Panel
+
+Interactive debugging tool for LiveView applications (**DEBUG mode only**):
+
+**Open**: `Ctrl+Shift+D` (Windows/Linux) or `Cmd+Shift+D` (Mac), or click the 🐞 floating button
+
+**Features**:
+- **Event Handlers Tab**: Discover all handlers with parameters, types, and descriptions
+- **Event History Tab**: Real-time log with timing metrics and parameter inspection
+- **VDOM Patches Tab**: Monitor DOM updates with sub-millisecond precision
+- **Variables Tab**: Inspect current view state
+
+**See**: **[docs/DEBUG_PANEL.md](docs/DEBUG_PANEL.md)** for complete guide
+
+### Event Handler Best Practices
+
+**Always use `@event_handler` decorator** for auto-discovery and validation:
+
+```python
+from djust.decorators import event_handler
+
+@event_handler()
+def search(self, value: str = "", **kwargs):
+    """Search handler - description shown in debug panel"""
+    self.search_query = value
+    self._refresh_results()
+```
+
+**Parameter naming convention**: Use `value` for form input events:
+
+```python
+# ✅ Correct - matches what @input/@change sends
+@event_handler()
+def search(self, value: str = "", **kwargs):
+    self.search_query = value
+
+# ❌ Wrong - won't receive input value
+@event_handler()
+def search(self, query: str = "", **kwargs):
+    self.search_query = query  # Always "" (default)
+```
+
+**Type hints for validation**:
+
+```python
+@event_handler()
+def update_quantity(self, item_id: int, quantity: int = 1):
+    """Types validated at runtime - wrong types rejected"""
+    self.items[item_id].quantity = quantity
+```
+
+**See**: **[docs/EVENT_HANDLERS.md](docs/EVENT_HANDLERS.md)** for complete patterns and best practices
+
+### Public/Private Variables
+
+**Convention** used throughout the codebase:
+
+- `_private` - Not exposed to template context (internal state)
+- `public` - Auto-exposed to templates
+
+```python
+def mount(self, request):
+    # Private - internal state
+    self._properties = Property.objects.all()
+
+    # Public - exposed to template
+    self.properties = None  # Set in get_context_data()
+    self.search_query = ""
+```
+
+**Benefits**:
+- Clear separation of concerns
+- JIT serialization only processes public variables
+- Debug panel only shows public variables
+- Template can't access internal state
+
+### Parameter Validation
+
+djust validates event handler signatures **strictly by default**:
+
+- **Missing required parameters** → Validation error
+- **Unexpected parameters** → Validation error
+- **Wrong types** → Validation error
+
+**Error messages** show expected vs provided parameters:
+
+```
+Handler 'search' received unexpected parameters: ['query']. Expected: ['value']
+```
+
+**Use `**kwargs` for flexibility**:
+
+```python
+@event_handler()
+def flexible_handler(self, value: str = "", **kwargs):
+    """Accepts any additional parameters"""
+    self.value = value
+    # Optional params accessible in kwargs
+```
+
 ## State Management Decorators
 
 djust provides Python-only state management decorators that eliminate the need for custom JavaScript in most use cases.
