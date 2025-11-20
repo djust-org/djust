@@ -21,12 +21,21 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-87!sngq(q&)!)20pn^jj26t%@k*ugvl^%1zzh)v+ydngzfm0h2'
+# For production, set DJANGO_SECRET_KEY environment variable
+# For development/demo, use insecure key (acceptable for example projects)
+SECRET_KEY = os.environ.get(
+    'DJANGO_SECRET_KEY',
+    'django-insecure-87!sngq(q&)!)20pn^jj26t%@k*ugvl^%1zzh)v+ydngzfm0h2'
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Set DEBUG=false in production environment
+DEBUG = os.environ.get('DEBUG', 'True').lower() in ('true', '1', 'yes')
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0']
+# Configure allowed hosts for production
+# Set ALLOWED_HOSTS environment variable as comma-separated list
+# Example: ALLOWED_HOSTS=example.com,www.example.com
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,0.0.0.0').split(',')
 
 
 # Application definition
@@ -100,8 +109,9 @@ CHANNEL_LAYERS = {
 
 # djust configuration
 DJUST_CONFIG = {
-    'STATE_BACKEND': 'memory',  # Use 'redis' for production
-    'SESSION_TTL': 3600,  # 1 hour
+    'STATE_BACKEND': os.environ.get('DJUST_STATE_BACKEND', 'memory'),  # Use 'redis' for production
+    'REDIS_URL': os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/0'),  # Redis URL for state backend
+    'SESSION_TTL': int(os.environ.get('DJUST_SESSION_TTL', '3600')),  # 1 hour default
     'css_framework': 'tailwind',  # Using Tailwind CSS
     'debug_vdom': DEBUG,  # Enable VDOM debugging in development
 }
@@ -167,12 +177,29 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Cache configuration for GitHub stars and other API calls
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': 'marketing-cache',
+# Set CACHE_BACKEND=redis in production for shared caching across servers
+CACHE_BACKEND = os.environ.get('CACHE_BACKEND', 'locmem')
+
+if CACHE_BACKEND == 'redis':
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': os.environ.get('REDIS_CACHE_URL', 'redis://127.0.0.1:6379/1'),
+            'OPTIONS': {
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            },
+            'KEY_PREFIX': 'marketing',
+            'TIMEOUT': 300,  # 5 minutes default
+        }
     }
-}
+else:
+    # Development default: in-memory cache
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'marketing-cache',
+        }
+    }
 
 # GitHub repository for star count display
 # Set to None or empty string to disable GitHub API calls
