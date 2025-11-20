@@ -1,0 +1,245 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}Framework Comparison | djust{% endblock %}
+
+{% block content %}
+<!-- Main Content -->
+<main class="pt-24 pb-12 px-6">
+    <div class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <div class="text-center mb-12">
+            <h1 class="text-4xl md:text-5xl font-extrabold text-white mb-4">Framework Comparison</h1>
+            <p class="text-lg text-brand-muted max-w-3xl mx-auto">
+                How djust compares to Phoenix LiveView, Laravel Livewire, and HTMX. Make an informed decision for your next project.
+            </p>
+        </div>
+
+        <!-- Quick Comparison Table -->
+        <div class="mb-16">
+            <h2 class="text-2xl font-bold text-white mb-6">At a Glance</h2>
+            <div class="comparison-table bg-brand-panel rounded-xl border border-white/10 overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm min-w-[800px]">
+                        <thead class="bg-white/5 border-b border-white/10">
+                            <tr>
+                                <th class="px-6 py-4 text-left text-white font-semibold">Feature</th>
+                                <th class="px-6 py-4 text-center text-white font-semibold">djust</th>
+                                <th class="px-6 py-4 text-center text-brand-muted font-semibold">LiveView</th>
+                                <th class="px-6 py-4 text-center text-brand-muted font-semibold">Livewire</th>
+                                <th class="px-6 py-4 text-center text-brand-muted font-semibold">HTMX</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-brand-text">
+                            {% for item in comparison_features %}
+                            <tr class="border-b border-white/5">
+                                <td class="px-6 py-4">{{ item.feature }}</td>
+
+                                <!-- djust column -->
+                                <td class="px-6 py-4 text-center {% if item.highlight == 'djust' %}font-bold text-brand-django{% else %}font-mono text-sm{% endif %}">
+                                    {% if item.djust is mapping %}
+                                        {% if item.djust.check %}
+                                            <span class="text-brand-success">✓</span>
+                                        {% elif item.djust.partial %}
+                                            <span class="text-yellow-500">~</span>
+                                        {% else %}
+                                            <span class="text-brand-danger">✗</span>
+                                        {% endif %}
+                                        <span class="text-xs text-brand-muted block">{{ item.djust.label }}</span>
+                                    {% else %}
+                                        {{ item.djust }}
+                                    {% endif %}
+                                </td>
+
+                                <!-- LiveView column -->
+                                <td class="px-6 py-4 text-center text-brand-muted">
+                                    {% if item.liveview is mapping %}
+                                        {% if item.liveview.check %}
+                                            <span class="text-brand-success">✓</span>
+                                        {% elif item.liveview.partial %}
+                                            <span class="text-yellow-500">~</span>
+                                        {% else %}
+                                            <span class="text-brand-danger">✗</span>
+                                        {% endif %}
+                                        <span class="text-xs text-brand-muted block">{{ item.liveview.label }}</span>
+                                    {% else %}
+                                        <span class="font-mono text-sm">{{ item.liveview }}</span>
+                                    {% endif %}
+                                </td>
+
+                                <!-- Livewire column -->
+                                <td class="px-6 py-4 text-center text-brand-muted">
+                                    {% if item.livewire is mapping %}
+                                        {% if item.livewire.check %}
+                                            <span class="text-brand-success">✓</span>
+                                        {% elif item.livewire.partial %}
+                                            <span class="text-yellow-500">~</span>
+                                        {% else %}
+                                            <span class="text-brand-danger">✗</span>
+                                        {% endif %}
+                                        <span class="text-xs text-brand-muted block">{{ item.livewire.label }}</span>
+                                    {% else %}
+                                        <span class="font-mono text-sm">{{ item.livewire }}</span>
+                                    {% endif %}
+                                </td>
+
+                                <!-- HTMX column -->
+                                <td class="px-6 py-4 text-center text-brand-muted">
+                                    {% if item.htmx is mapping %}
+                                        {% if item.htmx.check %}
+                                            <span class="text-brand-success">✓</span>
+                                        {% elif item.htmx.partial %}
+                                            <span class="text-yellow-500">~</span>
+                                        {% else %}
+                                            <span class="text-brand-danger">✗</span>
+                                        {% endif %}
+                                        <span class="text-xs text-brand-muted block">{{ item.htmx.label }}</span>
+                                    {% else %}
+                                        <span class="font-mono text-sm">{{ item.htmx }}</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Code Comparison -->
+        <div class="mb-16">
+            <h2 class="text-2xl font-bold text-white mb-6">Code Comparison: Counter Example</h2>
+            <div class="code-comparison grid gap-4 lg:grid-cols-2">
+                {% for example in code_examples %}
+                <!-- {{ example.name }} -->
+                <div class="bg-brand-panel rounded-xl border border-white/10 overflow-hidden">
+                    <div class="px-6 py-3 bg-white/5 border-b border-white/10">
+                        <h3 class="font-bold {% if example.name == 'djust' %}text-white{% else %}text-brand-muted{% endif %}">
+                            {{ example.name }} ({{ example.language }})
+                        </h3>
+                    </div>
+                    <div class="p-6">
+                        <pre class="text-sm font-mono {% if example.name == 'djust' %}text-gray-300{% else %}text-gray-400{% endif %} overflow-x-auto"><code>{{ example.code }}</code></pre>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Detailed Comparisons -->
+        <div class="grid md:grid-cols-2 gap-8 mb-16">
+            {% for comparison in detailed_comparisons %}
+            <!-- {{ comparison.title }} -->
+            <div class="bg-brand-panel rounded-xl border border-white/10 p-8">
+                <h3 class="text-xl font-bold text-white mb-4">{{ comparison.title }}</h3>
+                <div class="space-y-4 text-sm">
+                    <div>
+                        <h4 class="font-semibold text-brand-django mb-2">When to choose djust:</h4>
+                        <ul class="space-y-2 text-brand-muted">
+                            {% for reason in comparison.choose_djust %}
+                            <li>✓ {{ reason }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    <div>
+                        <h4 class="font-semibold text-brand-muted mb-2">When to choose {{ comparison.framework_name }}:</h4>
+                        <ul class="space-y-2 text-brand-muted">
+                            {% for reason in comparison.choose_other %}
+                            <li>• {{ reason }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+
+            <!-- Performance Summary -->
+            <div class="bg-gradient-to-br from-brand-rust/10 to-brand-django/10 rounded-xl border border-white/10 p-8">
+                <h3 class="text-xl font-bold text-white mb-4">Performance Summary</h3>
+                <div class="space-y-4 text-sm">
+                    {% for perf in performance_data %}
+                    <div class="flex justify-between items-center">
+                        <span class="{% if perf.label == 'djust' %}text-brand-text{% else %}text-brand-muted{% endif %}">
+                            {{ perf.label }}
+                        </span>
+                        <span class="{% if perf.label == 'djust' %}font-bold text-brand-django{% else %}text-brand-muted{% endif %}">
+                            {{ perf.time }}
+                        </span>
+                    </div>
+                    <div class="w-full bg-white/5 rounded-full h-2">
+                        <div class="bg-{{ perf.color }}/{% if perf.label != 'djust' %}50{% endif %} h-2 rounded-full" style="width: {{ perf.width }}%"></div>
+                    </div>
+                    {% endfor %}
+
+                    <p class="text-xs text-brand-muted mt-4 pt-4 border-t border-white/10">
+                        * Benchmarks based on 10,000 renders of a typical dashboard template
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Migration Guides -->
+        <div class="mb-16">
+            <h2 class="text-2xl font-bold text-white mb-6">Migration Guides</h2>
+            <div class="grid md:grid-cols-3 gap-6">
+                <a href="#" class="bg-brand-panel rounded-xl border border-white/10 p-6 hover:border-brand-rust/50 transition group">
+                    <h3 class="text-lg font-bold text-white mb-2 group-hover:text-brand-rust transition">From Phoenix LiveView</h3>
+                    <p class="text-sm text-brand-muted mb-4">Learn how to migrate your LiveView app to djust. Map concepts, adapt patterns, and deploy.</p>
+                    <span class="text-brand-rust text-sm font-semibold">Read Guide →</span>
+                </a>
+                <a href="#" class="bg-brand-panel rounded-xl border border-white/10 p-6 hover:border-brand-rust/50 transition group">
+                    <h3 class="text-lg font-bold text-white mb-2 group-hover:text-brand-rust transition">From Laravel Livewire</h3>
+                    <p class="text-sm text-brand-muted mb-4">Port your Livewire components to djust. Similar concepts, better performance.</p>
+                    <span class="text-brand-rust text-sm font-semibold">Read Guide →</span>
+                </a>
+                <a href="#" class="bg-brand-panel rounded-xl border border-white/10 p-6 hover:border-brand-rust/50 transition group">
+                    <h3 class="text-lg font-bold text-white mb-2 group-hover:text-brand-rust transition">From HTMX</h3>
+                    <p class="text-sm text-brand-muted mb-4">Upgrade from HTMX to djust for stateful components and automatic diffing.</p>
+                    <span class="text-brand-rust text-sm font-semibold">Read Guide →</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- CTA -->
+        <div class="bg-gradient-to-br from-brand-rust/10 to-brand-django/10 rounded-2xl p-8 border border-white/10 text-center">
+            <h2 class="text-2xl font-bold text-white mb-4">Ready to Try djust?</h2>
+            <p class="text-brand-muted mb-6 max-w-2xl mx-auto">
+                Experience the performance and developer experience of djust. Try the playground or install locally.
+            </p>
+            <div class="flex gap-4 justify-center flex-wrap">
+                <a href="/playground/"
+                    class="px-8 py-3 bg-brand-rust hover:bg-brand-rust/90 text-white font-bold rounded-lg transition">
+                    Try Playground
+                </a>
+                <a href="/docs/"
+                    class="px-8 py-3 bg-white/5 hover:bg-white/10 border border-white/20 text-white font-bold rounded-lg transition">
+                    Read Documentation
+                </a>
+            </div>
+        </div>
+    </div>
+</main>
+
+<style>
+/* Comparison table styles */
+.comparison-table {
+    overflow-x: auto;
+}
+
+.comparison-table table {
+    min-width: 800px;
+}
+
+/* Code comparison grid */
+.code-comparison {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1rem;
+}
+
+@media (min-width: 1024px) {
+    .code-comparison {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+</style>
+{% endblock %}

@@ -1,0 +1,199 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}Playground | djust{% endblock %}
+
+{% block extra_head %}
+<!-- Monaco Editor -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/editor/editor.main.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<!-- Hero -->
+<div class="relative pt-32 pb-12 px-6 overflow-hidden">
+    <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMSIgY3k9IjEiIHI9IjEiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNSkiLz48L3N2Zz4=')] [mask-image:linear-gradient(to_bottom,white,transparent)] pointer-events-none"></div>
+
+    <div class="max-w-7xl mx-auto text-center relative z-10">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-django/10 text-brand-django text-xs font-bold uppercase tracking-wider mb-6 border border-brand-django/20">
+            🚀 Try djust Now
+        </div>
+        <h1 class="text-5xl md:text-6xl font-extrabold text-white tracking-tight mb-6">
+            Interactive Playground
+        </h1>
+        <p class="text-xl text-brand-muted max-w-2xl mx-auto">
+            Experiment with djust code in your browser
+        </p>
+    </div>
+</div>
+
+<!-- Playground -->
+<div class="py-12 px-6">
+    <div class="max-w-7xl mx-auto">
+        <!-- Example Selector -->
+        <div class="mb-6 flex gap-3 overflow-x-auto pb-2">
+            {% for example in examples %}
+            <button
+                @click="select_example"
+                data-example_id="{{ example.id }}"
+                onclick="loadExample('{{ example.id }}')"
+                class="px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition {% if example.id == selected_example %}bg-brand-rust text-white{% else %}bg-white/5 text-brand-muted hover:bg-white/10 hover:text-white{% endif %}"
+            >
+                {{ example.name }}
+            </button>
+            {% endfor %}
+        </div>
+
+        <!-- Editors -->
+        <div class="grid lg:grid-cols-2 gap-6">
+            <!-- Python Code Editor -->
+            <div class="glass-panel rounded-xl overflow-hidden">
+                <div class="px-4 py-3 bg-white/5 border-b border-white/10 flex items-center justify-between">
+                    <span class="text-sm font-mono text-brand-muted">views.py</span>
+                    <button class="text-xs text-brand-muted hover:text-white transition" onclick="copyCode('python-editor')">
+                        Copy
+                    </button>
+                </div>
+                <div id="python-editor" class="h-[500px]"></div>
+            </div>
+
+            <!-- Template Editor -->
+            <div class="glass-panel rounded-xl overflow-hidden">
+                <div class="px-4 py-3 bg-white/5 border-b border-white/10 flex items-center justify-between">
+                    <span class="text-sm font-mono text-brand-muted">template.html</span>
+                    <button class="text-xs text-brand-muted hover:text-white transition" onclick="copyCode('template-editor')">
+                        Copy
+                    </button>
+                </div>
+                <div id="template-editor" class="h-[500px]"></div>
+            </div>
+        </div>
+
+        <!-- Output -->
+        <div class="mt-6 glass-panel rounded-xl overflow-hidden">
+            <div class="px-4 py-3 bg-white/5 border-b border-white/10">
+                <span class="text-sm font-mono text-brand-muted">Output</span>
+            </div>
+            <div class="p-6">
+                {% if error %}
+                <div class="flex items-start gap-3 text-brand-danger">
+                    <svg class="w-6 h-6 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <pre class="font-mono text-sm">{{ error }}</pre>
+                </div>
+                {% elif output %}
+                <div class="flex items-start gap-3 text-brand-success">
+                    <svg class="w-6 h-6 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <pre class="font-mono text-sm text-brand-text">{{ output }}</pre>
+                </div>
+                {% else %}
+                <div class="text-center text-brand-muted py-8">
+                    <svg class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                    </svg>
+                    <p>Select an example or write your own code to see the output</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Documentation Link -->
+<div class="py-20 px-6 border-t border-white/10">
+    <div class="max-w-4xl mx-auto text-center">
+        <h2 class="text-3xl font-bold text-white mb-6">Ready to Build?</h2>
+        <p class="text-brand-muted text-lg mb-8">Install djust and start building your own reactive applications</p>
+        <a href="/quickstart/" class="inline-flex items-center gap-2 px-8 py-4 bg-brand-rust hover:bg-brand-rust/90 text-white font-bold rounded-lg transition shadow-lg shadow-brand-rust/20">
+            View Quick Start Guide
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            </svg>
+        </a>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' }});
+
+    let pythonEditor, templateEditor;
+
+    // Store examples data
+    const examples = {{ examples_json|safe }};
+
+    require(['vs/editor/editor.main'], function() {
+        // Python Editor
+        pythonEditor = monaco.editor.create(document.getElementById('python-editor'), {
+            value: `{{ code|safe }}`,
+            language: 'python',
+            theme: 'vs-dark',
+            minimap: { enabled: false },
+            fontSize: 13,
+            lineNumbers: 'on',
+            roundedSelection: false,
+            scrollBeyondLastLine: false,
+            automaticLayout: true,
+        });
+
+        // Template Editor
+        templateEditor = monaco.editor.create(document.getElementById('template-editor'), {
+            value: `{{ template|safe }}`,
+            language: 'html',
+            theme: 'vs-dark',
+            minimap: { enabled: false },
+            fontSize: 13,
+            lineNumbers: 'on',
+            roundedSelection: false,
+            scrollBeyondLastLine: false,
+            automaticLayout: true,
+        });
+
+        // Auto-update on code changes (with debounce)
+        let updateTimeout;
+        pythonEditor.onDidChangeModelContent(() => {
+            clearTimeout(updateTimeout);
+            updateTimeout = setTimeout(() => {
+                updateCode('code', pythonEditor.getValue());
+            }, 500);
+        });
+
+        templateEditor.onDidChangeModelContent(() => {
+            clearTimeout(updateTimeout);
+            updateTimeout = setTimeout(() => {
+                updateCode('template', templateEditor.getValue());
+            }, 500);
+        });
+    });
+
+    function updateCode(type, value) {
+        // Trigger the LiveView event handlers
+        const eventName = type === 'code' ? 'update_code' : 'update_template';
+
+        // Use djust's event system to trigger the handler
+        if (window.djust && window.djust.sendEvent) {
+            window.djust.sendEvent(eventName, { value: value });
+        } else {
+            console.log(`Updated ${type}:`, value);
+        }
+    }
+
+    function copyCode(editorId) {
+        const editor = editorId === 'python-editor' ? pythonEditor : templateEditor;
+        navigator.clipboard.writeText(editor.getValue());
+    }
+
+    function loadExample(exampleId) {
+        // Find the example by ID
+        const example = examples.find(ex => ex.id === exampleId);
+        if (example && pythonEditor && templateEditor) {
+            // Update Monaco editors with new code
+            pythonEditor.setValue(example.code);
+            templateEditor.setValue(example.template);
+        }
+    }
+</script>
+{% endblock %}

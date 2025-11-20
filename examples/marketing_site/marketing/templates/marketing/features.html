@@ -1,0 +1,246 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}Features Deep Dive | djust{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<main class="relative pt-32 pb-20 px-6 overflow-hidden">
+    <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMSIgY3k9IjEiIHI9IjEiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNSkiLz48L3N2Zz4=')] [mask-image:linear-gradient(to_bottom,white,transparent)] pointer-events-none"></div>
+
+    <div class="max-w-4xl mx-auto text-center relative z-10">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-rust/10 text-brand-rust text-xs font-bold uppercase tracking-wider mb-6 border border-brand-rust/20">
+            {{ hero_badge }}
+        </div>
+
+        <h1 class="text-5xl md:text-7xl font-extrabold text-white tracking-tight mb-8 leading-tight">
+            {{ hero_title }}
+        </h1>
+
+        <p class="text-xl text-brand-muted mb-12 max-w-2xl mx-auto leading-relaxed">
+            {{ hero_description }}
+        </p>
+    </div>
+</main>
+
+<!-- 1. Rust VDOM Engine -->
+<section class="py-24 px-6 border-y border-white/10 bg-brand-panel/30">
+    <div class="max-w-7xl mx-auto">
+        <div class="grid lg:grid-cols-2 gap-16 items-center">
+            <div>
+                <h2 class="text-3xl font-bold text-white mb-6 flex items-center gap-3">
+                    <span class="text-brand-rust">01.</span> Rust VDOM Engine
+                </h2>
+                <p class="text-brand-muted text-lg mb-6">
+                    Traditional Django templates re-render the entire string for every request. djust compiles
+                    templates into a Virtual DOM tree in Rust.
+                </p>
+                <ul class="space-y-4 mb-8">
+                    {% for feature in vdom_features %}
+                    <li class="flex items-start gap-3">
+                        <svg class="w-6 h-6 text-brand-rust shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        <div>
+                            <strong class="text-white block">{{ feature.title }}</strong>
+                            <span class="text-sm text-brand-muted">{{ feature.description|safe }}</span>
+                        </div>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+
+            <!-- Visual: Benchmark -->
+            <div class="bg-brand-dark rounded-xl border border-white/10 p-8">
+                <h3 class="text-white font-bold mb-6">Rendering Performance (100 items)</h3>
+
+                <div class="space-y-6">
+                    {% for benchmark in benchmarks %}
+                    <div>
+                        <div class="flex justify-between text-sm mb-2">
+                            <span class="{% if benchmark.highlight %}text-white font-bold{% else %}text-gray-400{% endif %}">{{ benchmark.name }}</span>
+                            <span class="{% if benchmark.highlight %}text-brand-rust font-bold{% else %}text-gray-400{% endif %}">{{ benchmark.time }}</span>
+                        </div>
+                        <div class="w-full bg-white/5 rounded-full h-4 overflow-hidden {% if benchmark.highlight %}relative{% endif %}">
+                            {% if benchmark.highlight %}
+                            <div class="absolute inset-0 bg-brand-rust/20 animate-pulse"></div>
+                            <div class="bg-{{ benchmark.color }} h-full rounded-full relative z-10" style="width: {{ benchmark.width }}"></div>
+                            {% else %}
+                            <div class="bg-{{ benchmark.color }} h-full rounded-full" style="width: {{ benchmark.width }}"></div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <div class="mt-8 pt-6 border-t border-white/5 text-xs text-brand-muted font-mono">
+                    * Benchmarks on Apple M1 Pro. Includes parsing, diffing, and patch generation.
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- 2. Unified Templates -->
+<section class="py-24 px-6">
+    <div class="max-w-7xl mx-auto">
+        <div class="grid lg:grid-cols-2 gap-16 items-center">
+            <!-- Code Example -->
+            <div class="order-2 lg:order-1 bg-brand-dark rounded-xl border border-white/10 overflow-hidden shadow-2xl">
+                <div class="flex items-center gap-2 px-4 py-3 bg-white/5 border-b border-white/10">
+                    <div class="flex gap-1.5">
+                        <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                        <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+                        <div class="w-3 h-3 rounded-full bg-green-500"></div>
+                    </div>
+                    <span class="ml-2 text-xs font-mono text-brand-muted">templates/dashboard.html</span>
+                </div>
+                <div class="p-6 overflow-x-auto">
+                    <pre class="font-mono text-sm leading-relaxed text-gray-300">
+<span class="text-purple-400">&#123;% extends</span> <span class="text-green-400">"base.html"</span> <span class="text-purple-400">%&#125;</span>
+
+<span class="text-purple-400">&#123;% block</span> title <span class="text-purple-400">%&#125;</span>Dashboard<span class="text-purple-400">&#123;% endblock %&#125;</span>
+
+<span class="text-purple-400">&#123;% block</span> content <span class="text-purple-400">%&#125;</span>
+  &lt;div class="stats"&gt;
+    &lt;h1&gt;Welcome, <span class="text-yellow-400">&#123;&#123; user.name &#125;&#125;</span>&lt;/h1&gt;
+
+    &lt;!-- This updates independently --&gt;
+    &lt;div&gt;Active Users: <span class="text-yellow-400">&#123;&#123; active_count &#125;&#125;</span>&lt;/div&gt;
+
+    &lt;!-- Loop updates are optimized --&gt;
+    <span class="text-purple-400">&#123;% for</span> item <span class="text-purple-400">in</span> items <span class="text-purple-400">%&#125;</span>
+      &lt;div&gt;<span class="text-yellow-400">&#123;&#123; item.name &#125;&#125;</span>&lt;/div&gt;
+    <span class="text-purple-400">&#123;% endfor %&#125;</span>
+  &lt;/div&gt;
+<span class="text-purple-400">&#123;% endblock %&#125;</span></pre>
+                </div>
+            </div>
+
+            <div class="order-1 lg:order-2">
+                <h2 class="text-3xl font-bold text-white mb-6 flex items-center gap-3">
+                    <span class="text-brand-django">02.</span> Unified Templates
+                </h2>
+                <p class="text-brand-muted text-lg mb-6">
+                    Don't learn a new syntax. djust supports standard Django template inheritance.
+                </p>
+                <p class="text-brand-muted mb-6">
+                    The entire page—base template, child template, and included components—is compiled into a
+                    <b>single VDOM tree</b>. This means you can update a variable in the navbar (defined in
+                    `base.html`) from a view rendering `child.html`.
+                </p>
+                <div class="bg-brand-panel/50 p-4 rounded-lg border border-white/5">
+                    <h4 class="text-white font-bold mb-2 text-sm">How it works:</h4>
+                    <ol class="list-decimal list-inside text-sm text-brand-muted space-y-2">
+                        {% for step in unified_steps %}
+                        <li>{{ step|safe }}</li>
+                        {% endfor %}
+                    </ol>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- 3. ORM JIT Compiler -->
+<section class="py-24 px-6 border-t border-white/10 bg-brand-panel/30">
+    <div class="max-w-7xl mx-auto">
+        <div class="grid lg:grid-cols-2 gap-16 items-center">
+            <div>
+                <h2 class="text-3xl font-bold text-white mb-6 flex items-center gap-3">
+                    <span class="text-brand-django">03.</span> ORM JIT Compiler
+                </h2>
+                <p class="text-brand-muted text-lg mb-6">
+                    The #1 performance killer in Django apps is the N+1 query problem. djust solves it
+                    automatically.
+                </p>
+                <p class="text-brand-muted mb-6">
+                    Our compiler analyzes your templates to see exactly which fields you use (e.g.,
+                    <code>&#123;&#123; book.author.name &#125;&#125;</code>). It then automatically injects the optimal
+                    <code>select_related</code> and <code>prefetch_related</code> calls into your QuerySet.
+                </p>
+                <ul class="space-y-4 mb-8">
+                    {% for feature in orm_features %}
+                    <li class="flex items-start gap-3">
+                        <svg class="w-6 h-6 text-brand-success shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <div>
+                            <strong class="text-white block">{{ feature.title }}</strong>
+                            <span class="text-sm text-brand-muted">{{ feature.description|safe }}</span>
+                        </div>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+
+            <!-- Visual: Code Comparison -->
+            <div class="bg-brand-dark rounded-xl border border-white/10 overflow-hidden shadow-2xl">
+                <div class="grid grid-cols-2 border-b border-white/10">
+                    <div class="px-4 py-3 bg-white/5 text-xs font-mono text-center text-brand-danger border-r border-white/10">Without djust</div>
+                    <div class="px-4 py-3 bg-white/5 text-xs font-mono text-center text-brand-success">With djust ORM JIT</div>
+                </div>
+                <div class="grid grid-cols-2">
+                    <!-- Bad Side -->
+                    <div class="p-6 border-r border-white/10 bg-red-500/5">
+                        <div class="text-xs text-brand-muted mb-2 font-mono">Template:</div>
+                        <pre class="text-xs text-gray-400 mb-4">&#123;% for book in books %&#125;
+  &#123;&#123; book.author.name &#125;&#125;
+&#123;% endfor %&#125;</pre>
+                        <div class="text-xs text-brand-muted mb-2 font-mono">SQL Queries:</div>
+                        <div class="space-y-1 font-mono text-xs text-red-400">
+                            <div>SELECT * FROM books</div>
+                            <div>SELECT * FROM authors WHERE id=1</div>
+                            <div>SELECT * FROM authors WHERE id=2</div>
+                            <div>SELECT * FROM authors WHERE id=3</div>
+                            <div class="italic opacity-50">... (100 more)</div>
+                        </div>
+                    </div>
+
+                    <!-- Good Side -->
+                    <div class="p-6 bg-green-500/5">
+                        <div class="text-xs text-brand-muted mb-2 font-mono">Template:</div>
+                        <pre class="text-xs text-gray-400 mb-4">&#123;% for book in books %&#125;
+  &#123;&#123; book.author.name &#125;&#125;
+&#123;% endfor %&#125;</pre>
+                        <div class="text-xs text-brand-muted mb-2 font-mono">SQL Queries:</div>
+                        <div class="space-y-1 font-mono text-xs text-green-400">
+                            <div>SELECT * FROM books <br>JOIN authors ON ...</div>
+                            <div class="mt-2 text-brand-muted italic opacity-75">// 1 Query Total</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- 4. State Management -->
+<section class="py-24 px-6 border-t border-white/10">
+    <div class="max-w-7xl mx-auto">
+        <div class="text-center mb-16">
+            <h2 class="text-3xl font-bold text-white mb-4">
+                <span class="text-blue-400">04.</span> Python-First State Management
+            </h2>
+            <p class="text-brand-muted max-w-2xl mx-auto">
+                Complex UI patterns usually require JavaScript. djust provides Python decorators that handle them
+                for you.
+            </p>
+        </div>
+
+        <div class="grid md:grid-cols-3 gap-8">
+            {% for pattern in state_patterns %}
+            <div class="glass-panel p-6 rounded-xl">
+                <div class="text-{{ pattern.color }} font-mono font-bold mb-4">{{ pattern.decorator }}</div>
+                <h3 class="text-white font-bold mb-2">{{ pattern.title }}</h3>
+                <p class="text-sm text-brand-muted mb-4">
+                    {{ pattern.description }}
+                </p>
+                <div class="bg-brand-dark p-3 rounded border border-white/5 text-xs font-mono text-gray-400">
+                    <pre class="whitespace-pre-wrap">{{ pattern.code }}</pre>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% endblock %}
