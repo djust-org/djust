@@ -1,0 +1,159 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}Use Cases | djust{% endblock %}
+
+{% block content %}
+<!-- Main Content -->
+<main class="pt-24 pb-12 px-6">
+    <div class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <div class="text-center mb-12">
+            <h1 class="text-4xl md:text-5xl font-extrabold text-white mb-4">Use Cases</h1>
+            <p class="text-lg text-brand-muted max-w-3xl mx-auto">
+                See how djust powers real-time applications across FinTech, SaaS, E-commerce, Healthcare, and Enterprise.
+            </p>
+        </div>
+
+        <!-- Use Cases Grid -->
+        <div class="space-y-16">
+            {% for use_case in use_cases %}
+            <!-- {{ use_case.industry }} -->
+            {% if use_case.has_code %}
+            {% if use_case.id == "saas" %}
+            <!-- SaaS Dashboards - Code on left, content on right -->
+            <div class="bg-brand-panel rounded-2xl border border-white/10 overflow-hidden hover:shadow-xl hover:shadow-brand-rust/10 transition-all duration-200">
+                <div class="grid lg:grid-cols-2 gap-8">
+                    <div class="p-8 bg-white/5">
+                        <h3 class="font-semibold text-white mb-4">{{ use_case.code_title }}</h3>
+                        <pre class="text-xs font-mono text-gray-300 overflow-x-auto bg-slate-900 rounded-lg p-4"><code>{{ use_case.code|safe }}</code></pre>
+                    </div>
+                    <div class="p-8">
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-12 h-12 bg-gradient-to-br {{ use_case.gradient|safe }} rounded-lg flex items-center justify-center">
+                                <svg class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="{{ use_case.icon_path|safe }}" />
+                                </svg>
+                            </div>
+                            <h2 class="text-2xl font-bold text-white">{{ use_case.industry }}</h2>
+                        </div>
+                        <p class="text-brand-muted mb-6">{{ use_case.description }}</p>
+                        <h3 class="font-semibold text-white mb-3">Perfect For:</h3>
+                        <ul class="space-y-2 text-sm text-brand-muted mb-6">
+                            {% for item in use_case.perfect_for %}
+                            <li class="flex items-start gap-2">
+                                <span class="text-brand-django">✓</span>
+                                <span>{{ item }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                        <h3 class="font-semibold text-white mb-3">Key Benefits:</h3>
+                        <ul class="space-y-2 text-sm text-brand-muted">
+                            {% for benefit in use_case.key_benefits %}
+                            <li class="flex items-start gap-2">
+                                <span class="text-brand-rust">→</span>
+                                <span>{{ benefit }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <!-- FinTech & E-commerce - Content on left, code on right -->
+            <div class="bg-brand-panel rounded-2xl border border-white/10 overflow-hidden hover:shadow-xl hover:shadow-brand-rust/10 transition-all duration-200">
+                <div class="grid lg:grid-cols-2 gap-8">
+                    <div class="p-8">
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-12 h-12 bg-gradient-to-br {{ use_case.gradient|safe }} rounded-lg flex items-center justify-center">
+                                <svg class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="{{ use_case.icon_path|safe }}" />
+                                </svg>
+                            </div>
+                            <h2 class="text-2xl font-bold text-white">{{ use_case.industry }}</h2>
+                        </div>
+                        <p class="text-brand-muted mb-6">{{ use_case.description }}</p>
+                        <h3 class="font-semibold text-white mb-3">Perfect For:</h3>
+                        <ul class="space-y-2 text-sm text-brand-muted mb-6">
+                            {% for item in use_case.perfect_for %}
+                            <li class="flex items-start gap-2">
+                                <span class="text-brand-django">✓</span>
+                                <span>{{ item }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                        <h3 class="font-semibold text-white mb-3">Key Benefits:</h3>
+                        <ul class="space-y-2 text-sm text-brand-muted">
+                            {% for benefit in use_case.key_benefits %}
+                            <li class="flex items-start gap-2">
+                                <span class="text-brand-rust">→</span>
+                                <span>{{ benefit }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    <div class="p-8 bg-white/5">
+                        <h3 class="font-semibold text-white mb-4">{{ use_case.code_title }}</h3>
+                        <pre class="text-xs font-mono text-gray-300 overflow-x-auto bg-slate-900 rounded-lg p-4"><code>{{ use_case.code|safe }}</code></pre>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+            {% else %}
+            <!-- Healthcare, Enterprise, Collaboration - Simple cards -->
+            <div class="bg-brand-panel rounded-2xl border border-white/10 p-8 hover:shadow-xl hover:shadow-brand-rust/10 transition-all duration-200">
+                <div class="flex items-center gap-3 mb-6">
+                    <div class="w-12 h-12 bg-gradient-to-br {{ use_case.gradient|safe }} rounded-lg flex items-center justify-center">
+                        <svg class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="{{ use_case.icon_path|safe }}" />
+                        </svg>
+                    </div>
+                    <h2 class="text-2xl font-bold text-white">{{ use_case.industry }}</h2>
+                </div>
+                <div class="grid md:grid-cols-2 gap-8">
+                    <div>
+                        <p class="text-brand-muted mb-6">{{ use_case.description }}</p>
+                        <h3 class="font-semibold text-white mb-3">Perfect For:</h3>
+                        <ul class="space-y-2 text-sm text-brand-muted">
+                            {% for item in use_case.perfect_for %}
+                            <li class="flex items-start gap-2">
+                                <span class="text-brand-django">✓</span>
+                                <span>{{ item }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-white mb-3">Key Benefits:</h3>
+                        <ul class="space-y-2 text-sm text-brand-muted">
+                            {% for benefit in use_case.key_benefits %}
+                            <li class="flex items-start gap-2">
+                                <span class="text-brand-rust">→</span>
+                                <span>{{ benefit }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+
+        <!-- CTA -->
+        <div class="mt-16 bg-gradient-to-br from-brand-rust/10 to-brand-django/10 rounded-2xl p-8 border border-white/10 text-center">
+            <h2 class="text-2xl font-bold text-white mb-4">Ready to Build Your Application?</h2>
+            <p class="text-brand-muted mb-6 max-w-2xl mx-auto">
+                Start with the interactive playground or explore the documentation to see how djust fits your use case.
+            </p>
+            <div class="flex gap-4 justify-center flex-wrap">
+                <a href="/playground/" class="px-8 py-3 bg-brand-rust hover:bg-brand-rust/90 text-white font-bold rounded-lg transition">
+                    Try Playground
+                </a>
+                <a href="/docs/" class="px-8 py-3 bg-white/5 hover:bg-white/10 border border-white/20 text-white font-bold rounded-lg transition">
+                    Read Documentation
+                </a>
+            </div>
+        </div>
+    </div>
+</main>
+{% endblock %}

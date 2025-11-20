@@ -1,0 +1,483 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}Quick Start Guide | djust{% endblock %}
+
+{% block content %}
+<!-- Main Content -->
+<main class="pt-24 pb-12 px-6">
+    <div class="max-w-4xl mx-auto">
+        <!-- Header -->
+        <div class="text-center mb-12">
+            <h1 class="text-4xl md:text-5xl font-extrabold text-white mb-4">Quick Start Guide</h1>
+            <p class="text-lg text-brand-muted max-w-2xl mx-auto">
+                Build your first real-time Django app with djust in 5 minutes. No JavaScript required.
+            </p>
+        </div>
+
+        <!-- Prerequisites -->
+        <div class="bg-brand-panel rounded-xl border border-white/10 p-6 mb-8">
+            <h2 class="text-xl font-bold text-white mb-4">Prerequisites</h2>
+            <div class="grid md:grid-cols-2 gap-4 text-sm">
+                <div class="flex items-start gap-3">
+                    <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd"
+                            d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                            clip-rule="evenodd" />
+                    </svg>
+                    <div>
+                        <div class="font-semibold text-white">Python 3.9+</div>
+                        <div class="text-brand-muted">Check: <code class="font-mono text-xs bg-white/5 px-1 py-0.5 rounded">python --version</code></div>
+                    </div>
+                </div>
+                <div class="flex items-start gap-3">
+                    <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd"
+                            d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                            clip-rule="evenodd" />
+                    </svg>
+                    <div>
+                        <div class="font-semibold text-white">Django 4.2+</div>
+                        <div class="text-brand-muted">Or we'll install it for you</div>
+                    </div>
+                </div>
+                <div class="flex items-start gap-3">
+                    <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd"
+                            d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                            clip-rule="evenodd" />
+                    </svg>
+                    <div>
+                        <div class="font-semibold text-white">Rust 1.70+</div>
+                        <div class="text-brand-muted">For building the VDOM engine</div>
+                    </div>
+                </div>
+                <div class="flex items-start gap-3">
+                    <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd"
+                            d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                            clip-rule="evenodd" />
+                    </svg>
+                    <div>
+                        <div class="font-semibold text-white">Basic Django knowledge</div>
+                        <div class="text-brand-muted">Views, templates, URLs</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 1: Installation -->
+        <div class="mb-12">
+            <div class="flex items-start gap-4 mb-4">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-brand-django to-brand-rust flex items-center justify-center text-white font-bold text-xl flex-shrink-0">1</div>
+                <div class="flex-1">
+                    <h2 class="text-2xl font-bold text-white mb-2">Install djust</h2>
+                    <p class="text-brand-muted mb-4">
+                        Install djust via pip. This will also install Django and other dependencies.
+                    </p>
+                    <div class="bg-slate-900 rounded-lg p-4 relative">
+                        <pre class="font-mono text-sm text-gray-300 overflow-x-auto"><code><span class="text-brand-muted"># Create and activate a virtual environment</span>
+python -m venv venv
+source venv/bin/activate  <span class="text-brand-muted"># On Windows: venv\Scripts\activate</span>
+
+<span class="text-brand-muted"># Install djust</span>
+pip install djust</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 2: Create Django Project -->
+        <div class="mb-12">
+            <div class="flex items-start gap-4 mb-4">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-brand-django to-brand-rust flex items-center justify-center text-white font-bold text-xl flex-shrink-0">2</div>
+                <div class="flex-1">
+                    <h2 class="text-2xl font-bold text-white mb-2">Create a Django Project</h2>
+                    <p class="text-brand-muted mb-4">
+                        Create a new Django project or use an existing one.
+                    </p>
+                    <div class="bg-slate-900 rounded-lg p-4 relative">
+                        <pre class="font-mono text-sm text-gray-300 overflow-x-auto"><code><span class="text-brand-muted"># Create new Django project</span>
+django-admin startproject myproject
+cd myproject
+
+<span class="text-brand-muted"># Create an app</span>
+python manage.py startapp counter</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3: Configure Settings -->
+        <div class="mb-12">
+            <div class="flex items-start gap-4 mb-4">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-brand-django to-brand-rust flex items-center justify-center text-white font-bold text-xl flex-shrink-0">3</div>
+                <div class="flex-1">
+                    <h2 class="text-2xl font-bold text-white mb-2">Configure Django Settings</h2>
+                    <p class="text-brand-muted mb-4">
+                        Add djust and Channels to your <code class="font-mono text-xs bg-white/5 px-1 py-0.5 rounded">INSTALLED_APPS</code> in <code class="font-mono text-xs bg-white/5 px-1 py-0.5 rounded">settings.py</code>
+                    </p>
+                    <div class="bg-slate-900 rounded-lg p-4 relative">
+                        <pre class="font-mono text-sm text-gray-300 overflow-x-auto"><code><span class="text-brand-muted"># myproject/settings.py</span>
+
+<span class="text-purple-400">INSTALLED_APPS</span> = [
+    <span class="text-green-400">'django.contrib.admin'</span>,
+    <span class="text-green-400">'django.contrib.auth'</span>,
+    <span class="text-green-400">'django.contrib.contenttypes'</span>,
+    <span class="text-green-400">'django.contrib.sessions'</span>,
+    <span class="text-green-400">'django.contrib.messages'</span>,
+    <span class="text-green-400">'django.contrib.staticfiles'</span>,
+
+    <span class="text-green-400">'channels'</span>,  <span class="text-brand-muted"># Required for WebSocket</span>
+    <span class="text-green-400">'djust'</span>,     <span class="text-brand-muted"># djust framework</span>
+    <span class="text-green-400">'counter'</span>,   <span class="text-brand-muted"># Your app</span>
+]
+
+<span class="text-brand-muted"># Configure ASGI</span>
+<span class="text-purple-400">ASGI_APPLICATION</span> = <span class="text-green-400">'myproject.asgi.application'</span></code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 4: Configure ASGI -->
+        <div class="mb-12">
+            <div class="flex items-start gap-4 mb-4">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-brand-django to-brand-rust flex items-center justify-center text-white font-bold text-xl flex-shrink-0">4</div>
+                <div class="flex-1">
+                    <h2 class="text-2xl font-bold text-white mb-2">Setup ASGI Routing</h2>
+                    <p class="text-brand-muted mb-4">
+                        Configure WebSocket routing in <code class="font-mono text-xs bg-white/5 px-1 py-0.5 rounded">asgi.py</code>
+                    </p>
+                    <div class="bg-slate-900 rounded-lg p-4 relative">
+                        <pre class="font-mono text-sm text-gray-300 overflow-x-auto"><code><span class="text-brand-muted"># myproject/asgi.py</span>
+
+<span class="text-purple-400">import</span> os
+<span class="text-purple-400">from</span> django.core.asgi <span class="text-purple-400">import</span> get_asgi_application
+<span class="text-purple-400">from</span> channels.routing <span class="text-purple-400">import</span> ProtocolTypeRouter, URLRouter
+<span class="text-purple-400">from</span> channels.auth <span class="text-purple-400">import</span> AuthMiddlewareStack
+<span class="text-purple-400">from</span> django.urls <span class="text-purple-400">import</span> path
+<span class="text-purple-400">from</span> djust.websocket <span class="text-purple-400">import</span> LiveViewConsumer
+
+os.environ.setdefault(<span class="text-green-400">'DJANGO_SETTINGS_MODULE'</span>, <span class="text-green-400">'myproject.settings'</span>)
+
+application = ProtocolTypeRouter(&#123;
+    <span class="text-green-400">"http"</span>: get_asgi_application(),
+    <span class="text-green-400">"websocket"</span>: AuthMiddlewareStack(
+        URLRouter([
+            path(<span class="text-green-400">'ws/live/'</span>, LiveViewConsumer.as_asgi()),
+        ])
+    ),
+&#125;)</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 5: Create Your First LiveView -->
+        <div class="mb-12">
+            <div class="flex items-start gap-4 mb-4">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-brand-django to-brand-rust flex items-center justify-center text-white font-bold text-xl flex-shrink-0">5</div>
+                <div class="flex-1">
+                    <h2 class="text-2xl font-bold text-white mb-2">Create Your First LiveView</h2>
+                    <p class="text-brand-muted mb-4">
+                        Create a simple counter with real-time updates in <code class="font-mono text-xs bg-white/5 px-1 py-0.5 rounded">counter/views.py</code>
+                    </p>
+                    <div class="bg-slate-900 rounded-lg p-4 relative">
+                        <pre class="font-mono text-sm text-gray-300 overflow-x-auto"><code><span class="text-brand-muted"># counter/views.py</span>
+
+<span class="text-purple-400">from</span> djust <span class="text-purple-400">import</span> LiveView
+
+<span class="text-purple-400">class</span> <span class="text-yellow-400">CounterView</span>(LiveView):
+    template_name = <span class="text-green-400">'counter/counter.html'</span>
+
+    <span class="text-purple-400">def</span> <span class="text-blue-400">mount</span>(self, request):
+        <span class="text-green-400">"""Called when the view is first loaded"""</span>
+        self.count = <span class="text-orange-400">0</span>
+
+    <span class="text-purple-400">def</span> <span class="text-blue-400">increment</span>(self):
+        <span class="text-green-400">"""Event handler - called when user clicks increment"""</span>
+        self.count += <span class="text-orange-400">1</span>
+
+    <span class="text-purple-400">def</span> <span class="text-blue-400">decrement</span>(self):
+        <span class="text-green-400">"""Event handler - called when user clicks decrement"""</span>
+        self.count -= <span class="text-orange-400">1</span>
+
+    <span class="text-purple-400">def</span> <span class="text-blue-400">reset</span>(self):
+        <span class="text-green-400">"""Event handler - called when user clicks reset"""</span>
+        self.count = <span class="text-orange-400">0</span>
+
+    <span class="text-purple-400">def</span> <span class="text-blue-400">get_context_data</span>(self, **kwargs):
+        <span class="text-green-400">"""Return context for template rendering"""</span>
+        <span class="text-purple-400">return</span> &#123;<span class="text-green-400">'count'</span>: self.count&#125;</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 6: Create Template -->
+        <div class="mb-12">
+            <div class="flex items-start gap-4 mb-4">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-brand-django to-brand-rust flex items-center justify-center text-white font-bold text-xl flex-shrink-0">6</div>
+                <div class="flex-1">
+                    <h2 class="text-2xl font-bold text-white mb-2">Create the Template</h2>
+                    <p class="text-brand-muted mb-4">
+                        Create <code class="font-mono text-xs bg-white/5 px-1 py-0.5 rounded">counter/templates/counter/counter.html</code>
+                    </p>
+                    <div class="bg-slate-900 rounded-lg p-4 relative">
+                        <pre class="font-mono text-sm text-gray-300 overflow-x-auto"><code><span class="text-brand-muted">&lt;!-- counter/templates/counter/counter.html --&gt;</span>
+<span class="text-purple-400">&lt;!DOCTYPE html&gt;</span>
+<span class="text-purple-400">&lt;html&gt;</span>
+<span class="text-purple-400">&lt;head&gt;</span>
+    <span class="text-purple-400">&lt;title&gt;</span>Counter Example<span class="text-purple-400">&lt;/title&gt;</span>
+    &#123;% load static %&#125;
+    <span class="text-purple-400">&lt;script</span> <span class="text-blue-400">src</span>=<span class="text-green-400">"&#123;% static 'djust/client.js' %&#125;"</span><span class="text-purple-400">&gt;&lt;/script&gt;</span>
+<span class="text-purple-400">&lt;/head&gt;</span>
+<span class="text-purple-400">&lt;body&gt;</span>
+    <span class="text-purple-400">&lt;div</span> <span class="text-blue-400">style</span>=<span class="text-green-400">"text-align: center; padding: 2rem;"</span><span class="text-purple-400">&gt;</span>
+        <span class="text-purple-400">&lt;h1&gt;</span>Counter Example<span class="text-purple-400">&lt;/h1&gt;</span>
+
+        <span class="text-purple-400">&lt;div</span> <span class="text-blue-400">style</span>=<span class="text-green-400">"font-size: 4rem; margin: 2rem 0;"</span><span class="text-purple-400">&gt;</span>
+            &#123;&#123; count &#125;&#125;
+        <span class="text-purple-400">&lt;/div&gt;</span>
+
+        <span class="text-purple-400">&lt;div&gt;</span>
+            <span class="text-purple-400">&lt;button</span> <span class="text-blue-400">@click</span>=<span class="text-green-400">"decrement"</span><span class="text-purple-400">&gt;</span>-<span class="text-purple-400">&lt;/button&gt;</span>
+            <span class="text-purple-400">&lt;button</span> <span class="text-blue-400">@click</span>=<span class="text-green-400">"reset"</span><span class="text-purple-400">&gt;</span>Reset<span class="text-purple-400">&lt;/button&gt;</span>
+            <span class="text-purple-400">&lt;button</span> <span class="text-blue-400">@click</span>=<span class="text-green-400">"increment"</span><span class="text-purple-400">&gt;</span>+<span class="text-purple-400">&lt;/button&gt;</span>
+        <span class="text-purple-400">&lt;/div&gt;</span>
+    <span class="text-purple-400">&lt;/div&gt;</span>
+<span class="text-purple-400">&lt;/body&gt;</span>
+<span class="text-purple-400">&lt;/html&gt;</span></code></pre>
+                    </div>
+                    <div class="mt-4 bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
+                        <div class="flex items-start gap-3">
+                            <svg class="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <div class="text-sm text-blue-300">
+                                <strong>Note:</strong> The <code class="font-mono text-xs bg-white/10 px-1 py-0.5 rounded">@click</code> attribute binds click events to your Python methods. No JavaScript needed!
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 7: Add URL Pattern -->
+        <div class="mb-12">
+            <div class="flex items-start gap-4 mb-4">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-brand-django to-brand-rust flex items-center justify-center text-white font-bold text-xl flex-shrink-0">7</div>
+                <div class="flex-1">
+                    <h2 class="text-2xl font-bold text-white mb-2">Configure URLs</h2>
+                    <p class="text-brand-muted mb-4">
+                        Add the URL pattern to <code class="font-mono text-xs bg-white/5 px-1 py-0.5 rounded">myproject/urls.py</code>
+                    </p>
+                    <div class="bg-slate-900 rounded-lg p-4 relative">
+                        <pre class="font-mono text-sm text-gray-300 overflow-x-auto"><code><span class="text-brand-muted"># myproject/urls.py</span>
+
+<span class="text-purple-400">from</span> django.contrib <span class="text-purple-400">import</span> admin
+<span class="text-purple-400">from</span> django.urls <span class="text-purple-400">import</span> path
+<span class="text-purple-400">from</span> counter.views <span class="text-purple-400">import</span> CounterView
+
+urlpatterns = [
+    path(<span class="text-green-400">'admin/'</span>, admin.site.urls),
+    path(<span class="text-green-400">''</span>, CounterView.as_view(), name=<span class="text-green-400">'counter'</span>),
+]</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 8: Run the Server -->
+        <div class="mb-12">
+            <div class="flex items-start gap-4 mb-4">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-brand-django to-brand-rust flex items-center justify-center text-white font-bold text-xl flex-shrink-0">8</div>
+                <div class="flex-1">
+                    <h2 class="text-2xl font-bold text-white mb-2">Run the Development Server</h2>
+                    <p class="text-brand-muted mb-4">
+                        Start the server and see your counter in action!
+                    </p>
+                    <div class="bg-slate-900 rounded-lg p-4 relative mb-4">
+                        <pre class="font-mono text-sm text-gray-300 overflow-x-auto"><code>python manage.py runserver</code></pre>
+                    </div>
+                    <div class="bg-gradient-to-br from-brand-django/20 to-brand-rust/20 border border-brand-django/30 rounded-lg p-6">
+                        <div class="flex items-start gap-3 mb-4">
+                            <svg class="w-6 h-6 text-brand-django flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd"
+                                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                                    clip-rule="evenodd" />
+                            </svg>
+                            <div>
+                                <div class="font-bold text-white mb-2">Success!</div>
+                                <div class="text-sm text-brand-text">
+                                    Open <a href="http://localhost:8000" class="text-brand-rust hover:underline font-mono">http://localhost:8000</a> in your browser.
+                                    Click the buttons and watch the counter update in real-time!
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- How It Works -->
+        <div class="bg-brand-panel rounded-xl border border-white/10 p-8 mb-12">
+            <h2 class="text-2xl font-bold text-white mb-6">How It Works</h2>
+            <div class="space-y-6">
+                <div class="flex items-start gap-4">
+                    <div class="w-8 h-8 bg-brand-rust/20 rounded-lg flex items-center justify-center text-brand-rust flex-shrink-0">
+                        1
+                    </div>
+                    <div>
+                        <div class="font-semibold text-white mb-1">Initial Load</div>
+                        <div class="text-sm text-brand-muted">
+                            When you visit the page, Django renders the template with <code class="font-mono text-xs bg-white/5 px-1 py-0.5 rounded">count = 0</code> and sends full HTML to the browser.
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-start gap-4">
+                    <div class="w-8 h-8 bg-brand-rust/20 rounded-lg flex items-center justify-center text-brand-rust flex-shrink-0">
+                        2
+                    </div>
+                    <div>
+                        <div class="font-semibold text-white mb-1">WebSocket Connection</div>
+                        <div class="text-sm text-brand-muted">
+                            The djust client JavaScript establishes a WebSocket connection to the server, creating a live session.
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-start gap-4">
+                    <div class="w-8 h-8 bg-brand-rust/20 rounded-lg flex items-center justify-center text-brand-rust flex-shrink-0">
+                        3
+                    </div>
+                    <div>
+                        <div class="font-semibold text-white mb-1">User Clicks Button</div>
+                        <div class="text-sm text-brand-muted">
+                            When you click "increment", the client sends an event to the server: <code class="font-mono text-xs bg-white/5 px-1 py-0.5 rounded">&#123;"event": "increment"&#125;</code>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-start gap-4">
+                    <div class="w-8 h-8 bg-brand-rust/20 rounded-lg flex items-center justify-center text-brand-rust flex-shrink-0">
+                        4
+                    </div>
+                    <div>
+                        <div class="font-semibold text-white mb-1">Server Updates State</div>
+                        <div class="text-sm text-brand-muted">
+                            The server calls <code class="font-mono text-xs bg-white/5 px-1 py-0.5 rounded">self.increment()</code>, updating <code class="font-mono text-xs bg-white/5 px-1 py-0.5 rounded">self.count = 1</code>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-start gap-4">
+                    <div class="w-8 h-8 bg-brand-rust/20 rounded-lg flex items-center justify-center text-brand-rust flex-shrink-0">
+                        5
+                    </div>
+                    <div>
+                        <div class="font-semibold text-white mb-1">VDOM Diff (Rust)</div>
+                        <div class="text-sm text-brand-muted">
+                            djust's Rust engine re-renders the template and compares it to the previous version, generating minimal patches in <strong>&lt;100μs</strong>.
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-start gap-4">
+                    <div class="w-8 h-8 bg-brand-rust/20 rounded-lg flex items-center justify-center text-brand-rust flex-shrink-0">
+                        6
+                    </div>
+                    <div>
+                        <div class="font-semibold text-white mb-1">Client Updates DOM</div>
+                        <div class="text-sm text-brand-muted">
+                            The client receives patches like <code class="font-mono text-xs bg-white/5 px-1 py-0.5 rounded">[&#123;path: [2,0], text: "1"&#125;]</code> and updates only the counter number. No full page reload!
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Next Steps -->
+        <div class="mb-12">
+            <h2 class="text-3xl font-bold text-white mb-6">Next Steps</h2>
+            <div class="grid md:grid-cols-2 gap-6">
+                <a href="{% url 'marketing:examples' %}" class="bg-brand-panel rounded-xl border border-white/10 p-6 hover:border-brand-rust/50 transition group">
+                    <div class="flex items-start gap-4">
+                        <div class="w-12 h-12 bg-brand-rust/20 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:bg-brand-rust/30 transition">
+                            <svg class="w-6 h-6 text-brand-rust" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-white mb-2 group-hover:text-brand-rust transition">Explore Examples</h3>
+                            <p class="text-sm text-brand-muted">See more complex examples like forms, todo lists, and data tables.</p>
+                        </div>
+                    </div>
+                </a>
+
+                <a href="#" class="bg-brand-panel rounded-xl border border-white/10 p-6 hover:border-brand-rust/50 transition group">
+                    <div class="flex items-start gap-4">
+                        <div class="w-12 h-12 bg-brand-django/20 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:bg-brand-django/30 transition">
+                            <svg class="w-6 h-6 text-brand-django" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-white mb-2 group-hover:text-brand-django transition">Read the Docs</h3>
+                            <p class="text-sm text-brand-muted">Deep dive into components, forms, state management, and more.</p>
+                        </div>
+                    </div>
+                </a>
+
+                <a href="#" class="bg-brand-panel rounded-xl border border-white/10 p-6 hover:border-brand-rust/50 transition group">
+                    <div class="flex items-start gap-4">
+                        <div class="w-12 h-12 bg-purple-500/20 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:bg-purple-500/30 transition">
+                            <svg class="w-6 h-6 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-white mb-2 group-hover:text-purple-400 transition">Join Discord</h3>
+                            <p class="text-sm text-brand-muted">Get help, share your projects, and connect with the community.</p>
+                        </div>
+                    </div>
+                </a>
+
+                <a href="https://github.com/johnrtipton/djust" class="bg-brand-panel rounded-xl border border-white/10 p-6 hover:border-brand-rust/50 transition group">
+                    <div class="flex items-start gap-4">
+                        <div class="w-12 h-12 bg-white/10 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:bg-white/20 transition">
+                            <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24">
+                                <path fill-rule="evenodd"
+                                    d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"
+                                    clip-rule="evenodd" />
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-white mb-2 group-hover:text-white transition">Star on GitHub</h3>
+                            <p class="text-sm text-brand-muted">Check out the source code, report issues, and contribute.</p>
+                        </div>
+                    </div>
+                </a>
+            </div>
+        </div>
+
+        <!-- CTA -->
+        <div class="bg-gradient-to-br from-brand-rust/10 to-brand-django/10 rounded-2xl p-8 border border-white/10 text-center">
+            <h2 class="text-2xl font-bold text-white mb-4">Need Help?</h2>
+            <p class="text-brand-muted mb-6 max-w-2xl mx-auto">
+                Stuck on something? Check out the full documentation or ask the community for help.
+            </p>
+            <div class="flex gap-4 justify-center flex-wrap">
+                <a href="#"
+                    class="px-8 py-3 bg-brand-rust hover:bg-brand-rust/90 text-white font-bold rounded-lg transition">
+                    Full Documentation
+                </a>
+                <a href="#"
+                    class="px-8 py-3 bg-white/5 hover:bg-white/10 border border-white/20 text-white font-bold rounded-lg transition">
+                    Ask on Discord
+                </a>
+            </div>
+        </div>
+    </div>
+</main>
+{% endblock %}

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}djust | The Django LiveView Framework{% endblock %}</title>
+    <meta name="description" content="Build reactive, real-time Django apps without writing JavaScript. Features a Rust-powered VDOM engine and shadcn-style component system.">
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        brand: {
+                            dark: '#0B0F19',
+                            panel: '#151B2B',
+                            rust: '#E57324',
+                            django: '#44B78B',
+                            text: '#E2E8F0',
+                            muted: '#94A3B8',
+                            danger: '#F43F5E',
+                            success: '#10B981'
+                        }
+                    },
+                    backgroundImage: {
+                        'grid-pattern': "linear-gradient(to right, #1e293b 1px, transparent 1px), linear-gradient(to bottom, #1e293b 1px, transparent 1px)",
+                        'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .code-kw { color: #c678dd; }
+        .code-fn { color: #61afef; }
+        .code-str { color: #98c379; }
+        .code-cls { color: #e5c07b; }
+        .code-dec { color: #E57324; }
+
+        .glass-panel {
+            background: rgba(21, 27, 43, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Mobile menu styles */
+        #mobile-menu {
+            display: none;
+            opacity: 0;
+            transform: translateY(-20px);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+
+        #mobile-menu.open {
+            display: block;
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        @media (min-width: 768px) {
+            #mobile-menu {
+                display: none !important;
+            }
+        }
+    </style>
+
+    {% block extra_head %}{% endblock %}
+</head>
+
+<body class="bg-brand-dark text-brand-text font-sans antialiased selection:bg-brand-rust selection:text-white">
+
+    <!-- Navbar -->
+    <nav class="fixed w-full z-50 border-b border-white/10 bg-brand-dark/90 backdrop-blur-md">
+        <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <!-- Logo -->
+                <a href="/" class="flex items-center gap-2 group">
+                    <div class="w-8 h-8 bg-gradient-to-br from-brand-django to-brand-rust rounded-lg flex items-center justify-center text-white font-bold text-xl group-hover:scale-105 transition-transform">
+                        d
+                    </div>
+                    <span class="text-2xl font-bold tracking-tighter text-white group-hover:text-brand-rust transition">djust</span>
+                </a>
+            </div>
+            <div class="hidden md:flex items-center gap-6 text-sm font-medium text-brand-muted">
+                {% for item in nav_items %}
+                <a href="{{ item.url }}" class="hover:text-white transition {% if item.slug == active_page %}text-white{% endif %}">{{ item.name }}</a>
+                {% endfor %}
+            </div>
+            <div class="flex items-center gap-4">
+                <!-- GitHub Star Badge -->
+                {% if github_stars > 0 %}
+                <a href="https://github.com/johnrtipton/djust" class="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-brand-text hover:text-white transition text-sm font-medium">
+                    <svg class="w-4 h-4 animate-pulse" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                    </svg>
+                    <span>{{ github_stars }}</span>
+                </a>
+                {% endif %}
+                <a href="/quickstart/" class="hidden md:inline-flex text-xs font-bold uppercase tracking-wide bg-brand-rust hover:bg-brand-rust/90 text-white px-5 py-2.5 rounded transition shadow-lg shadow-brand-rust/20">
+                    Get Started
+                </a>
+                <!-- Mobile menu button -->
+                <button id="mobile-menu-button" class="md:hidden text-white p-2 hover:text-brand-rust transition" aria-label="Toggle mobile menu">
+                    <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Mobile Menu -->
+    <div id="mobile-menu" class="fixed top-16 left-0 right-0 z-40 bg-brand-dark/95 backdrop-blur-lg border-b border-white/10 md:hidden">
+        <div class="px-6 py-6 space-y-4">
+            {% for item in nav_items %}
+            <a href="{{ item.url }}" class="block py-2 text-brand-text hover:text-white transition text-lg font-medium {% if item.slug == active_page %}text-white{% endif %}">{{ item.name }}</a>
+            {% endfor %}
+            <div class="pt-2">
+                <a href="/quickstart/" class="block w-full text-center text-xs font-bold uppercase tracking-wide bg-brand-rust hover:bg-brand-rust/90 text-white px-5 py-3 rounded transition shadow-lg shadow-brand-rust/20">
+                    Get Started
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="py-12 px-6 border-t border-white/10 bg-brand-dark">
+        <div class="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
+            <div class="flex items-center gap-2">
+                <div class="w-6 h-6 bg-gradient-to-br from-brand-django to-brand-rust rounded flex items-center justify-center text-white font-bold text-xs">
+                    d
+                </div>
+                <span class="text-white font-bold">djust</span>
+            </div>
+            <div class="text-brand-muted text-sm">
+                &copy; 2025 djust Framework. MIT License.
+            </div>
+            <div class="flex gap-6 text-brand-muted text-sm">
+                <a href="https://github.com/johnrtipton/djust" class="hover:text-white transition">GitHub</a>
+                <a href="#" class="hover:text-white transition">Twitter</a>
+                <a href="#" class="hover:text-white transition">Discord</a>
+            </div>
+        </div>
+    </footer>
+
+    <!-- djust Client -->
+    {% load static %}
+    <script>
+        // Disable debug logging in production
+        window.djustDebug = {% if debug %}true{% else %}false{% endif %};
+
+        // Mobile menu toggle
+        document.getElementById('mobile-menu-button').addEventListener('click', function() {
+            const menu = document.getElementById('mobile-menu');
+            menu.classList.toggle('open');
+        });
+    </script>
+
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

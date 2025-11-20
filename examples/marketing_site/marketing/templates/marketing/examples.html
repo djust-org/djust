@@ -1,0 +1,803 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}Examples & Demos | djust{% endblock %}
+
+{% block extra_head %}
+<style>
+    /* Pygments syntax highlighting - matching homepage colors (One Dark theme) */
+    pre {
+        line-height: 125%;
+        margin: 0;
+    }
+
+    td.linenos .normal {
+        color: #5c6370;
+        background-color: transparent;
+        padding-left: 5px;
+        padding-right: 5px;
+    }
+
+    span.linenos {
+        color: #5c6370;
+        background-color: transparent;
+        padding-left: 5px;
+        padding-right: 5px;
+    }
+
+    .highlight {
+        background: #0B0F19;
+        color: #abb2bf;
+    }
+
+    .highlight .hll {
+        background-color: #2c313c
+    }
+
+    /* Comments */
+    .highlight .c {
+        color: #5c6370;
+        font-style: italic
+    }
+
+    /* Comment */
+    .highlight .cm {
+        color: #5c6370;
+        font-style: italic
+    }
+
+    /* Comment.Multiline */
+    .highlight .cp {
+        color: #5c6370;
+        font-style: italic
+    }
+
+    /* Comment.Preproc */
+    .highlight .c1 {
+        color: #5c6370;
+        font-style: italic
+    }
+
+    /* Comment.Single */
+    .highlight .cs {
+        color: #5c6370;
+        font-style: italic
+    }
+
+    /* Comment.Special */
+
+    /* Keywords */
+    .highlight .k {
+        color: #c678dd
+    }
+
+    /* Keyword - purple */
+    .highlight .kc {
+        color: #c678dd
+    }
+
+    /* Keyword.Constant */
+    .highlight .kd {
+        color: #c678dd
+    }
+
+    /* Keyword.Declaration */
+    .highlight .kn {
+        color: #c678dd
+    }
+
+    /* Keyword.Namespace */
+    .highlight .kp {
+        color: #c678dd
+    }
+
+    /* Keyword.Pseudo */
+    .highlight .kr {
+        color: #c678dd
+    }
+
+    /* Keyword.Reserved */
+    .highlight .kt {
+        color: #e5c07b
+    }
+
+    /* Keyword.Type - yellow */
+
+    /* Strings */
+    .highlight .s {
+        color: #98c379
+    }
+
+    /* Literal.String - green */
+    .highlight .sb {
+        color: #98c379
+    }
+
+    /* Literal.String.Backtick */
+    .highlight .sc {
+        color: #98c379
+    }
+
+    /* Literal.String.Char */
+    .highlight .sd {
+        color: #98c379
+    }
+
+    /* Literal.String.Doc */
+    .highlight .s2 {
+        color: #98c379
+    }
+
+    /* Literal.String.Double */
+    .highlight .se {
+        color: #d19a66
+    }
+
+    /* Literal.String.Escape - orange */
+    .highlight .sh {
+        color: #98c379
+    }
+
+    /* Literal.String.Heredoc */
+    .highlight .si {
+        color: #98c379
+    }
+
+    /* Literal.String.Interpol */
+    .highlight .sx {
+        color: #98c379
+    }
+
+    /* Literal.String.Other */
+    .highlight .sr {
+        color: #98c379
+    }
+
+    /* Literal.String.Regex */
+    .highlight .s1 {
+        color: #98c379
+    }
+
+    /* Literal.String.Single */
+    .highlight .ss {
+        color: #98c379
+    }
+
+    /* Literal.String.Symbol */
+
+    /* Numbers */
+    .highlight .m {
+        color: #d19a66
+    }
+
+    /* Literal.Number - orange */
+    .highlight .mb {
+        color: #d19a66
+    }
+
+    /* Literal.Number.Bin */
+    .highlight .mf {
+        color: #d19a66
+    }
+
+    /* Literal.Number.Float */
+    .highlight .mh {
+        color: #d19a66
+    }
+
+    /* Literal.Number.Hex */
+    .highlight .mi {
+        color: #d19a66
+    }
+
+    /* Literal.Number.Integer */
+    .highlight .mo {
+        color: #d19a66
+    }
+
+    /* Literal.Number.Oct */
+    .highlight .il {
+        color: #d19a66
+    }
+
+    /* Literal.Number.Integer.Long */
+
+    /* Functions */
+    .highlight .nf {
+        color: #61afef
+    }
+
+    /* Name.Function - blue */
+    .highlight .fm {
+        color: #61afef
+    }
+
+    /* Name.Function.Magic */
+
+    /* Classes */
+    .highlight .nc {
+        color: #e5c07b
+    }
+
+    /* Name.Class - yellow */
+    .highlight .ne {
+        color: #e5c07b
+    }
+
+    /* Name.Exception */
+
+    /* Decorators */
+    .highlight .nd {
+        color: #E57324
+    }
+
+    /* Name.Decorator - rust/orange */
+
+    /* Names and variables */
+    .highlight .n {
+        color: #abb2bf
+    }
+
+    /* Name */
+    .highlight .na {
+        color: #d19a66
+    }
+
+    /* Name.Attribute - orange */
+    .highlight .nb {
+        color: #e5c07b
+    }
+
+    /* Name.Builtin - yellow */
+    .highlight .nn {
+        color: #abb2bf
+    }
+
+    /* Name.Namespace */
+    .highlight .nv {
+        color: #e06c75
+    }
+
+    /* Name.Variable - red */
+    .highlight .vc {
+        color: #e06c75
+    }
+
+    /* Name.Variable.Class */
+    .highlight .vg {
+        color: #e06c75
+    }
+
+    /* Name.Variable.Global */
+    .highlight .vi {
+        color: #e06c75
+    }
+
+    /* Name.Variable.Instance */
+    .highlight .vm {
+        color: #e06c75
+    }
+
+    /* Name.Variable.Magic */
+
+    /* HTML/XML Tags */
+    .highlight .nt {
+        color: #e06c75
+    }
+
+    /* Name.Tag - red */
+
+    /* Operators and punctuation */
+    .highlight .o {
+        color: #56b6c2
+    }
+
+    /* Operator - cyan */
+    .highlight .ow {
+        color: #c678dd
+    }
+
+    /* Operator.Word - purple */
+    .highlight .p {
+        color: #abb2bf
+    }
+
+    /* Punctuation */
+
+    /* Others */
+    .highlight .l {
+        color: #d19a66
+    }
+
+    /* Literal */
+    .highlight .no {
+        color: #d19a66
+    }
+
+    /* Name.Constant - orange */
+    .highlight .err {
+        color: #e06c75
+    }
+
+    /* Error - red */
+    .highlight .ge {
+        font-style: italic
+    }
+
+    /* Generic.Emph */
+    .highlight .gs {
+        font-weight: bold
+    }
+
+    /* Generic.Strong */
+</style>
+{% endblock %}
+
+{% block content %}
+<div data-liveview-root>
+    <!-- Main Content -->
+    <main class="relative pt-32 pb-20 px-6 overflow-hidden">
+        <!-- Background Pattern -->
+        <div
+            class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMSIgY3k9IjEiIHI9IjEiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNSkiLz48L3N2Zz4=')] [mask-image:linear-gradient(to_bottom,white,transparent)] pointer-events-none">
+        </div>
+
+        <div class="max-w-7xl mx-auto relative z-10">
+            <!-- Header -->
+            <div class="text-center mb-20">
+                <div
+                    class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-rust/10 text-brand-rust text-xs font-bold uppercase tracking-wider mb-6 border border-brand-rust/20">
+                    Live Demos
+                </div>
+                <h1 class="text-5xl md:text-7xl font-extrabold text-white tracking-tight mb-8 leading-tight">
+                    Examples & Demos
+                </h1>
+                <p class="text-xl text-brand-muted max-w-2xl mx-auto leading-relaxed">
+                    Explore real djust applications. Each demo is fully interactive with complete source code.
+                </p>
+            </div>
+
+            <!-- Demo Grid -->
+            <div class="space-y-12 mb-12">
+                {% for demo in demos %}
+                <!-- Demo: {{ demo.title }} -->
+                <div class="demo-section">
+                    <!-- Demo Header -->
+                    <div class="mb-6">
+                        <h2 class="text-3xl font-bold text-white mb-2">{{ demo.title }}</h2>
+                        <p class="text-brand-muted">{{ demo.description }}</p>
+                    </div>
+
+                    <!-- Demo Content: Side-by-Side Card -->
+                    <div
+                        class="demo-card bg-brand-dark/50 backdrop-blur-sm rounded-xl border border-white/10 overflow-hidden shadow-2xl">
+                        <div class="flex flex-col {% if demo.reverse_layout %}lg:flex-row-reverse{% else %}lg:flex-row{% endif %}">
+                            <!-- Interactive Demo Section -->
+                            <div
+                                class="lg:w-1/2 p-8 flex items-center justify-center {% if demo.reverse_layout %}lg:border-l{% else %}lg:border-r{% endif %} border-white/10 bg-gradient-to-b from-white/5 to-transparent">
+                                {% if demo.id == 'counter' %}
+                                <div class="demo-component counter-demo w-full max-w-md mx-auto">
+                                    <div
+                                        class="count-display text-8xl font-black my-12 text-center bg-gradient-to-r from-brand-rust to-brand-django bg-clip-text text-transparent drop-shadow-2xl">
+                                        {{ count }}
+                                    </div>
+                                    <div class="button-group flex gap-4 justify-center">
+                                        <button @click="decrement"
+                                            class="px-6 py-3 bg-brand-dark border border-white/10 hover:border-red-500/50 hover:bg-red-500/10 text-white font-medium rounded-lg transition-all duration-200">
+                                            Decrement
+                                        </button>
+                                        <button @click="reset"
+                                            class="px-6 py-3 bg-brand-dark border border-white/10 hover:border-white/30 text-brand-muted hover:text-white font-medium rounded-lg transition-all duration-200">
+                                            Reset
+                                        </button>
+                                        <button @click="increment"
+                                            class="px-6 py-3 bg-brand-rust hover:bg-brand-rust/90 text-white font-bold rounded-lg transition-all duration-200 shadow-lg shadow-brand-rust/20 hover:shadow-brand-rust/40 hover:-translate-y-0.5">
+                                            Increment
+                                        </button>
+                                    </div>
+                                </div>
+                                {% endif %}
+                                {% if demo.id == 'todo' %}
+                                <div class="demo-component todo-demo w-full max-w-md mx-auto">
+                                    <form @submit="add_todo" class="add-form mb-6">
+                                        <div class="flex gap-3">
+                                            <input type="text" name="text" placeholder="What needs to be done?"
+                                                class="flex-1 px-5 py-3 bg-brand-dark border border-white/10 rounded-xl text-brand-text placeholder-brand-muted focus:outline-none focus:border-brand-rust focus:ring-1 focus:ring-brand-rust transition-all" />
+                                            <button type="submit"
+                                                class="px-6 py-3 bg-brand-rust hover:bg-brand-rust/90 text-white font-bold rounded-xl transition-all shadow-lg shadow-brand-rust/20 hover:shadow-brand-rust/40">Add</button>
+                                        </div>
+                                    </form>
+
+                                    <div class="todo-list min-h-[200px] space-y-2">
+                                        {% for todo in todos %}
+                                        <div
+                                            class="todo-item group flex items-center gap-4 p-4 rounded-xl bg-brand-dark border border-white/5 hover:border-white/10 transition-all hover:shadow-lg hover:shadow-black/20">
+                                            <input type="checkbox" @change="toggle_todo" data-id="{{ todo.id }}" {% if
+                                                todo.completed %}checked{% endif %}
+                                                class="w-6 h-6 rounded-md border-white/20 bg-white/5 text-brand-rust focus:ring-brand-rust focus:ring-offset-0 cursor-pointer" />
+                                            <span
+                                                class="flex-1 text-lg text-brand-text transition-all {% if todo.completed %}line-through opacity-40{% endif %}">
+                                                {{ todo.text }}
+                                            </span>
+                                            <button @click="delete_todo" data-id="{{ todo.id }}"
+                                                class="opacity-0 group-hover:opacity-100 px-3 py-1 text-xs font-bold uppercase tracking-wider bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded transition-all">
+                                                Delete
+                                            </button>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+
+                                    <div
+                                        class="stats mt-6 flex gap-6 justify-center text-brand-muted text-sm font-medium">
+                                        <span>{{ completed_count }} completed</span>
+                                        <span class="w-px h-4 bg-white/10"></span>
+                                        <span>{{ total_count }} total</span>
+                                    </div>
+                                </div>
+                                {% endif %}
+                                {% if demo.id == 'form' %}
+                                <div class="demo-component form-demo w-full max-w-md mx-auto">
+                                    <form @submit="submit_form" class="space-y-5">
+                                        <div class="form-field">
+                                            <label for="email"
+                                                class="block text-sm font-bold text-brand-text mb-2 uppercase tracking-wider text-xs">Email
+                                                Address</label>
+                                            <input type="email" name="email" @change="validate_field"
+                                                value="{{ form_email }}"
+                                                class="w-full px-5 py-3 bg-brand-dark border {% if form_errors.email %}border-red-500/50 focus:border-red-500{% else %}border-white/10 focus:border-brand-rust{% endif %} rounded-xl text-brand-text placeholder-brand-muted focus:outline-none focus:ring-1 {% if form_errors.email %}focus:ring-red-500{% else %}focus:ring-brand-rust{% endif %} transition-all"
+                                                placeholder="you@example.com" />
+                                            {% if form_errors.email %}
+                                            <p class="text-sm text-red-400 mt-2 flex items-center gap-2">
+                                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24"
+                                                    stroke="currentColor">
+                                                    <path stroke-linecap="round" stroke-linejoin="round"
+                                                        stroke-width="2"
+                                                        d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                                </svg>
+                                                {{ form_errors.email }}
+                                            </p>
+                                            {% endif %}
+                                        </div>
+
+                                        <div class="form-field">
+                                            <label for="password"
+                                                class="block text-sm font-bold text-brand-text mb-2 uppercase tracking-wider text-xs">Password</label>
+                                            <input type="password" name="password" @change="validate_field"
+                                                class="w-full px-5 py-3 bg-brand-dark border {% if form_errors.password %}border-red-500/50 focus:border-red-500{% else %}border-white/10 focus:border-brand-rust{% endif %} rounded-xl text-brand-text placeholder-brand-muted focus:outline-none focus:ring-1 {% if form_errors.password %}focus:ring-red-500{% else %}focus:ring-brand-rust{% endif %} transition-all"
+                                                placeholder="At least 8 characters" />
+                                            {% if form_errors.password %}
+                                            <p class="text-sm text-red-400 mt-2 flex items-center gap-2">
+                                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24"
+                                                    stroke="currentColor">
+                                                    <path stroke-linecap="round" stroke-linejoin="round"
+                                                        stroke-width="2"
+                                                        d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                                </svg>
+                                                {{ form_errors.password }}
+                                            </p>
+                                            {% endif %}
+                                        </div>
+
+                                        <button type="submit"
+                                            class="w-full px-6 py-4 bg-brand-rust hover:bg-brand-rust/90 text-white font-bold rounded-xl transition-all shadow-lg shadow-brand-rust/20 hover:shadow-brand-rust/40 hover:-translate-y-0.5 mt-2">
+                                            Create Account
+                                        </button>
+
+                                        {% if form_success %}
+                                        <div
+                                            class="p-4 bg-green-500/10 border border-green-500/20 rounded-xl text-center">
+                                            <p
+                                                class="text-green-400 font-medium flex items-center justify-center gap-2">
+                                                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24"
+                                                    stroke="currentColor">
+                                                    <path stroke-linecap="round" stroke-linejoin="round"
+                                                        stroke-width="2" d="M5 13l4 4L19 7" />
+                                                </svg>
+                                                Account created successfully!
+                                            </p>
+                                        </div>
+                                        {% else %}
+                                        <p class="text-sm text-center text-brand-muted">
+                                            Real-time validation with instant feedback
+                                        </p>
+                                        {% endif %}
+                                    </form>
+                                </div>
+                                {% endif %}
+                                {% if demo.id == 'table' %}
+                                <div class="demo-component table-demo w-full">
+                                    <div class="mb-6 relative">
+                                        <svg class="w-5 h-5 text-brand-muted absolute left-4 top-1/2 -translate-y-1/2"
+                                            fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                        </svg>
+                                        <input type="text" @input="search" value="{{ search_query }}"
+                                            class="w-full pl-12 pr-4 py-3 bg-brand-dark border border-white/10 rounded-xl text-brand-text placeholder-brand-muted focus:outline-none focus:border-brand-rust focus:ring-1 focus:ring-brand-rust transition-all"
+                                            placeholder="Search products..." />
+                                    </div>
+
+                                    <div class="overflow-hidden rounded-xl border border-white/10 bg-brand-dark">
+                                        <table class="w-full text-sm">
+                                            <thead class="bg-white/5 border-b border-white/10">
+                                                <tr>
+                                                    <th @click="sort" data-field="name"
+                                                        class="text-left py-4 px-6 text-brand-text font-bold uppercase tracking-wider text-xs cursor-pointer hover:text-brand-rust transition select-none group">
+                                                        <div class="flex items-center gap-2">
+                                                            Name
+                                                            <span class="text-brand-muted group-hover:text-brand-rust">
+                                                                {% if sort_by == 'name' %}{% if sort_order == 'asc'
+                                                                %}↑{% else %}↓{% endif %}{% else %}↕{% endif %}
+                                                            </span>
+                                                        </div>
+                                                    </th>
+                                                    <th @click="sort" data-field="price"
+                                                        class="text-left py-4 px-6 text-brand-text font-bold uppercase tracking-wider text-xs cursor-pointer hover:text-brand-rust transition select-none group">
+                                                        <div class="flex items-center gap-2">
+                                                            Price
+                                                            <span class="text-brand-muted group-hover:text-brand-rust">
+                                                                {% if sort_by == 'price' %}{% if sort_order == 'asc'
+                                                                %}↑{% else %}↓{% endif %}{% else %}↕{% endif %}
+                                                            </span>
+                                                        </div>
+                                                    </th>
+                                                    <th @click="sort" data-field="stock"
+                                                        class="text-left py-4 px-6 text-brand-text font-bold uppercase tracking-wider text-xs cursor-pointer hover:text-brand-rust transition select-none group">
+                                                        <div class="flex items-center gap-2">
+                                                            Stock
+                                                            <span class="text-brand-muted group-hover:text-brand-rust">
+                                                                {% if sort_by == 'stock' %}{% if sort_order == 'asc'
+                                                                %}↑{% else %}↓{% endif %}{% else %}↕{% endif %}
+                                                            </span>
+                                                        </div>
+                                                    </th>
+                                                </tr>
+                                            </thead>
+                                            <tbody class="divide-y divide-white/5">
+                                                {% for product in products %}
+                                                <tr class="hover:bg-white/5 transition-colors">
+                                                    <td class="py-4 px-6 text-brand-text font-medium">{{ product.name }}
+                                                    </td>
+                                                    <td class="py-4 px-6 text-brand-muted font-mono">${{ product.price
+                                                        }}</td>
+                                                    <td class="py-4 px-6">
+                                                        <span
+                                                            class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {% if product.stock > 50 %}bg-green-500/10 text-green-400{% elif product.stock > 10 %}bg-yellow-500/10 text-yellow-400{% else %}bg-red-500/10 text-red-400{% endif %}">
+                                                            {{ product.stock }}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+
+                                    <p class="text-xs text-center text-brand-muted mt-4 font-medium">
+                                        Click column headers to sort · {{ products|length }} products
+                                    </p>
+                                </div>
+                                {% endif %}
+                                {% if demo.id != 'counter' and demo.id != 'todo' and demo.id != 'form' and demo.id !=
+                                'table' %}
+                                <div class="text-center text-brand-muted py-12 w-full">
+                                    <p class="text-sm">{% if demo.reverse_layout %}← {% endif %}Code example - see implementation {% if demo.reverse_layout %}on the left{% else %}on the right →{% endif %}</p>
+                                </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Code Tabs Section -->
+                            <div class="lg:w-1/2 bg-[#0B0F19]">
+                                <div class="h-full max-h-[600px] p-6 flex flex-col">
+                                    {{ demo.code_tabs|safe }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <!-- CTA Section -->
+            <div
+                class="bg-gradient-to-br from-brand-rust/10 to-brand-django/10 rounded-2xl p-8 border border-white/10 text-center">
+                <h2 class="text-2xl font-bold text-white mb-4">Ready to Build Your Own?</h2>
+                <p class="text-brand-muted mb-6 max-w-2xl mx-auto">
+                    Try these examples in the interactive playground or install djust locally to start building
+                    real-time applications.
+                </p>
+                <div class="flex gap-4 justify-center flex-wrap">
+                    <a href="/playground/"
+                        class="px-8 py-3 bg-brand-rust hover:bg-brand-rust/90 text-white font-bold rounded-lg transition">
+                        Try Playground
+                    </a>
+                    <a href="/docs/"
+                        class="px-8 py-3 bg-white/5 hover:bg-white/10 border border-white/20 text-white font-bold rounded-lg transition">
+                        Read Documentation
+                    </a>
+                </div>
+            </div>
+        </div>
+    </main>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<style>
+    /* Custom Scrollbar for Tab Contents */
+    .code-tabs .tab-contents::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+    }
+
+    .code-tabs .tab-contents::-webkit-scrollbar-track {
+        background: #0B0F19;
+    }
+
+    .code-tabs .tab-contents::-webkit-scrollbar-thumb {
+        background: #2c313c;
+        border-radius: 5px;
+        border: 2px solid #0B0F19;
+    }
+
+    .code-tabs .tab-contents::-webkit-scrollbar-thumb:hover {
+        background: #3e4451;
+    }
+
+    /* Demo card hover effect */
+    .demo-card {
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .demo-card:hover {
+        box-shadow: 0 10px 30px rgba(229, 115, 36, 0.2);
+    }
+
+    /* Code tabs styling */
+    .code-tabs {
+        margin-bottom: 0;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+    }
+
+    .code-tabs .tab-buttons {
+        display: flex;
+        gap: 0;
+        border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+        margin-bottom: 0;
+        flex-shrink: 0;
+    }
+
+    .code-tabs .tab-button {
+        padding: 0.75rem 1.5rem;
+        background: rgba(255, 255, 255, 0.05);
+        border: none;
+        border-bottom: 2px solid transparent;
+        color: #94A3B8;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.875rem;
+        cursor: pointer;
+        transition: all 0.2s;
+        margin-bottom: -2px;
+    }
+
+    .code-tabs .tab-button:hover {
+        background: rgba(255, 255, 255, 0.08);
+        color: #E57324;
+    }
+
+    .code-tabs .tab-button.active {
+        background: rgba(229, 115, 36, 0.1);
+        border-bottom-color: #E57324;
+        color: #E57324;
+    }
+
+    .code-tabs .tab-contents {
+        position: relative;
+        flex: 1;
+        overflow-y: auto;
+        min-height: 0;
+    }
+
+    .code-tabs .tab-content {
+        display: none;
+        height: 100%;
+    }
+
+    .code-tabs .tab-content.active {
+        display: block;
+    }
+
+    /* Code block styling */
+    .code-block {
+        margin-bottom: 0;
+        height: 100%;
+    }
+
+    .code-block .code-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.75rem 1rem;
+        background: #1e293b;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        position: sticky;
+        top: 0;
+        z-index: 10;
+    }
+
+    .code-block .code-filename {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.875rem;
+        color: #94A3B8;
+    }
+
+    .code-block .code-copy {
+        padding: 0.25rem 0.75rem;
+        font-size: 0.75rem;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 0.25rem;
+        color: #94A3B8;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .code-block .code-copy:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: white;
+    }
+
+    /* Pygments code styling */
+    .code-block .highlight {
+        margin: 0;
+        border-radius: 0 0 0.5rem 0.5rem;
+        overflow-x: auto;
+    }
+
+    .code-block .highlight pre {
+        padding: 1rem;
+        border-radius: 0 0 0.5rem 0.5rem;
+    }
+
+    .code-block code {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.875rem;
+        line-height: 1.6;
+    }
+</style>
+
+<script>
+    // Tab switching functionality
+    document.addEventListener('click', function (e) {
+        // Handle tab button clicks
+        if (e.target.classList.contains('tab-button')) {
+            const tabId = e.target.getAttribute('data-tab');
+            const tabsContainer = e.target.closest('.code-tabs');
+
+            // Remove active class from all tabs and contents
+            tabsContainer.querySelectorAll('.tab-button').forEach(function (btn) {
+                btn.classList.remove('active');
+            });
+            tabsContainer.querySelectorAll('.tab-content').forEach(function (content) {
+                content.classList.remove('active');
+            });
+
+            // Add active class to clicked tab and corresponding content
+            e.target.classList.add('active');
+            tabsContainer.querySelector('[data-tab="' + tabId + '"].tab-content').classList.add('active');
+        }
+
+        // Copy code functionality
+        if (e.target.classList.contains('code-copy')) {
+            const code = e.target.getAttribute('data-code');
+            navigator.clipboard.writeText(code).then(function () {
+                const originalText = e.target.textContent;
+                e.target.textContent = 'Copied!';
+                setTimeout(function () {
+                    e.target.textContent = originalText;
+                }, 2000);
+            });
+        }
+    });
+</script>
+{% endblock %}

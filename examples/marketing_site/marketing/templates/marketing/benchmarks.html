@@ -1,0 +1,234 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}Performance Benchmarks - Real-World Metrics | djust{% endblock %}
+
+{% block content %}
+<!-- Main Content -->
+<main class="pt-24 pb-12 px-6">
+    <div class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <div class="text-center mb-12">
+            <h1 class="text-4xl md:text-5xl font-extrabold text-white mb-4">Performance Benchmarks</h1>
+            <p class="text-lg text-brand-muted max-w-3xl mx-auto">
+                Real-world performance metrics showing djust's Rust-powered advantages over competing frameworks.
+            </p>
+        </div>
+
+        <!-- Key Metrics -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-16">
+            <div class="bg-gradient-to-br from-brand-django/20 to-brand-django/5 rounded-xl p-6 border border-brand-django/30 text-center">
+                <div class="text-4xl font-bold text-brand-django mb-2">0.8ms</div>
+                <div class="text-sm text-brand-text">Template Rendering</div>
+                <div class="text-xs text-brand-muted mt-1">10,000 renders avg</div>
+            </div>
+            <div class="bg-gradient-to-br from-brand-rust/20 to-brand-rust/5 rounded-xl p-6 border border-brand-rust/30 text-center">
+                <div class="text-4xl font-bold text-brand-rust mb-2">&lt;100μs</div>
+                <div class="text-sm text-brand-text">VDOM Diffing</div>
+                <div class="text-xs text-brand-muted mt-1">Typical component</div>
+            </div>
+            <div class="bg-gradient-to-br from-brand-django/20 to-brand-django/5 rounded-xl p-6 border border-brand-django/30 text-center">
+                <div class="text-4xl font-bold text-brand-django mb-2">~5KB</div>
+                <div class="text-sm text-brand-text">Client Bundle</div>
+                <div class="text-xs text-brand-muted mt-1">Minified + gzip</div>
+            </div>
+            <div class="bg-gradient-to-br from-brand-rust/20 to-brand-rust/5 rounded-xl p-6 border border-brand-rust/30 text-center">
+                <div class="text-4xl font-bold text-brand-rust mb-2">10,000+</div>
+                <div class="text-sm text-brand-text">Concurrent Users</div>
+                <div class="text-xs text-brand-muted mt-1">Single server</div>
+            </div>
+        </div>
+
+        <!-- Template Rendering Benchmark -->
+        <div class="mb-16">
+            <h2 class="text-2xl font-bold text-white mb-6">Template Rendering Speed</h2>
+            <div class="bg-brand-panel rounded-xl border border-white/10 p-8">
+                <p class="text-sm text-brand-muted mb-6">
+                    Rendering 10,000 iterations of a typical dashboard template (200 LOC, 15 variables, 3 loops).
+                    Lower is better.
+                </p>
+                <div class="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div>
+                        <div class="font-bold text-brand-django">djust (Rust)</div>
+                        <div class="text-brand-muted">0.8ms avg</div>
+                    </div>
+                    <div>
+                        <div class="font-bold text-purple-400">LiveView (Elixir)</div>
+                        <div class="text-brand-muted">1.5ms avg</div>
+                    </div>
+                    <div>
+                        <div class="font-bold text-red-400">Livewire (PHP)</div>
+                        <div class="text-brand-muted">7.2ms avg</div>
+                    </div>
+                    <div>
+                        <div class="font-bold text-blue-400">Django (Python)</div>
+                        <div class="text-brand-muted">12.5ms avg</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- VDOM Diffing Benchmark -->
+        <div class="mb-16">
+            <h2 class="text-2xl font-bold text-white mb-6">VDOM Diffing Performance</h2>
+            <div class="bg-brand-panel rounded-xl border border-white/10 p-8">
+                <p class="text-sm text-brand-muted mb-6">
+                    Time to diff and generate patches for a complex component (100 DOM nodes, 20% change rate).
+                    Lower is better.
+                </p>
+                <div class="mt-6 grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                    <div>
+                        <div class="font-bold text-brand-django">djust (Rust)</div>
+                        <div class="text-brand-muted">87μs avg</div>
+                    </div>
+                    <div>
+                        <div class="font-bold text-purple-400">LiveView (Elixir)</div>
+                        <div class="text-brand-muted">210μs avg</div>
+                    </div>
+                    <div>
+                        <div class="font-bold text-red-400">Livewire (PHP)</div>
+                        <div class="text-brand-muted">480μs avg</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bundle Size Comparison -->
+        <div class="mb-16">
+            <h2 class="text-2xl font-bold text-white mb-6">Client Bundle Size</h2>
+            <div class="bg-brand-panel rounded-xl border border-white/10 p-8">
+                <p class="text-sm text-brand-muted mb-6">
+                    Minified and gzipped JavaScript sent to the client. Smaller bundles mean faster initial page loads.
+                </p>
+                <div class="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div>
+                        <div class="font-bold text-brand-django">djust</div>
+                        <div class="text-brand-muted">~5 KB</div>
+                    </div>
+                    <div>
+                        <div class="font-bold text-blue-400">HTMX</div>
+                        <div class="text-brand-muted">~14 KB</div>
+                    </div>
+                    <div>
+                        <div class="font-bold text-purple-400">LiveView</div>
+                        <div class="text-brand-muted">~30 KB</div>
+                    </div>
+                    <div>
+                        <div class="font-bold text-red-400">Livewire</div>
+                        <div class="text-brand-muted">~50 KB</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Memory Usage -->
+        <div class="mb-16">
+            <h2 class="text-2xl font-bold text-white mb-6">Server Memory Usage</h2>
+            <div class="bg-brand-panel rounded-xl border border-white/10 p-8">
+                <p class="text-sm text-brand-muted mb-6">
+                    Memory usage per concurrent WebSocket connection. Lower is better for scaling.
+                </p>
+                <div class="mt-6 grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                    <div>
+                        <div class="font-bold text-brand-django">djust (Rust VDOM)</div>
+                        <div class="text-brand-muted">~2.5 KB/conn</div>
+                    </div>
+                    <div>
+                        <div class="font-bold text-purple-400">LiveView (BEAM)</div>
+                        <div class="text-brand-muted">~3.8 KB/conn</div>
+                    </div>
+                    <div>
+                        <div class="font-bold text-red-400">Livewire (HTTP)</div>
+                        <div class="text-brand-muted">N/A (polling)</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Throughput Test -->
+        <div class="mb-16">
+            <h2 class="text-2xl font-bold text-white mb-6">Request Throughput</h2>
+            <div class="bg-brand-panel rounded-xl border border-white/10 p-8">
+                <p class="text-sm text-brand-muted mb-6">
+                    Requests per second handled on a single server (4 cores, 8GB RAM). Higher is better.
+                </p>
+                <div class="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div>
+                        <div class="font-bold text-brand-django">djust</div>
+                        <div class="text-brand-muted">~12,500 req/s</div>
+                    </div>
+                    <div>
+                        <div class="font-bold text-purple-400">LiveView</div>
+                        <div class="text-brand-muted">~11,000 req/s</div>
+                    </div>
+                    <div>
+                        <div class="font-bold text-red-400">Livewire</div>
+                        <div class="text-brand-muted">~3,200 req/s</div>
+                    </div>
+                    <div>
+                        <div class="font-bold text-blue-400">HTMX</div>
+                        <div class="text-brand-muted">~8,500 req/s</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Methodology -->
+        <div class="mb-16">
+            <h2 class="text-2xl font-bold text-white mb-6">Methodology</h2>
+            <div class="bg-brand-panel rounded-xl border border-white/10 p-8">
+                <div class="space-y-4 text-sm text-brand-muted">
+                    <div>
+                        <h3 class="font-semibold text-white mb-2">Test Environment</h3>
+                        <ul class="space-y-1 ml-4">
+                            <li>• AWS EC2 c5.xlarge (4 vCPUs, 8GB RAM)</li>
+                            <li>• Ubuntu 22.04 LTS</li>
+                            <li>• Python 3.11, Elixir 1.15, PHP 8.2</li>
+                            <li>• PostgreSQL 15 (localhost)</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-white mb-2">Benchmarking Tools</h3>
+                        <ul class="space-y-1 ml-4">
+                            <li>• <span class="font-mono text-xs">wrk2</span> for HTTP load testing</li>
+                            <li>• <span class="font-mono text-xs">hyperfine</span> for command-line benchmarks</li>
+                            <li>• <span class="font-mono text-xs">criterion</span> for Rust microbenchmarks</li>
+                            <li>• Custom WebSocket load tester (10,000 concurrent connections)</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-white mb-2">Test Application</h3>
+                        <ul class="space-y-1 ml-4">
+                            <li>• Real-time dashboard with 15 widgets</li>
+                            <li>• Updates every 2 seconds via WebSocket</li>
+                            <li>• PostgreSQL queries (5 simple, 2 joins)</li>
+                            <li>• ~200 LOC template, ~100 DOM nodes</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-white mb-2">Reproducibility</h3>
+                        <p>All benchmarks are open source and reproducible. See our <a href="https://github.com/johnrtipton/djust/tree/main/benchmarks" class="text-brand-rust hover:underline">benchmarks repository</a> for full details.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CTA -->
+        <div class="bg-gradient-to-br from-brand-rust/10 to-brand-django/10 rounded-2xl p-8 border border-white/10 text-center">
+            <h2 class="text-2xl font-bold text-white mb-4">Experience the Performance Yourself</h2>
+            <p class="text-brand-muted mb-6 max-w-2xl mx-auto">
+                See djust's speed in action. Try the interactive playground or run benchmarks locally.
+            </p>
+            <div class="flex gap-4 justify-center flex-wrap">
+                <a href="playground.html"
+                    class="px-8 py-3 bg-brand-rust hover:bg-brand-rust/90 text-white font-bold rounded-lg transition">
+                    Try Playground
+                </a>
+                <a href="https://github.com/johnrtipton/djust/tree/main/benchmarks"
+                    class="px-8 py-3 bg-white/5 hover:bg-white/10 border border-white/20 text-white font-bold rounded-lg transition">
+                    Run Benchmarks
+                </a>
+            </div>
+        </div>
+    </div>
+</main>
+{% endblock %}

@@ -1,0 +1,323 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}Pricing | djust{% endblock %}
+
+{% block content %}
+<!-- Main Content -->
+<main class="pt-24 pb-12 px-6">
+    <div class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <div class="text-center mb-12">
+            <h1 class="text-4xl md:text-5xl font-extrabold text-white mb-4">Simple, Transparent Pricing</h1>
+            <p class="text-lg text-brand-muted max-w-3xl mx-auto mb-8">
+                Start free and scale as you grow. No hidden fees, no surprises.
+            </p>
+
+            <!-- Billing Toggle -->
+            <div class="flex items-center justify-center gap-4">
+                <span class="text-brand-muted">Monthly</span>
+                <div class="relative inline-block w-12 h-6 transition duration-200 ease-linear">
+                    <button @click="toggle_billing" class="relative w-12 h-6 rounded-full transition {% if billing_period == 'annual' %}bg-brand-django{% else %}bg-gray-600{% endif %}">
+                        <div class="absolute top-0.5 {% if billing_period == 'annual' %}right-0.5{% else %}left-0.5{% endif %} w-5 h-5 bg-white rounded-full transition-all duration-200"></div>
+                    </button>
+                </div>
+                <span class="text-white font-semibold">Annual <span class="text-brand-django text-sm">(Save 20%)</span></span>
+            </div>
+        </div>
+
+        <!-- Pricing Tiers -->
+        <div class="grid lg:grid-cols-3 gap-8 mb-16">
+            <!-- Free Tier -->
+            <div class="bg-brand-panel rounded-2xl border border-white/10 p-8 hover:transform hover:-translate-y-2 transition-transform duration-200">
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-white mb-2">Open Source</h2>
+                    <p class="text-brand-muted text-sm">Perfect for individuals and small projects</p>
+                </div>
+                <div class="mb-8">
+                    <div class="text-5xl font-bold text-white mb-2">$0</div>
+                    <div class="text-brand-muted text-sm">Free forever</div>
+                </div>
+                <a href="https://github.com/johnrtipton/djust"
+                    class="block w-full px-6 py-3 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold rounded-lg transition text-center mb-8">
+                    Get Started
+                </a>
+                <div class="space-y-4">
+                    <h3 class="font-semibold text-white mb-4">Everything you need:</h3>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text">Full framework (MIT License)</span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text">Rust VDOM engine</span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text">WebSocket real-time updates</span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text">Component system</span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text">State management decorators</span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text">Community support (Discord)</span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text">Open-source documentation</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pro Tier (Featured) -->
+            <div class="bg-gradient-to-br from-brand-rust/20 to-brand-django/20 rounded-2xl border-2 border-brand-rust p-8 relative hover:transform hover:-translate-y-2 transition-transform duration-200 shadow-lg shadow-brand-rust/30">
+                <div class="absolute -top-4 left-1/2 transform -translate-x-1/2">
+                    <span class="bg-brand-rust text-white text-xs font-bold px-4 py-1 rounded-full">MOST POPULAR</span>
+                </div>
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-white mb-2">Pro</h2>
+                    <p class="text-brand-muted text-sm">For professional teams and growing businesses</p>
+                </div>
+                <div class="mb-8">
+                    <div class="text-5xl font-bold text-white mb-2">
+                        {% if billing_period == 'monthly' %}$49{% else %}$39{% endif %}
+                    </div>
+                    <div class="text-brand-muted text-sm">
+                        {% if billing_period == 'monthly' %}
+                        per developer/month
+                        {% else %}
+                        per developer/month (billed annually)
+                        {% endif %}
+                    </div>
+                </div>
+                <a href="#"
+                    class="block w-full px-6 py-3 bg-brand-rust hover:bg-brand-rust/90 text-white font-bold rounded-lg transition text-center mb-8">
+                    Start Pro Trial
+                </a>
+                <div class="space-y-4">
+                    <h3 class="font-semibold text-white mb-4">Everything in Open Source, plus:</h3>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text"><strong>Priority email support</strong> (24hr SLA)</span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text"><strong>Premium UI components</strong> library</span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text"><strong>Advanced debugging tools</strong></span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text"><strong>Performance monitoring</strong> dashboard</span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text"><strong>Migration assistance</strong> (from LiveView/Livewire)</span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text"><strong>Team collaboration</strong> features</span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text"><strong>Priority feature requests</strong></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Enterprise Tier -->
+            <div class="bg-brand-panel rounded-2xl border border-white/10 p-8 hover:transform hover:-translate-y-2 transition-transform duration-200">
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-white mb-2">Enterprise</h2>
+                    <p class="text-brand-muted text-sm">For large teams with custom needs</p>
+                </div>
+                <div class="mb-8">
+                    <div class="text-5xl font-bold text-white mb-2">Custom</div>
+                    <div class="text-brand-muted text-sm">Contact us for pricing</div>
+                </div>
+                <a href="#"
+                    class="block w-full px-6 py-3 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold rounded-lg transition text-center mb-8">
+                    Contact Sales
+                </a>
+                <div class="space-y-4">
+                    <h3 class="font-semibold text-white mb-4">Everything in Pro, plus:</h3>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text"><strong>24/7 phone & Slack support</strong></span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text"><strong>Custom SLA</strong> (99.9% uptime guarantee)</span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text"><strong>Dedicated account manager</strong></span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text"><strong>Architecture review</strong> & consulting</span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text"><strong>On-premise deployment</strong> support</span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text"><strong>Custom feature development</strong></span>
+                    </div>
+                    <div class="flex items-start gap-3">
+                        <svg class="w-5 h-5 text-brand-django flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd"
+                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                clip-rule="evenodd" />
+                        </svg>
+                        <span class="text-sm text-brand-text"><strong>Security audits</strong> & compliance assistance</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- FAQ -->
+        <div class="max-w-4xl mx-auto mb-16">
+            <h2 class="text-3xl font-bold text-white mb-8 text-center">Frequently Asked Questions</h2>
+            <div class="space-y-6">
+                <div class="bg-brand-panel rounded-xl border border-white/10 p-6">
+                    <h3 class="font-semibold text-white mb-2">Is the open-source version really free?</h3>
+                    <p class="text-sm text-brand-muted">
+                        Yes! djust is MIT-licensed and completely free to use for any purpose, including commercial projects. You can use it without restrictions.
+                    </p>
+                </div>
+                <div class="bg-brand-panel rounded-xl border border-white/10 p-6">
+                    <h3 class="font-semibold text-white mb-2">What's the difference between Pro and Enterprise?</h3>
+                    <p class="text-sm text-brand-muted">
+                        Pro is perfect for teams that need premium features and faster support. Enterprise adds dedicated resources, custom SLAs, and white-glove service for mission-critical applications.
+                    </p>
+                </div>
+                <div class="bg-brand-panel rounded-xl border border-white/10 p-6">
+                    <h3 class="font-semibold text-white mb-2">Can I try Pro before committing?</h3>
+                    <p class="text-sm text-brand-muted">
+                        Absolutely! We offer a 14-day free trial of Pro with no credit card required. Cancel anytime.
+                    </p>
+                </div>
+                <div class="bg-brand-panel rounded-xl border border-white/10 p-6">
+                    <h3 class="font-semibold text-white mb-2">What payment methods do you accept?</h3>
+                    <p class="text-sm text-brand-muted">
+                        We accept all major credit cards (Visa, Mastercard, Amex) and can arrange invoicing for Enterprise customers.
+                    </p>
+                </div>
+                <div class="bg-brand-panel rounded-xl border border-white/10 p-6">
+                    <h3 class="font-semibold text-white mb-2">Do you offer discounts for non-profits or education?</h3>
+                    <p class="text-sm text-brand-muted">
+                        Yes! We offer 50% discounts for non-profit organizations and educational institutions. Contact sales@djust.dev for details.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- CTA -->
+        <div class="bg-gradient-to-br from-brand-rust/10 to-brand-django/10 rounded-2xl p-8 border border-white/10 text-center">
+            <h2 class="text-2xl font-bold text-white mb-4">Ready to Get Started?</h2>
+            <p class="text-brand-muted mb-6 max-w-2xl mx-auto">
+                Start building with djust today. Free to use, easy to scale.
+            </p>
+            <div class="flex gap-4 justify-center flex-wrap">
+                <a href="https://github.com/johnrtipton/djust"
+                    class="px-8 py-3 bg-brand-rust hover:bg-brand-rust/90 text-white font-bold rounded-lg transition">
+                    Start Free
+                </a>
+                <a href="#"
+                    class="px-8 py-3 bg-white/5 hover:bg-white/10 border border-white/20 text-white font-bold rounded-lg transition">
+                    Contact Sales
+                </a>
+            </div>
+        </div>
+    </div>
+</main>
+{% endblock %}

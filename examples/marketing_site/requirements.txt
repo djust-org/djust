@@ -1,0 +1,11 @@
+# Core dependencies
+Django>=5.0.9
+channels>=4.0.0
+daphne>=4.0.0
+
+# djust framework (local development)
+-e ../../
+
+# Optional: for production deployment
+# redis>=5.0.0  # For Redis state backend
+# uvicorn[standard]>=0.27.0  # Alternative ASGI server

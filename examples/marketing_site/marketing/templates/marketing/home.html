@@ -1,0 +1,264 @@
+{% extends "marketing/base.html" %}
+
+{% block title %}djust | The Django LiveView Framework{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<main class="relative pt-32 pb-20 px-6 overflow-hidden">
+    <!-- Background Grid -->
+    <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMSIgY3k9IjEiIHI9IjEiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNSkiLz48L3N2Zz4=')] [mask-image:linear-gradient(to_bottom,white,transparent)] pointer-events-none"></div>
+
+    <!-- Glow Effects -->
+    <div class="absolute top-20 left-1/2 -translate-x-1/2 w-[800px] h-[500px] bg-brand-django/20 rounded-full blur-[120px] pointer-events-none"></div>
+    <div class="absolute top-40 left-1/2 -translate-x-1/2 w-[600px] h-[400px] bg-brand-rust/10 rounded-full blur-[100px] pointer-events-none"></div>
+
+    <div class="max-w-5xl mx-auto text-center relative z-10">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-brand-muted text-xs font-bold uppercase tracking-wider mb-8 backdrop-blur-sm">
+            <span class="w-2 h-2 rounded-full bg-brand-success animate-pulse"></span>
+            v0.1.0 Alpha Release
+        </div>
+
+        <h1 class="text-5xl md:text-7xl font-extrabold text-white tracking-tight mb-8 leading-tight">
+            {{ hero_title|default:"Client-Side Behavior." }}<br>
+            <span class="text-transparent bg-clip-text bg-gradient-to-r from-brand-django to-brand-rust">{{ hero_title_gradient|default:"Server-Side Code." }}</span>
+        </h1>
+
+        <p class="text-xl text-brand-muted mb-12 max-w-2xl mx-auto leading-relaxed">
+            Build reactive, real-time applications with <b>Django</b> and <b>Python</b>.
+            No JavaScript required. Powered by a high-performance <b>Rust VDOM engine</b>.
+        </p>
+
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <a href="/quickstart/" class="w-full sm:w-auto px-8 py-4 bg-white text-brand-dark font-bold rounded-lg hover:bg-gray-100 transition flex items-center justify-center gap-2">
+                <span>Install Package</span>
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                </svg>
+            </a>
+            <div class="w-full sm:w-auto px-8 py-4 bg-brand-panel border border-white/10 text-brand-muted font-mono text-sm rounded-lg flex items-center justify-center gap-3">
+                <span class="text-brand-rust">$</span> pip install djust
+                <button class="hover:text-white transition" title="Copy to clipboard">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+</main>
+
+<!-- State Management Primitives -->
+<section id="features" class="py-24 px-6 border-y border-white/10 bg-brand-panel/30">
+    <div class="max-w-7xl mx-auto">
+        <div class="text-center mb-16">
+            <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">State Management Primitives</h2>
+            <p class="text-brand-muted max-w-2xl mx-auto">
+                Complex client-side behavior, declared in Python. djust provides a suite of decorators that handle
+                the hard parts of frontend development for you.
+            </p>
+        </div>
+
+        <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <!-- Decorator 1: @debounce -->
+            <div class="glass-panel p-6 rounded-xl hover:border-brand-rust/50 transition group">
+                <div class="font-mono text-brand-rust text-lg font-bold mb-3 group-hover:translate-x-1 transition-transform">@debounce</div>
+                <p class="text-sm text-brand-muted mb-4">
+                    Delay server requests until the user stops typing. Perfect for search inputs.
+                </p>
+                <div class="bg-brand-dark p-3 rounded border border-white/5 text-xs font-mono text-gray-400">
+                    <span class="code-dec">@debounce</span>(wait=<span class="code-str">0.5</span>)<br>
+                    <span class="code-kw">def</span> <span class="code-fn">search</span>(self, query):<br>
+                    &nbsp;&nbsp;self.results = ...
+                </div>
+            </div>
+
+            <!-- Decorator 2: @optimistic -->
+            <div class="glass-panel p-6 rounded-xl hover:border-brand-django/50 transition group">
+                <div class="font-mono text-brand-django text-lg font-bold mb-3 group-hover:translate-x-1 transition-transform">@optimistic</div>
+                <p class="text-sm text-brand-muted mb-4">
+                    Update the UI instantly, validate on the server later. Zero latency feel.
+                </p>
+                <div class="bg-brand-dark p-3 rounded border border-white/5 text-xs font-mono text-gray-400">
+                    <span class="code-dec">@optimistic</span><br>
+                    <span class="code-kw">def</span> <span class="code-fn">like</span>(self):<br>
+                    &nbsp;&nbsp;self.liked = <span class="code-kw">True</span>
+                </div>
+            </div>
+
+            <!-- Decorator 3: @cache -->
+            <div class="glass-panel p-6 rounded-xl hover:border-blue-400/50 transition group">
+                <div class="font-mono text-blue-400 text-lg font-bold mb-3 group-hover:translate-x-1 transition-transform">@cache</div>
+                <p class="text-sm text-brand-muted mb-4">
+                    Cache responses client-side. Instant results for repeated queries.
+                </p>
+                <div class="bg-brand-dark p-3 rounded border border-white/5 text-xs font-mono text-gray-400">
+                    <span class="code-dec">@cache</span>(ttl=<span class="code-str">300</span>)<br>
+                    <span class="code-kw">def</span> <span class="code-fn">get_cities</span>(self):<br>
+                    &nbsp;&nbsp;<span class="code-kw">return</span> Cities.all()
+                </div>
+            </div>
+
+            <!-- Decorator 4: @client_state -->
+            <div class="glass-panel p-6 rounded-xl hover:border-purple-400/50 transition group">
+                <div class="font-mono text-purple-400 text-lg font-bold mb-3 group-hover:translate-x-1 transition-transform">@client_state</div>
+                <p class="text-sm text-brand-muted mb-4">
+                    Sync multiple components instantly without a server roundtrip.
+                </p>
+                <div class="bg-brand-dark p-3 rounded border border-white/5 text-xs font-mono text-gray-400">
+                    <span class="code-dec">@client_state</span>(keys=[<span class="code-str">'tab'</span>])<br>
+                    <span class="code-kw">def</span> <span class="code-fn">switch_tab</span>(self, tab):<br>
+                    &nbsp;&nbsp;self.tab = tab
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Component System -->
+<section id="components" class="py-24 px-6">
+    <div class="max-w-7xl mx-auto">
+        <div class="grid lg:grid-cols-2 gap-16 items-center">
+            <div>
+                <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-django/10 text-brand-django text-xs font-bold uppercase tracking-wider mb-6 border border-brand-django/20">
+                    shadcn/ui for Django
+                </div>
+                <h2 class="text-3xl md:text-4xl font-bold text-white mb-6">
+                    Copy. Paste. Own.
+                </h2>
+                <p class="text-brand-muted text-lg mb-8 leading-relaxed">
+                    Stop fighting with npm packages. djust uses a <b>component-as-code</b> philosophy.
+                    Copy our components into your project and customize them to your heart's content.
+                </p>
+
+                <ul class="space-y-4 mb-8">
+                    <li class="flex items-start gap-3">
+                        <svg class="w-6 h-6 text-brand-django shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                        </svg>
+                        <div>
+                            <strong class="text-white block">Framework Agnostic</strong>
+                            <span class="text-sm text-brand-muted">Switch between Bootstrap 5 and Tailwind CSS with a single config setting.</span>
+                        </div>
+                    </li>
+                    <li class="flex items-start gap-3">
+                        <svg class="w-6 h-6 text-brand-django shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                        </svg>
+                        <div>
+                            <strong class="text-white block">Two-Tier Architecture</strong>
+                            <span class="text-sm text-brand-muted">Use lightweight <code>Component</code> for static UI and powerful <code>LiveComponent</code> for interactive widgets.</span>
+                        </div>
+                    </li>
+                </ul>
+
+                <a href="/examples/" class="text-brand-rust font-bold hover:text-white transition flex items-center gap-2">
+                    Browse Component Library
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                    </svg>
+                </a>
+            </div>
+
+            <!-- Code Example -->
+            <div class="relative group">
+                <div class="absolute -inset-1 bg-gradient-to-r from-brand-rust to-brand-django opacity-20 blur-lg rounded-xl group-hover:opacity-40 transition duration-500"></div>
+                <div class="relative bg-brand-dark rounded-xl border border-white/10 overflow-hidden shadow-2xl">
+                    <div class="flex items-center justify-between px-4 py-3 bg-white/5 border-b border-white/10">
+                        <div class="flex gap-1.5">
+                            <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                            <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+                            <div class="w-3 h-3 rounded-full bg-green-500"></div>
+                        </div>
+                        <span class="text-xs font-mono text-brand-muted">components/navbar.py</span>
+                    </div>
+                    <div class="p-6 overflow-x-auto">
+                        <pre class="font-mono text-sm leading-relaxed text-gray-300">
+<span class="code-kw">class</span> <span class="code-cls">Navbar</span>(<span class="code-cls">Component</span>):
+    <span class="code-kw">def</span> <span class="code-fn">render</span>(self):
+        framework = config.get(<span class="code-str">'css_framework'</span>)
+
+        <span class="code-kw">if</span> framework == <span class="code-str">'bootstrap5'</span>:
+        <span class="code-kw">elif</span> framework == <span class="code-str">'tailwind'</span>:
+            <span class="code-kw">return</span> self._render_tailwind()
+
+        <span class="code-kw">return</span> self._render_plain()</pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- N+1 Query Elimination -->
+<section class="py-24 px-6 border-t border-white/10 bg-brand-panel/30">
+    <div class="max-w-7xl mx-auto">
+        <div class="grid lg:grid-cols-2 gap-16 items-center">
+            <div>
+                <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-rust/10 text-brand-rust text-xs font-bold uppercase tracking-wider mb-6 border border-brand-rust/20">
+                    Performance Magic
+                </div>
+                <h2 class="text-3xl md:text-4xl font-bold text-white mb-6">
+                    The End of N+1 Queries.
+                </h2>
+                <p class="text-brand-muted text-lg mb-6 leading-relaxed">
+                    The #1 performance killer in Django apps is the N+1 query problem. djust solves it automatically.
+                </p>
+                <p class="text-brand-muted mb-8">
+                    Our compiler analyzes your templates to see exactly which fields you use (e.g.,
+                    <code>&#123;&#123; book.author.name &#125;&#125;</code>). It then automatically injects the optimal
+                    <code>select_related</code> calls into your QuerySet.
+                </p>
+
+                <a href="/features/" class="inline-flex items-center gap-2 text-white font-bold hover:text-brand-rust transition">
+                    See How It Works
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                    </svg>
+                </a>
+            </div>
+
+            <!-- Visual: Code Comparison -->
+            <div class="bg-brand-dark rounded-xl border border-white/10 overflow-hidden shadow-2xl relative group">
+                <!-- Glow Effect -->
+                <div class="absolute -inset-1 bg-gradient-to-r from-red-500/20 to-green-500/20 opacity-20 blur-lg group-hover:opacity-30 transition duration-500"></div>
+
+                <div class="relative">
+                    <div class="grid grid-cols-2 border-b border-white/10">
+                        <div class="px-4 py-3 bg-white/5 text-xs font-mono text-center text-brand-danger border-r border-white/10">Without djust</div>
+                        <div class="px-4 py-3 bg-white/5 text-xs font-mono text-center text-brand-success">With djust</div>
+                    </div>
+                    <div class="grid grid-cols-2">
+                        <!-- Bad Side -->
+                        <div class="p-6 border-r border-white/10 bg-red-500/5">
+                            <div class="text-xs text-brand-muted mb-2 font-mono">Template:</div>
+                            <pre class="text-xs text-gray-400 mb-4">&#123;% for book in books %&#125;
+  &#123;&#123; book.author.name &#125;&#125;
+&#123;% endfor %&#125;</pre>
+                            <div class="text-xs text-brand-muted mb-2 font-mono">SQL Queries:</div>
+                            <div class="space-y-1 font-mono text-xs text-red-400">
+                                <div>SELECT * FROM books</div>
+                                <div>SELECT * FROM authors WHERE id=1</div>
+                                <div>SELECT * FROM authors WHERE id=2</div>
+                                <div class="italic opacity-50">... (100 more)</div>
+                            </div>
+                        </div>
+
+                        <!-- Good Side -->
+                        <div class="p-6 bg-green-500/5">
+                            <div class="text-xs text-brand-muted mb-2 font-mono">Template:</div>
+                            <pre class="text-xs text-gray-400 mb-4">&#123;% for book in books %&#125;
+  &#123;&#123; book.author.name &#125;&#125;
+&#123;% endfor %&#125;</pre>
+                            <div class="text-xs text-brand-muted mb-2 font-mono">SQL Queries:</div>
+                            <div class="space-y-1 font-mono text-xs text-green-400">
+                                <div>SELECT * FROM books <br>JOIN authors ON ...</div>
+                                <div class="mt-4 text-brand-muted italic opacity-75">// 1 Query Total</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
