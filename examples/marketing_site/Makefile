@@ -49,7 +49,10 @@ start-bg: stop ## Start server in background (stops existing servers first)
 .PHONY: stop
 stop: ## Stop the development server
 	@echo "$(YELLOW)Stopping development server on port $(PORT)...$(NC)"
-	@pkill -9 -f "daphne.*$(PORT)" 2>/dev/null || true
+	@PIDS=$$(lsof -ti:$(PORT) 2>/dev/null); \
+	if [ -n "$$PIDS" ]; then \
+		echo "$$PIDS" | xargs kill -9 2>/dev/null || true; \
+	fi
 	@if [ -f server.pid ]; then \
 		rm server.pid; \
 	fi

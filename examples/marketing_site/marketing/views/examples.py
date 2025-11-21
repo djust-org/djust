@@ -446,15 +446,15 @@ class ProductTableView(LiveView):
             self.todos = [t for t in self.todos if t['id'] != todo_id]
 
     # Form event handlers
-    def validate_field(self, field_name: str = None, value: str = "", **kwargs):
+    def validate_field(self, field: str = None, value: str = "", **kwargs):
         """Validate form field in real-time."""
-        if field_name == 'email':
+        if field == 'email':
             self.form_email = value
             if '@' not in value:
                 self.form_errors['email'] = 'Invalid email address'
             else:
                 self.form_errors.pop('email', None)
-        elif field_name == 'password':
+        elif field == 'password':
             self.form_password = value
             if len(value) < 8:
                 self.form_errors['password'] = 'Password must be at least 8 characters'

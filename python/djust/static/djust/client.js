@@ -334,7 +334,7 @@ class LiveViewWebSocket {
         }
     }
 
-    sendEvent(eventName, params = {}) {
+    sendEvent(eventName, params = {}, triggerElement = null) {
         if (!this.enabled || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
             return false;
         }
@@ -344,8 +344,9 @@ class LiveViewWebSocket {
             return false;
         }
 
-        // Phase 5: Track event name for loading state
+        // Phase 5: Track event name and trigger element for loading state
         this.lastEventName = eventName;
+        this.lastTriggerElement = triggerElement;
 
         this.ws.send(JSON.stringify({
             type: 'event',
@@ -700,6 +701,11 @@ function initReactCounters() {
     });
 }
 
+// Stub function for todo items initialization (reserved for future use)
+function initTodoItems() {
+    // Currently no-op - todo functionality handled via LiveView events
+}
+
 // Smart default rate limiting by input type
 // Prevents VDOM version mismatches from high-frequency events
 const DEFAULT_RATE_LIMITS = {
@@ -1031,7 +1037,7 @@ async function handleEvent(eventName, params = {}) {
     globalLoadingManager.startLoading(eventName, triggerElement);
 
     // Try WebSocket first
-    if (liveViewWS && liveViewWS.sendEvent(eventName, params)) {
+    if (liveViewWS && liveViewWS.sendEvent(eventName, params, triggerElement)) {
         return;
     }
 

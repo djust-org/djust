@@ -32,13 +32,7 @@ class HomeView(TemplateView):
             {'name': 'Features', 'url': reverse('marketing:features'), 'slug': 'features'},
             {'name': 'Security', 'url': reverse('marketing:security'), 'slug': 'security'},
             {'name': 'Examples', 'url': reverse('marketing:examples'), 'slug': 'examples'},
-            {'name': 'Playground', 'url': reverse('marketing:playground'), 'slug': 'playground'},
-            {'name': 'Comparison', 'url': reverse('marketing:comparison'), 'slug': 'comparison'},
-            {'name': 'Benchmarks', 'url': reverse('marketing:benchmarks'), 'slug': 'benchmarks'},
-            {'name': 'Use Cases', 'url': reverse('marketing:use_cases'), 'slug': 'use_cases'},
-            {'name': 'Pricing', 'url': reverse('marketing:pricing'), 'slug': 'pricing'},
             {'name': 'Quick Start', 'url': reverse('marketing:quickstart'), 'slug': 'quickstart'},
-            {'name': 'FAQ', 'url': reverse('marketing:faq'), 'slug': 'faq'},
         ]
 
         # GitHub stars (mock for now - could add real API call)
