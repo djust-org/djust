@@ -145,6 +145,7 @@ LIVEVIEW_ALLOWED_MODULES = [
     'djust_demos.views',
     'djust_shared.views',
     'djust_rentals.views',
+    'djust_tests.views',
 ]
 
 # djust State Backend Configuration
