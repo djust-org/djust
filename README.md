@@ -633,8 +633,6 @@ djust is open source (MIT licensed) and free forever. If you're using djust in p
 
 - ⭐ **Star this repo** - Help others discover djust
 - 💜 **[GitHub Sponsors](https://github.com/sponsors/djust-org)** - Monthly support from $5/month
-- 🚀 **[Pricing](https://djust.org/pricing/)** - Premium templates, components, and managed hosting
-- 🏢 **Enterprise support** - Priority support and custom development
 
 Your support helps us maintain and improve djust for everyone!
 
