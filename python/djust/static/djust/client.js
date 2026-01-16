@@ -1,6 +1,13 @@
 // djust - WebSocket + HTTP Fallback Client
 
 // ============================================================================
+// Global Namespace
+// ============================================================================
+
+// Create djust namespace at the top to ensure it's available for all exports
+window.djust = window.djust || {};
+
+// ============================================================================
 // Centralized Response Handler (WebSocket + HTTP)
 // ============================================================================
 
@@ -459,9 +466,6 @@ class LiveViewWebSocket {
         }, interval);
     }
 }
-
-// Create djust namespace for all exposed APIs
-window.djust = window.djust || {};
 
 // Expose LiveViewWebSocket to window for client-dev.js to wrap
 window.djust.LiveViewWebSocket = LiveViewWebSocket;
@@ -1451,7 +1455,9 @@ function generateCacheRequestId() {
 
 // Main Event Handler
 async function handleEvent(eventName, params = {}) {
-    console.log(`[LiveView] Handling event: ${eventName}`, params);
+    if (globalThis.djustDebug) {
+        console.log(`[LiveView] Handling event: ${eventName}`, params);
+    }
 
     // Start loading state
     const triggerElement = params._targetElement;
