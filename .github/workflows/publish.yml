@@ -57,7 +57,7 @@ jobs:
 
       - name: Build wheel (Linux)
         if: runner.os == 'Linux'
-        run: maturin build --release --strip --manylinux 2017
+        run: maturin build --release --strip --compatibility manylinux2014
 
       - name: Build wheel (non-Linux)
         if: runner.os != 'Linux'
