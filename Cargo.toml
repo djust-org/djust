@@ -21,7 +21,7 @@ pyo3 = { version = "0.22" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rmp-serde = "1.3"  # MessagePack for binary serialization
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.49", features = ["full"] }
 ahash = "0.8"  # Faster hashing
 dashmap = "6.1"  # Concurrent HashMap for template caching
 indexmap = "2.7"  # HashMap that preserves insertion order
