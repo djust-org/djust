@@ -19,7 +19,7 @@ function handleServerResponse(data, eventName, triggerElement) {
         if (data.cache_request_id && pendingCacheRequests.has(data.cache_request_id)) {
             const { cacheKey, ttl } = pendingCacheRequests.get(data.cache_request_id);
             const expiresAt = Date.now() + (ttl * 1000);
-            resultCache.set(cacheKey, {
+            addToCache(cacheKey, {
                 patches: data.patches,
                 expiresAt
             });
@@ -456,7 +456,12 @@ class LiveViewWebSocket {
     }
 }
 
+// Create djust namespace for all exposed APIs
+window.djust = window.djust || {};
+
 // Expose LiveViewWebSocket to window for client-dev.js to wrap
+window.djust.LiveViewWebSocket = LiveViewWebSocket;
+// Backward compatibility
 window.LiveViewWebSocket = LiveViewWebSocket;
 
 // Global WebSocket instance
@@ -474,9 +479,33 @@ const optimisticUpdates = new Map(); // Map<eventName, {element, originalState}>
 const pendingEvents = new Set(); // Set<eventName> (for loading indicators)
 const resultCache = new Map(); // Map<cacheKey, {patches, expiresAt}>
 const pendingCacheRequests = new Map(); // Map<requestId, {cacheKey, ttl}>
+const CACHE_MAX_SIZE = 100; // Maximum number of cached entries (LRU eviction)
 
 // Cache configuration from server (event_name -> {ttl, key_params})
 const cacheConfig = new Map();
+
+/**
+ * Add entry to cache with LRU eviction
+ * @param {string} cacheKey - Cache key
+ * @param {Object} value - Value to cache {patches, expiresAt}
+ */
+function addToCache(cacheKey, value) {
+    // If key exists, delete it first to update insertion order (for LRU)
+    if (resultCache.has(cacheKey)) {
+        resultCache.delete(cacheKey);
+    }
+
+    // Evict oldest entries if cache is full
+    while (resultCache.size >= CACHE_MAX_SIZE) {
+        const oldestKey = resultCache.keys().next().value;
+        resultCache.delete(oldestKey);
+        if (globalThis.djustDebug) {
+            console.log(`[LiveView:cache] Evicted (LRU): ${oldestKey}`);
+        }
+    }
+
+    resultCache.set(cacheKey, value);
+}
 
 /**
  * Set cache configuration for handlers (called during mount)
@@ -493,7 +522,9 @@ function setCacheConfig(config) {
     });
 }
 
-// Expose setCacheConfig for server/tests
+// Expose setCacheConfig under djust namespace
+window.djust.setCacheConfig = setCacheConfig;
+// Backward compatibility
 window.setCacheConfig = setCacheConfig;
 
 /**
@@ -511,7 +542,7 @@ function buildCacheKey(eventName, params, keyParams = null) {
     if (keyParams && keyParams.length > 0) {
         // Try to use specified key params
         keyParams.forEach(key => {
-            if (params.hasOwnProperty(key)) {
+            if (Object.prototype.hasOwnProperty.call(params, key)) {
                 cacheParams[key] = params[key];
                 usedKeyParams = true;
             }
@@ -1201,10 +1232,17 @@ const globalLoadingManager = {
                     originalState.disabled = element.disabled;
                 } else if (modifier === 'show') {
                     modifiers.push({ type: 'show' });
+                    // Store original inline display to restore when loading stops
                     originalState.display = element.style.display;
+                    // Determine display value to use when showing:
+                    // 1. Use attribute value if specified (e.g., @loading.show="flex")
+                    // 2. Otherwise default to 'block'
+                    originalState.visibleDisplay = attr.value || 'block';
                 } else if (modifier === 'hide') {
                     modifiers.push({ type: 'hide' });
-                    originalState.display = element.style.display;
+                    // Store computed display to properly restore when loading stops
+                    const computedDisplay = getComputedStyle(element).display;
+                    originalState.display = computedDisplay !== 'none' ? computedDisplay : (element.style.display || 'block');
                 } else if (modifier === 'class') {
                     const className = attr.value;
                     if (className) {
@@ -1310,7 +1348,8 @@ const globalLoadingManager = {
             if (modifier.type === 'disable') {
                 element.disabled = true;
             } else if (modifier.type === 'show') {
-                element.style.display = '';
+                // Use stored visible display value (supports @loading.show="flex" etc.)
+                element.style.display = config.originalState.visibleDisplay || 'block';
             } else if (modifier.type === 'hide') {
                 element.style.display = 'none';
             } else if (modifier.type === 'class') {
@@ -1334,7 +1373,9 @@ const globalLoadingManager = {
     }
 };
 
-// Make globalLoadingManager available globally for tests
+// Expose globalLoadingManager under djust namespace
+window.djust.globalLoadingManager = globalLoadingManager;
+// Backward compatibility
 window.globalLoadingManager = globalLoadingManager;
 
 // Generate unique request ID for cache tracking
