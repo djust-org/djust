@@ -58,7 +58,7 @@ jobs:
         run: uv run maturin build --release
 
       - name: Upload built wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: rust-wheel
           path: target/wheels/*.whl
@@ -290,7 +290,7 @@ jobs:
 
       - name: Upload server logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-server-logs
           path: examples/demo_project/server.log
