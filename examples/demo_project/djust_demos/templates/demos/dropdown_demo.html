@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dropdown Component Demo - djust</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .hero {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 3rem 0;
+            margin-bottom: 2rem;
+        }
+        .demo-section {
+            margin-bottom: 3rem;
+        }
+        .code-block {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 0.375rem;
+            padding: 1rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.875rem;
+            overflow-x: auto;
+        }
+        .component-showcase {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin: 1rem 0;
+        }
+        .feature-badge {
+            display: inline-block;
+            background: #e7f5ff;
+            color: #1971c2;
+            padding: 0.25rem 0.75rem;
+            border-radius: 1rem;
+            font-size: 0.875rem;
+            margin: 0.25rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Hero Section -->
+    <div class="hero">
+        <div class="container">
+            <h1 class="display-4">Dropdown Component</h1>
+            <p class="lead">Button-triggered dropdown menus with Bootstrap 5 styling</p>
+            <div>
+                <span class="feature-badge">Stateless</span>
+                <span class="feature-badge">High-Performance</span>
+                <span class="feature-badge">Loop Support</span>
+                <span class="feature-badge">Framework Agnostic</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Status Alert (Interactive) -->
+        <div class="demo-section">
+            <h2>Interactive Status</h2>
+            <p>Try the interactive dropdown below to see real-time updates:</p>
+            {{ status_alert|safe }}
+        </div>
+
+        <!-- Interactive Dropdown (Stateful) -->
+        <div class="demo-section">
+            <h2>Stateful Dropdown (Interactive)</h2>
+            <p>This uses <code>DropdownComponent</code> with event handlers:</p>
+
+            <div class="card">
+                <div class="card-body">
+                    {{ actions_dropdown|safe }}
+
+                    <div class="mt-3">
+                        <p><strong>Action Count:</strong> {{ action_count }}</p>
+                        <p><strong>Last Action:</strong> {{ last_action }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-3 code-block">
+                <strong>Python (View):</strong><br>
+                self.actions_dropdown = DropdownComponent(<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;label="Actions", variant="primary",<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;items=[<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{'text': 'Edit', 'action': 'handle_edit', 'icon': '✏️'},<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{'text': 'Delete', 'action': 'handle_delete', 'icon': '🗑️', 'variant': 'danger'},<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;]<br>
+                )
+            </div>
+        </div>
+
+        <hr class="my-5">
+
+        <!-- Basic Dropdown (Stateless) -->
+        <div class="demo-section">
+            <h2>Stateless Dropdown (Display)</h2>
+            <p>This uses the new <code>Dropdown</code> component - stateless and high-performance:</p>
+
+            <div class="card">
+                <div class="card-body">
+                    {{ basic_dropdown|safe }}
+                </div>
+            </div>
+
+            <div class="mt-3 code-block">
+                <strong>Python:</strong><br>
+                dropdown = Dropdown(<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;label="Basic Menu",<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;items=[<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{'label': 'Action', 'url': '#action'},<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{'label': 'Another action', 'url': '#another'},<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{'divider': True},<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{'label': 'Separated link', 'url': '#separated'},<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;],<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;variant="primary"<br>
+                )
+            </div>
+        </div>
+
+        <!-- Split Button -->
+        <div class="demo-section">
+            <h2>Split Button Dropdown</h2>
+            <p>Split the button from the dropdown toggle:</p>
+
+            <div class="card">
+                <div class="card-body">
+                    {{ split_dropdown|safe }}
+                </div>
+            </div>
+
+            <div class="mt-3 code-block">
+                <strong>Python:</strong><br>
+                dropdown = Dropdown(<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;label="Split Button",<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;items=[...],<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;variant="success",<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;split=True<br>
+                )
+            </div>
+        </div>
+
+        <!-- Variants -->
+        <div class="demo-section">
+            <h2>Variants</h2>
+            <p>All Bootstrap 5 button variants are supported:</p>
+
+            <div class="card">
+                <div class="card-body">
+                    <div class="component-showcase">
+                        {% for dropdown in dropdown_variants %}
+                            {{ dropdown|safe }}
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-3 code-block">
+                <strong>Available Variants:</strong><br>
+                primary, secondary, success, danger, warning, info, light, dark
+            </div>
+        </div>
+
+        <!-- Sizes -->
+        <div class="demo-section">
+            <h2>Sizes</h2>
+            <p>Three sizes available: small, medium (default), and large:</p>
+
+            <div class="card">
+                <div class="card-body">
+                    <div class="component-showcase">
+                        {{ size_small|safe }}
+                        {{ size_medium|safe }}
+                        {{ size_large|safe }}
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-3 code-block">
+                <strong>Python:</strong><br>
+                small = Dropdown("Small", items=[...], size="sm")<br>
+                medium = Dropdown("Medium", items=[...], size="md")<br>
+                large = Dropdown("Large", items=[...], size="lg")
+            </div>
+        </div>
+
+        <!-- Directions -->
+        <div class="demo-section">
+            <h2>Directions</h2>
+            <p>Control the dropdown menu direction:</p>
+
+            <div class="card">
+                <div class="card-body">
+                    <div class="component-showcase" style="padding: 2rem;">
+                        {{ direction_down|safe }}
+                        {{ direction_up|safe }}
+                        {{ direction_start|safe }}
+                        {{ direction_end|safe }}
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-3 code-block">
+                <strong>Python:</strong><br>
+                down = Dropdown("Down", items=[...], direction="down")<br>
+                up = Dropdown("Up", items=[...], direction="up")<br>
+                start = Dropdown("Start", items=[...], direction="start")<br>
+                end = Dropdown("End", items=[...], direction="end")
+            </div>
+        </div>
+
+        <!-- Disabled Items -->
+        <div class="demo-section">
+            <h2>Disabled Items</h2>
+            <p>Mark specific menu items as disabled:</p>
+
+            <div class="card">
+                <div class="card-body">
+                    {{ disabled_dropdown|safe }}
+                </div>
+            </div>
+
+            <div class="mt-3 code-block">
+                <strong>Python:</strong><br>
+                dropdown = Dropdown(<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;label="Menu with Disabled",<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;items=[<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{'label': 'Active item', 'url': '#active'},<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{'label': 'Disabled item', 'url': '#disabled', 'disabled': True},<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{'divider': True},<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{'label': 'Another disabled', 'url': '#disabled2', 'disabled': True},<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;]<br>
+                )
+            </div>
+        </div>
+
+        <!-- Performance & Implementation -->
+        <div class="demo-section">
+            <h2>Performance & Implementation</h2>
+
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header bg-primary text-white">
+                            <h5 class="mb-0">Dropdown (Stateless)</h5>
+                        </div>
+                        <div class="card-body">
+                            <p><strong>Performance:</strong></p>
+                            <ul>
+                                <li>Pure Python: ~50-100μs</li>
+                                <li>Uses loops (not template_string)</li>
+                                <li>Zero overhead</li>
+                            </ul>
+                            <p><strong>Use Cases:</strong></p>
+                            <ul>
+                                <li>Display-only menus</li>
+                                <li>Static navigation</li>
+                                <li>High-frequency rendering</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header bg-success text-white">
+                            <h5 class="mb-0">DropdownComponent (Stateful)</h5>
+                        </div>
+                        <div class="card-body">
+                            <p><strong>Features:</strong></p>
+                            <ul>
+                                <li>Event handlers</li>
+                                <li>State management</li>
+                                <li>Lifecycle methods</li>
+                            </ul>
+                            <p><strong>Use Cases:</strong></p>
+                            <ul>
+                                <li>Interactive menus</li>
+                                <li>Dynamic actions</li>
+                                <li>State-dependent behavior</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Back Link -->
+        <div class="text-center my-5">
+            <a href="/" class="btn btn-outline-primary">← Back to Home</a>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- djust client -->
+    <script src="/static/djust/client.js"></script>
+</body>
+</html>

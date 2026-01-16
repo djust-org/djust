@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+
+{% block title %}Contact Form - djust{% endblock %}
+
+{% block nav_forms_active %}active{% endblock %}
+
+{% block extra_styles %}
+<style>
+.card { border-radius: 10px; }
+.card-header { border-radius: 10px 10px 0 0 !important; }
+.form-label { font-weight: 500; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center mt-5">
+        <div class="col-md-8">
+            <div class="card shadow">
+                <div class="card-header bg-success text-white">
+                    <h2 class="mb-0">Contact Us</h2>
+                </div>
+                <div class="card-body">
+                    {% if success_message %}
+                    <div class="alert alert-success alert-dismissible fade show" role="alert">
+                        {{ success_message }}
+                        <button type="button" class="btn-close" @click="clear_message"></button>
+                    </div>
+                    {% endif %}
+
+                    {% if error_message %}
+                    <div class="alert alert-danger" role="alert">
+                        {{ error_message }}
+                    </div>
+                    {% endif %}
+
+                    <form @submit="submit_form" class="needs-validation" novalidate>
+                        <div class="row">
+                            <!-- Name -->
+                            <div class="col-md-6 mb-3">
+                                <label for="name" class="form-label">Name</label>
+                                <input
+                                    type="text"
+                                    name="name"
+                                    id="name"
+                                    class="form-control {% if field_errors.name %}is-invalid{% endif %}"
+                                    value="{{ form_data.name }}"
+                                    @change="validate_field"
+                                    data-field="name"
+                                    required
+                                />
+                                {% if field_errors.name %}
+                                <div class="invalid-feedback d-block">
+                                    {% for error in field_errors.name %}{{ error }}{% endfor %}
+                                </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Email -->
+                            <div class="col-md-6 mb-3">
+                                <label for="email" class="form-label">Email</label>
+                                <input
+                                    type="email"
+                                    name="email"
+                                    id="email"
+                                    class="form-control {% if field_errors.email %}is-invalid{% endif %}"
+                                    value="{{ form_data.email }}"
+                                    @change="validate_field"
+                                    data-field="email"
+                                    required
+                                />
+                                {% if field_errors.email %}
+                                <div class="invalid-feedback d-block">
+                                    {% for error in field_errors.email %}{{ error }}{% endfor %}
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+
+                        <!-- Subject -->
+                        <div class="mb-3">
+                            <label for="subject" class="form-label">Subject</label>
+                            <select
+                                name="subject"
+                                id="subject"
+                                class="form-control {% if field_errors.subject %}is-invalid{% endif %}"
+                                @change="validate_field"
+                                data-field="subject"
+                                required
+                            >
+                                <option value="">Select a subject...</option>
+                                <option value="general" {% if form_data.subject == "general" %}selected{% endif %}>General Inquiry</option>
+                                <option value="support" {% if form_data.subject == "support" %}selected{% endif %}>Technical Support</option>
+                                <option value="billing" {% if form_data.subject == "billing" %}selected{% endif %}>Billing Question</option>
+                                <option value="feedback" {% if form_data.subject == "feedback" %}selected{% endif %}>Feedback</option>
+                                <option value="other" {% if form_data.subject == "other" %}selected{% endif %}>Other</option>
+                            </select>
+                            {% if field_errors.subject %}
+                            <div class="invalid-feedback d-block">
+                                {% for error in field_errors.subject %}{{ error }}{% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        <!-- Priority -->
+                        <div class="mb-3">
+                            <label class="form-label">Priority</label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="priority" id="priority_low" value="low"
+                                       {% if form_data.priority == "low" %}checked{% endif %}
+                                       @change="validate_field" data-field="priority">
+                                <label class="form-check-label" for="priority_low">Low</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="priority" id="priority_medium" value="medium"
+                                       {% if form_data.priority == "medium" or not form_data.priority %}checked{% endif %}
+                                       @change="validate_field" data-field="priority">
+                                <label class="form-check-label" for="priority_medium">Medium</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="priority" id="priority_high" value="high"
+                                       {% if form_data.priority == "high" %}checked{% endif %}
+                                       @change="validate_field" data-field="priority">
+                                <label class="form-check-label" for="priority_high">High</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="priority" id="priority_urgent" value="urgent"
+                                       {% if form_data.priority == "urgent" %}checked{% endif %}
+                                       @change="validate_field" data-field="priority">
+                                <label class="form-check-label" for="priority_urgent">Urgent</label>
+                            </div>
+                        </div>
+
+                        <!-- Message -->
+                        <div class="mb-3">
+                            <label for="message" class="form-label">Message</label>
+                            <textarea
+                                name="message"
+                                id="message"
+                                class="form-control {% if field_errors.message %}is-invalid{% endif %}"
+                                rows="5"
+                                @change="validate_field"
+                                data-field="message"
+                                required
+                            >{{ form_data.message }}</textarea>
+                            <small class="form-text text-muted">Please provide details (minimum 10 characters)</small>
+                            {% if field_errors.message %}
+                            <div class="invalid-feedback d-block">
+                                {% for error in field_errors.message %}{{ error }}{% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        <!-- Newsletter -->
+                        <div class="mb-3 form-check">
+                            <input
+                                type="checkbox"
+                                name="subscribe_newsletter"
+                                id="subscribe_newsletter"
+                                class="form-check-input"
+                                {% if form_data.subscribe_newsletter %}checked{% endif %}
+                                @change="validate_field"
+                                data-field="subscribe_newsletter"
+                            />
+                            <label class="form-check-label" for="subscribe_newsletter">
+                                Subscribe to newsletter
+                            </label>
+                        </div>
+
+                        <!-- Submit -->
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-success btn-lg">
+                                Send Message
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary" @click="reset_form">
+                                Reset Form
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

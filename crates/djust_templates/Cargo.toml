@@ -1,0 +1,30 @@
+[package]
+name = "djust_templates"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+pyo3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ahash.workspace = true
+smallvec.workspace = true
+regex.workspace = true
+once_cell.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+djust_core = { path = "../djust_core" }
+djust_components = { path = "../djust_components" }
+
+[dev-dependencies]
+criterion = "0.5"
+tempfile = "3.8"
+
+[[bench]]
+name = "variable_extraction"
+harness = false

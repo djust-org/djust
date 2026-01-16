@@ -1,0 +1,58 @@
+{% extends "rentals/base.html" %}
+
+{% block title %}Tenants - Rental Management{% endblock %}
+
+{% block content %}
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.tenants.TenantListView">
+  <div class="container mx-auto px-4 max-w-7xl">
+    <!-- Page Header with Lucide Icon and Add Button -->
+    {{ page_header|safe }}
+
+    <!-- Search and Filters -->
+    <div class="bg-card border border-border rounded-lg p-6 mb-6">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- Search -->
+        <div>
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            <div class="flex items-center gap-1">
+              <i data-lucide="search" class="w-4 h-4"></i>
+              Search Tenants
+            </div>
+          </label>
+          <input type="text"
+                 @input="search"
+                 value="{{ search_query }}"
+                 placeholder="Search by name, email, or phone..."
+                 class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
+        </div>
+
+        <!-- Status Filter -->
+        <div>
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            <div class="flex items-center gap-1">
+              <i data-lucide="filter" class="w-4 h-4"></i>
+              Lease Status
+            </div>
+          </label>
+          <select @change="filter_by_status"
+                  class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
+            <option value="all" {% if filter_status == 'all' %}selected{% endif %}>All Tenants</option>
+            <option value="active" {% if filter_status == 'active' %}selected{% endif %}>Active Leases</option>
+            <option value="inactive" {% if filter_status == 'inactive' %}selected{% endif %}>No Active Lease</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Summary Stats - Using StatCard Components -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      {% for stat_card in stat_cards %}
+        {{ stat_card|safe }}
+      {% endfor %}
+    </div>
+
+    <!-- Tenants Table - Using DataTable Component -->
+    {{ tenant_table|safe }}
+  </div>
+</div>
+{% endblock %}

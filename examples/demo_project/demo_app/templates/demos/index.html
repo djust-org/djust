@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Demos - djust</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Shared Theme System -->
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/utilities.css">
+
+    <!-- Tailwind for utility classes -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+</head>
+<body>
+    <!-- Navbar Component -->
+    {{ navbar.render }}
+
+    <!-- Theme Toggle -->
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+        <svg class="theme-icon-dark" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+        <svg class="theme-icon-light" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="display: none;">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+    </button>
+
+    <!-- Hero Section -->
+    <section class="hero-section">
+        <div class="container mx-auto px-4">
+            <div class="max-w-4xl mx-auto text-center">
+                <h1 class="hero-title fade-in-modern">
+                    Interactive Live Demos
+                </h1>
+                <p class="hero-subtitle fade-in-modern">
+                    Explore real-time, reactive examples showcasing djust's capabilities.
+                    All demos feature instant updates without page reloads.
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Demos Grid -->
+    <section class="section-modern">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+            <div class="row g-4">
+            <!-- Counter Demo -->
+            <div class="col-md-6 fade-in-modern">
+                <div class="demo-card-modern">
+                    <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.03);">
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="text-3xl">⚡</div>
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Counter</h3>
+                        </div>
+                        <p class="text-sm m-0" style="color: var(--color-text-muted);">
+                            Simple counter demonstrating real-time state management and event handling.
+                            Click buttons to increment, decrement, or reset the value.
+                        </p>
+                    </div>
+                    <div class="p-4" style="background: var(--color-bg-elevated);">
+                        <div class="space-y-2 mb-3">
+                            <div class="text-sm" style="color: var(--color-text);">✓ Real-time updates</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Event handling (@click)</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ State synchronization</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ No page reloads</div>
+                        </div>
+                        <a href="/demos/counter/" class="btn-primary-modern w-full text-center">
+                            <span>Try Demo</span>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                            </svg>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Todo List Demo -->
+            <div class="col-md-6 fade-in-modern">
+                <div class="demo-card-modern">
+                    <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(16, 185, 129, 0.03);">
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="text-3xl">✅</div>
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Todo List</h3>
+                        </div>
+                        <p class="text-sm m-0" style="color: var(--color-text-muted);">
+                            Full-featured todo list with add, complete, and delete functionality.
+                            Shows complex state management and list rendering.
+                        </p>
+                    </div>
+                    <div class="p-4" style="background: var(--color-bg-elevated);">
+                        <div class="space-y-2 mb-3">
+                            <div class="text-sm" style="color: var(--color-text);">✓ Add/remove items</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Mark complete</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Filter by status</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Persistent state</div>
+                        </div>
+                        <a href="/demos/todo/" class="btn-primary-modern w-full text-center" style="background: var(--color-success);">
+                            <span>Try Demo</span>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                            </svg>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Demo -->
+            <div class="col-md-6 fade-in-modern">
+                <div class="demo-card-modern">
+                    <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(6, 182, 212, 0.03);">
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="text-3xl">💬</div>
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Live Chat</h3>
+                        </div>
+                        <p class="text-sm m-0" style="color: var(--color-text-muted);">
+                            Real-time chat interface with message history and user presence.
+                            Demonstrates WebSocket communication patterns.
+                        </p>
+                    </div>
+                    <div class="p-4" style="background: var(--color-bg-elevated);">
+                        <div class="space-y-2 mb-3">
+                            <div class="text-sm" style="color: var(--color-text);">✓ Instant messaging</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Message history</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Typing indicators</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Auto-scroll</div>
+                        </div>
+                        <a href="/demos/chat/" class="btn-primary-modern w-full text-center" style="background: #06b6d4;">
+                            <span>Try Demo</span>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                            </svg>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- React Demo -->
+            <div class="col-md-6 fade-in-modern">
+                <div class="demo-card-modern">
+                    <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(245, 158, 11, 0.03);">
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="text-3xl">⚛️</div>
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">React-like UI</h3>
+                        </div>
+                        <p class="text-sm m-0" style="color: var(--color-text-muted);">
+                            Demonstrates React-style component patterns and reactive rendering
+                            with djust's VDOM engine.
+                        </p>
+                    </div>
+                    <div class="p-4" style="background: var(--color-bg-elevated);">
+                        <div class="space-y-2 mb-3">
+                            <div class="text-sm" style="color: var(--color-text);">✓ Component composition</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ VDOM diffing</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Efficient updates</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Nested components</div>
+                        </div>
+                        <a href="/demos/react/" class="btn-primary-modern w-full text-center" style="background: var(--color-warning);">
+                            <span>Try Demo</span>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                            </svg>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Data Table Demo -->
+            <div class="col-md-6 fade-in-modern">
+                <div class="demo-card-modern">
+                    <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(239, 68, 68, 0.03);">
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="text-3xl">📊</div>
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Data Table</h3>
+                        </div>
+                        <p class="text-sm m-0" style="color: var(--color-text-muted);">
+                            Interactive data table with sorting, filtering, and pagination.
+                            Perfect for displaying large datasets efficiently.
+                        </p>
+                    </div>
+                    <div class="p-4" style="background: var(--color-bg-elevated);">
+                        <div class="space-y-2 mb-3">
+                            <div class="text-sm" style="color: var(--color-text);">✓ Sort columns</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Search/filter</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Pagination</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Row selection</div>
+                        </div>
+                        <a href="/demos/datatable/" class="btn-primary-modern w-full text-center" style="background: var(--color-error);">
+                            <span>Try Demo</span>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                            </svg>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Performance Test Demo -->
+            <div class="col-md-6 fade-in-modern">
+                <div class="demo-card-modern">
+                    <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(107, 114, 128, 0.03);">
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="text-3xl">🚀</div>
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Performance Test</h3>
+                        </div>
+                        <p class="text-sm m-0" style="color: var(--color-text-muted);">
+                            Stress test the VDOM rendering engine with rapid updates.
+                            See how djust handles high-frequency changes.
+                        </p>
+                    </div>
+                    <div class="p-4" style="background: var(--color-bg-elevated);">
+                        <div class="space-y-2 mb-3">
+                            <div class="text-sm" style="color: var(--color-text);">✓ Rapid updates</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Performance metrics</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Benchmark tools</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Optimized diffing</div>
+                        </div>
+                        <a href="/demos/performance/" class="btn-primary-modern w-full text-center" style="background: #6b7280;">
+                            <span>Try Demo</span>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                            </svg>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Python Components Demo -->
+            <div class="col-md-6 fade-in-modern">
+                <div class="demo-card-modern">
+                    <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(168, 85, 247, 0.03);">
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="text-3xl">🐍</div>
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Python Components</h3>
+                        </div>
+                        <p class="text-sm m-0" style="color: var(--color-text-muted);">
+                            Explore reusable Python components like Dropdowns, Tabs, Cards, Buttons, and more.
+                            All with type safety and IDE support.
+                        </p>
+                    </div>
+                    <div class="p-4" style="background: var(--color-bg-elevated);">
+                        <div class="space-y-2 mb-3">
+                            <div class="text-sm" style="color: var(--color-text);">✓ Dropdown menus</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Tabbed interfaces</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Type-safe API</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Framework agnostic</div>
+                        </div>
+                        <a href="/demos/rust-components/" class="btn-primary-modern w-full text-center" style="background: #a855f7;">
+                            <span>Try Demo</span>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                            </svg>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Components-Only Dashboard -->
+            <div class="col-md-6 fade-in-modern">
+                <div class="demo-card-modern">
+                    <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(217, 70, 239, 0.03);">
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="text-3xl">🎨</div>
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Components-Only</h3>
+                        </div>
+                        <p class="text-sm m-0" style="color: var(--color-text-muted);">
+                            A complete dashboard built entirely from Python components - zero HTML!
+                            Shows the full power of component-based architecture.
+                        </p>
+                    </div>
+                    <div class="p-4" style="background: var(--color-bg-elevated);">
+                        <div class="space-y-2 mb-3">
+                            <div class="text-sm" style="color: var(--color-text);">✓ No HTML written</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Pure Python UI</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Composable design</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Full-featured dashboard</div>
+                        </div>
+                        <a href="/demos/components-only/" class="btn-primary-modern w-full text-center" style="background: #d946ef;">
+                            <span>Try Demo</span>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                            </svg>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- No Template Demo -->
+            <div class="col-md-6 fade-in-modern">
+                <div class="demo-card-modern">
+                    <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(251, 146, 60, 0.03);">
+                        <div class="flex items-center gap-3 mb-2">
+                            <div class="text-3xl">✨</div>
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">No Template</h3>
+                        </div>
+                        <p class="text-sm m-0" style="color: var(--color-text-muted);">
+                            Ultimate demo - ZERO template files! Everything generated from Python using
+                            template_string. Single-file UI architecture.
+                        </p>
+                    </div>
+                    <div class="p-4" style="background: var(--color-bg-elevated);">
+                        <div class="space-y-2 mb-3">
+                            <div class="text-sm" style="color: var(--color-text);">✓ No .html files</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ template_string only</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Single file app</div>
+                            <div class="text-sm" style="color: var(--color-text);">✓ Fully interactive</div>
+                        </div>
+                        <a href="/demos/no-template/" class="btn-primary-modern w-full text-center" style="background: #fb923c;">
+                            <span>Try Demo</span>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                            </svg>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Features Section -->
+        <div class="row g-4" style="margin-top: 2rem;">
+            <div class="col-md-6">
+                <div class="feature-card">
+                    <h3>Key Features</h3>
+                    <ul>
+                        <li>
+                            <strong>Real-time Updates:</strong> Changes sync instantly via WebSocket
+                        </li>
+                        <li>
+                            <strong>Event Handling:</strong> Simple @click, @change, @submit directives
+                        </li>
+                        <li>
+                            <strong>VDOM Rendering:</strong> Efficient DOM updates like React
+                        </li>
+                        <li>
+                            <strong>State Management:</strong> Python-based state on the server
+                        </li>
+                        <li>
+                            <strong>No JavaScript:</strong> Write Python, get reactive UI
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="feature-card">
+                    <h3>How It Works</h3>
+                    <ul>
+                        <li>
+                            <strong>1. Define View:</strong> Create LiveView class with state
+                        </li>
+                        <li>
+                            <strong>2. Add Template:</strong> Use @ directives for events
+                        </li>
+                        <li>
+                            <strong>3. Handle Events:</strong> Write Python methods
+                        </li>
+                        <li>
+                            <strong>4. Auto Updates:</strong> VDOM patches DOM automatically
+                        </li>
+                        <li>
+                            <strong>5. Zero Config:</strong> Works out of the box
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Start -->
+        <div class="row" style="margin-top: 2rem; margin-bottom: 3rem;">
+            <div class="col-12">
+                <div class="quick-start-card">
+                    <div class="quick-start-header">
+                        <h4>Quick Start</h4>
+                    </div>
+                    <div class="quick-start-body">
+                        <h5>Creating a LiveView</h5>
+                        <pre><code>from djust import LiveView
+
+class CounterView(LiveView):
+    count = 0
+
+    def increment(self, **kwargs):
+        self.count += 1
+
+    def decrement(self, **kwargs):
+        self.count -= 1</code></pre>
+
+                        <h5>Template with Event Handlers</h5>
+                        <pre><code>&lt;div&gt;
+    &lt;h1&gt;Count: &#123;&#123; count &#125;&#125;&lt;/h1&gt;
+    &lt;button @click="increment"&gt;+&lt;/button&gt;
+    &lt;button @click="decrement"&gt;-&lt;/button&gt;
+&lt;/div&gt;</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </div>
+    </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Theme Switcher -->
+    <script src="/static/js/theme-switcher.js"></script>
+</body>
+</html>

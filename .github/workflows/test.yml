@@ -1,0 +1,328 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # Build Rust extensions once and share across jobs
+  build-extensions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-python-build-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-python-build-
+            ${{ runner.os }}-python-
+
+      - name: Install Python dependencies
+        run: uv sync --extra dev
+
+      - name: Build Rust extensions
+        run: uv run maturin build --release
+
+      - name: Upload built wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-wheel
+          path: target/wheels/*.whl
+          retention-days: 1
+
+  # Rust tests - runs in parallel
+  rust-tests:
+    runs-on: ubuntu-latest
+    needs: build-extensions
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Set up Python (for PyO3)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Cache Python dependencies (for PyO3)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-python-minimal-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-python-minimal-
+            ${{ runner.os }}-python-
+
+      - name: Install minimal Python deps (for PyO3)
+        run: uv sync --no-dev
+
+      - name: Run Rust tests
+        run: |
+          export PYO3_PYTHON=$(pwd)/.venv/bin/python
+          cargo test --workspace --exclude djust_live --release
+
+      - name: Run Rust linter
+        run: |
+          export PYO3_PYTHON=$(pwd)/.venv/bin/python
+          cargo clippy -- -W clippy::all -D clippy::correctness -D clippy::suspicious
+
+      - name: Check Rust formatting
+        run: cargo fmt --check
+
+  # Python tests - runs in parallel with pytest-xdist
+  python-tests:
+    runs-on: ubuntu-latest
+    needs: build-extensions
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-python-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-python-
+
+      - name: Install Python dependencies
+        run: uv sync --extra dev
+
+      - name: Download pre-built wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-wheel
+          path: wheels/
+
+      - name: Install pre-built Rust extension
+        run: uv pip install $(ls wheels/*.whl | head -1)
+
+      - name: Install pytest-xdist for parallel execution
+        run: uv pip install pytest-xdist
+
+      - name: Run Python tests (parallel with pytest-xdist)
+        run: |
+          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ -v -n auto
+
+      - name: Run Python linter
+        run: uv run ruff check python/
+
+  # JavaScript tests - runs in parallel
+  javascript-tests:
+    runs-on: ubuntu-latest
+    needs: build-extensions
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Run JavaScript tests
+        run: npm test
+
+      - name: Run JavaScript linter (if configured)
+        run: |
+          if [ -f "package.json" ] && grep -q "lint" package.json; then
+            npm run lint || echo "No lint script found, skipping"
+          fi
+
+  # Playwright browser tests - runs in parallel
+  playwright-tests:
+    runs-on: ubuntu-latest
+    needs: build-extensions
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-python-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-python-
+
+      - name: Install Python dependencies
+        run: uv sync --extra dev
+
+      - name: Download pre-built wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-wheel
+          path: wheels/
+
+      - name: Install pre-built Rust extension
+        run: uv pip install $(ls wheels/*.whl | head -1)
+
+      - name: Install Playwright
+        run: |
+          uv pip install playwright
+          .venv/bin/playwright install chromium
+
+      - name: Run Django migrations
+        run: |
+          cd examples/demo_project
+          uv run python manage.py migrate --noinput
+          cd ../..
+
+      - name: Start development server
+        run: |
+          cd examples/demo_project
+          nohup uv run python -m uvicorn demo_project.asgi:application \
+            --host 0.0.0.0 \
+            --port 8002 \
+            --log-level info \
+            > server.log 2>&1 &
+          echo $! > server.pid
+          cd ../..
+        env:
+          PYTHONPATH: .
+
+      - name: Wait for server to be ready
+        run: |
+          echo "Waiting for server to start..."
+          for i in {1..30}; do
+            if curl -s http://localhost:8002/ > /dev/null; then
+              echo "Server is ready!"
+              exit 0
+            fi
+            echo "Attempt $i/30: Server not ready yet..."
+            sleep 2
+          done
+          echo "Server failed to start"
+          cat examples/demo_project/server.log
+          exit 1
+
+      - name: Run Playwright tests
+        run: |
+          echo "Running @loading attribute tests..."
+          .venv/bin/python tests/playwright/test_loading_attribute.py
+          echo "Running @cache decorator tests..."
+          .venv/bin/python tests/playwright/test_cache_decorator.py
+          echo "Running DraftMode tests..."
+          .venv/bin/python tests/playwright/test_draft_mode.py
+
+      - name: Upload server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-server-logs
+          path: examples/demo_project/server.log
+
+      - name: Stop server
+        if: always()
+        run: |
+          if [ -f examples/demo_project/server.pid ]; then
+            kill $(cat examples/demo_project/server.pid) || true
+            rm examples/demo_project/server.pid
+          fi
+
+  # Summary job - waits for all test jobs
+  test-summary:
+    runs-on: ubuntu-latest
+    needs: [rust-tests, python-tests, javascript-tests, playwright-tests]
+    if: always()
+    steps:
+      - name: Check test results
+        run: |
+          echo "🔍 Test Results Summary:"
+          echo "  Rust tests: ${{ needs.rust-tests.result }}"
+          echo "  Python tests: ${{ needs.python-tests.result }}"
+          echo "  JavaScript tests: ${{ needs.javascript-tests.result }}"
+          echo "  Playwright tests: ${{ needs.playwright-tests.result }}"
+
+          if [ "${{ needs.rust-tests.result }}" == "success" ] && \
+             [ "${{ needs.python-tests.result }}" == "success" ] && \
+             [ "${{ needs.javascript-tests.result }}" == "success" ] && \
+             [ "${{ needs.playwright-tests.result }}" == "success" ]; then
+            echo "✅ All tests passed!"
+            exit 0
+          else
+            echo "❌ Some tests failed"
+            exit 1
+          fi

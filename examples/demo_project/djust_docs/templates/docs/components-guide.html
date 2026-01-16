@@ -1,0 +1,2320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Component Architecture - djust</title>
+
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Syntax Highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+        :root {
+            /* Spacing & Sizing (theme-independent) */
+            --spacing-xs: 0.25rem;
+            --spacing-sm: 0.5rem;
+            --spacing-md: 1rem;
+            --spacing-lg: 1.5rem;
+            --spacing-xl: 2rem;
+            --spacing-2xl: 3rem;
+            --radius-sm: 6px;
+            --radius-md: 8px;
+            --radius-lg: 12px;
+
+            /* Transitions */
+            --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+            --transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+            --transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        /* Dark Theme (default) */
+        :root,
+        [data-theme="dark"] {
+            --color-bg: #0a0a0a;
+            --color-bg-elevated: #111111;
+            --color-bg-overlay: rgba(17, 17, 17, 0.95);
+            --color-border: rgba(255, 255, 255, 0.06);
+            --color-border-hover: rgba(255, 255, 255, 0.12);
+            --color-text: #f5f5f5;
+            --color-text-muted: #b4b4b4;
+            --color-text-subtle: #808080;
+            --color-accent: #3b82f6;
+            --color-accent-hover: #2563eb;
+            --color-accent-muted: rgba(59, 130, 246, 0.1);
+            --color-success: #10b981;
+            --color-warning: #f59e0b;
+            --color-error: #ef4444;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Light Theme */
+        [data-theme="light"] {
+            --color-bg: #ffffff;
+            --color-bg-elevated: #f9fafb;
+            --color-bg-overlay: rgba(249, 250, 251, 0.95);
+            --color-border: rgba(0, 0, 0, 0.08);
+            --color-border-hover: rgba(0, 0, 0, 0.15);
+            --color-text: #0f172a;
+            --color-text-muted: #475569;
+            --color-text-subtle: #64748b;
+            --color-accent: #3b82f6;
+            --color-accent-hover: #2563eb;
+            --color-accent-muted: rgba(59, 130, 246, 0.1);
+            --color-success: #10b981;
+            --color-warning: #f59e0b;
+            --color-error: #ef4444;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            transition: background-color var(--transition-base);
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: var(--color-bg);
+            color: var(--color-text);
+            padding-top: 60px;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            transition: background-color var(--transition-base), color var(--transition-base);
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 0 var(--spacing-lg);
+        }
+
+        .navbar-custom {
+            background: var(--color-bg-overlay) !important;
+            backdrop-filter: blur(12px) saturate(180%);
+            border-bottom: 1px solid var(--color-border) !important;
+            box-shadow: none !important;
+            min-height: 60px !important;
+            transition: background-color var(--transition-base), border-color var(--transition-base);
+        }
+
+        .theme-toggle {
+            background: transparent;
+            border: 1px solid var(--color-border);
+            color: var(--color-text-muted);
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            margin-left: var(--spacing-md);
+        }
+
+        .theme-toggle:hover {
+            background: var(--color-bg-elevated);
+            border-color: var(--color-border-hover);
+            color: var(--color-text);
+        }
+
+        .theme-toggle svg {
+            width: 18px;
+            height: 18px;
+        }
+        .nav-link {
+            color: var(--color-text-muted) !important;
+            font-weight: 500;
+            transition: color 0.15s ease;
+            font-size: 14px;
+            position: relative;
+        }
+        .nav-link:hover {
+            color: var(--color-text) !important;
+        }
+        .nav-link.active {
+            color: var(--color-text) !important;
+        }
+        .navbar-nav {
+            display: flex !important;
+            flex-direction: row !important;
+            gap: var(--spacing-md);
+        }
+        .navbar-collapse {
+            display: flex !important;
+            justify-content: flex-end;
+            flex-grow: 1;
+        }
+        .navbar-brand img {
+            max-height: 16px;
+            opacity: 0.9;
+        }
+        .badge {
+            background: var(--color-accent) !important;
+            color: white !important;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 10px;
+        }
+        h1 {
+            color: var(--color-text);
+            font-weight: 800;
+            margin-bottom: var(--spacing-md);
+            font-size: 3rem;
+            letter-spacing: -0.025em;
+            line-height: 1.1;
+        }
+        h2 {
+            color: var(--color-text);
+            font-weight: 700;
+            margin-top: 4rem;
+            margin-bottom: var(--spacing-xl);
+            padding-bottom: var(--spacing-md);
+            font-size: 2rem;
+            letter-spacing: -0.02em;
+            line-height: 1.2;
+            border-bottom: 2px solid var(--color-border);
+            position: relative;
+        }
+        h2::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 60px;
+            height: 2px;
+            background: var(--color-accent);
+        }
+        h3 {
+            color: var(--color-text);
+            font-weight: 700;
+            margin-top: 2.5rem;
+            margin-bottom: var(--spacing-lg);
+            font-size: 1.375rem;
+            letter-spacing: -0.015em;
+            line-height: 1.3;
+        }
+        h4 {
+            color: var(--color-text);
+            font-weight: 600;
+            margin-top: var(--spacing-xl);
+            margin-bottom: var(--spacing-md);
+            font-size: 1.125rem;
+            letter-spacing: -0.01em;
+            line-height: 1.4;
+        }
+        .lead {
+            color: var(--color-text-muted);
+            font-size: 1.375rem;
+            font-weight: 400;
+            line-height: 1.65;
+            margin-bottom: 2.5rem;
+            max-width: 65ch;
+        }
+        p {
+            color: var(--color-text-muted);
+            font-size: 1rem;
+            line-height: 1.75;
+            margin-bottom: var(--spacing-lg);
+            max-width: 70ch;
+        }
+        .section-card {
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            padding: var(--spacing-2xl);
+            margin: var(--spacing-2xl) 0;
+            transition: background-color var(--transition-base),
+                        border-color var(--transition-fast);
+        }
+        .section-card:hover {
+            border-color: var(--color-border-hover);
+        }
+        .code-block {
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-md);
+            padding: var(--spacing-lg);
+            overflow-x: auto;
+        }
+        .code-block pre {
+            margin: 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem;
+            line-height: 1.6;
+            color: var(--color-text-muted);
+        }
+        .diagram {
+            background: var(--color-bg-elevated);
+            border: 2px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            padding: var(--spacing-2xl);
+            margin: 2.5rem 0;
+            text-align: center;
+            box-shadow: var(--shadow-sm);
+        }
+        .component-box {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            padding: 12px 18px;
+            border-radius: var(--radius-sm);
+            font-weight: 600;
+            display: inline-block;
+            margin: var(--spacing-sm);
+            font-size: 0.9375rem;
+            transition: all var(--transition-fast);
+            letter-spacing: -0.01em;
+        }
+        .component-box:hover {
+            background: rgba(59, 130, 246, 0.15);
+            border-color: rgba(59, 130, 246, 0.3);
+        }
+        .state-box {
+            background: rgba(99, 102, 241, 0.1);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            color: #a5b4fc;
+            padding: 10px 16px;
+            border-radius: var(--radius-sm);
+            font-size: 0.875rem;
+            display: inline-block;
+            font-weight: 600;
+            letter-spacing: -0.005em;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .event-box {
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.2);
+            color: #86efac;
+            padding: 10px 16px;
+            border-radius: var(--radius-sm);
+            font-size: 0.875rem;
+            display: inline-block;
+            font-weight: 600;
+            letter-spacing: -0.005em;
+        }
+        .arrow {
+            color: var(--color-text-subtle);
+            font-size: 1.5em;
+            margin: var(--spacing-md);
+        }
+        .info-box {
+            background: rgba(59, 130, 246, 0.05);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: var(--radius-md);
+            padding: var(--spacing-xl);
+            margin: var(--spacing-xl) 0;
+            font-size: 1rem;
+            line-height: 1.7;
+        }
+        .info-box strong {
+            color: #60a5fa;
+            font-weight: 600;
+        }
+        .info-box p:last-child {
+            margin-bottom: 0;
+        }
+        .warning-box {
+            background: rgba(234, 179, 8, 0.05);
+            border: 1px solid rgba(234, 179, 8, 0.2);
+            border-radius: var(--radius-md);
+            padding: var(--spacing-xl);
+            margin: var(--spacing-xl) 0;
+            font-size: 1rem;
+            line-height: 1.7;
+        }
+        .warning-box strong {
+            color: #fbbf24;
+            font-weight: 600;
+        }
+        .warning-box p:last-child {
+            margin-bottom: 0;
+        }
+        .success-box {
+            background: rgba(34, 197, 94, 0.05);
+            border: 1px solid rgba(34, 197, 94, 0.2);
+            border-radius: var(--radius-md);
+            padding: var(--spacing-xl);
+            margin: var(--spacing-xl) 0;
+            font-size: 1rem;
+            line-height: 1.7;
+        }
+        .success-box strong {
+            color: #86efac;
+            font-weight: 600;
+        }
+        .success-box p:last-child {
+            margin-bottom: 0;
+        }
+        .info-box ol,
+        .warning-box ol,
+        .success-box ol {
+            margin-bottom: 0;
+        }
+        .code-header {
+            background: rgba(255, 255, 255, 0.02);
+            padding: 12px var(--spacing-lg);
+            border-bottom: 1px solid var(--color-border);
+            font-size: 0.8125rem;
+            font-weight: 600;
+            color: var(--color-text);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            letter-spacing: -0.01em;
+        }
+        .code-header .file-path {
+            font-size: 0.75rem;
+            color: var(--color-text-subtle);
+            font-weight: 400;
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: 0;
+        }
+        .code-block-with-header {
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            margin: var(--spacing-xl) 0;
+            position: relative;
+        }
+
+        /* Space before code blocks after headings */
+        h3 + .code-block-with-header {
+            margin-top: var(--spacing-lg);
+        }
+
+        /* Better spacing for paragraphs after code blocks */
+        .code-block-with-header + p {
+            margin-top: var(--spacing-xl);
+        }
+
+        /* Better spacing for callout boxes */
+        .info-box + *,
+        .warning-box + *,
+        .success-box + * {
+            margin-top: var(--spacing-xl);
+        }
+        .code-block-with-header .code-content {
+            padding: var(--spacing-lg);
+            overflow-x: auto;
+            background: rgba(0, 0, 0, 0.2);
+        }
+        .copy-button {
+            position: absolute;
+            top: var(--spacing-md);
+            right: var(--spacing-md);
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            color: var(--color-text-muted);
+            width: 32px;
+            height: 32px;
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            opacity: 0;
+            transition: all var(--transition-fast);
+            z-index: 10;
+        }
+        .code-block-with-header:hover .copy-button {
+            opacity: 1;
+        }
+        .copy-button:hover {
+            background: var(--color-accent-muted);
+            border-color: var(--color-accent);
+            color: var(--color-accent);
+        }
+        .copy-button.copied {
+            background: rgba(16, 185, 129, 0.1);
+            border-color: var(--color-success);
+            color: var(--color-success);
+        }
+        .copy-button svg {
+            width: 16px;
+            height: 16px;
+        }
+        .code-block-with-header pre {
+            margin: 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem;
+            line-height: 1.7;
+            font-weight: 400;
+        }
+        .btn {
+            font-weight: 600;
+            padding: 10px 20px;
+            border-radius: var(--radius-sm);
+            transition: all var(--transition-fast);
+            border: 1px solid var(--color-border);
+            background: var(--color-bg-elevated);
+            color: var(--color-text);
+            cursor: pointer;
+            font-size: 0.9375rem;
+            letter-spacing: -0.01em;
+            line-height: 1.5;
+        }
+        .btn:hover {
+            border-color: var(--color-border-hover);
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .btn-primary {
+            background: var(--color-accent);
+            border-color: var(--color-accent);
+            color: white;
+        }
+        .btn-primary:hover {
+            background: var(--color-accent-hover);
+            border-color: var(--color-accent-hover);
+        }
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: var(--color-border);
+        }
+        .btn-lg {
+            padding: 13px 26px;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        .alert-info {
+            background: rgba(59, 130, 246, 0.05);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: var(--radius-md);
+            color: #60a5fa;
+            padding: var(--spacing-xl);
+            font-size: 0.9375rem;
+            line-height: 1.6;
+        }
+        .alert-info h4 {
+            margin: 0;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+        }
+        table {
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+        thead {
+            background: rgba(255, 255, 255, 0.02);
+        }
+        thead th {
+            font-weight: 600;
+            padding: var(--spacing-lg) var(--spacing-md);
+            border-bottom: 1px solid var(--color-border);
+            color: var(--color-text);
+            font-size: 0.875rem;
+            text-align: left;
+            letter-spacing: -0.01em;
+        }
+        tbody td {
+            padding: var(--spacing-lg) var(--spacing-md);
+            color: var(--color-text-muted);
+            border-bottom: 1px solid var(--color-border);
+            font-size: 1rem;
+            line-height: 1.6;
+        }
+        tbody td strong {
+            color: var(--color-text);
+        }
+        tbody tr:last-child td {
+            border-bottom: none;
+        }
+        tbody tr {
+            transition: background 0.1s ease;
+        }
+        tbody tr:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+        ul, ol {
+            color: var(--color-text-muted);
+            padding-left: 1.75rem;
+            margin-bottom: var(--spacing-xl);
+            line-height: 1.75;
+        }
+        ul li, ol li {
+            margin-bottom: var(--spacing-md);
+            font-size: 1rem;
+        }
+        ul li::marker {
+            color: var(--color-text-subtle);
+        }
+        code {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--color-border);
+            padding: 3px 7px;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875em;
+            color: var(--color-accent);
+            font-weight: 500;
+        }
+        strong {
+            color: var(--color-text);
+            font-weight: 600;
+        }
+        em {
+            color: var(--color-text);
+            font-style: italic;
+        }
+        a {
+            color: var(--color-accent);
+            text-decoration: none;
+            transition: color var(--transition-fast);
+            font-weight: 500;
+        }
+        a:hover {
+            color: var(--color-accent-hover);
+        }
+        a:focus-visible {
+            outline: 2px solid var(--color-accent);
+            outline-offset: 2px;
+            border-radius: 2px;
+        }
+
+        /* Bootstrap utility overrides for modern look */
+        .my-5 {
+            margin-top: var(--spacing-2xl) !important;
+            margin-bottom: var(--spacing-2xl) !important;
+        }
+        .my-4 {
+            margin-top: var(--spacing-xl) !important;
+            margin-bottom: var(--spacing-xl) !important;
+        }
+        .mb-0 {
+            margin-bottom: 0 !important;
+        }
+        .me-2 {
+            margin-right: var(--spacing-sm) !important;
+        }
+        .text-center {
+            text-align: center;
+        }
+        .d-inline-block {
+            display: inline-block;
+        }
+        .text-muted {
+            color: var(--color-text-muted) !important;
+        }
+        .row {
+            display: flex;
+            flex-wrap: wrap;
+            margin: 0 calc(-1 * var(--spacing-lg));
+        }
+        .col-lg-10 {
+            flex: 0 0 auto;
+            width: 100%;
+            padding: 0 var(--spacing-lg);
+        }
+        .mx-auto {
+            margin-left: auto;
+            margin-right: auto;
+        }
+        @media (min-width: 992px) {
+            .col-lg-10 {
+                width: 83.333333%;
+            }
+        }
+
+        /* Fine-tune heading spacing in cards */
+        .section-card h2:first-child {
+            margin-top: 0;
+        }
+        .section-card h3:first-child {
+            margin-top: 0;
+        }
+
+        /* Add space between paragraphs and headings */
+        p + h2 {
+            margin-top: 4.5rem;
+        }
+        p + h3 {
+            margin-top: 3rem;
+        }
+        p + h4 {
+            margin-top: 2.5rem;
+        }
+
+        /* Polish the table */
+        .table-bordered {
+            border: 1px solid var(--color-border);
+        }
+
+        /* Command Palette */
+        .command-palette-backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(4px);
+            z-index: 9998;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity var(--transition-base), visibility var(--transition-base);
+        }
+
+        .command-palette-backdrop.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .command-palette {
+            position: fixed;
+            top: 20%;
+            left: 50%;
+            transform: translate(-50%, -20px);
+            width: 90%;
+            max-width: 600px;
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-lg);
+            z-index: 9999;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity var(--transition-base),
+                        visibility var(--transition-base),
+                        transform var(--transition-base);
+        }
+
+        .command-palette.active {
+            opacity: 1;
+            visibility: visible;
+            transform: translate(-50%, 0);
+        }
+
+        .command-palette-header {
+            display: flex;
+            align-items: center;
+            padding: var(--spacing-lg);
+            border-bottom: 1px solid var(--color-border);
+            gap: var(--spacing-md);
+        }
+
+        .command-palette-search {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: var(--color-text);
+            font-size: 1rem;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .command-palette-search::placeholder {
+            color: var(--color-text-subtle);
+        }
+
+        .command-palette-icon {
+            width: 20px;
+            height: 20px;
+            color: var(--color-text-subtle);
+            flex-shrink: 0;
+        }
+
+        .command-palette-results {
+            max-height: 400px;
+            overflow-y: auto;
+            padding: var(--spacing-sm);
+        }
+
+        .command-palette-item {
+            display: flex;
+            align-items: center;
+            padding: var(--spacing-md) var(--spacing-lg);
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            transition: background-color var(--transition-fast);
+            color: var(--color-text);
+            text-decoration: none;
+            margin-bottom: var(--spacing-xs);
+        }
+
+        .command-palette-item:hover,
+        .command-palette-item.selected {
+            background: var(--color-accent-muted);
+        }
+
+        .command-palette-item-icon {
+            width: 16px;
+            height: 16px;
+            margin-right: var(--spacing-md);
+            color: var(--color-text-subtle);
+            flex-shrink: 0;
+        }
+
+        .command-palette-item-text {
+            flex: 1;
+            font-size: 0.9375rem;
+        }
+
+        .command-palette-item-badge {
+            font-size: 0.75rem;
+            color: var(--color-text-subtle);
+            font-weight: 500;
+            padding: 2px 8px;
+            border-radius: var(--radius-sm);
+            background: var(--color-border);
+        }
+
+        .command-palette-empty {
+            padding: var(--spacing-2xl);
+            text-align: center;
+            color: var(--color-text-subtle);
+        }
+
+        .command-palette-footer {
+            padding: var(--spacing-md) var(--spacing-lg);
+            border-top: 1px solid var(--color-border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            color: var(--color-text-subtle);
+        }
+
+        .command-palette-hint {
+            display: flex;
+            gap: var(--spacing-md);
+            align-items: center;
+        }
+
+        .command-palette-key {
+            padding: 2px 6px;
+            background: var(--color-bg);
+            border: 1px solid var(--color-border);
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+        }
+
+        /* Code Playground */
+        .code-playground {
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            margin: var(--spacing-2xl) 0;
+        }
+
+        .code-playground-header {
+            background: var(--color-bg-elevated);
+            border-bottom: 1px solid var(--color-border);
+            padding: var(--spacing-md) var(--spacing-lg);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .code-playground-title {
+            font-weight: 600;
+            font-size: 0.9375rem;
+            color: var(--color-text);
+        }
+
+        .code-playground-actions {
+            display: flex;
+            gap: var(--spacing-sm);
+        }
+
+        .code-playground-btn {
+            padding: var(--spacing-xs) var(--spacing-md);
+            background: transparent;
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-sm);
+            color: var(--color-text-muted);
+            font-size: 0.8125rem;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            font-family: 'Inter', sans-serif;
+        }
+
+        .code-playground-btn:hover {
+            background: var(--color-bg);
+            border-color: var(--color-border-hover);
+            color: var(--color-text);
+        }
+
+        .code-playground-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            min-height: 400px;
+        }
+
+        @media (max-width: 768px) {
+            .code-playground-content {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .code-playground-editor {
+            border-right: 1px solid var(--color-border);
+        }
+
+        @media (max-width: 768px) {
+            .code-playground-editor {
+                border-right: none;
+                border-bottom: 1px solid var(--color-border);
+            }
+        }
+
+        .code-playground-editor-header {
+            background: var(--color-bg-elevated);
+            padding: var(--spacing-sm) var(--spacing-lg);
+            border-bottom: 1px solid var(--color-border);
+            font-size: 0.75rem;
+            color: var(--color-text-subtle);
+            font-weight: 500;
+        }
+
+        .code-playground-textarea {
+            width: 100%;
+            height: calc(400px - 32px);
+            padding: var(--spacing-lg);
+            background: var(--color-bg);
+            color: var(--color-text);
+            border: none;
+            outline: none;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem;
+            line-height: 1.6;
+            resize: none;
+            tab-size: 2;
+        }
+
+        .code-playground-preview {
+            background: var(--color-bg);
+        }
+
+        .code-playground-preview-header {
+            background: var(--color-bg-elevated);
+            padding: var(--spacing-sm) var(--spacing-lg);
+            border-bottom: 1px solid var(--color-border);
+            font-size: 0.75rem;
+            color: var(--color-text-subtle);
+            font-weight: 500;
+        }
+
+        .code-playground-preview-content {
+            padding: var(--spacing-lg);
+            height: calc(400px - 32px);
+            overflow: auto;
+        }
+
+        /* Animated Flow Diagram */
+        .animated-flow-diagram {
+            position: relative;
+            padding: var(--spacing-2xl);
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            margin: var(--spacing-2xl) 0;
+            min-height: 500px;
+            overflow: hidden;
+        }
+
+        .flow-node {
+            background: var(--color-bg);
+            border: 2px solid var(--color-border);
+            border-radius: var(--radius-md);
+            padding: var(--spacing-lg);
+            margin: var(--spacing-md) auto;
+            max-width: 350px;
+            position: relative;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: opacity 0.5s ease, transform 0.5s ease,
+                        border-color 0.3s ease, background-color 0.3s ease;
+        }
+
+        .flow-node.active {
+            opacity: 1;
+            transform: translateY(0);
+            border-color: var(--color-accent);
+            background: var(--color-accent-muted);
+        }
+
+        .flow-node.completed {
+            opacity: 0.6;
+            transform: translateY(0);
+        }
+
+        .flow-node-number {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            background: var(--color-accent);
+            color: white;
+            border-radius: 50%;
+            font-weight: 600;
+            font-size: 0.875rem;
+            margin-right: var(--spacing-sm);
+        }
+
+        .flow-node-title {
+            font-weight: 600;
+            font-size: 1rem;
+            color: var(--color-text);
+            margin-bottom: var(--spacing-xs);
+            display: flex;
+            align-items: center;
+        }
+
+        .flow-node-description {
+            font-size: 0.875rem;
+            color: var(--color-text-muted);
+            line-height: 1.5;
+        }
+
+        .flow-arrow {
+            width: 2px;
+            height: 30px;
+            background: var(--color-border);
+            margin: 0 auto;
+            position: relative;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+
+        .flow-arrow.active {
+            opacity: 1;
+            background: var(--color-accent);
+        }
+
+        .flow-arrow::after {
+            content: '';
+            position: absolute;
+            bottom: -6px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 0;
+            height: 0;
+            border-left: 6px solid transparent;
+            border-right: 6px solid transparent;
+            border-top: 8px solid var(--color-accent);
+        }
+
+        .flow-pulse {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            background: var(--color-accent);
+            border-radius: 50%;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            opacity: 0;
+        }
+
+        .flow-arrow.active .flow-pulse {
+            animation: flowPulse 1s ease-in-out infinite;
+        }
+
+        @keyframes flowPulse {
+            0% {
+                top: 0;
+                opacity: 1;
+            }
+            100% {
+                top: 100%;
+                opacity: 0;
+            }
+        }
+
+        .flow-controls {
+            text-align: center;
+            margin-top: var(--spacing-xl);
+        }
+
+        .flow-btn {
+            padding: var(--spacing-md) var(--spacing-xl);
+            background: var(--color-accent);
+            color: white;
+            border: none;
+            border-radius: var(--radius-md);
+            font-size: 0.9375rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color var(--transition-fast);
+            font-family: 'Inter', sans-serif;
+        }
+
+        .flow-btn:hover {
+            background: var(--color-accent-hover);
+        }
+
+        .flow-btn:disabled {
+            background: var(--color-border);
+            cursor: not-allowed;
+        }
+
+        .flow-progress {
+            text-align: center;
+            color: var(--color-text-subtle);
+            font-size: 0.875rem;
+            margin-top: var(--spacing-md);
+        }
+    </style>
+</head>
+<body>
+    <div data-liveview-root>
+    <!-- Navbar -->
+    {{ navbar.render }}
+
+    <!-- Theme Toggle (positioned in navbar) -->
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme" style="position: fixed; top: 12px; right: 20px; z-index: 1100;">
+        <svg class="theme-icon-dark" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+        <svg class="theme-icon-light" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="display: none;">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+    </button>
+
+    <!-- Command Palette -->
+    <div class="command-palette-backdrop" id="command-palette-backdrop"></div>
+    <div class="command-palette" id="command-palette">
+        <div class="command-palette-header">
+            <svg class="command-palette-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <input
+                type="text"
+                class="command-palette-search"
+                id="command-palette-search"
+                placeholder="Search documentation..."
+                autocomplete="off"
+            />
+        </div>
+        <div class="command-palette-results" id="command-palette-results">
+            <!-- Results will be populated by JavaScript -->
+        </div>
+        <div class="command-palette-footer">
+            <div class="command-palette-hint">
+                <span><kbd class="command-palette-key">↑</kbd><kbd class="command-palette-key">↓</kbd> to navigate</span>
+                <span><kbd class="command-palette-key">↵</kbd> to select</span>
+            </div>
+            <div class="command-palette-hint">
+                <span><kbd class="command-palette-key">ESC</kbd> to close</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="container my-5">
+        <div class="row">
+            <div class="col-lg-10 mx-auto">
+
+                <h1>Component Architecture</h1>
+                <p class="lead">
+                    Understanding how components communicate and share state in djust
+                </p>
+
+                <!-- Introduction -->
+                <div class="section-card">
+                    <h2>Overview</h2>
+                    <p>
+                        djust uses a <strong>parent-driven architecture</strong> where LiveViews orchestrate
+                        components and manage state flow. This is similar to React's one-way data flow, but
+                        happens entirely server-side.
+                    </p>
+
+                    <div class="animated-flow-diagram" id="flow-diagram">
+                        <div class="flow-node" data-step="1">
+                            <div class="flow-node-title">
+                                <span class="flow-node-number">1</span>
+                                User Interaction
+                            </div>
+                            <div class="flow-node-description">
+                                User clicks a button in the browser. The @click directive captures the event.
+                            </div>
+                        </div>
+
+                        <div class="flow-arrow" data-step="1">
+                            <div class="flow-pulse"></div>
+                        </div>
+
+                        <div class="flow-node" data-step="2">
+                            <div class="flow-node-title">
+                                <span class="flow-node-number">2</span>
+                                WebSocket Event
+                            </div>
+                            <div class="flow-node-description">
+                                Event is serialized and sent to server over persistent WebSocket connection.
+                            </div>
+                        </div>
+
+                        <div class="flow-arrow" data-step="2">
+                            <div class="flow-pulse"></div>
+                        </div>
+
+                        <div class="flow-node" data-step="3">
+                            <div class="flow-node-title">
+                                <span class="flow-node-number">3</span>
+                                LiveView Handler
+                            </div>
+                            <div class="flow-node-description">
+                                Server-side handler executes. State updates in Python (self.count += 1).
+                            </div>
+                        </div>
+
+                        <div class="flow-arrow" data-step="3">
+                            <div class="flow-pulse"></div>
+                        </div>
+
+                        <div class="flow-node" data-step="4">
+                            <div class="flow-node-title">
+                                <span class="flow-node-number">4</span>
+                                Re-render Components
+                            </div>
+                            <div class="flow-node-description">
+                                get_context_data() is called. Components receive updated props and render new HTML.
+                            </div>
+                        </div>
+
+                        <div class="flow-arrow" data-step="4">
+                            <div class="flow-pulse"></div>
+                        </div>
+
+                        <div class="flow-node" data-step="5">
+                            <div class="flow-node-title">
+                                <span class="flow-node-number">5</span>
+                                VDOM Diffing (Rust)
+                            </div>
+                            <div class="flow-node-description">
+                                Rust-powered VDOM creates minimal JSON patch describing only what changed (&lt;1ms).
+                            </div>
+                        </div>
+
+                        <div class="flow-arrow" data-step="5">
+                            <div class="flow-pulse"></div>
+                        </div>
+
+                        <div class="flow-node" data-step="6">
+                            <div class="flow-node-title">
+                                <span class="flow-node-number">6</span>
+                                Patch Sent to Client
+                            </div>
+                            <div class="flow-node-description">
+                                Tiny JSON/MessagePack patch sent back over WebSocket (typically &lt;1KB).
+                            </div>
+                        </div>
+
+                        <div class="flow-arrow" data-step="6">
+                            <div class="flow-pulse"></div>
+                        </div>
+
+                        <div class="flow-node" data-step="7">
+                            <div class="flow-node-title">
+                                <span class="flow-node-number">7</span>
+                                DOM Updates
+                            </div>
+                            <div class="flow-node-description">
+                                Client JavaScript applies patch. Only changed elements update. No full page reload!
+                            </div>
+                        </div>
+
+                        <div class="flow-controls">
+                            <button class="flow-btn" id="flow-play">Watch the Flow</button>
+                            <button class="flow-btn" id="flow-reset" style="display: none; margin-left: 12px;">Reset</button>
+                            <div class="flow-progress" id="flow-progress"></div>
+                        </div>
+                    </div>
+
+                    <div class="info-box">
+                        <strong>💡 Key Concept:</strong> The LiveView is the "source of truth" for state.
+                        Components receive state as props and render accordingly. When state changes,
+                        the entire view re-renders, and components automatically update.
+                    </div>
+                </div>
+
+                <!-- How State Flows -->
+                <div class="section-card">
+                    <h2>How State Flows</h2>
+
+                    <h3>1. LiveView Owns State</h3>
+                    <div class="code-block-with-header">
+                        <div class="code-header">
+                            <span>In IndexView (LiveView)</span>
+                            <span class="file-path">examples/demo_project/demo_app/views_old.py</span>
+                        </div>
+                        <div class="code-content">
+<pre><code class="language-python">class IndexView(LiveView):
+    def mount(self, request, **kwargs):
+        # State lives in the LiveView
+        self.notification_count = 0
+
+    def increment_notifications(self):
+        # State is modified here
+        self.notification_count += 1</code></pre>
+                        </div>
+                    </div>
+
+                    <h3>2. State Passed to Components</h3>
+                    <div class="code-block-with-header">
+                        <div class="code-header">
+                            <span>In IndexView.get_context_data()</span>
+                            <span class="file-path">examples/demo_project/demo_app/views_old.py</span>
+                        </div>
+                        <div class="code-content">
+<pre><code class="language-python">def get_context_data(self, **kwargs):
+    context = super().get_context_data(**kwargs)
+
+    # Pass state to navbar component
+    context['navbar'] = NavbarComponent(
+        items=[
+            NavItem("Demos", "/demos/",
+                    badge=self.notification_count,  # ← State flows here
+                    badge_variant="danger"),
+        ]
+    )
+
+    return context</code></pre>
+                        </div>
+                    </div>
+
+                    <h3>3. Components Render with Props</h3>
+                    <div class="code-block-with-header">
+                        <div class="code-header">
+                            <span>In NavbarComponent (LiveComponent)</span>
+                            <span class="file-path">python/djust/components/layout/navbar.py</span>
+                        </div>
+                        <div class="code-content">
+<pre><code class="language-python">class NavbarComponent(LiveComponent):
+    def mount(self, **kwargs):
+        # Components receive data via kwargs
+        self.items = kwargs.get('items', [])
+
+    def render(self):
+        # Render uses the data
+        for item in self.items:
+            if item.badge and item.badge > 0:
+                badge_html = f'&lt;span class="badge"&gt;{item.badge}&lt;/span&gt;'</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="diagram text-center">
+                        <div class="state-box">notification_count = 3</div>
+                        <div class="arrow">↓</div>
+                        <div class="component-box">NavbarComponent</div>
+                        <div class="arrow">↓</div>
+                        <div class="state-box">Badge shows "3"</div>
+                    </div>
+                </div>
+
+                <!-- Complete Example -->
+                <div class="section-card">
+                    <h2>Complete Example: Navbar Badge</h2>
+
+                    <p>Let's trace exactly what happens when you click "Add Notification" on the homepage:</p>
+
+                    <h3>Step 1: User Clicks Button</h3>
+                    <p>
+                        When a user clicks the button in the browser, the <code>@click</code> directive tells the djust client JavaScript to capture this event. The <code>@click="increment_notifications"</code> attribute specifies which event handler method should be called on the server-side LiveView. No page reload occurs - this is entirely handled via WebSocket.
+                    </p>
+                    <div class="code-block-with-header">
+                        <div class="code-header">
+                            <span>In Template</span>
+                            <span class="file-path">examples/demo_project/templates/index.html</span>
+                        </div>
+                        <div class="code-content">
+<pre><code class="language-html">&lt;button @click="increment_notifications"&gt;
+    Add Notification
+&lt;/button&gt;</code></pre>
+                        </div>
+                    </div>
+
+                    <h3>Step 2: Event Sent to Server</h3>
+                    <p>
+                        The client-side JavaScript serializes the event and sends it to the server over the WebSocket connection. The message contains the event name (<code>increment_notifications</code>) and any parameters (empty in this case). This happens in milliseconds and is completely transparent to the user. The persistent WebSocket connection means there's no HTTP overhead like with traditional AJAX requests.
+                    </p>
+                    <div class="code-block-with-header">
+                        <div class="code-header">
+                            <span>WebSocket Message (JSON)</span>
+                            <span class="file-path">Client → Server</span>
+                        </div>
+                        <div class="code-content">
+<pre><code class="language-json">{
+    "event": "increment_notifications",
+    "params": {}
+}</code></pre>
+                        </div>
+                    </div>
+
+                    <h3>Step 3: LiveView Handler Executes</h3>
+                    <p>
+                        The server receives the event and routes it to the appropriate LiveView instance (each user session has its own LiveView instance). The <code>increment_notifications</code> method is called, which simply increments the <code>notification_count</code> state variable. This is pure Python code running on the server - you have full access to your database, business logic, authentication, etc. After the handler completes, djust automatically triggers a re-render.
+                    </p>
+                    <div class="code-block-with-header">
+                        <div class="code-header">
+                            <span>In IndexView (LiveView)</span>
+                            <span class="file-path">examples/demo_project/demo_app/views_old.py</span>
+                        </div>
+                        <div class="code-content">
+<pre><code class="language-python">def increment_notifications(self):
+    # State changes on the server
+    self.notification_count += 1
+    # No explicit render call needed!</code></pre>
+                        </div>
+                    </div>
+
+                    <h3>Step 4: LiveView Re-renders</h3>
+                    <p>
+                        djust automatically calls <code>get_context_data()</code> after the event handler finishes. This method builds the context dictionary that will be passed to the template. Here, we create a new <code>NavbarComponent</code> instance with the updated <code>notification_count</code> value. The component is initialized with the new badge count (now 1, 2, 3, etc. depending on how many times it's been clicked).
+                    </p>
+                    <div class="code-block-with-header">
+                        <div class="code-header">
+                            <span>In IndexView.get_context_data()</span>
+                            <span class="file-path">examples/demo_project/demo_app/views_old.py</span>
+                        </div>
+                        <div class="code-content">
+<pre><code class="language-python">def get_context_data(self, **kwargs):
+    # This is called automatically after the event
+    context['navbar'] = NavbarComponent(
+        items=[
+            NavItem("Demos", "/demos/",
+                    badge=self.notification_count,  # New value!
+                    badge_variant="danger"),
+        ]
+    )</code></pre>
+                        </div>
+                    </div>
+
+                    <h3>Step 5: Component Renders with New Data</h3>
+                    <p>
+                        The <code>NavbarComponent.render()</code> method is called to generate the HTML for the navbar. The component sees the new <code>badge</code> value in its props and includes it in the HTML output. The component's render method generates the complete navbar HTML with the badge element included. This HTML generation happens in pure Python - no JavaScript frameworks involved on the server side.
+                    </p>
+                    <div class="code-block-with-header">
+                        <div class="code-header">
+                            <span>In NavbarComponent.render()</span>
+                            <span class="file-path">python/djust/components/layout/navbar.py</span>
+                        </div>
+                        <div class="code-content">
+<pre><code class="language-python"># NavbarComponent.render() is called
+# It sees badge=1 (or 2, 3, etc.)
+# Generates HTML with badge</code></pre>
+                        </div>
+                    </div>
+
+                    <h3>Step 6: VDOM Creates Minimal Patch</h3>
+                    <p>
+                        This is where the magic happens! The Rust-powered VDOM (Virtual DOM) compares the old HTML with the newly rendered HTML. Instead of sending the entire page back to the client, the VDOM algorithm identifies only what changed - in this case, a single badge element was added to a link in the navbar. The diff algorithm creates a minimal JSON patch describing precisely what needs to change in the DOM. This typically takes less than 1 millisecond and results in a tiny payload (often just a few hundred bytes).
+                    </p>
+                    <div class="code-block-with-header">
+                        <div class="code-header">
+                            <span>Rust VDOM Diffing</span>
+                            <span class="file-path">crates/djust_vdom/</span>
+                        </div>
+                        <div class="code-content">
+<pre><code class="language-json">{
+    "type": "add_element",
+    "path": ["nav", "ul", "li[1]", "a"],
+    "html": "&lt;span class='badge'&gt;1&lt;/span&gt;"
+}</code></pre>
+                        </div>
+                    </div>
+
+                    <h3>Step 7: Client Updates DOM</h3>
+                    <p>
+                        The minimal patch is sent back to the client over the WebSocket connection. The djust client JavaScript receives the patch and applies it to the DOM. Using the path information in the patch, it navigates to the exact element in the navbar that needs updating and inserts the badge HTML. The rest of the page remains completely untouched - no full re-render, no flickering, no loss of scroll position or focus. The entire round trip (click → server → DOM update) typically takes 10-50 milliseconds, feeling instant to users.
+                    </p>
+                    <div class="code-block-with-header">
+                        <div class="code-header">
+                            <span>Client JavaScript</span>
+                            <span class="file-path">python/djust/static/djust/client.js</span>
+                        </div>
+                        <div class="code-content">
+<pre><code class="language-javascript">// JavaScript applies the patch
+// Only the badge element is added/updated
+// Rest of page stays exactly the same</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="success-box">
+                        <strong>✅ Result:</strong> The badge appears in the navbar instantly, with zero page reload! The user experiences a smooth, app-like interface while all the complexity of state management, rendering, and diffing is handled automatically by djust. You wrote pure Python code with no client-side JavaScript, yet delivered a highly interactive experience.
+                    </div>
+                </div>
+
+                <!-- Multiple Components -->
+                <div class="section-card">
+                    <h2>Multiple Components Sharing State</h2>
+
+                    <p>Components can share state because they're all rendered by the same LiveView:</p>
+
+                    <div class="code-block-with-header">
+                        <div class="code-header">
+                            <span>In DashboardView (LiveView)</span>
+                            <span class="file-path">Example - Multiple Components</span>
+                        </div>
+                        <div class="code-content">
+<pre><code class="language-python">class DashboardView(LiveView):
+    def mount(self, request, **kwargs):
+        self.user_count = 42
+        self.message_count = 15
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+
+        # Multiple components, same state
+        context['navbar'] = NavbarComponent(
+            items=[
+                NavItem("Messages", "/messages/",
+                        badge=self.message_count),
+            ]
+        )
+
+        context['stats_card'] = StatsCardComponent(
+            title="Total Users",
+            value=self.user_count  # Same LiveView state
+        )
+
+        context['counter_display'] = CounterComponent(
+            count=self.message_count  # Shared with navbar badge!
+        )
+
+        return context</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="diagram text-center">
+                        <div class="component-box">DashboardView</div>
+                        <div style="margin: 16px 0;">
+                            <div class="state-box">user_count = 42</div>
+                            <div class="state-box">message_count = 15</div>
+                        </div>
+                        <div class="arrow">↓</div>
+                        <div>
+                            <div class="component-box">Navbar (shows 15)</div>
+                            <div class="component-box">StatsCard (shows 42)</div>
+                            <div class="component-box">Counter (shows 15)</div>
+                        </div>
+                    </div>
+
+                    <div class="info-box">
+                        <strong>💡 Key Insight:</strong> When <code>message_count</code> changes,
+                        <strong>both</strong> the navbar badge and counter component update automatically
+                        because they both use the same state from the LiveView!
+                    </div>
+                </div>
+
+                <!-- Component Communication -->
+                <div class="section-card">
+                    <h2>Component Communication Patterns</h2>
+
+                    <h3>Pattern 1: Props Down (Current Approach)</h3>
+                    <div class="code-block-with-header">
+                        <div class="code-header">
+                            <span>In LiveView.get_context_data()</span>
+                            <span class="file-path">Pattern: Props Down</span>
+                        </div>
+                        <div class="code-content">
+<pre><code class="language-python"># Parent passes data to child
+context['button'] = ButtonComponent(
+    label="Click Me",
+    variant="primary",
+    disabled=self.is_loading  # Parent state
+)</code></pre>
+                        </div>
+                    </div>
+
+                    <h3>Pattern 2: Events Up</h3>
+                    <div class="code-block-with-header">
+                        <div class="code-header">
+                            <span>Template + LiveView</span>
+                            <span class="file-path">Pattern: Events Up</span>
+                        </div>
+                        <div class="code-content">
+<pre><code class="language-html">&lt;!-- Template --&gt;
+&lt;button @click="handle_button_click"&gt;Click Me&lt;/button&gt;</code></pre>
+<pre><code class="language-python"># LiveView
+def handle_button_click(self):
+    self.is_loading = True
+    # Do something...
+    self.is_loading = False</code></pre>
+                        </div>
+                    </div>
+
+                    <h3>Pattern 3: Shared State via LiveView</h3>
+                    <div class="code-block-with-header">
+                        <div class="code-header">
+                            <span>In MyView (LiveView)</span>
+                            <span class="file-path">Pattern: Shared State</span>
+                        </div>
+                        <div class="code-content">
+<pre><code class="language-python">class MyView(LiveView):
+    def mount(self, request):
+        # Shared state
+        self.selected_item = None
+
+    def select_item(self, item_id):
+        # Update state
+        self.selected_item = item_id
+        # Both sidebar and detail view will update!
+
+    def get_context_data(self):
+        return {
+            'sidebar': SidebarComponent(
+                selected=self.selected_item
+            ),
+            'detail': DetailComponent(
+                item_id=self.selected_item
+            )
+        }</code></pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Nested Components -->
+                <div class="section-card">
+                    <h2>Nested Components</h2>
+
+                    <p>Components can contain other components:</p>
+
+                    <div class="code-block-with-header">
+                        <div class="code-header">
+                            <span>In CardComponent (LiveComponent)</span>
+                            <span class="file-path">Example - Nested Components</span>
+                        </div>
+                        <div class="code-content">
+<pre><code class="language-python">class CardComponent(LiveComponent):
+    def get_context_data(self):
+        return {
+            'title': self.title,
+            'button': ButtonComponent(
+                label="Action",
+                variant="primary"
+            )
+        }
+
+    def render(self):
+        # In template or inline:
+        return f'''
+        &lt;div class="card"&gt;
+            &lt;h3&gt;{self.title}&lt;/h3&gt;
+            {self.button.render()}  ← Nested component
+        &lt;/div&gt;
+        '''</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="diagram text-center">
+                        <div class="component-box">LiveView</div>
+                        <div class="arrow">↓</div>
+                        <div class="component-box">CardComponent</div>
+                        <div class="arrow">↓</div>
+                        <div class="component-box">ButtonComponent</div>
+                    </div>
+                </div>
+
+                <!-- Best Practices -->
+                <div class="section-card">
+                    <h2>Best Practices</h2>
+
+                    <h3>✅ Do This</h3>
+                    <ul>
+                        <li>Keep state in the LiveView (parent)</li>
+                        <li>Pass state to components via props</li>
+                        <li>Use event handlers in LiveView to modify state</li>
+                        <li>Let components be stateless renderers when possible</li>
+                        <li>Re-render the entire view when state changes</li>
+                    </ul>
+
+                    <h3>❌ Avoid This</h3>
+                    <ul>
+                        <li>Don't store state in components (they're ephemeral)</li>
+                        <li>Don't try to have components communicate directly</li>
+                        <li>Don't mutate component props</li>
+                        <li>Don't rely on component instance persistence</li>
+                    </ul>
+
+                    <div class="warning-box">
+                        <strong>⚠️ Important:</strong> Components are re-created on every render!
+                        They don't persist between renders. State must live in the LiveView.
+                    </div>
+                </div>
+
+                <!-- Comparison -->
+                <div class="section-card">
+                    <h2>Comparison with Other Frameworks</h2>
+
+                    <table class="table table-bordered">
+                        <thead>
+                            <tr>
+                                <th>Framework</th>
+                                <th>State Location</th>
+                                <th>Update Trigger</th>
+                                <th>Where Rendered</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>djust</strong></td>
+                                <td>LiveView (server)</td>
+                                <td>Event handler</td>
+                                <td>Server</td>
+                            </tr>
+                            <tr>
+                                <td>React</td>
+                                <td>Component state/props</td>
+                                <td>setState() / hooks</td>
+                                <td>Client</td>
+                            </tr>
+                            <tr>
+                                <td>Phoenix LiveView</td>
+                                <td>LiveView (server)</td>
+                                <td>Event handler</td>
+                                <td>Server</td>
+                            </tr>
+                            <tr>
+                                <td>Vue</td>
+                                <td>Component data/props</td>
+                                <td>Reactive setters</td>
+                                <td>Client</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <div class="info-box">
+                        <strong>💡 Insight:</strong> djust follows the Phoenix LiveView pattern -
+                        state on server, minimal client JavaScript, WebSocket for updates.
+                        But with shadcn-style component flexibility!
+                    </div>
+                </div>
+
+                <!-- Live Example -->
+                <div class="section-card">
+                    <h2>Live Example</h2>
+
+                    <p>This page itself demonstrates component communication:</p>
+
+                    <div class="text-center my-4">
+                        <button @click="increment_demo_count"
+                                class="btn btn-primary btn-lg me-2">
+                            Increment Counter
+                        </button>
+                        <button @click="reset_demo_count"
+                                class="btn btn-secondary btn-lg">
+                            Reset
+                        </button>
+                    </div>
+
+                    <div class="text-center my-4">
+                        <div class="alert alert-info d-inline-block">
+                            <h4 class="mb-0">Demo Count: <strong>{{ demo_count }}</strong></h4>
+                        </div>
+                    </div>
+
+                    <p class="text-center text-muted">
+                        👆 This counter updates the "Docs" badge in the navbar above!<br>
+                        Look at the top of the page when you click the button.
+                    </p>
+
+                    <div class="success-box">
+                        <strong>How it works:</strong>
+                        <ol class="mb-0">
+                            <li>Button click triggers <code>increment_demo_count()</code></li>
+                            <li>LiveView updates <code>self.demo_count</code></li>
+                            <li>View re-renders with new count</li>
+                            <li>NavbarComponent receives new badge value</li>
+                            <li>Both counter <em>and</em> navbar badge update!</li>
+                        </ol>
+                    </div>
+                </div>
+
+                <!-- Interactive Playground -->
+                <div class="section-card">
+                    <h2>Interactive Code Playground</h2>
+
+                    <p>Try editing the HTML below to see how different elements render. This playground demonstrates real-time HTML rendering - experiment with tags, attributes, and content!</p>
+
+                    <div class="code-playground">
+                        <div class="code-playground-header">
+                            <span class="code-playground-title">HTML Editor</span>
+                            <div class="code-playground-actions">
+                                <button class="code-playground-btn" id="playground-reset">Reset</button>
+                            </div>
+                        </div>
+                        <div class="code-playground-content">
+                            <div class="code-playground-editor">
+                                <div class="code-playground-editor-header">EDITOR</div>
+                                <textarea class="code-playground-textarea" id="playground-code" spellcheck="false"><div class="card" style="border: 2px solid #3b82f6; border-radius: 8px; padding: 20px; max-width: 400px;">
+  <h3 style="color: #3b82f6; margin-top: 0;">Welcome to djust!</h3>
+  <p style="color: #64748b; line-height: 1.6;">
+    Edit the HTML on the left to see live updates here. Try changing:
+  </p>
+  <ul style="color: #64748b;">
+    <li>Text content</li>
+    <li>Colors and styles</li>
+    <li>HTML structure</li>
+  </ul>
+  <button style="background: #3b82f6; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">
+    Click Me
+  </button>
+</div></textarea>
+                            </div>
+                            <div class="code-playground-preview">
+                                <div class="code-playground-preview-header">LIVE PREVIEW</div>
+                                <div class="code-playground-preview-content" id="playground-preview">
+                                    <!-- Preview renders here -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="info-box">
+                        <strong>💡 Tip:</strong> In a real djust application, your templates can use Django template syntax like <code>{{ "{{" }} variable }}</code> and <code>{&#37; if condition &#37;}</code>. The server renders these into HTML before sending to the client, where the VDOM efficiently updates only what changed!
+                    </div>
+                </div>
+
+                <!-- Conclusion -->
+                <div class="section-card">
+                    <h2>Summary</h2>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h3>🎯 Core Principles</h3>
+                            <ul>
+                                <li>LiveView owns state</li>
+                                <li>Components receive props</li>
+                                <li>Events flow up to LiveView</li>
+                                <li>Data flows down to components</li>
+                                <li>Re-render on state change</li>
+                            </ul>
+                        </div>
+                        <div class="col-md-6">
+                            <h3>⚡ Benefits</h3>
+                            <ul>
+                                <li>Simple mental model</li>
+                                <li>No prop drilling</li>
+                                <li>Automatic updates</li>
+                                <li>Server-side simplicity</li>
+                                <li>Client-side performance</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="info-box mt-4">
+                        <strong>🚀 Next Steps:</strong>
+                        <ul class="mb-0">
+                            <li>Read <a href="/docs/">Full Documentation</a></li>
+                            <li>Explore <a href="/demos/">Live Demos</a></li>
+                            <li>Try <a href="/kitchen-sink/">Component Library</a></li>
+                            <li>Check out <a href="https://github.com/yourusername/djust">GitHub Repo</a></li>
+                        </ul>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+    </div> <!-- Close data-liveview-root -->
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>hljs.highlightAll();</script>
+
+    <!-- Theme Switcher -->
+    <script>
+        (function() {
+            const themeToggle = document.getElementById('theme-toggle');
+            const htmlElement = document.documentElement;
+            const darkIcon = document.querySelector('.theme-icon-dark');
+            const lightIcon = document.querySelector('.theme-icon-light');
+
+            // Get theme from localStorage or system preference
+            function getPreferredTheme() {
+                const stored = localStorage.getItem('theme');
+                if (stored) {
+                    return stored;
+                }
+                return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+            }
+
+            // Set theme
+            function setTheme(theme) {
+                htmlElement.setAttribute('data-theme', theme);
+                localStorage.setItem('theme', theme);
+
+                // Update icons
+                if (theme === 'dark') {
+                    darkIcon.style.display = 'block';
+                    lightIcon.style.display = 'none';
+                } else {
+                    darkIcon.style.display = 'none';
+                    lightIcon.style.display = 'block';
+                }
+            }
+
+            // Initialize theme
+            const currentTheme = getPreferredTheme();
+            setTheme(currentTheme);
+
+            // Toggle theme on button click
+            themeToggle.addEventListener('click', function() {
+                const currentTheme = htmlElement.getAttribute('data-theme') || 'dark';
+                const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+                setTheme(newTheme);
+            });
+
+            // Listen for system theme changes
+            window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', function(e) {
+                if (!localStorage.getItem('theme')) {
+                    setTheme(e.matches ? 'light' : 'dark');
+                }
+            });
+        })();
+    </script>
+
+    <!-- Copy Button Functionality -->
+    <script>
+        (function() {
+            // Add copy buttons to all code blocks
+            const codeBlocks = document.querySelectorAll('.code-block-with-header');
+
+            codeBlocks.forEach(function(block) {
+                // Create copy button
+                const copyButton = document.createElement('button');
+                copyButton.className = 'copy-button';
+                copyButton.setAttribute('aria-label', 'Copy code');
+                copyButton.innerHTML = `
+                    <svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    <svg class="check-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="display: none;">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                    </svg>
+                `;
+
+                // Add click handler
+                copyButton.addEventListener('click', function() {
+                    const codeElement = block.querySelector('code');
+                    const textToCopy = codeElement.textContent;
+
+                    navigator.clipboard.writeText(textToCopy).then(function() {
+                        // Show success state
+                        copyButton.classList.add('copied');
+                        const copyIcon = copyButton.querySelector('.copy-icon');
+                        const checkIcon = copyButton.querySelector('.check-icon');
+                        copyIcon.style.display = 'none';
+                        checkIcon.style.display = 'block';
+
+                        // Reset after 2 seconds
+                        setTimeout(function() {
+                            copyButton.classList.remove('copied');
+                            copyIcon.style.display = 'block';
+                            checkIcon.style.display = 'none';
+                        }, 2000);
+                    }).catch(function(err) {
+                        console.error('Failed to copy:', err);
+                    });
+                });
+
+                // Insert button into code block
+                block.insertBefore(copyButton, block.firstChild);
+            });
+        })();
+    </script>
+
+    <!-- Command Palette Functionality -->
+    <script>
+        (function() {
+            const palette = document.getElementById('command-palette');
+            const backdrop = document.getElementById('command-palette-backdrop');
+            const search = document.getElementById('command-palette-search');
+            const results = document.getElementById('command-palette-results');
+
+            let allSections = [];
+            let selectedIndex = 0;
+
+            // Build index of all searchable sections
+            function buildIndex() {
+                allSections = [];
+
+                // Find all H2 and H3 headings with their parent section context
+                document.querySelectorAll('h2, h3').forEach(function(heading) {
+                    const text = heading.textContent.trim();
+                    const level = heading.tagName.toLowerCase();
+
+                    // Create an ID if one doesn't exist
+                    if (!heading.id) {
+                        heading.id = text.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+                    }
+
+                    allSections.push({
+                        text: text,
+                        id: heading.id,
+                        level: level,
+                        element: heading
+                    });
+                });
+            }
+
+            // Fuzzy search filter
+            function fuzzyMatch(text, query) {
+                if (!query) return true;
+
+                text = text.toLowerCase();
+                query = query.toLowerCase();
+
+                // Simple contains search
+                if (text.includes(query)) return true;
+
+                // Fuzzy match: all query characters must appear in order
+                let textIndex = 0;
+                for (let i = 0; i < query.length; i++) {
+                    textIndex = text.indexOf(query[i], textIndex);
+                    if (textIndex === -1) return false;
+                    textIndex++;
+                }
+                return true;
+            }
+
+            // Render results
+            function renderResults(query) {
+                const filtered = allSections.filter(function(section) {
+                    return fuzzyMatch(section.text, query);
+                });
+
+                if (filtered.length === 0) {
+                    results.innerHTML = '<div class="command-palette-empty">No results found</div>';
+                    return;
+                }
+
+                results.innerHTML = '';
+                filtered.forEach(function(section, index) {
+                    const item = document.createElement('div');
+                    item.className = 'command-palette-item';
+                    if (index === selectedIndex) {
+                        item.classList.add('selected');
+                    }
+
+                    item.innerHTML = `
+                        <svg class="command-palette-item-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        <span class="command-palette-item-text">${section.text}</span>
+                        <span class="command-palette-item-badge">${section.level}</span>
+                    `;
+
+                    item.addEventListener('click', function() {
+                        navigateToSection(section.id);
+                    });
+
+                    results.appendChild(item);
+                });
+            }
+
+            // Navigate to a section
+            function navigateToSection(id) {
+                closePalette();
+                const element = document.getElementById(id);
+                if (element) {
+                    element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    // Add a brief highlight effect
+                    element.style.transition = 'color 0.3s';
+                    const originalColor = element.style.color;
+                    element.style.color = 'var(--color-accent)';
+                    setTimeout(function() {
+                        element.style.color = originalColor;
+                    }, 1000);
+                }
+            }
+
+            // Open palette
+            function openPalette() {
+                buildIndex();
+                palette.classList.add('active');
+                backdrop.classList.add('active');
+                search.value = '';
+                selectedIndex = 0;
+                renderResults('');
+                setTimeout(function() {
+                    search.focus();
+                }, 100);
+            }
+
+            // Close palette
+            function closePalette() {
+                palette.classList.remove('active');
+                backdrop.classList.remove('active');
+                search.value = '';
+            }
+
+            // Keyboard shortcuts
+            document.addEventListener('keydown', function(e) {
+                // Cmd+K or Ctrl+K to open
+                if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+                    e.preventDefault();
+                    openPalette();
+                    return;
+                }
+
+                // Only handle these keys when palette is open
+                if (!palette.classList.contains('active')) return;
+
+                // Escape to close
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    closePalette();
+                    return;
+                }
+
+                // Arrow down
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    const items = results.querySelectorAll('.command-palette-item');
+                    if (items.length > 0) {
+                        selectedIndex = (selectedIndex + 1) % items.length;
+                        renderResults(search.value);
+                        // Scroll selected item into view
+                        const selected = results.querySelector('.command-palette-item.selected');
+                        if (selected) {
+                            selected.scrollIntoView({ block: 'nearest' });
+                        }
+                    }
+                    return;
+                }
+
+                // Arrow up
+                if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    const items = results.querySelectorAll('.command-palette-item');
+                    if (items.length > 0) {
+                        selectedIndex = selectedIndex === 0 ? items.length - 1 : selectedIndex - 1;
+                        renderResults(search.value);
+                        // Scroll selected item into view
+                        const selected = results.querySelector('.command-palette-item.selected');
+                        if (selected) {
+                            selected.scrollIntoView({ block: 'nearest' });
+                        }
+                    }
+                    return;
+                }
+
+                // Enter to select
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const items = results.querySelectorAll('.command-palette-item');
+                    if (items.length > 0 && selectedIndex < items.length) {
+                        const query = search.value;
+                        const filtered = allSections.filter(function(section) {
+                            return fuzzyMatch(section.text, query);
+                        });
+                        if (filtered[selectedIndex]) {
+                            navigateToSection(filtered[selectedIndex].id);
+                        }
+                    }
+                    return;
+                }
+            });
+
+            // Search input
+            search.addEventListener('input', function() {
+                selectedIndex = 0;
+                renderResults(search.value);
+            });
+
+            // Click backdrop to close
+            backdrop.addEventListener('click', function() {
+                closePalette();
+            });
+
+            // Build initial index
+            buildIndex();
+        })();
+    </script>
+
+    <!-- Code Playground Functionality -->
+    <script>
+        (function() {
+            const codeTextarea = document.getElementById('playground-code');
+            const previewContent = document.getElementById('playground-preview');
+            const resetButton = document.getElementById('playground-reset');
+
+            // Store original code
+            const originalCode = codeTextarea.value;
+
+            // Update preview
+            function updatePreview() {
+                const code = codeTextarea.value;
+                // Sanitize and render the code
+                previewContent.innerHTML = code;
+            }
+
+            // Reset to original code
+            function resetCode() {
+                codeTextarea.value = originalCode;
+                updatePreview();
+            }
+
+            // Listen for changes
+            codeTextarea.addEventListener('input', function() {
+                updatePreview();
+            });
+
+            // Reset button
+            resetButton.addEventListener('click', function() {
+                resetCode();
+            });
+
+            // Handle tab key in textarea
+            codeTextarea.addEventListener('keydown', function(e) {
+                if (e.key === 'Tab') {
+                    e.preventDefault();
+                    const start = this.selectionStart;
+                    const end = this.selectionEnd;
+                    const value = this.value;
+
+                    // Insert 2 spaces
+                    this.value = value.substring(0, start) + '  ' + value.substring(end);
+
+                    // Move cursor
+                    this.selectionStart = this.selectionEnd = start + 2;
+                }
+            });
+
+            // Initial render
+            updatePreview();
+        })();
+    </script>
+
+    <!-- Animated Flow Diagram -->
+    <script>
+        (function() {
+            const playButton = document.getElementById('flow-play');
+            const resetButton = document.getElementById('flow-reset');
+            const progress = document.getElementById('flow-progress');
+            const nodes = document.querySelectorAll('.flow-node');
+            const arrows = document.querySelectorAll('.flow-arrow');
+
+            let currentStep = 0;
+            let isPlaying = false;
+            const totalSteps = 7;
+            const stepDuration = 1000; // 1 second per step
+
+            function resetAnimation() {
+                currentStep = 0;
+                isPlaying = false;
+
+                // Reset all nodes and arrows
+                nodes.forEach(function(node) {
+                    node.classList.remove('active', 'completed');
+                });
+                arrows.forEach(function(arrow) {
+                    arrow.classList.remove('active');
+                });
+
+                // Update UI
+                playButton.textContent = 'Watch the Flow';
+                playButton.style.display = 'inline-block';
+                resetButton.style.display = 'none';
+                progress.textContent = '';
+            }
+
+            function activateStep(step) {
+                // Find nodes and arrows for this step
+                const node = document.querySelector(`.flow-node[data-step="${step}"]`);
+                const arrow = document.querySelector(`.flow-arrow[data-step="${step}"]`);
+
+                // Mark previous nodes as completed
+                for (let i = 1; i < step; i++) {
+                    const prevNode = document.querySelector(`.flow-node[data-step="${i}"]`);
+                    if (prevNode) {
+                        prevNode.classList.remove('active');
+                        prevNode.classList.add('completed');
+                    }
+                    const prevArrow = document.querySelector(`.flow-arrow[data-step="${i}"]`);
+                    if (prevArrow) {
+                        prevArrow.classList.remove('active');
+                    }
+                }
+
+                // Activate current node and arrow
+                if (node) {
+                    node.classList.add('active');
+                }
+                if (arrow) {
+                    arrow.classList.add('active');
+                }
+
+                // Update progress
+                progress.textContent = `Step ${step} of ${totalSteps}`;
+            }
+
+            function playAnimation() {
+                if (isPlaying) return;
+
+                isPlaying = true;
+                playButton.style.display = 'none';
+                resetButton.style.display = 'inline-block';
+
+                currentStep = 1;
+                activateStep(currentStep);
+
+                const interval = setInterval(function() {
+                    currentStep++;
+
+                    if (currentStep <= totalSteps) {
+                        activateStep(currentStep);
+                    } else {
+                        // Animation complete
+                        clearInterval(interval);
+                        isPlaying = false;
+
+                        // Mark all as completed
+                        nodes.forEach(function(node) {
+                            node.classList.remove('active');
+                            node.classList.add('completed');
+                        });
+                        arrows.forEach(function(arrow) {
+                            arrow.classList.remove('active');
+                        });
+
+                        progress.textContent = 'Complete! Click "Reset" to watch again.';
+                        playButton.textContent = 'Play Again';
+                        playButton.style.display = 'inline-block';
+                    }
+                }, stepDuration);
+            }
+
+            // Event listeners
+            playButton.addEventListener('click', function() {
+                if (!isPlaying && currentStep > 0) {
+                    resetAnimation();
+                }
+                playAnimation();
+            });
+
+            resetButton.addEventListener('click', function() {
+                resetAnimation();
+            });
+        })();
+    </script>
+</body>
+</html>

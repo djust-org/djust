@@ -1,0 +1,843 @@
+{% extends "base.html" %}
+
+{% block title %}Interactive Demos - djust{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block extra_head %}
+<style>
+    /* Page Container */
+    .demos-page {
+        min-height: calc(100vh - 70px);
+        background: var(--color-bg);
+        padding: 3rem 0 4rem;
+    }
+
+    /* Hero Section */
+    .demos-hero {
+        text-align: center;
+        margin-bottom: 3rem;
+        padding: 0 1rem;
+    }
+
+    .demos-hero-title {
+        font-size: 3.5rem;
+        font-weight: 800;
+        color: var(--color-text);
+        margin-bottom: 1rem;
+        letter-spacing: -0.03em;
+    }
+
+    .demos-hero-gradient {
+        background: linear-gradient(135deg, var(--color-accent) 0%, #2563eb 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+
+    .demos-hero-subtitle {
+        font-size: 1.25rem;
+        color: var(--color-text-muted);
+        max-width: 700px;
+        margin: 0 auto 2rem;
+        line-height: 1.6;
+    }
+
+    /* Search and Filter Bar */
+    .demos-search-bar {
+        max-width: 600px;
+        margin: 0 auto 3rem;
+        position: relative;
+    }
+
+    .demos-search-input {
+        width: 100%;
+        padding: 1rem 1rem 1rem 3rem;
+        background: var(--color-bg-elevated);
+        border: 2px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        color: var(--color-text);
+        font-size: 1rem;
+        transition: all var(--transition-fast);
+    }
+
+    .demos-search-input:focus {
+        outline: none;
+        border-color: var(--color-accent);
+        box-shadow: 0 0 0 3px var(--color-accent-muted);
+    }
+
+    .demos-search-icon {
+        position: absolute;
+        left: 1rem;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--color-text-muted);
+        pointer-events: none;
+    }
+
+    /* Category Filters */
+    .category-filters {
+        display: flex;
+        gap: 0.75rem;
+        justify-content: center;
+        flex-wrap: wrap;
+        margin-bottom: 3rem;
+    }
+
+    .category-filter-btn {
+        padding: 0.625rem 1.25rem;
+        background: var(--color-bg-elevated);
+        border: 2px solid var(--color-border);
+        border-radius: 999px;
+        color: var(--color-text-muted);
+        font-weight: 600;
+        font-size: 0.875rem;
+        cursor: pointer;
+        transition: all var(--transition-fast);
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .category-filter-btn:hover {
+        border-color: var(--color-border-hover);
+        color: var(--color-text);
+        transform: translateY(-1px);
+    }
+
+    .category-filter-btn.active {
+        background: var(--color-accent);
+        border-color: var(--color-accent);
+        color: white;
+    }
+
+    /* Category Sections */
+    .demos-category {
+        margin-bottom: 4rem;
+    }
+
+    .category-header {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 2px solid var(--color-border);
+    }
+
+    .category-icon {
+        font-size: 2rem;
+    }
+
+    .category-title {
+        font-size: 2rem;
+        font-weight: 700;
+        color: var(--color-text);
+        margin: 0;
+    }
+
+    .category-count {
+        font-size: 0.875rem;
+        color: var(--color-text-muted);
+        background: var(--color-bg-elevated);
+        padding: 0.25rem 0.75rem;
+        border-radius: 999px;
+        margin-left: auto;
+    }
+
+    /* Demo Cards Grid */
+    .demos-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 1.5rem;
+    }
+
+    /* Demo Card */
+    .demo-card-modern {
+        background: var(--color-bg-elevated);
+        border: 2px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        padding: 1.75rem;
+        transition: all var(--transition-base);
+        cursor: pointer;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .demo-card-modern::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, var(--color-accent), #2563eb);
+        opacity: 0;
+        transition: opacity var(--transition-fast);
+    }
+
+    .demo-card-modern:hover {
+        border-color: var(--color-accent);
+        box-shadow: var(--shadow-lg);
+        transform: translateY(-4px);
+    }
+
+    .demo-card-modern:hover::before {
+        opacity: 1;
+    }
+
+    .demo-card-icon {
+        font-size: 2.5rem;
+        margin-bottom: 1rem;
+        display: block;
+    }
+
+    .demo-card-title {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--color-text);
+        margin-bottom: 0.75rem;
+    }
+
+    .demo-card-description {
+        color: var(--color-text-muted);
+        font-size: 0.9375rem;
+        line-height: 1.6;
+        margin-bottom: 1.25rem;
+        flex-grow: 1;
+    }
+
+    /* Feature Tags */
+    .demo-card-features {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-bottom: 1.25rem;
+    }
+
+    .feature-tag-modern {
+        padding: 0.375rem 0.75rem;
+        background: var(--color-accent-muted);
+        color: var(--color-accent);
+        border-radius: var(--radius-sm);
+        font-size: 0.75rem;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+    }
+
+    /* Demo Card Footer */
+    .demo-card-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: auto;
+        padding-top: 1rem;
+        border-top: 1px solid var(--color-border);
+    }
+
+    .demo-card-cta {
+        color: var(--color-accent);
+        font-weight: 600;
+        font-size: 0.9375rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        transition: gap var(--transition-fast);
+    }
+
+    .demo-card-modern:hover .demo-card-cta {
+        gap: 0.75rem;
+    }
+
+    .demo-card-badge {
+        padding: 0.25rem 0.625rem;
+        background: var(--color-bg);
+        border: 1px solid var(--color-border);
+        border-radius: 999px;
+        font-size: 0.75rem;
+        color: var(--color-text-muted);
+        font-weight: 500;
+    }
+
+    /* Special Badges */
+    .badge-new {
+        background: var(--color-success);
+        color: white;
+        border-color: var(--color-success);
+    }
+
+    .badge-popular {
+        background: var(--color-accent);
+        color: white;
+        border-color: var(--color-accent);
+    }
+
+    .badge-advanced {
+        background: var(--color-warning);
+        color: white;
+        border-color: var(--color-warning);
+    }
+
+    /* Stats Bar */
+    .demos-stats {
+        background: var(--color-bg-elevated);
+        border: 2px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        padding: 2rem;
+        margin-bottom: 3rem;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 2rem;
+        text-align: center;
+    }
+
+    .stat-item {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .stat-value {
+        font-size: 2.5rem;
+        font-weight: 800;
+        color: var(--color-accent);
+        line-height: 1;
+    }
+
+    .stat-label {
+        font-size: 0.875rem;
+        color: var(--color-text-muted);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    /* Empty State */
+    .empty-state {
+        text-align: center;
+        padding: 4rem 2rem;
+        color: var(--color-text-muted);
+    }
+
+    .empty-state-icon {
+        font-size: 4rem;
+        margin-bottom: 1rem;
+        opacity: 0.5;
+    }
+
+    .empty-state-text {
+        font-size: 1.125rem;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+        .demos-hero-title {
+            font-size: 2.5rem;
+        }
+
+        .demos-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .category-filters {
+            padding: 0 1rem;
+        }
+
+        .demos-stats {
+            grid-template-columns: 1fr;
+            gap: 1.5rem;
+        }
+    }
+
+    /* Animation for cards appearing */
+    @keyframes fadeInUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .demo-card-modern {
+        animation: fadeInUp 0.4s ease-out backwards;
+    }
+
+    .demo-card-modern:nth-child(1) { animation-delay: 0.05s; }
+    .demo-card-modern:nth-child(2) { animation-delay: 0.1s; }
+    .demo-card-modern:nth-child(3) { animation-delay: 0.15s; }
+    .demo-card-modern:nth-child(4) { animation-delay: 0.2s; }
+    .demo-card-modern:nth-child(5) { animation-delay: 0.25s; }
+    .demo-card-modern:nth-child(6) { animation-delay: 0.3s; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div data-liveview-root class="demos-page">
+    <div class="container">
+        <!-- Hero Section -->
+        <div class="demos-hero">
+            <h1 class="demos-hero-title">
+                <span class="demos-hero-gradient">Interactive Demos</span>
+            </h1>
+            <p class="demos-hero-subtitle">
+                Explore real-time, reactive examples showcasing djust's powerful features.
+                All demos update instantly without page reloads.
+            </p>
+        </div>
+
+        <!-- Search Bar -->
+        <div class="demos-search-bar">
+            <svg class="demos-search-icon" width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+            </svg>
+            <input
+                type="text"
+                class="demos-search-input"
+                placeholder="Search demos..."
+                id="search-input"
+            >
+        </div>
+
+        <!-- Category Filters -->
+        <div class="category-filters">
+            <button class="category-filter-btn active" data-category="all">
+                ⭐ All Demos
+            </button>
+            <button class="category-filter-btn" data-category="basic">
+                🎯 Basic
+            </button>
+            <button class="category-filter-btn" data-category="state">
+                📊 State Management
+            </button>
+            <button class="category-filter-btn" data-category="interactive">
+                💡 Interactive
+            </button>
+            <button class="category-filter-btn" data-category="advanced">
+                🚀 Advanced
+            </button>
+        </div>
+
+        <!-- Stats Bar -->
+        <div class="demos-stats">
+            <div class="stat-item">
+                <div class="stat-value">12</div>
+                <div class="stat-label">Total Demos</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value">4</div>
+                <div class="stat-label">Categories</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value">0ms</div>
+                <div class="stat-label">Page Reloads</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value">&lt;1ms</div>
+                <div class="stat-label">VDOM Diff</div>
+            </div>
+        </div>
+
+        <!-- Basic Demos Category -->
+        <div class="demos-category" data-category="basic">
+            <div class="category-header">
+                <span class="category-icon">🎯</span>
+                <h2 class="category-title">Basic Demos</h2>
+                <span class="category-count">2 demos</span>
+            </div>
+            <div class="demos-grid">
+                <!-- Counter Demo -->
+                <a href="#counter" class="demo-card-modern" data-demo-name="counter">
+                    <span class="demo-card-icon">⚡</span>
+                    <h3 class="demo-card-title">Counter</h3>
+                    <p class="demo-card-description">
+                        Simple counter demonstrating real-time state management and event handling with instant updates.
+                    </p>
+                    <div class="demo-card-features">
+                        <span class="feature-tag-modern">✓ Real-time</span>
+                        <span class="feature-tag-modern">✓ @click</span>
+                        <span class="feature-tag-modern">✓ State sync</span>
+                    </div>
+                    <div class="demo-card-footer">
+                        <span class="demo-card-cta">
+                            View Demo
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                            </svg>
+                        </span>
+                        <span class="demo-card-badge badge-popular">Popular</span>
+                    </div>
+                </a>
+
+                <!-- Dropdown Demo -->
+                <a href="#dropdown" class="demo-card-modern" data-demo-name="dropdown">
+                    <span class="demo-card-icon">📋</span>
+                    <h3 class="demo-card-title">Dropdown</h3>
+                    <p class="demo-card-description">
+                        Interactive dropdown menu with dynamic state management and smooth open/close transitions.
+                    </p>
+                    <div class="demo-card-features">
+                        <span class="feature-tag-modern">✓ Toggle state</span>
+                        <span class="feature-tag-modern">✓ Selection</span>
+                        <span class="feature-tag-modern">✓ Persistence</span>
+                    </div>
+                    <div class="demo-card-footer">
+                        <span class="demo-card-cta">
+                            View Demo
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                            </svg>
+                        </span>
+                    </div>
+                </a>
+            </div>
+        </div>
+
+        <!-- State Management Category -->
+        <div class="demos-category" data-category="state">
+            <div class="category-header">
+                <span class="category-icon">📊</span>
+                <h2 class="category-title">State Management</h2>
+                <span class="category-count">3 demos</span>
+            </div>
+            <div class="demos-grid">
+                <!-- Debounce Demo -->
+                <a href="#debounce" class="demo-card-modern" data-demo-name="debounce">
+                    <span class="demo-card-icon">⏱️</span>
+                    <h3 class="demo-card-title">Debounce</h3>
+                    <p class="demo-card-description">
+                        Type rapidly - search waits until you stop typing (500ms delay). Reduces server calls by ~90%.
+                    </p>
+                    <div class="demo-card-features">
+                        <span class="feature-tag-modern">⏱️ 500ms wait</span>
+                        <span class="feature-tag-modern">⏰ 2s max</span>
+                        <span class="feature-tag-modern">📉 90% reduction</span>
+                    </div>
+                    <div class="demo-card-footer">
+                        <span class="demo-card-cta">
+                            View Demo
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                            </svg>
+                        </span>
+                        <span class="demo-card-badge badge-popular">Popular</span>
+                    </div>
+                </a>
+
+                <!-- Cache Demo -->
+                <a href="#cache" class="demo-card-modern" data-demo-name="cache">
+                    <span class="demo-card-icon">💾</span>
+                    <h3 class="demo-card-title">Cache</h3>
+                    <p class="demo-card-description">
+                        Client-side caching with 5min TTL. Repeat searches return instantly from cache with &lt;1ms latency.
+                    </p>
+                    <div class="demo-card-features">
+                        <span class="feature-tag-modern">💾 5min TTL</span>
+                        <span class="feature-tag-modern">⚡ &lt;1ms hits</span>
+                        <span class="feature-tag-modern">📉 87% reduction</span>
+                    </div>
+                    <div class="demo-card-footer">
+                        <span class="demo-card-cta">
+                            View Demo
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                            </svg>
+                        </span>
+                        <span class="demo-card-badge badge-new">New</span>
+                    </div>
+                </a>
+
+                <!-- Smart Dashboard Demo -->
+                <a href="/demos/smart-dashboard/" class="demo-card-modern" data-demo-name="smart dashboard">
+                    <span class="demo-card-icon">🏠</span>
+                    <h3 class="demo-card-title">Smart Dashboard</h3>
+                    <p class="demo-card-description">
+                        Complete dashboard showcasing @client_state decorator for client-only state management.
+                    </p>
+                    <div class="demo-card-features">
+                        <span class="feature-tag-modern">✓ Client state</span>
+                        <span class="feature-tag-modern">✓ Real-time</span>
+                        <span class="feature-tag-modern">✓ Multi-widget</span>
+                    </div>
+                    <div class="demo-card-footer">
+                        <span class="demo-card-cta">
+                            View Demo
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                            </svg>
+                        </span>
+                        <span class="demo-card-badge badge-advanced">Advanced</span>
+                    </div>
+                </a>
+            </div>
+        </div>
+
+        <!-- Interactive Demos Category -->
+        <div class="demos-category" data-category="interactive">
+            <div class="category-header">
+                <span class="category-icon">💡</span>
+                <h2 class="category-title">Interactive Demos</h2>
+                <span class="category-count">4 demos</span>
+            </div>
+            <div class="demos-grid">
+                <!-- Throttle Demo -->
+                <a href="/demos/throttle/" class="demo-card-modern" data-demo-name="throttle">
+                    <span class="demo-card-icon">⏱️</span>
+                    <h3 class="demo-card-title">Throttle</h3>
+                    <p class="demo-card-description">
+                        Scroll event throttling demonstration showing rate limiting for high-frequency events.
+                    </p>
+                    <div class="demo-card-features">
+                        <span class="feature-tag-modern">✓ Rate limiting</span>
+                        <span class="feature-tag-modern">✓ Scroll events</span>
+                        <span class="feature-tag-modern">✓ Performance</span>
+                    </div>
+                    <div class="demo-card-footer">
+                        <span class="demo-card-cta">
+                            View Demo
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                            </svg>
+                        </span>
+                    </div>
+                </a>
+
+                <!-- Todo List Demo -->
+                <a href="/demos/todo/" class="demo-card-modern" data-demo-name="todo list">
+                    <span class="demo-card-icon">✅</span>
+                    <h3 class="demo-card-title">Todo List</h3>
+                    <p class="demo-card-description">
+                        Full CRUD operations with add, edit, delete, and complete functionality. Real-time updates.
+                    </p>
+                    <div class="demo-card-features">
+                        <span class="feature-tag-modern">✓ CRUD ops</span>
+                        <span class="feature-tag-modern">✓ Real-time</span>
+                        <span class="feature-tag-modern">✓ Persistence</span>
+                    </div>
+                    <div class="demo-card-footer">
+                        <span class="demo-card-cta">
+                            View Demo
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                            </svg>
+                        </span>
+                        <span class="demo-card-badge badge-popular">Popular</span>
+                    </div>
+                </a>
+
+                <!-- Live Chat Demo -->
+                <a href="/demos/chat/" class="demo-card-modern" data-demo-name="live chat">
+                    <span class="demo-card-icon">💬</span>
+                    <h3 class="demo-card-title">Live Chat</h3>
+                    <p class="demo-card-description">
+                        Real-time messaging system with instant message delivery and typing indicators.
+                    </p>
+                    <div class="demo-card-features">
+                        <span class="feature-tag-modern">✓ WebSocket</span>
+                        <span class="feature-tag-modern">✓ Real-time</span>
+                        <span class="feature-tag-modern">✓ Multi-user</span>
+                    </div>
+                    <div class="demo-card-footer">
+                        <span class="demo-card-cta">
+                            View Demo
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                            </svg>
+                        </span>
+                    </div>
+                </a>
+
+                <!-- Product DataTable Demo -->
+                <a href="/demos/datatable/" class="demo-card-modern" data-demo-name="datatable product">
+                    <span class="demo-card-icon">📊</span>
+                    <h3 class="demo-card-title">Product DataTable</h3>
+                    <p class="demo-card-description">
+                        Interactive data table with sorting, filtering, and pagination. Visualize large datasets efficiently.
+                    </p>
+                    <div class="demo-card-features">
+                        <span class="feature-tag-modern">✓ Sorting</span>
+                        <span class="feature-tag-modern">✓ Filtering</span>
+                        <span class="feature-tag-modern">✓ Pagination</span>
+                    </div>
+                    <div class="demo-card-footer">
+                        <span class="demo-card-cta">
+                            View Demo
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                            </svg>
+                        </span>
+                    </div>
+                </a>
+            </div>
+        </div>
+
+        <!-- Advanced Demos Category -->
+        <div class="demos-category" data-category="advanced">
+            <div class="category-header">
+                <span class="category-icon">🚀</span>
+                <h2 class="category-title">Advanced Demos</h2>
+                <span class="category-count">2 demos</span>
+            </div>
+            <div class="demos-grid">
+                <!-- React Integration Demo -->
+                <a href="/demos/react/" class="demo-card-modern" data-demo-name="react integration">
+                    <span class="demo-card-icon">⚛️</span>
+                    <h3 class="demo-card-title">React Integration</h3>
+                    <p class="demo-card-description">
+                        Hybrid server/client rendering with React components embedded in LiveView.
+                    </p>
+                    <div class="demo-card-features">
+                        <span class="feature-tag-modern">✓ Hybrid rendering</span>
+                        <span class="feature-tag-modern">✓ React components</span>
+                        <span class="feature-tag-modern">✓ Server state</span>
+                    </div>
+                    <div class="demo-card-footer">
+                        <span class="demo-card-cta">
+                            View Demo
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                            </svg>
+                        </span>
+                        <span class="demo-card-badge badge-advanced">Advanced</span>
+                    </div>
+                </a>
+
+                <!-- Performance Test Demo -->
+                <a href="/demos/performance/" class="demo-card-modern" data-demo-name="performance test">
+                    <span class="demo-card-icon">⚡</span>
+                    <h3 class="demo-card-title">Performance Test</h3>
+                    <p class="demo-card-description">
+                        VDOM stress testing with rapid updates. See sub-100μs diffing in action.
+                    </p>
+                    <div class="demo-card-features">
+                        <span class="feature-tag-modern">⚡ Sub-100μs</span>
+                        <span class="feature-tag-modern">✓ Stress test</span>
+                        <span class="feature-tag-modern">✓ Benchmarks</span>
+                    </div>
+                    <div class="demo-card-footer">
+                        <span class="demo-card-cta">
+                            View Demo
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                            </svg>
+                        </span>
+                        <span class="demo-card-badge badge-advanced">Advanced</span>
+                    </div>
+                </a>
+            </div>
+        </div>
+
+        <!-- Empty State (hidden by default) -->
+        <div class="empty-state" id="empty-state" style="display: none;">
+            <div class="empty-state-icon">🔍</div>
+            <div class="empty-state-text">No demos found matching your search.</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Search and filter functionality
+    const searchInput = document.getElementById('search-input');
+    const categoryButtons = document.querySelectorAll('.category-filter-btn');
+    const demoCards = document.querySelectorAll('.demo-card-modern');
+    const categoryContainers = document.querySelectorAll('.demos-category');
+    const emptyState = document.getElementById('empty-state');
+
+    let currentCategory = 'all';
+    let currentSearch = '';
+
+    // Search functionality
+    searchInput.addEventListener('input', (e) => {
+        currentSearch = e.target.value.toLowerCase();
+        filterDemos();
+    });
+
+    // Category filter functionality
+    categoryButtons.forEach(button => {
+        button.addEventListener('click', () => {
+            // Update active state
+            categoryButtons.forEach(btn => btn.classList.remove('active'));
+            button.classList.add('active');
+
+            // Update current category
+            currentCategory = button.dataset.category;
+            filterDemos();
+        });
+    });
+
+    function filterDemos() {
+        let visibleCount = 0;
+
+        // Filter category containers
+        categoryContainers.forEach(container => {
+            const containerCategory = container.dataset.category;
+
+            if (currentCategory === 'all' || currentCategory === containerCategory) {
+                container.style.display = 'block';
+            } else {
+                container.style.display = 'none';
+            }
+        });
+
+        // Filter individual demo cards
+        demoCards.forEach(card => {
+            const demoName = card.dataset.demoName.toLowerCase();
+            const demoText = card.textContent.toLowerCase();
+            const categoryContainer = card.closest('.demos-category');
+            const containerCategory = categoryContainer.dataset.category;
+
+            const matchesSearch = currentSearch === '' ||
+                                 demoName.includes(currentSearch) ||
+                                 demoText.includes(currentSearch);
+
+            const matchesCategory = currentCategory === 'all' ||
+                                   currentCategory === containerCategory;
+
+            if (matchesSearch && matchesCategory) {
+                card.style.display = 'flex';
+                visibleCount++;
+            } else {
+                card.style.display = 'none';
+            }
+        });
+
+        // Show/hide category containers based on visible cards
+        categoryContainers.forEach(container => {
+            const visibleCards = container.querySelectorAll('.demo-card-modern[style*="display: flex"]');
+            if (visibleCards.length === 0) {
+                container.style.display = 'none';
+            }
+        });
+
+        // Show empty state if no demos visible
+        if (visibleCount === 0) {
+            emptyState.style.display = 'block';
+        } else {
+            emptyState.style.display = 'none';
+        }
+    }
+
+    // Smooth scroll for anchor links
+    demoCards.forEach(card => {
+        card.addEventListener('click', (e) => {
+            const href = card.getAttribute('href');
+            if (href && href.startsWith('#')) {
+                e.preventDefault();
+                const target = document.querySelector(href);
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }
+        });
+    });
+</script>
+{% endblock %}

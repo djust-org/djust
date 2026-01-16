@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+
+{% block title %}Registration Form - djust{% endblock %}
+
+{% block nav_forms_active %}active{% endblock %}
+
+{% block extra_styles %}
+    .card { border-radius: 10px; }
+    .card-header { border-radius: 10px 10px 0 0 !important; }
+    .form-label { font-weight: 500; }
+    .invalid-feedback { display: block; }
+{% endblock %}
+
+{% block content %}
+<div data-liveview-root>
+    <div class="container">
+        <div class="row justify-content-center mt-5">
+            <div class="col-md-6">
+                <div class="card shadow">
+                    <div class="card-header bg-primary text-white">
+                        <h2 class="mb-0">Create Account</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="alert alert-success alert-dismissible fade show{% if not success_message %} d-none{% endif %}" role="alert">
+                            {{ success_message }}
+                            <button type="button" class="btn-close" @click="clear_message"></button>
+                        </div>
+
+                        <div class="alert alert-danger alert-dismissible fade show{% if not error_message %} d-none{% endif %}" role="alert">
+                            {{ error_message }}
+                            <button type="button" class="btn-close" @click="clear_message"></button>
+                        </div>
+
+                        <form @submit="submit_form" class="needs-validation" novalidate>
+                            <!-- Username -->
+                            <div class="mb-3">
+                                <label for="username" class="form-label">Username</label>
+                                <input
+                                    type="text"
+                                    name="username"
+                                    id="username"
+                                    class="form-control {% if field_errors.username %}is-invalid{% endif %}"
+                                    value="{{ form_data.username }}"
+                                    @change="validate_field"
+                                    data-field="username"
+                                    required
+                                />
+                                <small class="form-text text-muted">Username must be 3-150 characters</small>
+                                {% if field_errors.username %}
+                                <div class="invalid-feedback d-block">
+                                    {% for error in field_errors.username %}
+                                    <div>{{ error }}</div>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Email -->
+                            <div class="mb-3">
+                                <label for="email" class="form-label">Email</label>
+                                <input
+                                    type="email"
+                                    name="email"
+                                    id="email"
+                                    class="form-control {% if field_errors.email %}is-invalid{% endif %}"
+                                    value="{{ form_data.email }}"
+                                    @change="validate_field"
+                                    data-field="email"
+                                    required
+                                />
+                                <small class="form-text text-muted">We'll never share your email</small>
+                                {% if field_errors.email %}
+                                <div class="invalid-feedback d-block">
+                                    {% for error in field_errors.email %}
+                                    <div>{{ error }}</div>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Password -->
+                            <div class="mb-3">
+                                <label for="password" class="form-label">Password</label>
+                                <input
+                                    type="password"
+                                    name="password"
+                                    id="password"
+                                    class="form-control {% if field_errors.password %}is-invalid{% endif %}"
+                                    value="{{ form_data.password }}"
+                                    @change="validate_field"
+                                    data-field="password"
+                                    required
+                                />
+                                <small class="form-text text-muted">Password must be at least 8 characters</small>
+                                {% if field_errors.password %}
+                                <div class="invalid-feedback d-block">
+                                    {% for error in field_errors.password %}
+                                    <div>{{ error }}</div>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Confirm Password -->
+                            <div class="mb-3">
+                                <label for="password_confirm" class="form-label">Confirm Password</label>
+                                <input
+                                    type="password"
+                                    name="password_confirm"
+                                    id="password_confirm"
+                                    class="form-control {% if field_errors.password_confirm %}is-invalid{% endif %}"
+                                    value="{{ form_data.password_confirm }}"
+                                    @change="validate_field"
+                                    data-field="password_confirm"
+                                    required
+                                />
+                                {% if field_errors.password_confirm %}
+                                <div class="invalid-feedback d-block">
+                                    {% for error in field_errors.password_confirm %}
+                                    <div>{{ error }}</div>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Terms and Conditions -->
+                            <div class="mb-3 form-check">
+                                <input
+                                    type="checkbox"
+                                    name="agree_terms"
+                                    id="agree_terms"
+                                    class="form-check-input {% if field_errors.agree_terms %}is-invalid{% endif %}"
+                                    {% if form_data.agree_terms %}checked{% endif %}
+                                    @change="validate_field"
+                                    data-field="agree_terms"
+                                    required
+                                />
+                                <label class="form-check-label" for="agree_terms">
+                                    I agree to the Terms and Conditions
+                                </label>
+                                {% if field_errors.agree_terms %}
+                                <div class="invalid-feedback d-block">
+                                    {% for error in field_errors.agree_terms %}
+                                    <div>{{ error }}</div>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Non-field errors -->
+                            {% if form_errors %}
+                            <div class="alert alert-danger">
+                                {% for error in form_errors %}
+                                <div>{{ error }}</div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+
+                            <!-- Submit Button -->
+                            <div class="d-grid gap-2">
+                                <button type="submit" class="btn btn-primary btn-lg">
+                                    Create Account
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary" @click="reset_form">
+                                    Reset Form
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

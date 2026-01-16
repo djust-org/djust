@@ -1,0 +1,193 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Test Page{% endblock %} - djust Testing</title>
+
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+
+    <!-- djust LiveView client is automatically injected by LiveView.get() -->
+
+    <style>
+        :root {
+            --test-success: #28a745;
+            --test-warning: #ffc107;
+            --test-danger: #dc3545;
+            --test-info: #17a2b8;
+            --test-primary: #007bff;
+        }
+
+        body {
+            background: #f8f9fa;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        }
+
+        .test-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem 0;
+            margin-bottom: 2rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .test-status-badge {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        .test-card {
+            border: none;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 1.5rem;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .test-card-header {
+            background: #fff;
+            border-bottom: 2px solid #e9ecef;
+            font-weight: 600;
+            padding: 1rem 1.5rem;
+        }
+
+        .test-result-item {
+            transition: all 0.2s ease;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+        }
+
+        .test-result-item:hover {
+            transform: translateX(4px);
+        }
+
+        .test-result-passed {
+            border-left: 4px solid var(--test-success);
+            background: #d4edda;
+        }
+
+        .test-result-failed {
+            border-left: 4px solid var(--test-danger);
+            background: #f8d7da;
+        }
+
+        .test-result-warning {
+            border-left: 4px solid var(--test-warning);
+            background: #fff3cd;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 8px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            transition: transform 0.2s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.12);
+        }
+
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            line-height: 1;
+            margin: 0.5rem 0;
+        }
+
+        .stat-label {
+            color: #6c757d;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+        }
+
+        .code-block {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 1.5rem;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.875rem;
+            line-height: 1.6;
+            overflow-x: auto;
+        }
+
+        .code-block.d-inline {
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            line-height: 1;
+        }
+
+        .alert-test {
+            border-left: 4px solid;
+            border-radius: 4px;
+        }
+
+        .alert-test.alert-success {
+            border-left-color: var(--test-success);
+        }
+
+        .alert-test.alert-danger {
+            border-left-color: var(--test-danger);
+        }
+
+        .alert-test.alert-info {
+            border-left-color: var(--test-info);
+        }
+
+        .test-console {
+            background: #1a202c;
+            color: #a0aec0;
+            padding: 1rem;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.813rem;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .badge-test {
+            padding: 0.5rem 1rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+
+        {% block extra_css %}{% endblock %}
+    </style>
+</head>
+<body>
+    <div class="test-header">
+        <div class="container">
+            <div class="row">
+                <div class="col-12 text-center">
+                    <div class="test-status-badge">
+                        {% block status_icon %}
+                        <i class="bi bi-flask"></i>
+                        {% endblock %}
+                    </div>
+                    <h1 class="mb-2">{% block page_title %}Test Page{% endblock %}</h1>
+                    <p class="lead mb-0">{% block page_description %}Automated testing for djust features{% endblock %}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container mb-5">
+        {% block content %}
+        <!-- Test page content goes here -->
+        {% endblock %}
+    </div>
+
+    <!-- Bootstrap 5 JS Bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

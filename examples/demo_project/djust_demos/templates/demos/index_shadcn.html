@@ -1,0 +1,835 @@
+{% extends "base.html" %}
+
+{% block title %}djust Interactive Playground - Modern UI Components{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+    tailwind.config = {
+        theme: {
+            extend: {
+                colors: {
+                    border: "hsl(215 20.2% 65.1%)",
+                    input: "hsl(215 20.2% 65.1%)",
+                    ring: "hsl(215 20.2% 65.1%)",
+                    background: "hsl(222.2 84% 4.9%)",
+                    foreground: "hsl(210 40% 98%)",
+                    primary: {
+                        DEFAULT: "hsl(210 40% 98%)",
+                        foreground: "hsl(222.2 47.4% 11.2%)",
+                    },
+                    secondary: {
+                        DEFAULT: "hsl(217.2 32.6% 17.5%)",
+                        foreground: "hsl(210 40% 98%)",
+                    },
+                    destructive: {
+                        DEFAULT: "hsl(0 62.8% 30.6%)",
+                        foreground: "hsl(210 40% 98%)",
+                    },
+                    muted: {
+                        DEFAULT: "hsl(217.2 32.6% 17.5%)",
+                        foreground: "hsl(215 20.2% 65.1%)",
+                    },
+                    accent: {
+                        DEFAULT: "hsl(217.2 32.6% 17.5%)",
+                        foreground: "hsl(210 40% 98%)",
+                    },
+                    popover: {
+                        DEFAULT: "hsl(222.2 84% 4.9%)",
+                        foreground: "hsl(210 40% 98%)",
+                    },
+                    card: {
+                        DEFAULT: "hsl(222.2 84% 4.9%)",
+                        foreground: "hsl(210 40% 98%)",
+                    },
+                },
+                borderRadius: {
+                    lg: "0.5rem",
+                    md: "calc(0.5rem - 2px)",
+                    sm: "calc(0.5rem - 4px)",
+                },
+            }
+        }
+    }
+</script>
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&display=swap');
+
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+
+    body {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: hsl(222.2 84% 4.9%);
+        color: hsl(210 40% 98%);
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* Hero gradient background */
+    .hero-gradient {
+        background: linear-gradient(to bottom right, hsl(222.2 84% 4.9%), hsl(217.2 32.6% 17.5%));
+    }
+
+    /* Glass morphism effect */
+    .glass-card {
+        background: rgba(255, 255, 255, 0.03);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    /* Smooth transitions */
+    .transition-all {
+        transition-property: all;
+        transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+        transition-duration: 150ms;
+    }
+
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+        background: hsl(217.2 32.6% 17.5%);
+    }
+
+    ::-webkit-scrollbar-thumb {
+        background: hsl(215 20.2% 65.1%);
+        border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+        background: hsl(210 40% 98%);
+    }
+
+    /* Animation utilities */
+    @keyframes fade-in-up {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .animate-fade-in-up {
+        animation: fade-in-up 0.6s ease-out;
+    }
+
+    /* Code syntax highlighting compatible colors */
+    .code-block {
+        background: hsl(222.2 84% 4.9%);
+        color: hsl(210 40% 98%);
+    }
+
+    /* Demo card hover effects */
+    .demo-card-hover {
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .demo-card-hover:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.24);
+    }
+
+    /* Gradient text */
+    .gradient-text {
+        background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 50%, #f472b6 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+
+    /* Split screen layout helper */
+    .split-screen {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        min-height: 100vh;
+    }
+
+    @media (max-width: 1024px) {
+        .split-screen {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    /* Tab state indicator */
+    [data-state="active"] {
+        background: hsl(222.2 84% 4.9%);
+        color: hsl(210 40% 98%);
+        box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    }
+
+    /* Input focus ring */
+    .focus-ring:focus {
+        outline: none;
+        box-shadow: 0 0 0 2px hsl(222.2 84% 4.9%), 0 0 0 4px hsl(215 20.2% 65.1%);
+    }
+
+    /* Smooth scroll */
+    html {
+        scroll-behavior: smooth;
+    }
+
+    /* Hidden utility */
+    .hidden-demo {
+        display: none !important;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div data-liveview-root class="min-h-screen">
+
+    <!-- Hero Section -->
+    <section class="hero-gradient min-h-screen flex items-center justify-center px-4 relative overflow-hidden">
+        <!-- Background decoration -->
+        <div class="absolute inset-0 opacity-30">
+            <div class="absolute top-20 left-10 w-72 h-72 bg-blue-500 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-pulse"></div>
+            <div class="absolute top-40 right-10 w-72 h-72 bg-purple-500 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-pulse" style="animation-delay: 2s;"></div>
+            <div class="absolute bottom-20 left-1/2 w-72 h-72 bg-pink-500 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-pulse" style="animation-delay: 4s;"></div>
+        </div>
+
+        <div class="max-w-6xl mx-auto text-center relative z-10">
+            <div class="space-y-8 animate-fade-in-up">
+                <!-- Badge -->
+                <div class="inline-flex items-center rounded-full border border-slate-800 bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-50">
+                    <span class="mr-2">⚡</span> Lightning Fast React-Based UI
+                </div>
+
+                <!-- Title -->
+                <h1 class="text-6xl md:text-8xl font-black tracking-tight leading-none">
+                    <span class="gradient-text">djust</span>
+                    <br />
+                    <span class="text-slate-50">Playground</span>
+                </h1>
+
+                <!-- Subtitle -->
+                <p class="text-xl md:text-2xl text-slate-400 max-w-3xl mx-auto leading-relaxed">
+                    Build modern, reactive Django applications with Python-only state management.
+                    <span class="text-slate-50 font-semibold">Zero JavaScript required.</span>
+                </p>
+
+                <!-- Stats -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-6 max-w-4xl mx-auto pt-8">
+                    <div class="space-y-2">
+                        <div class="text-4xl md:text-5xl font-black gradient-text">10-100x</div>
+                        <div class="text-sm text-slate-400 uppercase tracking-wide">Faster</div>
+                    </div>
+                    <div class="space-y-2">
+                        <div class="text-4xl md:text-5xl font-black gradient-text">~5KB</div>
+                        <div class="text-sm text-slate-400 uppercase tracking-wide">Bundle Size</div>
+                    </div>
+                    <div class="space-y-2">
+                        <div class="text-4xl md:text-5xl font-black gradient-text">&lt;100μs</div>
+                        <div class="text-sm text-slate-400 uppercase tracking-wide">VDOM Diff</div>
+                    </div>
+                    <div class="space-y-2">
+                        <div class="text-4xl md:text-5xl font-black gradient-text">87%</div>
+                        <div class="text-sm text-slate-400 uppercase tracking-wide">Less Code</div>
+                    </div>
+                </div>
+
+                <!-- CTA -->
+                <div class="pt-8">
+                    <a href="#demos" class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-slate-50 text-slate-900 hover:bg-slate-200 h-12 px-8 py-3 text-base">
+                        Explore Interactive Demos
+                        <svg class="ml-2 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Scroll indicator -->
+        <div class="absolute bottom-8 left-1/2 transform -translate-x-1/2 animate-bounce">
+            <svg class="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+            </svg>
+        </div>
+    </section>
+
+    <!-- Filter Bar -->
+    <section id="demos" class="sticky top-0 z-50 bg-slate-950/95 backdrop-blur supports-[backdrop-filter]:bg-slate-950/60 border-b border-slate-800">
+        <div class="max-w-7xl mx-auto px-4 py-6">
+            <div class="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
+                <!-- Title -->
+                <div class="flex items-center gap-3">
+                    <div class="h-8 w-1 bg-gradient-to-b from-blue-500 to-purple-500 rounded-full"></div>
+                    <h2 class="text-2xl font-bold tracking-tight text-slate-50">Interactive Demos</h2>
+                </div>
+
+                <!-- Controls -->
+                <div class="flex flex-wrap items-center gap-4">
+                    <!-- Decorator filter -->
+                    <div class="flex items-center gap-2">
+                        <label class="text-sm font-medium text-slate-400">Decorator</label>
+                        <select id="filter-decorator" class="flex h-10 w-full items-center justify-between rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm ring-offset-background placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 text-slate-50 min-w-[140px]">
+                            <option value="">All</option>
+                            <option value="debounce">@debounce</option>
+                            <option value="throttle">@throttle</option>
+                            <option value="cache">@cache</option>
+                            <option value="optimistic">@optimistic</option>
+                            <option value="client_state">@client_state</option>
+                        </select>
+                    </div>
+
+                    <!-- Complexity filter -->
+                    <div class="flex items-center gap-2">
+                        <label class="text-sm font-medium text-slate-400">Complexity</label>
+                        <select id="filter-complexity" class="flex h-10 w-full items-center justify-between rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm ring-offset-background placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 text-slate-50 min-w-[140px]">
+                            <option value="">All</option>
+                            <option value="easy">Easy</option>
+                            <option value="medium">Medium</option>
+                            <option value="advanced">Advanced</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category tabs -->
+            <div class="mt-6">
+                <div class="inline-flex h-10 items-center justify-center rounded-md bg-slate-900 p-1 text-slate-400 gap-1">
+                    <button class="category-tab inline-flex items-center justify-center whitespace-nowrap rounded-sm px-4 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-slate-950 data-[state=active]:text-slate-50 data-[state=active]:shadow-sm" data-category="all" data-state="active">
+                        All Demos
+                        <span class="ml-2 inline-flex items-center rounded-full border border-transparent bg-slate-800 px-2 py-0.5 text-xs font-semibold text-slate-50">4</span>
+                    </button>
+                    <button class="category-tab inline-flex items-center justify-center whitespace-nowrap rounded-sm px-4 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50" data-category="basic">
+                        ⚡ Basic
+                        <span class="ml-2 inline-flex items-center rounded-full border border-transparent bg-slate-800 px-2 py-0.5 text-xs font-semibold text-slate-50">2</span>
+                    </button>
+                    <button class="category-tab inline-flex items-center justify-center whitespace-nowrap rounded-sm px-4 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50" data-category="state">
+                        🔄 State
+                        <span class="ml-2 inline-flex items-center rounded-full border border-transparent bg-slate-800 px-2 py-0.5 text-xs font-semibold text-slate-50">2</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Main Content -->
+    <main class="bg-slate-950">
+
+        <!-- Counter Demo -->
+        <section class="showcase-section split-screen border-b border-slate-800" data-category="basic" data-complexity="easy">
+            <!-- Demo Side -->
+            <div class="flex flex-col items-center justify-center p-8 lg:p-16 bg-gradient-to-br from-slate-950 to-slate-900 relative overflow-hidden">
+                <!-- Background pattern -->
+                <div class="absolute inset-0 opacity-5">
+                    <div class="absolute top-0 left-0 w-full h-full" style="background-image: radial-gradient(circle at 2px 2px, rgba(255,255,255,0.15) 1px, transparent 0); background-size: 32px 32px;"></div>
+                </div>
+
+                <div class="max-w-2xl w-full relative z-10 space-y-8">
+                    <!-- Header -->
+                    <div class="space-y-4">
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm font-semibold text-slate-400 uppercase tracking-wider">Demo 01</span>
+                            <div class="flex gap-2">
+                                <div class="inline-flex items-center rounded-full border border-transparent bg-green-950/50 text-green-400 px-2.5 py-0.5 text-xs font-semibold">
+                                    real-time
+                                </div>
+                                <div class="inline-flex items-center rounded-full border border-transparent bg-slate-800 text-slate-50 px-2.5 py-0.5 text-xs font-semibold">
+                                    Easy
+                                </div>
+                            </div>
+                        </div>
+                        <h2 class="text-5xl lg:text-6xl font-black tracking-tight text-slate-50">
+                            ⚡ Counter
+                        </h2>
+                        <p class="text-lg text-slate-400 leading-relaxed">
+                            Experience real-time state synchronization with this simple yet powerful counter demo.
+                            Every click updates instantly without page reloads.
+                        </p>
+                    </div>
+
+                    <!-- Interactive Demo -->
+                    <div class="rounded-lg border border-slate-800 bg-slate-900 shadow-sm demo-card-hover">
+                        <div class="p-8 lg:p-12 space-y-8">
+                            <div class="text-center">
+                                <div class="text-8xl lg:text-9xl font-black gradient-text tabular-nums">{{ counter }}</div>
+                            </div>
+                            <div class="flex flex-wrap justify-center gap-3">
+                                <button @click="decrement" class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-slate-800 bg-slate-900 text-slate-50 hover:bg-slate-800 h-11 px-6">
+                                    Decrement
+                                </button>
+                                <button @click="reset" class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-slate-800 bg-slate-900 text-slate-50 hover:bg-slate-800 h-11 px-6">
+                                    Reset
+                                </button>
+                                <button @click="increment" class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-slate-50 text-slate-900 hover:bg-slate-200 h-11 px-6">
+                                    Increment
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Code Side -->
+            <div class="flex flex-col bg-slate-900 border-l border-slate-800">
+                <!-- Header -->
+                <div class="p-6 border-b border-slate-800 space-y-4">
+                    <h3 class="text-xl font-semibold tracking-tight text-slate-50 flex items-center gap-3">
+                        <span>🐍</span>
+                        <span>Python-Only Implementation</span>
+                    </h3>
+                    <ul class="space-y-2 text-sm text-slate-400">
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-400 font-bold mt-0.5">✓</span>
+                            <span>Instant state updates via WebSocket</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-400 font-bold mt-0.5">✓</span>
+                            <span>Sub-millisecond VDOM diffing</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-400 font-bold mt-0.5">✓</span>
+                            <span>Zero JavaScript required</span>
+                        </li>
+                    </ul>
+                    <!-- Tabs -->
+                    <div class="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 p-1 text-slate-400">
+                        <button class="code-tab inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50" data-tab="counter-python" data-state="active">
+                            <span class="mr-1.5">🐍</span>Python
+                        </button>
+                        <button class="code-tab inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50" data-tab="counter-html">
+                            <span class="mr-1.5">📄</span>HTML
+                        </button>
+                    </div>
+                </div>
+                <!-- Content -->
+                <div class="flex-1 overflow-auto bg-slate-950">
+                    <div class="code-tab-pane active" id="counter-python">
+                        {{ counter_code_python|safe }}
+                    </div>
+                    <div class="code-tab-pane hidden" id="counter-html">
+                        {{ counter_code_html|safe }}
+                    </div>
+                </div>
+                <!-- Footer -->
+                <div class="p-6 border-t border-slate-800">
+                    <a href="/demos/counter/" class="text-sm font-medium text-slate-50 hover:text-slate-300 flex items-center gap-2 transition-all group">
+                        <span>View Full Demo</span>
+                        <svg class="w-4 h-4 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <!-- Dropdown Demo -->
+        <section class="showcase-section split-screen border-b border-slate-800" data-category="basic" data-complexity="easy">
+            <!-- Code Side (reversed order) -->
+            <div class="flex flex-col bg-slate-900 border-r border-slate-800 lg:order-2">
+                <div class="p-6 border-b border-slate-800 space-y-4">
+                    <h3 class="text-xl font-semibold tracking-tight text-slate-50 flex items-center gap-3">
+                        <span>📋</span>
+                        <span>Interactive UI Components</span>
+                    </h3>
+                    <ul class="space-y-2 text-sm text-slate-400">
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-400 font-bold mt-0.5">✓</span>
+                            <span>Dynamic open/close state</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-400 font-bold mt-0.5">✓</span>
+                            <span>Server-side item selection</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-400 font-bold mt-0.5">✓</span>
+                            <span>Smooth animations and transitions</span>
+                        </li>
+                    </ul>
+                    <div class="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 p-1 text-slate-400">
+                        <button class="code-tab inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium" data-tab="dropdown-python" data-state="active">
+                            <span class="mr-1.5">🐍</span>Python
+                        </button>
+                        <button class="code-tab inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium" data-tab="dropdown-html">
+                            <span class="mr-1.5">📄</span>HTML
+                        </button>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-auto bg-slate-950">
+                    <div class="code-tab-pane active" id="dropdown-python">
+                        {{ dropdown_code_python|safe }}
+                    </div>
+                    <div class="code-tab-pane hidden" id="dropdown-html">
+                        {{ dropdown_code_html|safe }}
+                    </div>
+                </div>
+                <div class="p-6 border-t border-slate-800">
+                    <a href="/demos/dropdown/" class="text-sm font-medium text-slate-50 hover:text-slate-300 flex items-center gap-2 transition-all group">
+                        <span>View Full Demo</span>
+                        <svg class="w-4 h-4 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                    </a>
+                </div>
+            </div>
+
+            <!-- Demo Side (reversed order) -->
+            <div class="flex flex-col items-center justify-center p-8 lg:p-16 bg-gradient-to-br from-slate-900 to-slate-950 relative overflow-hidden lg:order-1">
+                <div class="absolute inset-0 opacity-5">
+                    <div class="absolute top-0 left-0 w-full h-full" style="background-image: radial-gradient(circle at 2px 2px, rgba(255,255,255,0.15) 1px, transparent 0); background-size: 32px 32px;"></div>
+                </div>
+
+                <div class="max-w-2xl w-full relative z-10 space-y-8">
+                    <div class="space-y-4">
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm font-semibold text-slate-400 uppercase tracking-wider">Demo 02</span>
+                            <div class="flex gap-2">
+                                <div class="inline-flex items-center rounded-full border border-transparent bg-blue-950/50 text-blue-400 px-2.5 py-0.5 text-xs font-semibold">
+                                    toggle
+                                </div>
+                                <div class="inline-flex items-center rounded-full border border-transparent bg-slate-800 text-slate-50 px-2.5 py-0.5 text-xs font-semibold">
+                                    Easy
+                                </div>
+                            </div>
+                        </div>
+                        <h2 class="text-5xl lg:text-6xl font-black tracking-tight text-slate-50">
+                            📋 Dropdown
+                        </h2>
+                        <p class="text-lg text-slate-400 leading-relaxed">
+                            Interactive dropdown with server-side state management.
+                            Toggle open/close and select items - all synchronized in real-time.
+                        </p>
+                    </div>
+
+                    <div class="rounded-lg border border-slate-800 bg-slate-900 shadow-sm demo-card-hover p-12">
+                        <div class="relative w-full max-w-md mx-auto">
+                            <button @click="toggle_dropdown" class="flex w-full items-center justify-between rounded-md border border-slate-700 bg-slate-950 px-4 py-3 text-sm font-medium text-slate-50 hover:border-slate-600 transition-colors focus-ring">
+                                <span>{{ selected_item }}</span>
+                                <svg class="w-5 h-5 transition-transform {% if dropdown_open %}rotate-180{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                </svg>
+                            </button>
+                            {% if dropdown_open %}
+                            <div class="absolute top-full left-0 right-0 mt-2 rounded-md border border-slate-800 bg-slate-900 shadow-lg overflow-hidden z-50">
+                                {% for item in dropdown_items %}
+                                <div @click="select_item" data-item="{{ item }}" class="px-4 py-3 text-sm text-slate-50 hover:bg-slate-800 cursor-pointer transition-colors">
+                                    {{ item }}
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Debounce Demo -->
+        <section class="showcase-section split-screen border-b border-slate-800" data-category="state" data-complexity="medium" data-decorator="debounce">
+            <div class="flex flex-col items-center justify-center p-8 lg:p-16 bg-gradient-to-br from-slate-950 to-slate-900 relative overflow-hidden">
+                <div class="absolute inset-0 opacity-5">
+                    <div class="absolute top-0 left-0 w-full h-full" style="background-image: radial-gradient(circle at 2px 2px, rgba(255,255,255,0.15) 1px, transparent 0); background-size: 32px 32px;"></div>
+                </div>
+
+                <div class="max-w-2xl w-full relative z-10 space-y-8">
+                    <div class="space-y-4">
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm font-semibold text-slate-400 uppercase tracking-wider">Demo 03</span>
+                            <div class="flex gap-2">
+                                <div class="inline-flex items-center rounded-full border border-transparent bg-blue-950/50 text-blue-400 px-2.5 py-0.5 text-xs font-semibold">
+                                    @debounce
+                                </div>
+                                <div class="inline-flex items-center rounded-full border border-transparent bg-yellow-950/50 text-yellow-400 px-2.5 py-0.5 text-xs font-semibold">
+                                    Medium
+                                </div>
+                            </div>
+                        </div>
+                        <h2 class="text-5xl lg:text-6xl font-black tracking-tight text-slate-50">
+                            ⏱️ Debounce
+                        </h2>
+                        <p class="text-lg text-slate-400 leading-relaxed">
+                            Type rapidly and watch as the search intelligently waits until you stop typing.
+                            Reduces server calls by ~90% without any custom JavaScript.
+                        </p>
+                    </div>
+
+                    <div class="rounded-lg border border-slate-800 bg-slate-900 shadow-sm demo-card-hover">
+                        <div class="p-8 space-y-6">
+                            <input
+                                type="text"
+                                class="flex h-14 w-full rounded-md border border-slate-700 bg-slate-950 px-4 py-2 text-lg ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 text-slate-50"
+                                @input="debounce_search"
+                                placeholder="Type something rapidly..."
+                                value="{{ debounce_query }}"
+                            >
+                            <div class="grid grid-cols-2 gap-4">
+                                <div class="rounded-lg border border-slate-800 bg-slate-950 p-4 text-center space-y-2">
+                                    <div class="text-sm text-slate-400 uppercase tracking-wide">Current Query</div>
+                                    <div class="text-xl font-bold text-blue-400 break-all">
+                                        {{ debounce_query|default:"(empty)" }}
+                                    </div>
+                                </div>
+                                <div class="rounded-lg border border-slate-800 bg-slate-950 p-4 text-center space-y-2">
+                                    <div class="text-sm text-slate-400 uppercase tracking-wide">Server Calls</div>
+                                    <div class="text-4xl font-black text-green-400 tabular-nums">
+                                        {{ debounce_count }}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex flex-col bg-slate-900 border-l border-slate-800">
+                <div class="p-6 border-b border-slate-800 space-y-4">
+                    <h3 class="text-xl font-semibold tracking-tight text-slate-50 flex items-center gap-3">
+                        <span>⏱️</span>
+                        <span>Smart Performance</span>
+                    </h3>
+                    <ul class="space-y-2 text-sm text-slate-400">
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-400 font-bold mt-0.5">✓</span>
+                            <span>500ms debounce delay</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-400 font-bold mt-0.5">✓</span>
+                            <span>2-second max wait time</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-400 font-bold mt-0.5">✓</span>
+                            <span>Automatic call reduction (~90%)</span>
+                        </li>
+                    </ul>
+                    <div class="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 p-1 text-slate-400">
+                        <button class="code-tab inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium" data-tab="debounce-python" data-state="active">
+                            <span class="mr-1.5">🐍</span>Python
+                        </button>
+                        <button class="code-tab inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium" data-tab="debounce-html">
+                            <span class="mr-1.5">📄</span>HTML
+                        </button>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-auto bg-slate-950">
+                    <div class="code-tab-pane active" id="debounce-python">
+                        {{ debounce_code_python|safe }}
+                    </div>
+                    <div class="code-tab-pane hidden" id="debounce-html">
+                        {{ debounce_code_html|safe }}
+                    </div>
+                </div>
+                <div class="p-6 border-t border-slate-800">
+                    <a href="/demos/debounce/" class="text-sm font-medium text-slate-50 hover:text-slate-300 flex items-center gap-2 transition-all group">
+                        <span>View Full Demo</span>
+                        <svg class="w-4 h-4 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <!-- Cache Demo -->
+        <section class="showcase-section split-screen border-b border-slate-800" data-category="state" data-complexity="medium" data-decorator="cache">
+            <div class="flex flex-col bg-slate-900 border-r border-slate-800 lg:order-2">
+                <div class="p-6 border-b border-slate-800 space-y-4">
+                    <h3 class="text-xl font-semibold tracking-tight text-slate-50 flex items-center gap-3">
+                        <span>💾</span>
+                        <span>Client-Side Caching</span>
+                    </h3>
+                    <ul class="space-y-2 text-sm text-slate-400">
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-400 font-bold mt-0.5">✓</span>
+                            <span>5-minute TTL cache</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-400 font-bold mt-0.5">✓</span>
+                            <span>Sub-millisecond cache hits</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-400 font-bold mt-0.5">✓</span>
+                            <span>87% reduction in server calls</span>
+                        </li>
+                    </ul>
+                    <div class="inline-flex h-10 items-center justify-center rounded-md bg-slate-950 p-1 text-slate-400">
+                        <button class="code-tab inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium" data-tab="cache-python" data-state="active">
+                            <span class="mr-1.5">🐍</span>Python
+                        </button>
+                        <button class="code-tab inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium" data-tab="cache-html">
+                            <span class="mr-1.5">📄</span>HTML
+                        </button>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-auto bg-slate-950">
+                    <div class="code-tab-pane active" id="cache-python">
+                        {{ cache_code_python|safe }}
+                    </div>
+                    <div class="code-tab-pane hidden" id="cache-html">
+                        {{ cache_code_html|safe }}
+                    </div>
+                </div>
+                <div class="p-6 border-t border-slate-800">
+                    <a href="/demos/cache/" class="text-sm font-medium text-slate-50 hover:text-slate-300 flex items-center gap-2 transition-all group">
+                        <span>View Full Demo</span>
+                        <svg class="w-4 h-4 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                    </a>
+                </div>
+            </div>
+
+            <div class="flex flex-col items-center justify-center p-8 lg:p-16 bg-gradient-to-br from-slate-900 to-slate-950 relative overflow-hidden lg:order-1">
+                <div class="absolute inset-0 opacity-5">
+                    <div class="absolute top-0 left-0 w-full h-full" style="background-image: radial-gradient(circle at 2px 2px, rgba(255,255,255,0.15) 1px, transparent 0); background-size: 32px 32px;"></div>
+                </div>
+
+                <div class="max-w-2xl w-full relative z-10 space-y-8">
+                    <div class="space-y-4">
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm font-semibold text-slate-400 uppercase tracking-wider">Demo 04</span>
+                            <div class="flex gap-2">
+                                <div class="inline-flex items-center rounded-full border border-transparent bg-purple-950/50 text-purple-400 px-2.5 py-0.5 text-xs font-semibold">
+                                    @cache
+                                </div>
+                                <div class="inline-flex items-center rounded-full border border-transparent bg-yellow-950/50 text-yellow-400 px-2.5 py-0.5 text-xs font-semibold">
+                                    Medium
+                                </div>
+                            </div>
+                        </div>
+                        <h2 class="text-5xl lg:text-6xl font-black tracking-tight text-slate-50">
+                            💾 Cache
+                        </h2>
+                        <p class="text-lg text-slate-400 leading-relaxed">
+                            Search products with intelligent client-side caching.
+                            Repeat searches return instantly from cache with zero server round-trips.
+                        </p>
+                    </div>
+
+                    <div class="rounded-lg border border-slate-800 bg-slate-900 shadow-sm demo-card-hover">
+                        <div class="p-8 space-y-6">
+                            <input
+                                type="text"
+                                class="flex h-14 w-full rounded-md border border-slate-700 bg-slate-950 px-4 py-2 text-lg ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 text-slate-50"
+                                @input="cache_search"
+                                placeholder="Try: laptop, mouse, keyboard..."
+                                value="{{ cache_query }}"
+                            >
+                            <div class="grid grid-cols-3 gap-4">
+                                <div class="rounded-lg border border-slate-800 bg-slate-950 p-4 text-center space-y-2">
+                                    <div class="text-xs text-slate-400 uppercase tracking-wide">Server Calls</div>
+                                    <div class="text-3xl font-black text-blue-400 tabular-nums">{{ cache_server_calls }}</div>
+                                </div>
+                                <div class="rounded-lg border border-slate-800 bg-slate-950 p-4 text-center space-y-2">
+                                    <div class="text-xs text-slate-400 uppercase tracking-wide">Cache Efficiency</div>
+                                    <div class="text-3xl font-black text-green-400 tabular-nums">{{ cache_efficiency }}%</div>
+                                </div>
+                                <div class="rounded-lg border border-slate-800 bg-slate-950 p-4 text-center space-y-2">
+                                    <div class="text-xs text-slate-400 uppercase tracking-wide">Results</div>
+                                    <div class="text-3xl font-black text-slate-50 tabular-nums">{{ cache_results|length }}</div>
+                                </div>
+                            </div>
+                            {% if cache_results %}
+                            <div class="space-y-3">
+                                <div class="text-sm font-semibold text-slate-400">Search Results ({{ cache_results|length }})</div>
+                                <div class="space-y-2">
+                                    {% for product in cache_results %}
+                                    <div class="rounded-md border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-50 hover:bg-slate-900 hover:border-slate-700 transition-colors">
+                                        📦 {{ product }}
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+</div>
+
+<script>
+// Tab switching
+document.addEventListener('click', (e) => {
+    const tab = e.target.closest('.code-tab');
+    if (!tab) return;
+
+    const tabId = tab.getAttribute('data-tab');
+    const codeArea = tab.closest('.showcase-code-side') || tab.closest('.flex.flex-col.bg-slate-900');
+
+    // Remove active state from all tabs in this section
+    codeArea.querySelectorAll('.code-tab').forEach(t => {
+        t.removeAttribute('data-state');
+        t.classList.remove('data-[state=active]:bg-slate-950', 'data-[state=active]:text-slate-50', 'data-[state=active]:shadow-sm');
+    });
+    codeArea.querySelectorAll('.code-tab-pane').forEach(p => {
+        p.classList.remove('active');
+        p.classList.add('hidden');
+    });
+
+    // Activate clicked tab
+    tab.setAttribute('data-state', 'active');
+    const pane = document.getElementById(tabId);
+    if (pane) {
+        pane.classList.remove('hidden');
+        pane.classList.add('active');
+    }
+});
+
+// Category filtering
+const categoryTabs = document.querySelectorAll('.category-tab');
+const showcaseSections = document.querySelectorAll('.showcase-section');
+
+categoryTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+        const category = tab.getAttribute('data-category');
+
+        // Update active state
+        categoryTabs.forEach(t => t.removeAttribute('data-state'));
+        tab.setAttribute('data-state', 'active');
+
+        // Filter sections
+        filterSections();
+    });
+});
+
+// Decorator and complexity filtering
+const decoratorFilter = document.getElementById('filter-decorator');
+const complexityFilter = document.getElementById('filter-complexity');
+
+decoratorFilter?.addEventListener('change', filterSections);
+complexityFilter?.addEventListener('change', filterSections);
+
+function filterSections() {
+    const activeCategory = document.querySelector('.category-tab[data-state="active"]')?.getAttribute('data-category') || 'all';
+    const selectedDecorator = decoratorFilter?.value || '';
+    const selectedComplexity = complexityFilter?.value || '';
+
+    showcaseSections.forEach(section => {
+        const sectionCategory = section.getAttribute('data-category');
+        const sectionDecorator = section.getAttribute('data-decorator') || '';
+        const sectionComplexity = section.getAttribute('data-complexity') || '';
+
+        const categoryMatch = activeCategory === 'all' || sectionCategory === activeCategory;
+        const decoratorMatch = !selectedDecorator || sectionDecorator === selectedDecorator;
+        const complexityMatch = !selectedComplexity || sectionComplexity === selectedComplexity;
+
+        if (categoryMatch && decoratorMatch && complexityMatch) {
+            section.classList.remove('hidden-demo');
+        } else {
+            section.classList.add('hidden-demo');
+        }
+    });
+}
+
+// Initialize
+filterSections();
+</script>
+{% endblock %}

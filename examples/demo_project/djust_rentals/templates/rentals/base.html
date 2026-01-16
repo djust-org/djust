@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Rental Management{% endblock %}</title>
+
+    <!-- Local Tailwind CSS (downloaded to avoid CDN issues) -->
+    {% load static %}
+    <script src="{% static 'js/tailwindcss-jit.js' %}"></script>
+    <script>
+      // Wait for tailwind global to be available
+      (function() {
+        function configureTailwind() {
+          if (typeof tailwind !== 'undefined') {
+            tailwind.config = {
+              darkMode: 'class',
+              theme: {
+                extend: {
+                  colors: {
+                    border: "hsl(var(--border))",
+                    input: "hsl(var(--input))",
+                    ring: "hsl(var(--ring))",
+                    background: "hsl(var(--background))",
+                    foreground: "hsl(var(--foreground))",
+                    primary: {
+                      DEFAULT: "hsl(var(--primary))",
+                      foreground: "hsl(var(--primary-foreground))",
+                    },
+                    secondary: {
+                      DEFAULT: "hsl(var(--secondary))",
+                      foreground: "hsl(var(--secondary-foreground))",
+                    },
+                    destructive: {
+                      DEFAULT: "hsl(var(--destructive))",
+                      foreground: "hsl(var(--destructive-foreground))",
+                    },
+                    muted: {
+                      DEFAULT: "hsl(var(--muted))",
+                      foreground: "hsl(var(--muted-foreground))",
+                    },
+                    accent: {
+                      DEFAULT: "hsl(var(--accent))",
+                      foreground: "hsl(var(--accent-foreground))",
+                    },
+                    card: {
+                      DEFAULT: "hsl(var(--card))",
+                      foreground: "hsl(var(--card-foreground))",
+                    },
+                  },
+                  borderRadius: {
+                    lg: "var(--radius)",
+                    md: "calc(var(--radius) - 2px)",
+                    sm: "calc(var(--radius) - 4px)",
+                  },
+                }
+              },
+            };
+          } else {
+            // Retry if tailwind not loaded yet
+            setTimeout(configureTailwind, 50);
+          }
+        }
+        configureTailwind();
+      })();
+    </script>
+
+    <style>
+      /* shadcn/ui CSS Variables - Dark Mode */
+      .dark {
+        --background: 222.2 84% 4.9%;
+        --foreground: 210 40% 98%;
+        --card: 222.2 84% 4.9%;
+        --card-foreground: 210 40% 98%;
+        --popover: 222.2 84% 4.9%;
+        --popover-foreground: 210 40% 98%;
+        --primary: 217.2 91.2% 59.8%;
+        --primary-foreground: 222.2 47.4% 11.2%;
+        --secondary: 217.2 32.6% 17.5%;
+        --secondary-foreground: 210 40% 98%;
+        --muted: 217.2 32.6% 17.5%;
+        --muted-foreground: 215 20.2% 65.1%;
+        --accent: 217.2 32.6% 17.5%;
+        --accent-foreground: 210 40% 98%;
+        --destructive: 0 62.8% 30.6%;
+        --destructive-foreground: 210 40% 98%;
+        --border: 217.2 32.6% 17.5%;
+        --input: 217.2 32.6% 17.5%;
+        --ring: 224.3 76.3% 48%;
+        --radius: 0.5rem;
+      }
+
+      /* shadcn/ui CSS Variables - Light Mode */
+      .light {
+        --background: 0 0% 100%;
+        --foreground: 222.2 84% 4.9%;
+        --card: 0 0% 100%;
+        --card-foreground: 222.2 84% 4.9%;
+        --popover: 0 0% 100%;
+        --popover-foreground: 222.2 84% 4.9%;
+        --primary: 221.2 83.2% 53.3%;
+        --primary-foreground: 210 40% 98%;
+        --secondary: 210 40% 96.1%;
+        --secondary-foreground: 222.2 47.4% 11.2%;
+        --muted: 210 40% 96.1%;
+        --muted-foreground: 215.4 16.3% 46.9%;
+        --accent: 210 40% 96.1%;
+        --accent-foreground: 222.2 47.4% 11.2%;
+        --destructive: 0 84.2% 60.2%;
+        --destructive-foreground: 210 40% 98%;
+        --border: 214.3 31.8% 91.4%;
+        --input: 214.3 31.8% 91.4%;
+        --ring: 221.2 83.2% 53.3%;
+        --radius: 0.5rem;
+      }
+
+      /* Map Tailwind classes to our CSS variables */
+      .bg-background { background-color: hsl(var(--background)); }
+      .bg-foreground { background-color: hsl(var(--foreground)); }
+      .bg-card { background-color: hsl(var(--card)); }
+      .bg-primary { background-color: hsl(var(--primary)); }
+      .bg-secondary { background-color: hsl(var(--secondary)); }
+      .bg-muted { background-color: hsl(var(--muted)); }
+      .bg-accent { background-color: hsl(var(--accent)); }
+      .bg-destructive { background-color: hsl(var(--destructive)); }
+
+      .text-foreground { color: hsl(var(--foreground)); }
+      .text-background { color: hsl(var(--background)); }
+      .text-card-foreground { color: hsl(var(--card-foreground)); }
+      .text-primary { color: hsl(var(--primary)); }
+      .text-primary-foreground { color: hsl(var(--primary-foreground)); }
+      .text-secondary-foreground { color: hsl(var(--secondary-foreground)); }
+      .text-muted-foreground { color: hsl(var(--muted-foreground)); }
+      .text-accent-foreground { color: hsl(var(--accent-foreground)); }
+      .text-destructive { color: hsl(var(--destructive)); }
+      .text-destructive-foreground { color: hsl(var(--destructive-foreground)); }
+
+      .border-border { border-color: hsl(var(--border)); }
+      .border-input { border-color: hsl(var(--input)); }
+
+      .ring-ring { --tw-ring-color: hsl(var(--ring)); }
+
+      .rounded-lg { border-radius: var(--radius); }
+      .rounded-md { border-radius: calc(var(--radius) - 2px); }
+      .rounded-sm { border-radius: calc(var(--radius) - 4px); }
+      .rounded { border-radius: 0.25rem; }
+
+      /* Apply background and foreground colors to body */
+      body {
+        background-color: hsl(var(--background));
+        color: hsl(var(--foreground));
+      }
+    </style>
+
+    <!-- Lucide Icons (local) -->
+    <script src="{% static 'js/lucide.min.js' %}"></script>
+
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="border-b border-border bg-card sticky top-0 z-50">
+        <div class="container mx-auto px-4">
+            <div class="flex h-16 items-center justify-between">
+                <!-- Logo/Brand -->
+                <div class="flex items-center gap-8">
+                    <a href="/rentals/" class="flex items-center gap-2 font-bold text-xl">
+                        <span class="text-2xl">🏠</span>
+                        <span>RentalPro</span>
+                    </a>
+
+                    <!-- Main Navigation -->
+                    <div class="hidden md:flex items-center gap-1">
+                        <a href="/rentals/"
+                           class="px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors">
+                            Dashboard
+                        </a>
+                        <a href="/rentals/properties/"
+                           class="px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors">
+                            Properties
+                        </a>
+                        <a href="/rentals/tenants/"
+                           class="px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors">
+                            Tenants
+                        </a>
+                        <a href="/rentals/leases/"
+                           class="px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors">
+                            Leases
+                        </a>
+                        <a href="/rentals/maintenance/"
+                           class="px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors">
+                            Maintenance
+                        </a>
+                        <a href="/rentals/financials/"
+                           class="px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors">
+                            Financials
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Right side: Theme toggle -->
+                <div class="flex items-center gap-4">
+                    <button id="theme-toggle"
+                            class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 hover:bg-accent hover:text-accent-foreground h-10 w-10"
+                            aria-label="Toggle theme">
+                        <svg id="sun-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden">
+                            <circle cx="12" cy="12" r="5"></circle>
+                            <line x1="12" y1="1" x2="12" y2="3"></line>
+                            <line x1="12" y1="21" x2="12" y2="23"></line>
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                            <line x1="1" y1="12" x2="3" y2="12"></line>
+                            <line x1="21" y1="12" x2="23" y2="12"></line>
+                            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                        </svg>
+                        <svg id="moon-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                        </svg>
+                    </button>
+
+                    <!-- Mobile menu button -->
+                    <button id="mobile-menu-button" class="md:hidden inline-flex items-center justify-center rounded-md p-2 hover:bg-accent hover:text-accent-foreground">
+                        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Mobile Navigation -->
+            <div id="mobile-menu" class="hidden md:hidden pb-4">
+                <div class="flex flex-col gap-2">
+                    <a href="/rentals/" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground">Dashboard</a>
+                    <a href="/rentals/properties/" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground">Properties</a>
+                    <a href="/rentals/tenants/" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground">Tenants</a>
+                    <a href="/rentals/leases/" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground">Leases</a>
+                    <a href="/rentals/maintenance/" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground">Maintenance</a>
+                    <a href="/rentals/financials/" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground">Financials</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="min-h-screen">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Theme Toggle Script -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const themeToggle = document.getElementById('theme-toggle');
+            const sunIcon = document.getElementById('sun-icon');
+            const moonIcon = document.getElementById('moon-icon');
+            const html = document.documentElement;
+
+            if (!themeToggle || !sunIcon || !moonIcon) {
+                console.error('Theme toggle elements not found');
+                return;
+            }
+
+            function updateIcons(theme) {
+                if (theme === 'dark') {
+                    sunIcon.classList.add('hidden');
+                    moonIcon.classList.remove('hidden');
+                } else {
+                    sunIcon.classList.remove('hidden');
+                    moonIcon.classList.add('hidden');
+                }
+            }
+
+            // Load saved theme or default to dark
+            const savedTheme = localStorage.getItem('theme') || 'dark';
+            html.classList.remove('light', 'dark');
+            html.classList.add(savedTheme);
+            updateIcons(savedTheme);
+
+            // Toggle theme on click
+            themeToggle.addEventListener('click', function() {
+                const currentTheme = html.classList.contains('dark') ? 'dark' : 'light';
+                const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+                html.classList.remove('light', 'dark');
+                html.classList.add(newTheme);
+                localStorage.setItem('theme', newTheme);
+                updateIcons(newTheme);
+
+                console.log('Theme switched to:', newTheme);
+            });
+
+            // Mobile menu toggle
+            const mobileMenuButton = document.getElementById('mobile-menu-button');
+            const mobileMenu = document.getElementById('mobile-menu');
+
+            if (mobileMenuButton && mobileMenu) {
+                mobileMenuButton.addEventListener('click', function() {
+                    mobileMenu.classList.toggle('hidden');
+                });
+            }
+
+            // Initialize Lucide icons on page load
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
+
+            // Re-initialize Lucide icons after LiveView DOM updates
+            // Hook into LiveView's afterUpdate callback if available
+            if (typeof window.addEventListener !== 'undefined') {
+                // Listen for custom LiveView update events
+                document.addEventListener('liveview:updated', function() {
+                    if (typeof lucide !== 'undefined') {
+                        lucide.createIcons();
+                    }
+                });
+
+                // Also re-init icons after a short delay (fallback for initial load)
+                setTimeout(function() {
+                    if (typeof lucide !== 'undefined') {
+                        lucide.createIcons();
+                    }
+                }, 100);
+            }
+        });
+    </script>
+</body>
+</html>

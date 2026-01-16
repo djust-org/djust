@@ -1,0 +1,215 @@
+{% extends "rentals/base.html" %}
+
+{% block title %}{% if is_edit %}Edit{% else %}Create{% endif %} Lease{% endblock %}
+
+{% block content %}
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.leases.LeaseFormView">
+  <div class="container mx-auto px-4 max-w-3xl">
+    <!-- Page Header -->
+    {{ page_header|safe }}
+
+    {% if success_message %}
+    <div class="bg-green-500/10 border border-green-500/20 text-green-600 dark:text-green-400 px-4 py-3 rounded-lg mb-6 flex items-center gap-2">
+      <i data-lucide="check-circle" class="w-5 h-5"></i>
+      <span>{{ success_message }}</span>
+    </div>
+    {% endif %}
+
+    {% if error_message %}
+    <div class="bg-destructive/10 border border-destructive text-destructive-foreground px-4 py-3 rounded-lg mb-6 flex items-center gap-2">
+      <i data-lucide="alert-circle" class="w-5 h-5"></i>
+      <span>{{ error_message }}</span>
+    </div>
+    {% endif %}
+
+    <form @submit="save_lease" class="bg-card border border-border rounded-lg p-6">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- Property -->
+        <div>
+          <label class="block text-sm font-medium text-card-foreground mb-1">
+            Property <span class="text-destructive">*</span>
+          </label>
+          <select
+            name="property_id"
+            class="w-full bg-background border border-input rounded-md px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+            required
+          >
+            {% for prop in properties %}
+            <option value="{{ prop.pk }}" {% if lease and lease.property.pk == prop.pk %}selected{% endif %}>
+              {{ prop.name }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <!-- Tenant -->
+        <div>
+          <label class="block text-sm font-medium text-card-foreground mb-1">
+            Tenant <span class="text-destructive">*</span>
+          </label>
+          <select
+            name="tenant_id"
+            class="w-full bg-background border border-input rounded-md px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+            required
+          >
+            {% for t in tenants %}
+            <option value="{{ t.pk }}" {% if lease and lease.tenant.pk == t.pk %}selected{% endif %}>
+              {{ t.user.get_full_name }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <!-- Start Date -->
+        <div>
+          <label class="block text-sm font-medium text-card-foreground mb-1">
+            Start Date <span class="text-destructive">*</span>
+          </label>
+          <div class="relative">
+            <i data-lucide="calendar" class="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground pointer-events-none"></i>
+            <input
+              type="date"
+              name="start_date"
+              class="w-full bg-background border border-input rounded-md pl-10 pr-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+              value="{% if lease %}{{ lease.start_date|date:'Y-m-d' }}{% endif %}"
+              required
+            />
+          </div>
+        </div>
+
+        <!-- End Date -->
+        <div>
+          <label class="block text-sm font-medium text-card-foreground mb-1">
+            End Date <span class="text-destructive">*</span>
+          </label>
+          <div class="relative">
+            <i data-lucide="calendar" class="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground pointer-events-none"></i>
+            <input
+              type="date"
+              name="end_date"
+              class="w-full bg-background border border-input rounded-md pl-10 pr-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+              value="{% if lease %}{{ lease.end_date|date:'Y-m-d' }}{% endif %}"
+              required
+            />
+          </div>
+        </div>
+
+        <!-- Monthly Rent -->
+        <div>
+          <label class="block text-sm font-medium text-card-foreground mb-1">
+            Monthly Rent <span class="text-destructive">*</span>
+          </label>
+          <div class="relative">
+            <span class="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground">$</span>
+            <input
+              type="number"
+              step="0.01"
+              name="monthly_rent"
+              class="w-full bg-background border border-input rounded-md pl-7 pr-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+              value="{% if lease %}{{ lease.monthly_rent }}{% endif %}"
+              min="0"
+              required
+            />
+          </div>
+        </div>
+
+        <!-- Security Deposit -->
+        <div>
+          <label class="block text-sm font-medium text-card-foreground mb-1">
+            Security Deposit <span class="text-destructive">*</span>
+          </label>
+          <div class="relative">
+            <span class="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground">$</span>
+            <input
+              type="number"
+              step="0.01"
+              name="security_deposit"
+              class="w-full bg-background border border-input rounded-md pl-7 pr-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+              value="{% if lease %}{{ lease.security_deposit }}{% endif %}"
+              min="0"
+              required
+            />
+          </div>
+        </div>
+
+        <!-- Rent Due Day -->
+        <div>
+          <label class="block text-sm font-medium text-card-foreground mb-1">
+            Rent Due Day
+          </label>
+          <input
+            type="number"
+            name="rent_due_day"
+            class="w-full bg-background border border-input rounded-md px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+            value="{% if lease %}{{ lease.rent_due_day }}{% else %}1{% endif %}"
+            min="1"
+            max="31"
+          />
+          <p class="text-xs text-muted-foreground mt-1">Day of month rent is due (1-31)</p>
+        </div>
+
+        <!-- Late Fee -->
+        <div>
+          <label class="block text-sm font-medium text-card-foreground mb-1">
+            Late Fee
+          </label>
+          <div class="relative">
+            <span class="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground">$</span>
+            <input
+              type="number"
+              step="0.01"
+              name="late_fee"
+              class="w-full bg-background border border-input rounded-md pl-7 pr-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+              value="{% if lease %}{{ lease.late_fee }}{% else %}0{% endif %}"
+              min="0"
+            />
+          </div>
+        </div>
+
+        <!-- Status -->
+        <div>
+          <label class="block text-sm font-medium text-card-foreground mb-1">
+            Status <span class="text-destructive">*</span>
+          </label>
+          <select
+            name="status"
+            class="w-full bg-background border border-input rounded-md px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+            required
+          >
+            {% for val, label in status_choices %}
+            <option value="{{ val }}" {% if lease and lease.status == val %}selected{% elif not lease and val == 'active' %}selected{% endif %}>
+              {{ label }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <!-- Terms -->
+        <div class="md:col-span-2">
+          <label class="block text-sm font-medium text-card-foreground mb-1">
+            Lease Terms
+          </label>
+          <textarea
+            name="terms"
+            class="w-full bg-background border border-input rounded-md px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+            rows="4"
+            placeholder="Additional terms and conditions..."
+          >{% if lease %}{{ lease.terms }}{% endif %}</textarea>
+        </div>
+      </div>
+
+      <!-- Form Actions -->
+      <div class="flex gap-3 pt-6 mt-6 border-t border-border">
+        <button type="submit" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90">
+          <i data-lucide="save" class="w-4 h-4"></i>
+          Save Lease
+        </button>
+        <a href="{% url 'rentals:lease-list' %}" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors bg-muted text-muted-foreground hover:bg-accent border border-border">
+          <i data-lucide="x" class="w-4 h-4"></i>
+          Cancel
+        </a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

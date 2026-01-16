@@ -1,0 +1,1312 @@
+{% extends "base.html" %}
+
+{% block title %}djust Interactive Playground - Where Code Meets Design{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block extra_head %}
+<style>
+    /* Dark Code Editor Aesthetic with Dramatic Gradients */
+    :root {
+        --playground-bg: #0d1117;
+        --playground-surface: #161b22;
+        --playground-elevated: #1c2128;
+        --playground-border: #30363d;
+        --playground-text: #c9d1d9;
+        --playground-text-muted: #8b949e;
+        --playground-accent: #58a6ff;
+        --playground-accent-glow: rgba(88, 166, 255, 0.1);
+        --playground-success: #3fb950;
+        --playground-warning: #d29922;
+        --playground-danger: #f85149;
+        --gradient-purple: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        --gradient-blue: linear-gradient(135deg, #00d2ff 0%, #3a7bd5 100%);
+        --gradient-green: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+    }
+
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+
+    body {
+        background: var(--playground-bg);
+        color: var(--playground-text);
+        overflow-x: hidden;
+    }
+
+    /* Hero Section - Design 2 Style with Dark Theme */
+    .hybrid-hero {
+        position: relative;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--gradient-purple);
+        overflow: hidden;
+    }
+
+    .hero-bg-pattern {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        opacity: 0.1;
+        background-image:
+            repeating-linear-gradient(45deg, transparent, transparent 35px, rgba(255,255,255,.05) 35px, rgba(255,255,255,.05) 70px);
+    }
+
+    .hero-content {
+        position: relative;
+        z-index: 2;
+        text-align: center;
+        padding: 2rem;
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+
+    .hero-title {
+        font-size: clamp(3rem, 8vw, 7rem);
+        font-weight: 900;
+        margin-bottom: 1rem;
+        line-height: 1.1;
+        text-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        animation: fadeInUp 1s ease-out;
+        color: white;
+    }
+
+    .hero-title-accent {
+        color: #fbbf24;
+        font-family: 'Courier New', monospace;
+    }
+
+    .hero-subtitle {
+        font-size: clamp(1.2rem, 3vw, 2rem);
+        margin-bottom: 2rem;
+        opacity: 0.95;
+        font-weight: 300;
+        animation: fadeInUp 1s ease-out 0.2s backwards;
+        color: rgba(255, 255, 255, 0.9);
+    }
+
+    .hero-stats {
+        display: flex;
+        justify-content: center;
+        gap: 3rem;
+        margin-bottom: 3rem;
+        flex-wrap: wrap;
+        animation: fadeInUp 1s ease-out 0.3s backwards;
+    }
+
+    .hero-stat {
+        text-align: center;
+    }
+
+    .hero-stat-value {
+        font-size: 2.5rem;
+        font-weight: 900;
+        color: #fbbf24;
+        font-family: 'Courier New', monospace;
+    }
+
+    .hero-stat-label {
+        font-size: 0.9rem;
+        color: rgba(255, 255, 255, 0.8);
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        margin-top: 0.5rem;
+    }
+
+    .hero-cta {
+        display: inline-block;
+        padding: 1.25rem 3rem;
+        background: white;
+        color: #667eea;
+        text-decoration: none;
+        border-radius: 50px;
+        font-weight: 700;
+        font-size: 1.2rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        animation: fadeInUp 1s ease-out 0.4s backwards;
+    }
+
+    .hero-cta:hover {
+        transform: translateY(-5px) scale(1.05);
+        box-shadow: 0 15px 40px rgba(0, 0, 0, 0.3);
+        color: #667eea;
+    }
+
+    .scroll-indicator {
+        position: absolute;
+        bottom: 2rem;
+        left: 50%;
+        transform: translateX(-50%);
+        animation: bounce 2s infinite;
+        opacity: 0.7;
+    }
+
+    /* Filter Bar - Design 3 Style */
+    .filter-bar {
+        background: var(--playground-surface);
+        border-bottom: 1px solid var(--playground-border);
+        position: sticky;
+        top: 70px;
+        z-index: 100;
+        backdrop-filter: blur(10px);
+    }
+
+    .filter-container {
+        max-width: 1600px;
+        margin: 0 auto;
+        padding: 1.5rem 2rem;
+    }
+
+    .filter-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 1.5rem;
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+
+    .filter-title {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--playground-text);
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .filter-controls {
+        display: flex;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .filter-group {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .filter-label {
+        font-size: 0.875rem;
+        color: var(--playground-text-muted);
+        font-weight: 500;
+    }
+
+    .filter-select {
+        background: var(--playground-elevated);
+        border: 1px solid var(--playground-border);
+        border-radius: 6px;
+        padding: 0.375rem 0.75rem;
+        color: var(--playground-text);
+        font-size: 0.875rem;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .filter-select:hover {
+        border-color: var(--playground-accent);
+    }
+
+    .filter-select:focus {
+        outline: none;
+        border-color: var(--playground-accent);
+        box-shadow: 0 0 0 3px var(--playground-accent-glow);
+    }
+
+    .category-tabs {
+        display: flex;
+        gap: 0.5rem;
+        overflow-x: auto;
+        padding-bottom: 0.5rem;
+    }
+
+    .category-tab {
+        padding: 0.5rem 1.25rem;
+        background: transparent;
+        border: 1px solid var(--playground-border);
+        border-radius: 6px;
+        color: var(--playground-text-muted);
+        cursor: pointer;
+        font-size: 0.875rem;
+        font-weight: 500;
+        white-space: nowrap;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .category-tab:hover {
+        background: var(--playground-elevated);
+        border-color: var(--playground-accent);
+        color: var(--playground-text);
+    }
+
+    .category-tab.active {
+        background: var(--playground-accent-glow);
+        border-color: var(--playground-accent);
+        color: var(--playground-accent);
+    }
+
+    .category-count {
+        background: var(--playground-surface);
+        padding: 0.125rem 0.5rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+    }
+
+    /* Main Content Area */
+    .playground-main {
+        max-width: 1600px;
+        margin: 0 auto;
+        padding: 0;
+    }
+
+    /* Showcase Section - Hybrid Split-Screen Design */
+    .showcase-section {
+        position: relative;
+        min-height: 100vh;
+        display: flex;
+        align-items: stretch;
+        scroll-snap-align: start;
+        border-bottom: 4px solid var(--playground-border);
+    }
+
+    .showcase-section:nth-child(even) {
+        flex-direction: row-reverse;
+    }
+
+    /* Left Side: Large Interactive Demo - Design 2 Style */
+    .showcase-demo-side {
+        flex: 1;
+        background: var(--playground-bg);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 4rem 3rem;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .showcase-section:nth-child(odd) .showcase-demo-side {
+        background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
+    }
+
+    .showcase-section:nth-child(even) .showcase-demo-side {
+        background: linear-gradient(135deg, rgba(0, 210, 255, 0.05) 0%, rgba(58, 123, 213, 0.05) 100%);
+    }
+
+    .demo-number {
+        position: absolute;
+        top: 2rem;
+        left: 2rem;
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--playground-accent);
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+    }
+
+    .demo-badge-group {
+        position: absolute;
+        top: 2rem;
+        right: 2rem;
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+
+    .demo-badge {
+        padding: 0.375rem 0.875rem;
+        background: var(--playground-surface);
+        border: 1px solid var(--playground-border);
+        border-radius: 4px;
+        font-size: 0.75rem;
+        color: var(--playground-text-muted);
+        font-family: 'Courier New', monospace;
+    }
+
+    .demo-badge.decorator {
+        border-color: var(--playground-accent);
+        color: var(--playground-accent);
+        background: var(--playground-accent-glow);
+    }
+
+    .demo-badge.feature {
+        border-color: var(--playground-success);
+        color: var(--playground-success);
+        background: rgba(63, 185, 80, 0.1);
+    }
+
+    .demo-badge.complexity-easy {
+        border-color: var(--playground-success);
+        color: var(--playground-success);
+    }
+
+    .demo-badge.complexity-medium {
+        border-color: var(--playground-warning);
+        color: var(--playground-warning);
+    }
+
+    .demo-badge.complexity-advanced {
+        border-color: var(--playground-danger);
+        color: var(--playground-danger);
+    }
+
+    .demo-title-large {
+        font-size: clamp(2.5rem, 5vw, 4rem);
+        font-weight: 900;
+        color: var(--playground-text);
+        margin-bottom: 1rem;
+        line-height: 1.1;
+        text-align: center;
+    }
+
+    .demo-description-large {
+        font-size: 1.125rem;
+        color: var(--playground-text-muted);
+        line-height: 1.8;
+        margin-bottom: 3rem;
+        text-align: center;
+        max-width: 600px;
+    }
+
+    .demo-interactive {
+        width: 100%;
+        max-width: 600px;
+        background: var(--playground-surface);
+        border: 1px solid var(--playground-border);
+        border-radius: 20px;
+        padding: 3rem;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+        position: relative;
+    }
+
+    .demo-interactive::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: var(--gradient-purple);
+        border-radius: 20px 20px 0 0;
+    }
+
+    .demo-interactive:hover {
+        transform: translateY(-10px);
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.4);
+    }
+
+    /* Right Side: Code Panel - Design 3 Style */
+    .showcase-code-side {
+        flex: 1;
+        background: var(--playground-surface);
+        border-left: 1px solid var(--playground-border);
+        display: flex;
+        flex-direction: column;
+    }
+
+    .showcase-section:nth-child(even) .showcase-code-side {
+        border-left: none;
+        border-right: 1px solid var(--playground-border);
+    }
+
+    .code-header {
+        padding: 2rem;
+        border-bottom: 1px solid var(--playground-border);
+        background: var(--playground-elevated);
+    }
+
+    .code-title {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--playground-text);
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .code-features {
+        list-style: none;
+        margin-bottom: 1.5rem;
+    }
+
+    .code-features li {
+        font-size: 0.95rem;
+        color: var(--playground-text-muted);
+        margin-bottom: 0.75rem;
+        padding-left: 1.5rem;
+        position: relative;
+    }
+
+    .code-features li::before {
+        content: "✓";
+        position: absolute;
+        left: 0;
+        color: var(--playground-success);
+        font-weight: 700;
+    }
+
+    .code-tabs {
+        display: flex;
+        gap: 0;
+        background: var(--playground-elevated);
+    }
+
+    .code-tab {
+        padding: 0.875rem 1.5rem;
+        background: transparent;
+        border: none;
+        color: var(--playground-text-muted);
+        cursor: pointer;
+        font-size: 0.875rem;
+        font-weight: 500;
+        transition: all 0.2s;
+        border-bottom: 2px solid transparent;
+        font-family: 'Courier New', monospace;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .code-tab:hover {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--playground-text);
+    }
+
+    .code-tab.active {
+        color: var(--playground-accent);
+        border-bottom-color: var(--playground-accent);
+        background: rgba(88, 166, 255, 0.05);
+    }
+
+    .code-content {
+        flex: 1;
+        overflow: auto;
+        background: var(--playground-bg);
+    }
+
+    .code-tab-pane {
+        display: none;
+        height: 100%;
+    }
+
+    .code-tab-pane.active {
+        display: block;
+    }
+
+    .code-footer {
+        padding: 1.5rem 2rem;
+        background: var(--playground-elevated);
+        border-top: 1px solid var(--playground-border);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .code-link {
+        color: var(--playground-accent);
+        text-decoration: none;
+        font-size: 0.95rem;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        transition: all 0.2s;
+    }
+
+    .code-link:hover {
+        color: var(--playground-text);
+        gap: 0.75rem;
+    }
+
+    /* Counter Demo Specific */
+    .counter-display {
+        font-size: 8rem;
+        font-weight: 900;
+        color: var(--playground-accent);
+        text-align: center;
+        margin: 2rem 0;
+        text-shadow: 0 4px 20px rgba(88, 166, 255, 0.5);
+        line-height: 1;
+    }
+
+    .counter-controls {
+        display: flex;
+        gap: 1rem;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+
+    .counter-btn {
+        padding: 1rem 2rem;
+        font-size: 1.1rem;
+        font-weight: 700;
+        border: none;
+        border-radius: 12px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        min-width: 140px;
+    }
+
+    .counter-btn.primary {
+        background: var(--gradient-purple);
+        color: white;
+    }
+
+    .counter-btn.secondary {
+        background: var(--playground-elevated);
+        color: var(--playground-text);
+        border: 2px solid var(--playground-border);
+    }
+
+    .counter-btn:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+    }
+
+    /* Dropdown Demo Specific */
+    .dropdown {
+        position: relative;
+        display: inline-block;
+        width: 100%;
+        max-width: 400px;
+    }
+
+    .dropdown-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 1.5rem 2rem;
+        background: var(--playground-bg);
+        border: 2px solid var(--playground-border);
+        border-radius: 12px;
+        color: var(--playground-text);
+        cursor: pointer;
+        font-size: 1.2rem;
+        font-weight: 600;
+        width: 100%;
+        transition: all 0.3s ease;
+    }
+
+    .dropdown-toggle:hover {
+        border-color: var(--playground-accent);
+        box-shadow: 0 4px 15px rgba(88, 166, 255, 0.3);
+    }
+
+    .dropdown-menu {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        margin-top: 0.5rem;
+        background: var(--playground-elevated);
+        border: 1px solid var(--playground-border);
+        border-radius: 12px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+        z-index: 1000;
+        overflow: hidden;
+    }
+
+    .dropdown-item {
+        padding: 1.25rem 2rem;
+        color: var(--playground-text);
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 1.1rem;
+    }
+
+    .dropdown-item:hover {
+        background: var(--playground-accent-glow);
+        padding-left: 2.5rem;
+    }
+
+    /* Search Input Styling */
+    .search-input {
+        width: 100%;
+        padding: 1.5rem 2rem;
+        font-size: 1.3rem;
+        border: 2px solid var(--playground-border);
+        border-radius: 12px;
+        background: var(--playground-bg);
+        color: var(--playground-text);
+        transition: all 0.3s ease;
+        margin-bottom: 2rem;
+    }
+
+    .search-input:focus {
+        outline: none;
+        border-color: var(--playground-accent);
+        box-shadow: 0 0 0 4px rgba(88, 166, 255, 0.2);
+    }
+
+    .search-input::placeholder {
+        color: var(--playground-text-muted);
+    }
+
+    /* Stats Grid */
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 1rem;
+        margin-top: 2rem;
+    }
+
+    .stat-card {
+        padding: 1.5rem;
+        border-radius: 12px;
+        text-align: center;
+        border: 2px solid;
+        background: var(--playground-elevated);
+    }
+
+    .stat-card.primary {
+        border-color: var(--playground-accent);
+        background: rgba(88, 166, 255, 0.05);
+    }
+
+    .stat-card.success {
+        border-color: var(--playground-success);
+        background: rgba(63, 185, 80, 0.05);
+    }
+
+    .stat-card.info {
+        border-color: var(--playground-border);
+    }
+
+    .stat-label {
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--playground-text-muted);
+        margin-bottom: 0.5rem;
+        font-weight: 600;
+    }
+
+    .stat-value {
+        font-size: 2.5rem;
+        font-weight: 900;
+        line-height: 1;
+    }
+
+    .stat-card.primary .stat-value {
+        color: var(--playground-accent);
+    }
+
+    .stat-card.success .stat-value {
+        color: var(--playground-success);
+    }
+
+    .stat-card.info .stat-value {
+        color: var(--playground-text);
+    }
+
+    /* Product Results */
+    .product-results {
+        margin-top: 2rem;
+    }
+
+    .results-title {
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--playground-text);
+        margin-bottom: 1rem;
+    }
+
+    .product-item {
+        background: var(--playground-bg);
+        border: 1px solid var(--playground-border);
+        border-radius: 8px;
+        padding: 1rem 1.25rem;
+        margin-bottom: 0.5rem;
+        color: var(--playground-text);
+        font-size: 1rem;
+        transition: all 0.2s ease;
+    }
+
+    .product-item:hover {
+        transform: translateX(10px);
+        border-color: var(--playground-accent);
+        background: var(--playground-elevated);
+    }
+
+    /* Animations */
+    @keyframes fadeInUp {
+        from {
+            opacity: 0;
+            transform: translateY(30px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @keyframes bounce {
+        0%, 100% {
+            transform: translateX(-50%) translateY(0);
+        }
+        50% {
+            transform: translateX(-50%) translateY(-20px);
+        }
+    }
+
+    /* Smooth Scroll */
+    html {
+        scroll-behavior: smooth;
+    }
+
+    /* Responsive Design */
+    @media (max-width: 1200px) {
+        .showcase-section {
+            flex-direction: column !important;
+            min-height: auto;
+        }
+
+        .showcase-code-side,
+        .showcase-section:nth-child(even) .showcase-code-side {
+            border-left: none;
+            border-right: none;
+            border-top: 1px solid var(--playground-border);
+        }
+
+        .demo-interactive {
+            max-width: 100%;
+        }
+
+        .hero-stats {
+            gap: 2rem;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .showcase-demo-side,
+        .code-header {
+            padding: 2rem 1.5rem;
+        }
+
+        .demo-interactive {
+            padding: 2rem 1.5rem;
+        }
+
+        .hero-title {
+            font-size: 2.5rem;
+        }
+
+        .hero-subtitle {
+            font-size: 1.1rem;
+        }
+
+        .demo-title-large {
+            font-size: 2rem;
+        }
+
+        .counter-display {
+            font-size: 5rem;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+        }
+
+        .filter-container {
+            padding: 1rem;
+        }
+
+        .filter-header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+    }
+
+    /* Hidden by default for filtering */
+    .showcase-section.hidden {
+        display: none;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div data-liveview-root>
+    <!-- Hero Section -->
+    <section class="hybrid-hero">
+        <div class="hero-bg-pattern"></div>
+        <div class="hero-content">
+            <h1 class="hero-title">
+                <span class="hero-title-accent">djust</span> Interactive Playground
+            </h1>
+            <p class="hero-subtitle">
+                Where beautiful design meets powerful code.<br>
+                Real-time reactive Django applications with Python-only state management.
+            </p>
+            <div class="hero-stats">
+                <div class="hero-stat">
+                    <div class="hero-stat-value">10-100x</div>
+                    <div class="hero-stat-label">Faster Rendering</div>
+                </div>
+                <div class="hero-stat">
+                    <div class="hero-stat-value">~5KB</div>
+                    <div class="hero-stat-label">Bundle Size</div>
+                </div>
+                <div class="hero-stat">
+                    <div class="hero-stat-value">&lt;100μs</div>
+                    <div class="hero-stat-label">VDOM Diffing</div>
+                </div>
+                <div class="hero-stat">
+                    <div class="hero-stat-value">87%</div>
+                    <div class="hero-stat-label">Code Reduction</div>
+                </div>
+            </div>
+            <a href="#demos" class="hero-cta">Explore Demos</a>
+        </div>
+        <div class="scroll-indicator">
+            <svg width="40" height="40" fill="white" viewBox="0 0 24 24">
+                <path d="M12 4l-8 8h5v8h6v-8h5l-8-8z" transform="rotate(180 12 12)"/>
+            </svg>
+        </div>
+    </section>
+
+    <!-- Filter Bar -->
+    <section class="filter-bar" id="demos">
+        <div class="filter-container">
+            <div class="filter-header">
+                <div class="filter-title">
+                    <span>⚡</span>
+                    <span>Interactive Demos</span>
+                </div>
+                <div class="filter-controls">
+                    <div class="filter-group">
+                        <label class="filter-label">Decorator:</label>
+                        <select class="filter-select" id="filter-decorator">
+                            <option value="">All</option>
+                            <option value="debounce">@debounce</option>
+                            <option value="throttle">@throttle</option>
+                            <option value="cache">@cache</option>
+                            <option value="optimistic">@optimistic</option>
+                            <option value="client_state">@client_state</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label class="filter-label">Complexity:</label>
+                        <select class="filter-select" id="filter-complexity">
+                            <option value="">All</option>
+                            <option value="easy">Easy</option>
+                            <option value="medium">Medium</option>
+                            <option value="advanced">Advanced</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="category-tabs">
+                <button class="category-tab active" data-category="all">
+                    <span>All Demos</span>
+                    <span class="category-count">4</span>
+                </button>
+                <button class="category-tab" data-category="basic">
+                    <span>⚡ Basic</span>
+                    <span class="category-count">2</span>
+                </button>
+                <button class="category-tab" data-category="state">
+                    <span>🔄 State Management</span>
+                    <span class="category-count">2</span>
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Main Content -->
+    <main class="playground-main">
+
+        <!-- Counter Demo -->
+        <section class="showcase-section" data-category="basic" data-complexity="easy">
+            <div class="showcase-demo-side">
+                <div class="demo-number">Demo 01</div>
+                <div class="demo-badge-group">
+                    <span class="demo-badge feature">real-time</span>
+                    <span class="demo-badge feature">@click</span>
+                    <span class="demo-badge complexity-easy">Easy</span>
+                </div>
+                <h2 class="demo-title-large">⚡ Counter</h2>
+                <p class="demo-description-large">
+                    Experience real-time state synchronization with this simple yet powerful counter demo.
+                    Every click updates instantly without page reloads.
+                </p>
+                <div class="demo-interactive">
+                    <div class="counter-display">{{ counter }}</div>
+                    <div class="counter-controls">
+                        <button @click="decrement" class="counter-btn secondary">Decrement</button>
+                        <button @click="reset" class="counter-btn secondary">Reset</button>
+                        <button @click="increment" class="counter-btn primary">Increment</button>
+                    </div>
+                </div>
+            </div>
+            <div class="showcase-code-side">
+                <div class="code-header">
+                    <h3 class="code-title">
+                        <span>🐍</span>
+                        <span>Python-Only Implementation</span>
+                    </h3>
+                    <ul class="code-features">
+                        <li>Instant state updates via WebSocket</li>
+                        <li>Sub-millisecond VDOM diffing</li>
+                        <li>Zero JavaScript required</li>
+                    </ul>
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="counter-python">
+                            <span>🐍</span>Python
+                        </button>
+                        <button class="code-tab" data-tab="counter-html">
+                            <span>📄</span>HTML
+                        </button>
+                    </div>
+                </div>
+                <div class="code-content">
+                    <div class="code-tab-pane active" id="counter-python">
+                        {{ counter_code_python|safe }}
+                    </div>
+                    <div class="code-tab-pane" id="counter-html">
+                        {{ counter_code_html|safe }}
+                    </div>
+                </div>
+                <div class="code-footer">
+                    <a href="/demos/counter/" class="code-link">
+                        <span>View Full Demo</span>
+                        <span>→</span>
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <!-- Dropdown Demo -->
+        <section class="showcase-section" data-category="basic" data-complexity="easy">
+            <div class="showcase-demo-side">
+                <div class="demo-number">Demo 02</div>
+                <div class="demo-badge-group">
+                    <span class="demo-badge feature">toggle</span>
+                    <span class="demo-badge feature">selection</span>
+                    <span class="demo-badge complexity-easy">Easy</span>
+                </div>
+                <h2 class="demo-title-large">📋 Dropdown</h2>
+                <p class="demo-description-large">
+                    Interactive dropdown with server-side state management.
+                    Toggle open/close and select items - all synchronized in real-time.
+                </p>
+                <div class="demo-interactive">
+                    <div class="dropdown">
+                        <button @click="toggle_dropdown" class="dropdown-toggle">
+                            <span>{{ selected_item }}</span>
+                            <span>{% if dropdown_open %}▲{% else %}▼{% endif %}</span>
+                        </button>
+                        {% if dropdown_open %}
+                        <div class="dropdown-menu">
+                            {% for item in dropdown_items %}
+                            <div @click="select_item" data-item="{{ item }}" class="dropdown-item">
+                                {{ item }}
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            <div class="showcase-code-side">
+                <div class="code-header">
+                    <h3 class="code-title">
+                        <span>🐍</span>
+                        <span>Interactive UI Components</span>
+                    </h3>
+                    <ul class="code-features">
+                        <li>Dynamic open/close state</li>
+                        <li>Server-side item selection</li>
+                        <li>Smooth animations and transitions</li>
+                    </ul>
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="dropdown-python">
+                            <span>🐍</span>Python
+                        </button>
+                        <button class="code-tab" data-tab="dropdown-html">
+                            <span>📄</span>HTML
+                        </button>
+                    </div>
+                </div>
+                <div class="code-content">
+                    <div class="code-tab-pane active" id="dropdown-python">
+                        {{ dropdown_code_python|safe }}
+                    </div>
+                    <div class="code-tab-pane" id="dropdown-html">
+                        {{ dropdown_code_html|safe }}
+                    </div>
+                </div>
+                <div class="code-footer">
+                    <a href="/demos/dropdown/" class="code-link">
+                        <span>View Full Demo</span>
+                        <span>→</span>
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <!-- Debounce Demo -->
+        <section class="showcase-section" data-category="state" data-complexity="medium" data-decorator="debounce">
+            <div class="showcase-demo-side">
+                <div class="demo-number">Demo 03</div>
+                <div class="demo-badge-group">
+                    <span class="demo-badge decorator">@debounce</span>
+                    <span class="demo-badge feature">500ms wait</span>
+                    <span class="demo-badge complexity-medium">Medium</span>
+                </div>
+                <h2 class="demo-title-large">⏱️ Debounce</h2>
+                <p class="demo-description-large">
+                    Type rapidly and watch as the search intelligently waits until you stop typing.
+                    Reduces server calls by ~90% without any custom JavaScript.
+                </p>
+                <div class="demo-interactive">
+                    <input
+                        type="text"
+                        class="search-input"
+                        @input="debounce_search"
+                        placeholder="Type something rapidly..."
+                        value="{{ debounce_query }}"
+                    >
+                    <div class="stats-grid">
+                        <div class="stat-card primary">
+                            <div class="stat-label">Current Query</div>
+                            <div class="stat-value" style="font-size: 1.2rem; word-break: break-all;">
+                                {{ debounce_query|default:"(empty)" }}
+                            </div>
+                        </div>
+                        <div class="stat-card success">
+                            <div class="stat-label">Server Calls</div>
+                            <div class="stat-value">{{ debounce_count }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="showcase-code-side">
+                <div class="code-header">
+                    <h3 class="code-title">
+                        <span>⏱️</span>
+                        <span>Smart Performance</span>
+                    </h3>
+                    <ul class="code-features">
+                        <li>500ms debounce delay</li>
+                        <li>2-second max wait time</li>
+                        <li>Automatic call reduction (~90%)</li>
+                    </ul>
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="debounce-python">
+                            <span>🐍</span>Python
+                        </button>
+                        <button class="code-tab" data-tab="debounce-html">
+                            <span>📄</span>HTML
+                        </button>
+                    </div>
+                </div>
+                <div class="code-content">
+                    <div class="code-tab-pane active" id="debounce-python">
+                        {{ debounce_code_python|safe }}
+                    </div>
+                    <div class="code-tab-pane" id="debounce-html">
+                        {{ debounce_code_html|safe }}
+                    </div>
+                </div>
+                <div class="code-footer">
+                    <a href="/demos/debounce/" class="code-link">
+                        <span>View Full Demo</span>
+                        <span>→</span>
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <!-- Cache Demo -->
+        <section class="showcase-section" data-category="state" data-complexity="medium" data-decorator="cache">
+            <div class="showcase-demo-side">
+                <div class="demo-number">Demo 04</div>
+                <div class="demo-badge-group">
+                    <span class="demo-badge decorator">@cache</span>
+                    <span class="demo-badge feature">5min TTL</span>
+                    <span class="demo-badge complexity-medium">Medium</span>
+                </div>
+                <h2 class="demo-title-large">💾 Cache</h2>
+                <p class="demo-description-large">
+                    Search products with intelligent client-side caching.
+                    Repeat searches return instantly from cache with zero server round-trips.
+                </p>
+                <div class="demo-interactive">
+                    <input
+                        type="text"
+                        class="search-input"
+                        @input="cache_search"
+                        placeholder="Try: laptop, mouse, keyboard..."
+                        value="{{ cache_query }}"
+                    >
+                    <div class="stats-grid">
+                        <div class="stat-card primary">
+                            <div class="stat-label">Server Calls</div>
+                            <div class="stat-value">{{ cache_server_calls }}</div>
+                        </div>
+                        <div class="stat-card success">
+                            <div class="stat-label">Cache Efficiency</div>
+                            <div class="stat-value">{{ cache_efficiency }}%</div>
+                        </div>
+                        <div class="stat-card info">
+                            <div class="stat-label">Results</div>
+                            <div class="stat-value">{{ cache_results|length }}</div>
+                        </div>
+                    </div>
+                    {% if cache_results %}
+                    <div class="product-results">
+                        <div class="results-title">Search Results ({{ cache_results|length }})</div>
+                        {% for product in cache_results %}
+                        <div class="product-item">📦 {{ product }}</div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="showcase-code-side">
+                <div class="code-header">
+                    <h3 class="code-title">
+                        <span>💾</span>
+                        <span>Client-Side Caching</span>
+                    </h3>
+                    <ul class="code-features">
+                        <li>5-minute TTL cache</li>
+                        <li>Sub-millisecond cache hits</li>
+                        <li>87% reduction in server calls</li>
+                    </ul>
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="cache-python">
+                            <span>🐍</span>Python
+                        </button>
+                        <button class="code-tab" data-tab="cache-html">
+                            <span>📄</span>HTML
+                        </button>
+                    </div>
+                </div>
+                <div class="code-content">
+                    <div class="code-tab-pane active" id="cache-python">
+                        {{ cache_code_python|safe }}
+                    </div>
+                    <div class="code-tab-pane" id="cache-html">
+                        {{ cache_code_html|safe }}
+                    </div>
+                </div>
+                <div class="code-footer">
+                    <a href="/demos/cache/" class="code-link">
+                        <span>View Full Demo</span>
+                        <span>→</span>
+                    </a>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+</div>
+
+<script>
+// Tab switching for code panels
+document.addEventListener('click', (e) => {
+    const tab = e.target.closest('.code-tab');
+    if (!tab) return;
+
+    const tabId = tab.getAttribute('data-tab');
+    const codeArea = tab.closest('.showcase-code-side');
+
+    // Remove active from all tabs in this section
+    codeArea.querySelectorAll('.code-tab').forEach(t => t.classList.remove('active'));
+    codeArea.querySelectorAll('.code-tab-pane').forEach(p => p.classList.remove('active'));
+
+    // Activate clicked tab
+    tab.classList.add('active');
+    document.getElementById(tabId)?.classList.add('active');
+});
+
+// Category filtering
+const categoryTabs = document.querySelectorAll('.category-tab');
+const showcaseSections = document.querySelectorAll('.showcase-section');
+
+categoryTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+        const category = tab.getAttribute('data-category');
+
+        // Update active tab
+        categoryTabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+
+        // Filter sections
+        filterSections();
+    });
+});
+
+// Decorator and complexity filtering
+const decoratorFilter = document.getElementById('filter-decorator');
+const complexityFilter = document.getElementById('filter-complexity');
+
+decoratorFilter?.addEventListener('change', filterSections);
+complexityFilter?.addEventListener('change', filterSections);
+
+function filterSections() {
+    const activeCategory = document.querySelector('.category-tab.active')?.getAttribute('data-category') || 'all';
+    const selectedDecorator = decoratorFilter?.value || '';
+    const selectedComplexity = complexityFilter?.value || '';
+
+    showcaseSections.forEach(section => {
+        const sectionCategory = section.getAttribute('data-category');
+        const sectionDecorator = section.getAttribute('data-decorator') || '';
+        const sectionComplexity = section.getAttribute('data-complexity') || '';
+
+        const categoryMatch = activeCategory === 'all' || sectionCategory === activeCategory;
+        const decoratorMatch = !selectedDecorator || sectionDecorator === selectedDecorator;
+        const complexityMatch = !selectedComplexity || sectionComplexity === selectedComplexity;
+
+        if (categoryMatch && decoratorMatch && complexityMatch) {
+            section.classList.remove('hidden');
+        } else {
+            section.classList.add('hidden');
+        }
+    });
+}
+
+// Parallax scroll effect for demo sections
+let lastScrollTop = 0;
+window.addEventListener('scroll', () => {
+    const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    const sections = document.querySelectorAll('.showcase-section:not(.hidden)');
+
+    sections.forEach((section) => {
+        const rect = section.getBoundingClientRect();
+        const isVisible = rect.top < window.innerHeight && rect.bottom > 0;
+
+        if (isVisible) {
+            const demoSide = section.querySelector('.showcase-demo-side');
+            if (demoSide) {
+                const scrollProgress = (window.innerHeight - rect.top) / window.innerHeight;
+                const translateY = Math.max(-30, Math.min(30, (0.5 - scrollProgress) * 60));
+                demoSide.style.transform = `translateY(${translateY}px)`;
+            }
+        }
+    });
+
+    lastScrollTop = scrollTop;
+}, { passive: true });
+
+// Initialize
+filterSections();
+</script>
+{% endblock %}

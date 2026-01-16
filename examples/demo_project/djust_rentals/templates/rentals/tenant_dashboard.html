@@ -1,0 +1,167 @@
+{% extends "rentals/base.html" %}
+
+{% block title %}Tenant Portal{% endblock %}
+
+{% block content %}
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.tenant_portal.TenantDashboardView">
+  <div class="container mx-auto px-4 max-w-7xl">
+    <!-- Page Header -->
+    {{ page_header|safe }}
+
+    <!-- Key Metrics Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      <!-- Monthly Rent -->
+      <div class="bg-card border border-border rounded-lg p-6 text-center">
+        <div class="flex items-center justify-center gap-2 mb-2">
+          <i data-lucide="dollar-sign" class="w-5 h-5 text-primary"></i>
+          <p class="text-sm text-muted-foreground">Monthly Rent</p>
+        </div>
+        <p class="text-3xl font-bold text-primary">
+          {% if current_lease %}${{ current_lease.monthly_rent|floatformat:2 }}{% else %}N/A{% endif %}
+        </p>
+      </div>
+
+      <!-- Lease Expiration -->
+      <div class="bg-card border border-border rounded-lg p-6 text-center">
+        <div class="flex items-center justify-center gap-2 mb-2">
+          <i data-lucide="calendar" class="w-5 h-5 text-primary"></i>
+          <p class="text-sm text-muted-foreground">Lease Expires</p>
+        </div>
+        {% if current_lease %}
+        <p class="text-2xl font-bold text-card-foreground">{{ current_lease.end_date|date:"M d, Y" }}</p>
+        <p class="text-sm text-muted-foreground mt-1">{{ days_until_due }} days remaining</p>
+        {% else %}
+        <p class="text-xl font-bold text-muted-foreground">No active lease</p>
+        {% endif %}
+      </div>
+
+      <!-- Payment Status -->
+      <div class="bg-card border border-border rounded-lg p-6 text-center">
+        <div class="flex items-center justify-center gap-2 mb-2">
+          <i data-lucide="credit-card" class="w-5 h-5 text-primary"></i>
+          <p class="text-sm text-muted-foreground">Next Payment</p>
+        </div>
+        {% if next_due_date %}
+        <p class="text-2xl font-bold text-card-foreground">{{ next_due_date|date:"M d" }}</p>
+        <p class="text-sm {% if days_until_due <= 5 %}text-red-600 dark:text-red-400{% else %}text-green-600 dark:text-green-400{% endif %} mt-1">
+          {{ days_until_due }} days
+        </p>
+        {% else %}
+        <p class="text-xl font-bold text-muted-foreground">N/A</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Main Content Grid -->
+    <div class="grid md:grid-cols-2 gap-6 mb-6">
+      <!-- Recent Payments -->
+      <div class="bg-card border border-border rounded-lg p-6">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2">
+            <i data-lucide="receipt" class="w-5 h-5 text-primary"></i>
+            <h2 class="text-xl font-semibold text-card-foreground">Recent Payments</h2>
+          </div>
+          <a href="{% url 'rentals:tenant-payments' %}" class="text-sm text-primary hover:underline">
+            View all →
+          </a>
+        </div>
+
+        {% if recent_payments %}
+        <div class="overflow-x-auto">
+          <table class="w-full">
+            <thead>
+              <tr class="border-b border-border">
+                <th class="text-left py-2 px-3 text-xs font-medium text-muted-foreground">Date</th>
+                <th class="text-left py-2 px-3 text-xs font-medium text-muted-foreground">Amount</th>
+                <th class="text-left py-2 px-3 text-xs font-medium text-muted-foreground">Method</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for payment in recent_payments %}
+              <tr class="border-b border-border">
+                <td class="py-2 px-3 text-sm text-card-foreground">{{ payment.payment_date|date:"M d, Y" }}</td>
+                <td class="py-2 px-3 text-sm text-green-600 dark:text-green-400 font-semibold">
+                  ${{ payment.amount|floatformat:2 }}
+                </td>
+                <td class="py-2 px-3 text-sm text-muted-foreground">{{ payment.get_payment_method_display }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="text-muted-foreground text-center py-4">No payments found</p>
+        {% endif %}
+      </div>
+
+      <!-- Maintenance Requests -->
+      <div class="bg-card border border-border rounded-lg p-6">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2">
+            <i data-lucide="wrench" class="w-5 h-5 text-primary"></i>
+            <h2 class="text-xl font-semibold text-card-foreground">Maintenance Requests</h2>
+          </div>
+        </div>
+
+        <div class="space-y-3 mb-4">
+          {% for req in maintenance_requests %}
+          <div class="p-4 bg-accent/50 rounded-md border border-border">
+            <div class="flex justify-between items-start mb-2">
+              <p class="font-semibold text-card-foreground">{{ req.title }}</p>
+              <span class="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
+                {% if req.priority == 'urgent' %}bg-red-500 text-white
+                {% elif req.priority == 'high' %}bg-orange-500 text-white
+                {% elif req.priority == 'medium' %}bg-yellow-500 text-white
+                {% else %}bg-green-500 text-white{% endif %}">
+                {{ req.get_priority_display }}
+              </span>
+            </div>
+            <p class="text-sm text-muted-foreground mb-2">{{ req.description|truncatewords:15 }}</p>
+            <div class="flex items-center gap-2 text-xs text-muted-foreground">
+              <i data-lucide="clock" class="w-3 h-3"></i>
+              <span>{{ req.get_status_display }} • {{ req.created_at|date:"M d" }}</span>
+            </div>
+          </div>
+          {% empty %}
+          <p class="text-muted-foreground text-center py-4">No maintenance requests</p>
+          {% endfor %}
+        </div>
+
+        <a href="{% url 'rentals:tenant-maintenance-create' %}" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90 w-full justify-center">
+          <i data-lucide="plus" class="w-4 h-4"></i>
+          Submit New Request
+        </a>
+      </div>
+    </div>
+
+    <!-- Lease Details -->
+    {% if current_lease %}
+    <div class="bg-card border border-border rounded-lg p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <i data-lucide="file-text" class="w-5 h-5 text-primary"></i>
+        <h2 class="text-xl font-semibold text-card-foreground">Lease Details</h2>
+      </div>
+
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+        <div>
+          <p class="text-sm text-muted-foreground mb-1">Property</p>
+          <p class="font-semibold text-card-foreground">{{ current_property.name }}</p>
+        </div>
+        <div>
+          <p class="text-sm text-muted-foreground mb-1">Address</p>
+          <p class="font-semibold text-card-foreground">{{ current_property.address }}</p>
+        </div>
+        <div>
+          <p class="text-sm text-muted-foreground mb-1">Start Date</p>
+          <p class="font-semibold text-card-foreground">{{ current_lease.start_date|date:"M d, Y" }}</p>
+        </div>
+        <div>
+          <p class="text-sm text-muted-foreground mb-1">Security Deposit</p>
+          <p class="font-semibold text-card-foreground">${{ current_lease.security_deposit|floatformat:2 }}</p>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

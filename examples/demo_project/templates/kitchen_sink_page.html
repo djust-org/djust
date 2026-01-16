@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Kitchen Sink - djust Components{% endblock %}
+
+{% block nav_components_active %}active{% endblock %}
+
+{% block extra_styles %}
+.hero-section {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 2rem 0;
+    margin-bottom: 3rem;
+}
+.component-section {
+    background: white;
+    border-radius: 12px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.component-section h3 {
+    color: #2c3e50;
+    font-weight: 600;
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 3px solid #667eea;
+    display: inline-block;
+}
+.component-demo {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+.demo-label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #6c757d;
+    margin-bottom: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.component-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1rem;
+}
+.badge-container {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+.btn-interactive {
+    margin: 0.5rem 0.5rem 0.5rem 0;
+}
+code {
+    background: #f4f4f4;
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.875rem;
+    color: #e83e8c;
+}
+.section-divider {
+    margin: 3rem 0;
+    border-top: 2px solid #e9ecef;
+}
+{% endblock %}
+
+{% block content %}
+<!-- LiveView reactive content injected here -->
+<div data-liveview-root></div>
+{% endblock %}

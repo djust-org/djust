@@ -1,0 +1,27 @@
+<nav class="navbar navbar-expand-lg navbar-custom fixed-top">
+    <div class="container">
+        <a class="navbar-brand d-flex align-items-center" href="/">
+            <img src="/static/images/djust.png" alt="djust" width="30" height="30" class="me-2">
+            <strong>djust</strong>
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            <ul class="navbar-nav ms-auto">
+                <li class="nav-item">
+                    <a class="nav-link {% if nav_home_active %}active{% endif %}" href="/">Home</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if nav_demos_active %}active{% endif %}" href="/demos/">Demos</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if nav_forms_active %}active{% endif %}" href="/forms/">Forms</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if nav_docs_active %}active{% endif %}" href="/docs/">Docs</a>
+                </li>
+            </ul>
+        </div>
+    </div>
+</nav>

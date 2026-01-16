@@ -1,0 +1,120 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "djust"
+version = "0.1.0"
+description = "Blazing fast reactive server-side rendering for Django, powered by Rust"
+authors = [{name = "djust contributors"}]
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+keywords = ["django", "rust", "reactive", "server-side-rendering", "websocket"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Django",
+    "Framework :: Django :: 3.2",
+    "Framework :: Django :: 4.0",
+    "Framework :: Django :: 4.1",
+    "Framework :: Django :: 4.2",
+    "Framework :: Django :: 5.0",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    "Django>=3.2",
+    "channels[daphne]>=4.0.0",
+    "msgpack>=1.0.0",
+]
+
+[project.optional-dependencies]
+redis = [
+    "redis>=5.0.0",
+]
+compression = [
+    "zstandard>=0.22.0",  # zstd compression for state backend
+]
+performance = [
+    "orjson>=3.9.0",  # Faster JSON serialization
+    "zstandard>=0.22.0",
+]
+dev = [
+    "maturin>=1.0,<2.0",
+    "pytest>=7.0",
+    "pytest-django>=4.5",
+    "pytest-asyncio>=0.21",
+    "pytest-xdist>=3.0",  # Parallel test execution
+    "black>=23.0",
+    "ruff>=0.1",
+    "mypy>=1.0",
+    "uvicorn[standard]>=0.30.0",
+    "whitenoise>=6.0.0",
+    "redis>=5.0.0",
+    "watchdog>=3.0.0",  # File system monitoring for hot reload
+    "zstandard>=0.22.0",  # Compression support
+    "orjson>=3.9.0",  # Fast JSON
+]
+
+[project.scripts]
+djust = "djust.cli:main"
+
+[project.urls]
+Homepage = "https://djust.org"
+Documentation = "https://djust.org/docs"
+Repository = "https://github.com/johnrtipton/djust"
+Issues = "https://github.com/johnrtipton/djust/issues"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "djust._rust"
+python-source = "python"
+bindings = "pyo3"
+manifest-path = "crates/djust_live/Cargo.toml"
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+testpaths = ["python/tests", "tests/unit", "tests/e2e", "tests/integration"]
+pythonpath = [".", "examples/demo_project"]
+DJANGO_SETTINGS_MODULE = "demo_project.settings"
+addopts = [
+    "--verbose",
+    "--strict-markers",
+    "--tb=short",
+    "--ignore=tests/playwright",  # Manual tests, not for CI
+    "--ignore=tests/js",  # JavaScript tests run with npm test
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "e2e: marks tests as end-to-end tests",
+    "asyncio: marks tests as async tests",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

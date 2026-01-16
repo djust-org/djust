@@ -1,0 +1,207 @@
+{% extends "rentals/base.html" %}
+
+{% block title %}{{ lease.property.name }} - Lease Details{% endblock %}
+
+{% block content %}
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.leases.LeaseDetailView">
+  <div class="container mx-auto px-4 max-w-6xl">
+    {% if error_message %}
+    <div class="bg-destructive/10 border border-destructive text-destructive-foreground px-4 py-3 rounded-lg mb-6">
+      {{ error_message }}
+    </div>
+    <a href="{% url 'rentals:lease-list' %}" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90">
+      <i data-lucide="arrow-left" class="w-4 h-4"></i>
+      Back to Leases
+    </a>
+    {% else %}
+    <!-- Page Header with Actions -->
+    {{ page_header|safe }}
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- Main Details -->
+      <div class="lg:col-span-2 space-y-6">
+        <!-- Lease Information -->
+        <div class="bg-card border border-border rounded-lg p-6">
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+              <i data-lucide="file-text" class="w-5 h-5 text-primary"></i>
+              <h2 class="text-xl font-semibold text-card-foreground">Lease Information</h2>
+            </div>
+            {{ status_badge|safe }}
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <p class="text-sm text-muted-foreground mb-1">Property</p>
+              <p class="font-medium">
+                <a href="{% url 'rentals:property-detail' lease.property.pk %}" class="text-primary hover:underline inline-flex items-center gap-1">
+                  {{ lease.property.name }}
+                  <i data-lucide="external-link" class="w-3 h-3"></i>
+                </a>
+              </p>
+              <p class="text-sm text-muted-foreground">{{ lease.property.address }}</p>
+            </div>
+            <div>
+              <p class="text-sm text-muted-foreground mb-1">Tenant</p>
+              <p class="font-medium">
+                <a href="{% url 'rentals:tenant-detail' lease.tenant.pk %}" class="text-primary hover:underline inline-flex items-center gap-1">
+                  {{ lease.tenant.user.get_full_name }}
+                  <i data-lucide="external-link" class="w-3 h-3"></i>
+                </a>
+              </p>
+              <p class="text-sm text-muted-foreground">{{ lease.tenant.user.email }}</p>
+            </div>
+            <div>
+              <p class="text-sm text-muted-foreground mb-1">Lease Period</p>
+              <div class="flex items-center gap-1">
+                <i data-lucide="calendar" class="w-4 h-4 text-muted-foreground"></i>
+                <p class="text-card-foreground">{{ lease.start_date }} - {{ lease.end_date }}</p>
+              </div>
+            </div>
+            <div>
+              <p class="text-sm text-muted-foreground mb-1">Days Remaining</p>
+              <div class="flex items-center gap-1">
+                <i data-lucide="clock" class="w-4 h-4 text-muted-foreground"></i>
+                <p class="text-card-foreground {% if days_left <= 30 %}text-red-600 dark:text-red-400 font-semibold{% elif days_left <= 60 %}text-yellow-600 dark:text-yellow-400 font-semibold{% endif %}">
+                  {{ days_left }} days
+                </p>
+              </div>
+            </div>
+            <div>
+              <p class="text-sm text-muted-foreground mb-1">Monthly Rent</p>
+              <div class="flex items-center gap-1">
+                <i data-lucide="dollar-sign" class="w-4 h-4 text-muted-foreground"></i>
+                <p class="text-green-600 dark:text-green-400 font-semibold text-lg">${{ lease.monthly_rent }}</p>
+              </div>
+            </div>
+            <div>
+              <p class="text-sm text-muted-foreground mb-1">Security Deposit</p>
+              <div class="flex items-center gap-1">
+                <i data-lucide="shield" class="w-4 h-4 text-muted-foreground"></i>
+                <p class="text-card-foreground font-semibold">${{ lease.security_deposit }}</p>
+              </div>
+            </div>
+            <div>
+              <p class="text-sm text-muted-foreground mb-1">Rent Due Day</p>
+              <div class="flex items-center gap-1">
+                <i data-lucide="calendar-days" class="w-4 h-4 text-muted-foreground"></i>
+                <p class="text-card-foreground">{{ lease.rent_due_day }} of each month</p>
+              </div>
+            </div>
+            <div>
+              <p class="text-sm text-muted-foreground mb-1">Late Fee</p>
+              <div class="flex items-center gap-1">
+                <i data-lucide="alert-circle" class="w-4 h-4 text-muted-foreground"></i>
+                <p class="text-card-foreground">${{ lease.late_fee }}</p>
+              </div>
+            </div>
+          </div>
+
+          {% if lease.terms %}
+          <div class="mt-4 pt-4 border-t border-border">
+            <p class="text-sm text-muted-foreground mb-2">Lease Terms</p>
+            <p class="text-card-foreground">{{ lease.terms }}</p>
+          </div>
+          {% endif %}
+        </div>
+
+        <!-- Payment History -->
+        <div class="bg-card border border-border rounded-lg p-6">
+          <div class="flex items-center gap-2 mb-4">
+            <i data-lucide="credit-card" class="w-5 h-5 text-primary"></i>
+            <h2 class="text-xl font-semibold text-card-foreground">Payment History</h2>
+          </div>
+
+          {% if payments %}
+          <div class="space-y-3">
+            {% for payment in payments|slice:":10" %}
+            <div class="flex justify-between items-center py-2 border-b border-border last:border-0">
+              <div>
+                <p class="text-card-foreground">{{ payment.payment_date }}</p>
+                <p class="text-sm text-muted-foreground">{{ payment.get_payment_method_display }}</p>
+              </div>
+              <div class="text-right">
+                <p class="text-green-600 dark:text-green-400 font-semibold">${{ payment.amount }}</p>
+                {% if payment.notes %}
+                <p class="text-xs text-muted-foreground">{{ payment.notes|truncatewords:5 }}</p>
+                {% endif %}
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+
+          {% if payment_count > 10 %}
+          <div class="mt-4 pt-4 border-t border-border text-center">
+            <p class="text-sm text-muted-foreground">Showing 10 of {{ payment_count }} payments</p>
+          </div>
+          {% endif %}
+          {% else %}
+          <div class="text-center py-8">
+            <i data-lucide="credit-card" class="w-12 h-12 mx-auto mb-3 text-muted-foreground"></i>
+            <p class="text-muted-foreground">No payment history available</p>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Sidebar -->
+      <div class="space-y-6">
+        <!-- Financial Summary -->
+        <div class="bg-card border border-border rounded-lg p-6">
+          <div class="flex items-center gap-2 mb-4">
+            <i data-lucide="bar-chart" class="w-5 h-5 text-primary"></i>
+            <h3 class="text-lg font-semibold text-card-foreground">Financial Summary</h3>
+          </div>
+          <div class="space-y-3">
+            <div>
+              <p class="text-sm text-muted-foreground mb-1">Total Paid</p>
+              <p class="text-2xl font-bold text-green-600 dark:text-green-400">${{ total_paid|floatformat:0 }}</p>
+            </div>
+            <div>
+              <p class="text-sm text-muted-foreground mb-1">Expected Total</p>
+              <p class="text-xl font-semibold text-card-foreground">${{ expected_total|floatformat:0 }}</p>
+            </div>
+            <div class="pt-3 border-t border-border">
+              <p class="text-sm text-muted-foreground mb-1">Balance</p>
+              <p class="text-xl font-bold {% if balance > 0 %}text-red-600 dark:text-red-400{% else %}text-green-600 dark:text-green-400{% endif %}">
+                {% if balance > 0 %}-{% endif %}\${{ balance|floatformat:0 }}
+              </p>
+              {% if balance > 0 %}
+              <p class="text-xs text-muted-foreground mt-1">Outstanding balance</p>
+              {% else %}
+              <p class="text-xs text-muted-foreground mt-1">Paid in full</p>
+              {% endif %}
+            </div>
+            <div class="pt-3 border-t border-border">
+              <p class="text-sm text-muted-foreground mb-1">Payment Count</p>
+              <p class="text-lg font-semibold text-card-foreground">{{ payment_count }}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="bg-card border border-border rounded-lg p-6">
+          <div class="flex items-center gap-2 mb-4">
+            <i data-lucide="zap" class="w-5 h-5 text-primary"></i>
+            <h3 class="text-lg font-semibold text-card-foreground">Quick Actions</h3>
+          </div>
+          <div class="space-y-2">
+            <a href="{% url 'rentals:property-detail' lease.property.pk %}" class="flex items-center justify-center gap-2 w-full bg-primary text-primary-foreground hover:bg-primary/90 py-2 rounded-md transition-colors">
+              <i data-lucide="home" class="w-4 h-4"></i>
+              View Property
+            </a>
+            <a href="{% url 'rentals:tenant-detail' lease.tenant.pk %}" class="flex items-center justify-center gap-2 w-full bg-muted text-muted-foreground hover:bg-accent py-2 rounded-md border border-border transition-colors">
+              <i data-lucide="user" class="w-4 h-4"></i>
+              View Tenant
+            </a>
+            <a href="{% url 'rentals:lease-list' %}" class="flex items-center justify-center gap-2 w-full bg-muted text-muted-foreground hover:bg-accent py-2 rounded-md border border-border transition-colors">
+              <i data-lucide="arrow-left" class="w-4 h-4"></i>
+              Back to Leases
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

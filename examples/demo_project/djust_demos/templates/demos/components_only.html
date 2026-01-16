@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block title %}Components Only Demo{% endblock %}
+
+{% block content %}
+<!-- Navigation -->
+{{ navbar.render }}
+
+<!-- Main Content - Built entirely from components -->
+<div class="container" style="margin-top: 80px;">
+
+    <!-- Alert Section -->
+    {% if header_alert %}
+        {{ header_alert.render }}
+    {% endif %}
+
+    <!-- Header -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <h1>Components-Only Dashboard</h1>
+            <p class="lead">This entire page is built using Python components - no HTML!</p>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="row mb-4">
+        <div class="col-md-6 mb-3">
+            {{ tasks_card.render }}
+        </div>
+        <div class="col-md-6 mb-3">
+            {{ status_card.render }}
+        </div>
+    </div>
+
+    <!-- Progress Section -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Task Progress</h5>
+                    {{ task_progress_bar.render }}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Actions Section -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title mb-3">Actions</h5>
+                    <div class="d-flex gap-2 flex-wrap">
+                        {{ primary_button.render }}
+                        {{ secondary_button.render }}
+                        {{ actions_dropdown.render }}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Button Groups Section -->
+    <div class="row mb-4">
+        <div class="col-md-8 mb-3">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title mb-3">Button Groups</h5>
+
+                    <div class="mb-3">
+                        <label class="d-block mb-2">Text Alignment:</label>
+                        {{ alignment_group.render }}
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="d-block mb-2">Text Formatting (Small):</label>
+                        {{ formatting_group.render }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4 mb-3">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title mb-3">Vertical Group</h5>
+                    <label class="d-block mb-2">View Mode:</label>
+                    {{ view_mode_group.render }}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tabbed Content -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title mb-3">Documentation</h5>
+                    {{ content_tabs.render }}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Source Code Card -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">View Source</h5>
+                    <p>The Python code for this view is at <code>demo_app/views/components_only_demo.py</code></p>
+                    <p>This template has minimal HTML - just layout containers. All UI elements are components!</p>
+                    <pre><code class="language-python">
+# All components are created in Python:
+self.alert = AlertComponent(message="Welcome!", variant="info")
+self.card = CardComponent(title="Stats", content="...")
+self.button = ButtonComponent(text="Click me", action="handle_click")
+self.dropdown = DropdownComponent(label="Actions", items=[...])
+self.tabs = TabsComponent(tabs=[...])
+</code></pre>
+                    <pre><code class="language-django">{% templatetag openblock %} extends "base.html" {% templatetag closeblock %}
+
+{% templatetag openblock %} block content {% templatetag closeblock %}
+    {% templatetag openvariable %} alert.render {% templatetag closevariable %}
+    {% templatetag openvariable %} card.render {% templatetag closevariable %}
+    {% templatetag openvariable %} button.render {% templatetag closevariable %}
+{% templatetag openblock %} endblock {% templatetag closeblock %}</code></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Modal -->
+{% if modal %}
+    {{ modal.render }}
+{% endif %}
+
+{% endblock %}

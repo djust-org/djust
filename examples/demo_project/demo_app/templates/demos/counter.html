@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+
+{% block title %}Counter Demo - djust{% endblock %}
+
+{% block syntax_highlighting %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+{% endblock %}
+
+{% block body_start %}<div data-liveview-root>{% endblock %}
+
+{% block content %}
+    <!-- Hero Section -->
+    <section class="hero-section" style="padding: 4rem 0 2rem;">
+        <div class="container mx-auto px-4">
+            <div class="max-w-4xl mx-auto text-center">
+                <div class="flex items-center justify-center gap-3 mb-4">
+                    <div class="text-5xl">⚡</div>
+                    <h1 class="hero-title" style="font-size: 2.5rem; margin-bottom: 0;">Counter Demo</h1>
+                </div>
+                <p class="hero-subtitle">
+                    Real-time reactive counter demonstrating instant state updates via WebSocket
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Demo Section -->
+    <section class="section-modern" style="padding: 2rem 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+            <div class="row g-4">
+                <!-- Live Demo -->
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Live Demo</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Click buttons to see instant updates without page reload
+                            </p>
+                        </div>
+                        <div class="p-6" style="background: var(--color-bg-elevated); min-height: 300px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2rem;">
+                            <!-- Counter Display -->
+                            <div class="text-center" style="width: 100%;">
+                                <div style="background: var(--color-accent-muted); border: 2px solid var(--color-accent); border-radius: var(--radius-lg); padding: 2rem; margin-bottom: 2rem;">
+                                    <div style="font-size: 1rem; color: var(--color-text-muted); margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Count</div>
+                                    <div style="font-size: 4rem; font-weight: 800; color: var(--color-accent); line-height: 1;">{{ count }}</div>
+                                </div>
+                            </div>
+
+                            <!-- Buttons -->
+                            <div class="flex gap-3 flex-wrap justify-center" style="width: 100%;">
+                                <button @click="increment" class="btn-primary-modern">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                                    </svg>
+                                    <span>Increment</span>
+                                </button>
+                                <button @click="decrement" class="btn-secondary-modern">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"></path>
+                                    </svg>
+                                    <span>Decrement</span>
+                                </button>
+                                <button @click="reset" class="btn-secondary-modern" style="border-color: var(--color-error); color: var(--color-error);">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                    </svg>
+                                    <span>Reset</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Implementation Code -->
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(16, 185, 129, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Implementation</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Full source code for this demo
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            <!-- Python Code -->
+                            <div class="mb-4">
+                                <div class="code-header-modern">
+                                    <span>views.py</span>
+                                    <span class="code-badge-modern">Python</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from djust import LiveView
+
+class CounterView(LiveView):
+    """
+    Simple counter demo - showcases
+    reactive state updates
+    """
+    template_name = "demos/counter.html"
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    def increment(self):
+        self.count += 1
+
+    def decrement(self):
+        self.count -= 1
+
+    def reset(self):
+        self.count = 0</code></pre>
+                                </div>
+                            </div>
+
+                            <!-- Template Code -->
+                            <div>
+                                <div class="code-header-modern">
+                                    <span>counter.html</span>
+                                    <span class="code-badge-modern">HTML</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-html">&lt;div&gt;
+  &lt;h2&gt;Count: &#123;&#123; count &#125;&#125;&lt;/h2&gt;
+
+  &lt;button @click="increment"&gt;
+    Increment
+  &lt;/button&gt;
+
+  &lt;button @click="decrement"&gt;
+    Decrement
+  &lt;/button&gt;
+
+  &lt;button @click="reset"&gt;
+    Reset
+  &lt;/button&gt;
+&lt;/div&gt;</code></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Features Section -->
+            <div class="row g-4 mt-4">
+                <div class="col-12">
+                    <div class="feature-card-modern p-4">
+                        <h3 class="text-lg font-bold mb-3" style="color: var(--color-text);">How It Works</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <div class="text-2xl mb-2">🔌</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">WebSocket Connection</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    Persistent connection keeps client and server in sync
+                                </p>
+                            </div>
+                            <div>
+                                <div class="text-2xl mb-2">⚡</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">Event Handling</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    @click directive sends events to Python methods
+                                </p>
+                            </div>
+                            <div>
+                                <div class="text-2xl mb-2">🔄</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">VDOM Updates</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    Minimal DOM patches update only what changed
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Back Button -->
+            <div class="text-center mt-4">
+                <a href="/demos/" class="btn-secondary-modern">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                    </svg>
+                    <span>Back to Demos</span>
+                </a>
+            </div>
+        </div>
+    </section>
+    </div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+{% endblock %}

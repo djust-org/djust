@@ -1,0 +1,150 @@
+{% extends "rentals/base.html" %}
+{% block title %}Dashboard - Rental Management{% endblock %}
+
+{% block content %}
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.dashboard.RentalDashboardView">
+  <div class="container mx-auto px-4 max-w-7xl">
+    <!-- Page Header with Lucide Icon -->
+    {{ page_header|safe }}
+
+    <!-- Key Metrics - Using StatCard Components -->
+    <div class="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+      {% for stat_card in stat_cards %}
+        {{ stat_card|safe }}
+      {% endfor %}
+    </div>
+
+    <!-- Financial Summary -->
+    <div class="bg-card border border-border rounded-lg p-6 mb-6">
+      <div class="flex items-center gap-2 mb-4">
+        <i data-lucide="dollar-sign" class="w-6 h-6 text-primary"></i>
+        <h2 class="text-xl font-semibold text-card-foreground">This Month's Financials</h2>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div>
+          <p class="text-sm text-muted-foreground mb-1">Income</p>
+          <p class="text-2xl font-bold text-green-600 dark:text-green-400">${{ month_income }}</p>
+        </div>
+        <div>
+          <p class="text-sm text-muted-foreground mb-1">Expenses</p>
+          <p class="text-2xl font-bold text-red-600 dark:text-red-400">${{ month_expenses }}</p>
+        </div>
+        <div>
+          <p class="text-sm text-muted-foreground mb-1">Net Profit</p>
+          <p class="text-2xl font-bold {% if month_profit >= 0 %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">${{ month_profit }}</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Two Column Layout -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- Recent Properties -->
+      <div class="bg-card border border-border rounded-lg p-6">
+        <div class="flex justify-between items-center mb-4">
+          <div class="flex items-center gap-2">
+            <i data-lucide="home" class="w-5 h-5 text-primary"></i>
+            <h2 class="text-xl font-semibold text-card-foreground">Recent Properties</h2>
+          </div>
+          <a href="/rentals/properties/"
+             data-djust-navigate
+             class="text-sm text-primary hover:underline flex items-center gap-1">
+            View all
+            <i data-lucide="arrow-right" class="w-3 h-3"></i>
+          </a>
+        </div>
+        <div class="space-y-3">
+          {% for property in properties %}
+          <div class="flex justify-between items-start p-3 bg-accent/50 rounded-md hover:bg-accent transition-colors">
+            <div class="flex-1">
+              <p class="font-medium text-card-foreground">{{ property.name }}</p>
+              <p class="text-sm text-muted-foreground">{{ property.address }}</p>
+            </div>
+            <div class="text-right">
+              <p class="font-semibold text-green-600 dark:text-green-400">${{ property.monthly_rent }}</p>
+              <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border {% if property.status == 'occupied' %}bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20{% else %}bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20{% endif %}">
+                {{ property.status_display }}
+              </span>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Pending Maintenance -->
+      <div class="bg-card border border-border rounded-lg p-6">
+        <div class="flex justify-between items-center mb-4">
+          <div class="flex items-center gap-2">
+            <i data-lucide="wrench" class="w-5 h-5 text-primary"></i>
+            <h2 class="text-xl font-semibold text-card-foreground">Pending Maintenance</h2>
+          </div>
+          <a href="/rentals/maintenance/"
+             data-djust-navigate
+             class="text-sm text-primary hover:underline flex items-center gap-1">
+            View all
+            <i data-lucide="arrow-right" class="w-3 h-3"></i>
+          </a>
+        </div>
+        <div class="space-y-3">
+          {% for request in pending_maintenance %}
+          <div class="p-3 bg-accent/50 rounded-md hover:bg-accent transition-colors">
+            <div class="flex justify-between items-start mb-2">
+              <p class="font-medium text-card-foreground">{{ request.title }}</p>
+              <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border {% if request.priority == 'urgent' %}bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20{% elif request.priority == 'high' %}bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border-yellow-500/20{% else %}bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20{% endif %}">
+                {{ request.priority_display }}
+              </span>
+            </div>
+            <p class="text-sm text-muted-foreground">{{ request.property_name }}</p>
+            <p class="text-xs text-muted-foreground mt-1">{{ request.created_at|date:"M d, Y" }}</p>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Lease Expirations -->
+    <div class="bg-card border border-border rounded-lg p-6 mt-6">
+      <div class="flex items-center gap-2 mb-4">
+        <i data-lucide="calendar-clock" class="w-6 h-6 text-primary"></i>
+        <h2 class="text-xl font-semibold text-card-foreground">Upcoming Lease Expirations</h2>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead class="border-b border-border">
+            <tr class="text-left">
+              <th class="pb-3 text-sm font-medium text-muted-foreground">Property</th>
+              <th class="pb-3 text-sm font-medium text-muted-foreground">Tenant</th>
+              <th class="pb-3 text-sm font-medium text-muted-foreground">Expires</th>
+              <th class="pb-3 text-sm font-medium text-muted-foreground">Days Left</th>
+              <th class="pb-3 text-sm font-medium text-muted-foreground">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for lease in expiring_soon %}
+            <tr class="border-b border-border hover:bg-accent/50 transition-colors">
+              <td class="py-3 text-sm text-card-foreground">{{ lease.property_name }}</td>
+              <td class="py-3 text-sm text-card-foreground">{{ lease.tenant_name }}</td>
+              <td class="py-3 text-sm text-card-foreground">{{ lease.end_date|date:"M d, Y" }}</td>
+              <td class="py-3 text-sm">
+                {% if lease.days_until_expiration %}
+                <span class="font-medium {% if lease.days_until_expiration < 30 %}text-red-600 dark:text-red-400{% elif lease.days_until_expiration < 60 %}text-yellow-600 dark:text-yellow-400{% else %}text-blue-600 dark:text-blue-400{% endif %}">
+                  {{ lease.days_until_expiration }} days
+                </span>
+                {% endif %}
+              </td>
+              <td class="py-3">
+                <a href="/rentals/leases/{{ lease.pk }}/"
+                   data-djust-navigate
+                   class="text-primary hover:underline text-sm inline-flex items-center gap-1">
+                  View
+                  <i data-lucide="arrow-right" class="w-3 h-3"></i>
+                </a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

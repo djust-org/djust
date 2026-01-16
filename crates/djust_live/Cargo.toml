@@ -1,0 +1,37 @@
+[package]
+name = "djust_live"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+# Library name for Rust imports
+name = "djust_live"
+# Both cdylib (for Python module _rust) and rlib (for other Rust crates)
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { workspace = true, features = ["extension-module"] }
+serde.workspace = true
+serde_json.workspace = true
+rmp-serde.workspace = true
+thiserror.workspace = true
+dashmap.workspace = true
+once_cell.workspace = true
+
+# Local dependencies
+djust_core = { path = "../djust_core" }
+djust_templates = { path = "../djust_templates" }
+djust_vdom = { path = "../djust_vdom" }
+djust_components = { path = "../djust_components" }
+
+# Additional dependencies for actor system
+tokio = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+bincode = { workspace = true }
+pyo3-async-runtimes = { workspace = true }
+uuid = { workspace = true }
+indexmap = { workspace = true }

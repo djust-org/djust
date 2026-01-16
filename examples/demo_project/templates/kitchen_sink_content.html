@@ -1,0 +1,241 @@
+<div data-liveview-root>
+    <!-- Hero Section -->
+    <div class="hero-section">
+        <div class="container">
+            <h1 class="display-4">Component Kitchen Sink</h1>
+            <p class="lead mb-0">
+                Explore all djust components with live, interactive examples.
+                All components support Bootstrap 5, Tailwind CSS, and plain HTML rendering.
+            </p>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="container pb-5">
+        <!-- Alerts Section -->
+        <div class="component-section">
+            <h3>Alerts & Notifications</h3>
+            <div class="component-demo">
+                <div class="demo-label">Alert Components</div>
+                <div class="mb-3">{{ alert_success.render }}</div>
+                <div class="mb-3">{{ alert_info.render }}</div>
+                <div>{{ alert_warning.render }}</div>
+            </div>
+        </div>
+
+        <!-- Buttons Section -->
+        <div class="component-section">
+            <h3>Buttons</h3>
+            <div class="component-demo">
+                <div class="demo-label">Button Variants & Sizes</div>
+                <div>
+                    {{ button_primary.render }}
+                    {{ button_secondary.render }}
+                    {{ button_success.render }}
+                    {{ button_danger.render }}
+                </div>
+                <div class="mt-3">
+                    <p class="text-muted mb-2">
+                        <small>Button click count: <strong>{{ button_click_count }}</strong></small>
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Badges Section -->
+        <div class="component-section">
+            <h3>Badges & Labels</h3>
+            <div class="component-demo">
+                <div class="demo-label">Badge Variants</div>
+                <div class="badge-container">
+                    {{ badge_primary.render }}
+                    {{ badge_success.render }}
+                    {{ badge_warning.render }}
+                    {{ badge_dismissible.render }}
+                </div>
+            </div>
+        </div>
+
+        <!-- Dropdowns Section -->
+        <div class="component-section">
+            <h3>Dropdowns</h3>
+            <div class="component-demo">
+                <div class="demo-label">Dropdown Menus</div>
+                <div>
+                    {{ dropdown_actions.render }}
+                    <span class="ms-2">{{ dropdown_split.render }}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cards Section -->
+        <div class="component-section">
+            <h3>Cards</h3>
+            <div class="component-grid">
+                <div>
+                    {{ card_basic.render }}
+                </div>
+                <div>
+                    {{ card_with_footer.render }}
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal Section -->
+        <div class="component-section">
+            <h3>Modal Dialogs</h3>
+            <div class="component-demo">
+                <div class="demo-label">Modal Example</div>
+                <button class="btn btn-primary" @click="show_modal">Open Modal</button>
+                <p class="text-muted mt-2 mb-0">
+                    <small>Modal opened: <strong>{{ modal_open_count }}</strong> time(s)</small>
+                </p>
+            </div>
+            {{ modal_example.render }}
+        </div>
+
+        <!-- Progress Bars Section -->
+        <div class="component-section">
+            <h3>Progress Indicators</h3>
+            <div class="component-demo">
+                <div class="demo-label">Progress Bars</div>
+                <div class="mb-3">
+                    <p class="text-muted mb-2"><small>Simple Progress</small></p>
+                    {{ progress_simple.render }}
+                </div>
+                <div class="mb-3">
+                    <p class="text-muted mb-2"><small>Striped & Animated</small></p>
+                    {{ progress_striped.render }}
+                </div>
+                <div class="mb-3">
+                    <p class="text-muted mb-2"><small>Custom Label</small></p>
+                    {{ progress_custom.render }}
+                </div>
+                <div class="mt-3">
+                    <button class="btn btn-sm btn-primary" @click="increment_progress">Increment (+10%)</button>
+                    <button class="btn btn-sm btn-secondary ms-2" @click="reset_progress">Reset</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Spinners Section -->
+        <div class="component-section">
+            <h3>Loading Spinners</h3>
+            <div class="component-demo">
+                <div class="demo-label">Spinner Variants</div>
+                <div class="d-flex gap-4 align-items-center">
+                    {{ spinner_border.render }}
+                    {{ spinner_grow.render }}
+                </div>
+            </div>
+        </div>
+
+        <!-- Tabs Section -->
+        <div class="component-section">
+            <h3>Tabs & Navigation</h3>
+            <div class="component-demo">
+                <div class="demo-label">Tabbed Interface</div>
+                {{ tabs_example.render }}
+            </div>
+        </div>
+
+        <!-- Data Table Section -->
+        <div class="component-section">
+            <h3>Data Tables</h3>
+            <div class="component-demo">
+                <div class="demo-label">Sortable Data Table</div>
+                <p class="text-muted mb-3"><small>Click column headers to sort</small></p>
+                {{ table_users.render }}
+            </div>
+        </div>
+
+        <!-- Pagination Section -->
+        <div class="component-section">
+            <h3>Pagination</h3>
+            <div class="component-demo">
+                <div class="demo-label">Basic Pagination</div>
+                <div class="mb-4">
+                    {{ pagination_basic.render }}
+                </div>
+
+                <div class="demo-label">Large Pagination with Info</div>
+                <div>
+                    {{ pagination_large.render }}
+                </div>
+            </div>
+        </div>
+
+        <!-- Component Composition Example -->
+        <div class="component-section">
+            <h3>Component Composition</h3>
+            <div class="component-demo">
+                <div class="demo-label">Combining Multiple Components</div>
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">User Dashboard</h5>
+                        <div>
+                            {{ badge_success.render }}
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p>This demonstrates how components can be composed together in complex UIs.</p>
+                        {{ progress_simple.render }}
+                        <div class="mt-3">
+                            {{ button_primary.render }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Code Example Section -->
+        <div class="component-section">
+            <h3>Usage Examples</h3>
+            <div class="component-demo">
+                <div class="demo-label">Python Code</div>
+                <pre style="background: #2d2d2d; color: #f8f8f2; padding: 1rem; border-radius: 8px; overflow-x: auto;"><code>from djust.components import ButtonComponent
+
+class MyView(LiveView):
+    def mount(self, request):
+        self.submit_btn = ButtonComponent(
+            label="Submit",
+            variant="primary",
+            on_click="handle_submit"
+        )
+
+    def handle_submit(self):
+        # Handle button click
+        pass</code></pre>
+            </div>
+
+            <div class="component-demo mt-3">
+                <div class="demo-label">Template Usage</div>
+                <pre style="background: #2d2d2d; color: #f8f8f2; padding: 1rem; border-radius: 8px; overflow-x: auto;"><code>&lt;!-- In your Django template --&gt;
+{% verbatim %}{{ submit_btn.render }}{% endverbatim %}</code></pre>
+            </div>
+        </div>
+
+        <!-- Features List -->
+        <div class="component-section">
+            <h3>Framework Features</h3>
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <h5>Reactive State Management</h5>
+                    <p class="text-muted">Components automatically sync with server state using Rust-powered VDOM diffing.</p>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <h5>Multi-Framework Support</h5>
+                    <p class="text-muted">Render components with Bootstrap 5, Tailwind CSS, or plain HTML.</p>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <h5>Zero JavaScript Required</h5>
+                    <p class="text-muted">All interactivity handled server-side with WebSocket updates.</p>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <h5>Type-Safe Components</h5>
+                    <p class="text-muted">Python type hints ensure correct component usage.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}djust{% endblock %}</title>
+
+    <!-- Bootstrap 5 CSS (or swap for Tailwind) -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Common Styles -->
+    <style>
+        .navbar-custom {
+            background: #ffffff !important;
+            border-bottom: 1px solid #e1e4e8 !important;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
+            min-height: 60px !important;
+        }
+        .navbar-brand strong {
+            color: #667eea;
+        }
+        .nav-link {
+            color: #24292e !important;
+            font-weight: 500;
+            transition: color 0.2s;
+            font-size: 15px;
+        }
+        .nav-link:hover, .nav-link.active {
+            color: #0969da !important;
+        }
+        .navbar-nav {
+            display: flex !important;
+            flex-direction: row !important;
+            gap: 0.5rem;
+        }
+        .navbar-collapse {
+            display: flex !important;
+            justify-content: flex-end;
+            flex-grow: 1;
+        }
+        .navbar-brand img {
+            max-height: 16px;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+            padding-top: 60px;
+            background-color: #ffffff;
+        }
+        {% block extra_styles %}{% endblock %}
+    </style>
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <!--
+        Navbar Component - Just render it!
+        The component automatically adapts to your CSS framework
+    -->
+    {{ navbar.render }}
+
+    <!-- Main Content -->
+    {% block content %}{% endblock %}
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

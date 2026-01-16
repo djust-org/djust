@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Todo List Demo - djust</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Shared Theme System -->
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/utilities.css">
+
+    <!-- Tailwind for utility classes -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+</head>
+<body>
+    <div data-liveview-root>
+    <!-- Navbar Component -->
+    {{ navbar.render }}
+
+    <!-- Theme Toggle -->
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+        <svg class="theme-icon-dark" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+        <svg class="theme-icon-light" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="display: none;">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+    </button>
+
+    <!-- Hero Section -->
+    <section class="hero-section" style="padding: 4rem 0 2rem;">
+        <div class="container mx-auto px-4">
+            <div class="max-w-4xl mx-auto text-center">
+                <div class="flex items-center justify-center gap-3 mb-4">
+                    <div class="text-5xl">✅</div>
+                    <h1 class="hero-title" style="font-size: 2.5rem; margin-bottom: 0;">Todo List Demo</h1>
+                </div>
+                <p class="hero-subtitle">
+                    Dynamic task management with real-time updates and state synchronization
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Demo Section -->
+    <section class="section-modern" style="padding: 2rem 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+            <div class="row g-4">
+                <!-- Live Demo -->
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(16, 185, 129, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Live Demo</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Add, toggle, and delete tasks in real-time
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated); min-height: 500px;">
+                            <!-- Add Todo Form -->
+                            <form @submit="add_todo" class="mb-4">
+                                <div class="flex gap-2">
+                                    <input
+                                        type="text"
+                                        name="text"
+                                        placeholder="What needs to be done?"
+                                        class="form-control"
+                                        style="flex: 1; background: var(--color-bg); border: 1px solid var(--color-border); color: var(--color-text);"
+                                    />
+                                    <button type="submit" class="btn-primary-modern" style="padding: 0.5rem 1.5rem;">
+                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                                        </svg>
+                                        <span>Add</span>
+                                    </button>
+                                </div>
+                            </form>
+
+                            <!-- Todo List -->
+                            <div style="background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1rem; min-height: 250px;">
+                                {% if todos %}
+                                    {% for todo in todos %}
+                                    <div class="flex items-center gap-3 p-3 mb-2" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: var(--radius-sm);">
+                                        <input
+                                            type="checkbox"
+                                            {% if todo.done %}checked{% endif %}
+                                            @change="toggle_todo"
+                                            data-id="{{ todo.id }}"
+                                            style="width: 18px; height: 18px; cursor: pointer;"
+                                        />
+                                        <span style="flex: 1; color: var(--color-text); {% if todo.done %}text-decoration: line-through; opacity: 0.6;{% endif %}">
+                                            {{ todo.text }}
+                                        </span>
+                                        <button
+                                            @click="delete_todo"
+                                            data-id="{{ todo.id }}"
+                                            class="btn-secondary-modern"
+                                            style="padding: 0.375rem 0.75rem; border-color: var(--color-error); color: var(--color-error);"
+                                        >
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                    {% endfor %}
+                                {% else %}
+                                    <div class="text-center py-5" style="color: var(--color-text-muted);">
+                                        <div class="text-4xl mb-2">📝</div>
+                                        <p>No tasks yet. Add one above!</p>
+                                    </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Stats -->
+                            <div class="flex gap-4 justify-center mt-4 p-3" style="background: var(--color-accent-muted); border-radius: var(--radius-md);">
+                                <div class="text-center">
+                                    <div style="font-size: 1.5rem; font-weight: 700; color: var(--color-accent);">{{ active_count }}</div>
+                                    <div style="font-size: 0.875rem; color: var(--color-text-muted);">Active</div>
+                                </div>
+                                <div style="width: 1px; background: var(--color-border);"></div>
+                                <div class="text-center">
+                                    <div style="font-size: 1.5rem; font-weight: 700; color: var(--color-success);">{{ done_count }}</div>
+                                    <div style="font-size: 0.875rem; color: var(--color-text-muted);">Completed</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Implementation Code -->
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(245, 158, 11, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Implementation</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Full source code for this demo
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            <!-- Python Code -->
+                            <div class="mb-4">
+                                <div class="code-header-modern">
+                                    <span>views.py</span>
+                                    <span class="code-badge-modern">Python</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from djust import LiveView
+
+class TodoView(LiveView):
+    """
+    Todo list demo - showcases list
+    manipulation and state management
+    """
+    template_name = "demos/todo.html"
+
+    def mount(self, request, **kwargs):
+        self.todos = []
+        self.next_id = 1
+
+    def add_todo(self, text=""):
+        if text.strip():
+            self.todos.append({
+                'id': self.next_id,
+                'text': text,
+                'done': False,
+            })
+            self.next_id += 1
+
+    def toggle_todo(self, id=None, **kwargs):
+        item_id = id or kwargs.get('todo_id')
+        if item_id:
+            for todo in self.todos:
+                if todo['id'] == int(item_id):
+                    todo['done'] = not todo['done']
+                    break
+
+    def delete_todo(self, id=None, **kwargs):
+        item_id = id or kwargs.get('todo_id')
+        if item_id:
+            self.todos = [t for t in self.todos
+                         if t['id'] != int(item_id)]
+
+    @property
+    def active_count(self):
+        return sum(1 for t in self.todos
+                  if not t['done'])
+
+    @property
+    def done_count(self):
+        return sum(1 for t in self.todos
+                  if t['done'])</code></pre>
+                                </div>
+                            </div>
+
+                            <!-- Template Code -->
+                            <div>
+                                <div class="code-header-modern">
+                                    <span>todo.html</span>
+                                    <span class="code-badge-modern">HTML</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-html">&lt;!-- Add Todo Form --&gt;
+&lt;form @submit="add_todo"&gt;
+  &lt;input type="text" name="text"
+         placeholder="What needs to be done?" /&gt;
+  &lt;button type="submit"&gt;Add&lt;/button&gt;
+&lt;/form&gt;
+
+&lt;!-- Todo List --&gt;
+&#123;% for todo in todos %&#125;
+  &lt;div class="todo-item"&gt;
+    &lt;input type="checkbox"
+           &#123;% if todo.done %&#125;checked&#123;% endif %&#125;
+           @change="toggle_todo"
+           data-id="&#123;&#123; todo.id &#125;&#125;" /&gt;
+    &lt;span&gt;&#123;&#123; todo.text &#125;&#125;&lt;/span&gt;
+    &lt;button @click="delete_todo"
+            data-id="&#123;&#123; todo.id &#125;&#125;"&gt;
+      Delete
+    &lt;/button&gt;
+  &lt;/div&gt;
+&#123;% endfor %&#125;
+
+&lt;!-- Stats --&gt;
+&lt;div&gt;
+  &#123;&#123; active_count &#125;&#125; active
+  &#123;&#123; done_count &#125;&#125; completed
+&lt;/div&gt;</code></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Features Section -->
+            <div class="row g-4 mt-4">
+                <div class="col-12">
+                    <div class="feature-card-modern p-4">
+                        <h3 class="text-lg font-bold mb-3" style="color: var(--color-text);">How It Works</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <div class="text-2xl mb-2">📋</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">List Management</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    Server maintains todo list state with add/toggle/delete operations
+                                </p>
+                            </div>
+                            <div>
+                                <div class="text-2xl mb-2">🎯</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">Event Parameters</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    data-id attributes pass item IDs to event handlers
+                                </p>
+                            </div>
+                            <div>
+                                <div class="text-2xl mb-2">🔢</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">Computed Properties</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    @property decorators calculate active/done counts automatically
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Back Button -->
+            <div class="text-center mt-4">
+                <a href="/demos/" class="btn-secondary-modern">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                    </svg>
+                    <span>Back to Demos</span>
+                </a>
+            </div>
+        </div>
+    </section>
+    </div>
+
+    <!-- LiveView Client -->
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>hljs.highlightAll();</script>
+
+    <!-- Theme Switcher -->
+    <script src="/static/js/theme-switcher.js"></script>
+</body>
+</html>

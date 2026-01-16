@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Demo - djust</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Shared Theme System -->
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/utilities.css">
+
+    <!-- Tailwind for utility classes -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+</head>
+<body>
+    <div data-liveview-root>
+    <!-- Navbar Component -->
+    {{ navbar.render }}
+
+    <!-- Theme Toggle -->
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+        <svg class="theme-icon-dark" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+        <svg class="theme-icon-light" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="display: none;">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+    </button>
+
+    <!-- Hero Section -->
+    <section class="hero-section" style="padding: 4rem 0 2rem;">
+        <div class="container mx-auto px-4">
+            <div class="max-w-4xl mx-auto text-center">
+                <div class="flex items-center justify-center gap-3 mb-4">
+                    <div class="text-5xl">💬</div>
+                    <h1 class="hero-title" style="font-size: 2.5rem; margin-bottom: 0;">Chat Demo</h1>
+                </div>
+                <p class="hero-subtitle">
+                    Real-time messaging with instant delivery and message history
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Demo Section -->
+    <section class="section-modern" style="padding: 2rem 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+            <div class="row g-4">
+                <!-- Live Demo -->
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(139, 92, 246, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Live Demo</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Send messages and see them appear instantly
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            <!-- Chat Messages -->
+                            <div style="background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1.5rem; height: 400px; overflow-y: auto; margin-bottom: 1rem;" id="messages">
+                                {% if messages %}
+                                    {% for message in messages %}
+                                    <div class="mb-3 p-3" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: var(--radius-sm);">
+                                        <div class="flex items-center gap-2 mb-1">
+                                            <div style="width: 32px; height: 32px; border-radius: 50%; background: var(--color-accent); display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; font-size: 0.875rem;">
+                                                {{ message.user|first|upper }}
+                                            </div>
+                                            <strong style="color: var(--color-accent);">{{ message.user }}</strong>
+                                            <small style="color: var(--color-text-muted); margin-left: auto;">{{ message.time }}</small>
+                                        </div>
+                                        <div style="color: var(--color-text); margin-left: 40px;">
+                                            {{ message.text }}
+                                        </div>
+                                    </div>
+                                    {% endfor %}
+                                {% else %}
+                                    <div class="text-center py-5" style="color: var(--color-text-muted); height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+                                        <div class="text-4xl mb-2">💬</div>
+                                        <p>No messages yet. Start the conversation!</p>
+                                    </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Message Input Form -->
+                            <form @submit="send_message" class="flex gap-2">
+                                <input
+                                    type="text"
+                                    name="message"
+                                    placeholder="Type a message..."
+                                    class="form-control"
+                                    style="flex: 1; background: var(--color-bg); border: 1px solid var(--color-border); color: var(--color-text);"
+                                    autocomplete="off"
+                                />
+                                <button type="submit" class="btn-primary-modern" style="padding: 0.5rem 1.5rem;">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
+                                    </svg>
+                                    <span>Send</span>
+                                </button>
+                            </form>
+
+                            <!-- Current User Info -->
+                            <div class="mt-3 p-2" style="background: var(--color-accent-muted); border-radius: var(--radius-sm); text-align: center;">
+                                <small style="color: var(--color-text-muted);">
+                                    Chatting as <strong style="color: var(--color-accent);">{{ username }}</strong>
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Implementation Code -->
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(236, 72, 153, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Implementation</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                Full source code for this demo
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            <!-- Python Code -->
+                            <div class="mb-4">
+                                <div class="code-header-modern">
+                                    <span>views.py</span>
+                                    <span class="code-badge-modern">Python</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from djust import LiveView
+import datetime
+
+class ChatView(LiveView):
+    """
+    Chat demo - showcases real-time
+    communication
+    """
+    template_name = "demos/chat.html"
+
+    def mount(self, request, **kwargs):
+        self.messages = []
+        self.username = (
+            request.user.username
+            if request.user.is_authenticated
+            else "Guest"
+        )
+
+    def send_message(self, message=""):
+        if message.strip():
+            self.messages.append({
+                'user': self.username,
+                'text': message,
+                'time': datetime.datetime.now()
+                    .strftime("%H:%M"),
+            })</code></pre>
+                                </div>
+                            </div>
+
+                            <!-- Template Code -->
+                            <div>
+                                <div class="code-header-modern">
+                                    <span>chat.html</span>
+                                    <span class="code-badge-modern">HTML</span>
+                                </div>
+                                <div class="code-block-modern">
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-html">&lt;!-- Chat Messages --&gt;
+&lt;div class="chat-messages"&gt;
+  &#123;% for message in messages %&#125;
+    &lt;div class="message"&gt;
+      &lt;strong&gt;&#123;&#123; message.user &#125;&#125;:&lt;/strong&gt;
+      &lt;span&gt;&#123;&#123; message.text &#125;&#125;&lt;/span&gt;
+      &lt;small&gt;&#123;&#123; message.time &#125;&#125;&lt;/small&gt;
+    &lt;/div&gt;
+  &#123;% endfor %&#125;
+&lt;/div&gt;
+
+&lt;!-- Message Input --&gt;
+&lt;form @submit="send_message"&gt;
+  &lt;input type="text"
+         name="message"
+         placeholder="Type a message..."
+         autocomplete="off" /&gt;
+  &lt;button type="submit"&gt;Send&lt;/button&gt;
+&lt;/form&gt;
+
+&lt;!-- Current User --&gt;
+&lt;div&gt;
+  Chatting as &lt;strong&gt;&#123;&#123; username &#125;&#125;&lt;/strong&gt;
+&lt;/div&gt;</code></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Features Section -->
+            <div class="row g-4 mt-4">
+                <div class="col-12">
+                    <div class="feature-card-modern p-4">
+                        <h3 class="text-lg font-bold mb-3" style="color: var(--color-text);">How It Works</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <div class="text-2xl mb-2">📨</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">Message State</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    Server maintains message history as a list of dictionaries
+                                </p>
+                            </div>
+                            <div>
+                                <div class="text-2xl mb-2">⏱️</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">Timestamps</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    Python datetime automatically adds current time to each message
+                                </p>
+                            </div>
+                            <div>
+                                <div class="text-2xl mb-2">👤</div>
+                                <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">User Context</h4>
+                                <p class="text-sm" style="color: var(--color-text-muted);">
+                                    Request object provides authenticated username or defaults to "Guest"
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Back Button -->
+            <div class="text-center mt-4">
+                <a href="/demos/" class="btn-secondary-modern">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                    </svg>
+                    <span>Back to Demos</span>
+                </a>
+            </div>
+        </div>
+    </section>
+    </div>
+
+    <!-- LiveView Client -->
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>hljs.highlightAll();</script>
+
+    <!-- Theme Switcher -->
+    <script src="/static/js/theme-switcher.js"></script>
+
+    <!-- Auto-scroll to bottom when new messages arrive -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const messagesContainer = document.getElementById('messages');
+            if (messagesContainer) {
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }
+        });
+    </script>
+</body>
+</html>

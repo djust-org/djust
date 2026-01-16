@@ -1,0 +1,143 @@
+/**
+ * DataTable Component Styles
+ */
+
+.datatable-container {
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    padding: 20px;
+    margin: 20px 0;
+}
+
+.datatable-filter {
+    margin-bottom: 20px;
+}
+
+.datatable-filter input {
+    max-width: 300px;
+}
+
+.table {
+    margin-bottom: 0;
+}
+
+.table th {
+    background-color: #f8f9fa;
+    font-weight: 600;
+    border-bottom: 2px solid #dee2e6;
+}
+
+.table tbody tr {
+    transition: background-color 0.2s;
+}
+
+.table tbody tr:hover {
+    background-color: #f8f9fa;
+}
+
+.sort-indicator {
+    font-size: 0.8em;
+    color: #6c757d;
+}
+
+.datatable-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid #dee2e6;
+}
+
+.pagination-info {
+    color: #6c757d;
+    font-size: 14px;
+}
+
+.pagination-controls {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.pagination-controls select {
+    width: auto;
+    display: inline-block;
+}
+
+.pagination {
+    margin-bottom: 0;
+}
+
+/* Badge styles for status indicators */
+.badge {
+    padding: 0.25em 0.6em;
+    font-size: 0.875em;
+    font-weight: 600;
+    border-radius: 0.25rem;
+}
+
+.badge-success {
+    background-color: #28a745;
+    color: white;
+}
+
+.badge-danger {
+    background-color: #dc3545;
+    color: white;
+}
+
+.badge-warning {
+    background-color: #ffc107;
+    color: #212529;
+}
+
+.badge-info {
+    background-color: #17a2b8;
+    color: white;
+}
+
+/* Price formatting */
+.price {
+    font-weight: 600;
+    color: #28a745;
+}
+
+/* Stock indicator */
+.stock {
+    font-weight: 500;
+}
+
+.stock.low {
+    color: #dc3545;
+}
+
+.stock.medium {
+    color: #ffc107;
+}
+
+.stock.high {
+    color: #28a745;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .datatable-pagination {
+        flex-direction: column;
+        gap: 15px;
+    }
+
+    .pagination-controls {
+        flex-direction: column;
+        width: 100%;
+    }
+
+    .pagination-controls nav {
+        width: 100%;
+    }
+
+    .pagination {
+        flex-wrap: wrap;
+    }
+}

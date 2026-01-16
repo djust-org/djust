@@ -1,0 +1,62 @@
+<section id="counter" class="demo-section">
+    <div class="demo-section-header">
+        <h2 class="demo-section-title">
+            <span>🔢</span>
+            <span>Counter</span>
+        </h2>
+        <p class="demo-section-subtitle">
+            Simple reactive counter demonstrating instant state updates.
+        </p>
+    </div>
+
+    <div class="demo-container">
+        <!-- Live Demo -->
+        <div class="demo-live">
+            <div style="text-align: center;">
+                <div style="background: var(--color-accent-muted); border: 2px solid var(--color-accent); border-radius: var(--radius-lg); padding: 2rem; margin-bottom: 2rem;">
+                    <div style="font-size: 1rem; color: var(--color-text-muted); margin-bottom: 0.5rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Count</div>
+                    <div style="font-size: 4rem; font-weight: 800; color: var(--color-accent); line-height: 1;">{{ counter }}</div>
+                </div>
+                <div style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
+                    <button @click="increment" class="btn btn-secondary" style="background: var(--color-bg); color: var(--color-text); border: 2px solid var(--color-border);">Decrement</button>
+                    <button @click="reset" class="btn btn-secondary" style="background: var(--color-bg); color: var(--color-text); border: 2px solid var(--color-border);">Reset</button>
+                    <button @click="increment" class="btn btn-primary" style="background: var(--color-accent); color: white; border: none;">Increment</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Code Section -->
+        <div class="demo-code-section">
+            <div class="code-section-header" onclick="toggleCodeSection(this)">
+                <div class="code-section-title">
+                    <span>💻</span>
+                    <span>View Code</span>
+                </div>
+                <div class="code-section-toggle">
+                    <span>Click to expand</span>
+                    <svg class="toggle-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                    </svg>
+                </div>
+            </div>
+            <div class="code-section-content">
+                <div class="code-tabs">
+                    <button class="code-tab active" onclick="switchTab(this, 'counter-python')">Python</button>
+                    <button class="code-tab" onclick="switchTab(this, 'counter-html')">HTML</button>
+                </div>
+                <div id="counter-python" class="code-tab-content active">
+                    {{ counter_code_python|safe }}
+                </div>
+                <div id="counter-html" class="code-tab-content">
+                    {{ counter_code_html|safe }}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="feature-tags">
+        <span class="feature-tag">✓ Real-time updates</span>
+        <span class="feature-tag">✓ Event handling (@click)</span>
+        <span class="feature-tag">✓ State synchronization</span>
+    </div>
+</section>

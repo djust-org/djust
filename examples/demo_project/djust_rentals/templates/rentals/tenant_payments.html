@@ -1,0 +1,130 @@
+{% extends "rentals/base.html" %}
+
+{% block title %}Payment History{% endblock %}
+
+{% block content %}
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.tenant_portal.TenantPaymentsView">
+  <div class="container mx-auto px-4 max-w-7xl">
+    <!-- Page Header -->
+    {{ page_header|safe }}
+
+    <!-- Payment Summary Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      <!-- Total Paid -->
+      <div class="bg-card border border-border rounded-lg p-6 text-center">
+        <div class="flex items-center justify-center gap-2 mb-2">
+          <i data-lucide="dollar-sign" class="w-5 h-5 text-green-600 dark:text-green-400"></i>
+          <p class="text-sm text-muted-foreground">Total Paid</p>
+        </div>
+        <p class="text-3xl font-bold text-green-600 dark:text-green-400">${{ total_paid|floatformat:2 }}</p>
+      </div>
+
+      <!-- Payment Count -->
+      <div class="bg-card border border-border rounded-lg p-6 text-center">
+        <div class="flex items-center justify-center gap-2 mb-2">
+          <i data-lucide="hash" class="w-5 h-5 text-primary"></i>
+          <p class="text-sm text-muted-foreground">Payments</p>
+        </div>
+        <p class="text-3xl font-bold text-card-foreground">{{ payment_count }}</p>
+      </div>
+
+      <!-- Expected Total -->
+      <div class="bg-card border border-border rounded-lg p-6 text-center">
+        <div class="flex items-center justify-center gap-2 mb-2">
+          <i data-lucide="trending-up" class="w-5 h-5 text-primary"></i>
+          <p class="text-sm text-muted-foreground">Expected</p>
+        </div>
+        <p class="text-2xl font-bold text-card-foreground">${{ expected_total|floatformat:2 }}</p>
+      </div>
+
+      <!-- Balance -->
+      <div class="bg-card border border-border rounded-lg p-6 text-center">
+        <div class="flex items-center justify-center gap-2 mb-2">
+          <i data-lucide="alert-circle" class="w-5 h-5 {% if balance > 0 %}text-red-600 dark:text-red-400{% else %}text-green-600 dark:text-green-400{% endif %}"></i>
+          <p class="text-sm text-muted-foreground">Balance</p>
+        </div>
+        <p class="text-2xl font-bold {% if balance > 0 %}text-red-600 dark:text-red-400{% else %}text-green-600 dark:text-green-400{% endif %}">
+          ${{ balance|floatformat:2 }}
+        </p>
+      </div>
+    </div>
+
+    <!-- Payment History Table -->
+    <div class="bg-card border border-border rounded-lg p-6 mb-6">
+      <div class="flex items-center gap-2 mb-4">
+        <i data-lucide="list" class="w-5 h-5 text-primary"></i>
+        <h2 class="text-xl font-semibold text-card-foreground">Payment History</h2>
+      </div>
+
+      {% if payments %}
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Date</th>
+              <th class="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Period</th>
+              <th class="text-right py-3 px-4 text-sm font-medium text-muted-foreground">Amount</th>
+              <th class="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Method</th>
+              <th class="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Status</th>
+              <th class="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for payment in payments %}
+            <tr class="border-b border-border hover:bg-accent/50 transition-colors">
+              <td class="py-3 px-4 text-card-foreground">{{ payment.payment_date|date:"M d, Y" }}</td>
+              <td class="py-3 px-4 text-sm text-muted-foreground">
+                {{ payment.payment_date|date:"M Y" }}
+              </td>
+              <td class="py-3 px-4 text-right text-green-600 dark:text-green-400 font-semibold">
+                ${{ payment.amount|floatformat:2 }}
+              </td>
+              <td class="py-3 px-4">
+                <span class="inline-flex items-center gap-1 text-sm text-muted-foreground">
+                  <i data-lucide="credit-card" class="w-3 h-3"></i>
+                  {{ payment.get_payment_method_display }}
+                </span>
+              </td>
+              <td class="py-3 px-4">
+                <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium
+                  {% if payment.status == 'completed' %}bg-green-500 text-white
+                  {% elif payment.status == 'pending' %}bg-yellow-500 text-white
+                  {% else %}bg-red-500 text-white{% endif %}">
+                  {{ payment.get_status_display|default:"Completed" }}
+                </span>
+              </td>
+              <td class="py-3 px-4 text-sm text-muted-foreground">{{ payment.notes|default:"-" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="text-center py-12">
+        <i data-lucide="inbox" class="w-12 h-12 mx-auto text-muted-foreground mb-3"></i>
+        <p class="text-muted-foreground">No payment history found</p>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Payment Actions -->
+    <div class="bg-card border border-border rounded-lg p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <i data-lucide="settings" class="w-5 h-5 text-primary"></i>
+        <h2 class="text-xl font-semibold text-card-foreground">Payment Options</h2>
+      </div>
+      <p class="text-muted-foreground mb-4">Contact your property manager to update payment methods or set up auto-pay.</p>
+      <div class="flex flex-wrap gap-3">
+        <a href="{% url 'rentals:tenant-dashboard' %}" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90">
+          <i data-lucide="mail" class="w-4 h-4"></i>
+          Contact Manager
+        </a>
+        <button class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors bg-muted text-muted-foreground hover:bg-accent border border-border">
+          <i data-lucide="download" class="w-4 h-4"></i>
+          Download Receipt
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

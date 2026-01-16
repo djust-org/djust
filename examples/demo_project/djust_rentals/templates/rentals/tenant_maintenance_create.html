@@ -1,0 +1,134 @@
+{% extends "rentals/base.html" %}
+
+{% block title %}Submit Maintenance Request{% endblock %}
+
+{% block content %}
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.tenant_portal.TenantMaintenanceCreateView">
+  <div class="container mx-auto px-4 max-w-3xl">
+    <!-- Page Header -->
+    {{ page_header|safe }}
+
+    {% if success_message %}
+    <div class="bg-green-500/10 border border-green-500/20 text-green-600 dark:text-green-400 px-4 py-3 rounded-lg mb-6 flex items-center gap-2">
+      <i data-lucide="check-circle" class="w-5 h-5"></i>
+      <span>{{ success_message }}</span>
+    </div>
+    {% endif %}
+
+    {% if error_message %}
+    <div class="bg-destructive/10 border border-destructive text-destructive-foreground px-4 py-3 rounded-lg mb-6 flex items-center gap-2">
+      <i data-lucide="alert-circle" class="w-5 h-5"></i>
+      <span>{{ error_message }}</span>
+    </div>
+    {% endif %}
+
+    {% if not current_property %}
+    <div class="bg-yellow-500/10 border border-yellow-500/20 text-yellow-600 dark:text-yellow-400 px-4 py-3 rounded-lg mb-6 flex items-center gap-2">
+      <i data-lucide="alert-triangle" class="w-5 h-5"></i>
+      <span>You don't have an active lease. Please contact your property manager.</span>
+    </div>
+    {% else %}
+
+    <div class="bg-card border border-border rounded-lg p-6">
+      <!-- Current Property Info -->
+      <div class="bg-accent/50 rounded-md p-4 mb-6 border border-border">
+        <div class="flex items-center gap-2 mb-2">
+          <i data-lucide="home" class="w-5 h-5 text-primary"></i>
+          <h3 class="font-semibold text-card-foreground">Property</h3>
+        </div>
+        <p class="text-card-foreground font-medium">{{ current_property.name }}</p>
+        <p class="text-sm text-muted-foreground">{{ current_property.address }}</p>
+      </div>
+
+      <form @submit="submit_request" class="space-y-6">
+        <!-- Issue Title -->
+        <div>
+          <label class="block text-sm font-medium text-card-foreground mb-1">
+            Issue Title <span class="text-destructive">*</span>
+          </label>
+          <input
+            type="text"
+            name="title"
+            class="w-full bg-background border border-input rounded-md px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+            placeholder="e.g., Leaky faucet in kitchen, AC not working"
+            required
+          />
+        </div>
+
+        <!-- Priority -->
+        <div>
+          <label class="block text-sm font-medium text-card-foreground mb-2">
+            Priority <span class="text-destructive">*</span>
+          </label>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {% for val, label in priority_choices %}
+            <button
+              type="button"
+              class="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-md font-medium transition-colors border
+              {% if val == 'urgent' %}
+                bg-red-500 text-white border-red-500 hover:bg-red-600
+              {% elif val == 'high' %}
+                bg-orange-500 text-white border-orange-500 hover:bg-orange-600
+              {% elif val == 'medium' %}
+                bg-yellow-500 text-white border-yellow-500 hover:bg-yellow-600
+              {% else %}
+                bg-green-500 text-white border-green-500 hover:bg-green-600
+              {% endif %}"
+              onclick="this.form.querySelector('input[name=priority]').value='{{ val }}'; this.form.querySelectorAll('button[type=button]').forEach(b => b.classList.remove('ring-2', 'ring-ring')); this.classList.add('ring-2', 'ring-ring');"
+            >
+              {{ label }}
+            </button>
+            {% endfor %}
+          </div>
+          <input type="hidden" name="priority" value="medium" />
+          <p class="text-xs text-muted-foreground mt-1">Select the urgency level for this request</p>
+        </div>
+
+        <!-- Description -->
+        <div>
+          <label class="block text-sm font-medium text-card-foreground mb-1">
+            Description <span class="text-destructive">*</span>
+          </label>
+          <textarea
+            name="description"
+            class="w-full bg-background border border-input rounded-md px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+            rows="5"
+            placeholder="Please provide detailed information about the issue, including when it started and any relevant details..."
+            required
+          ></textarea>
+          <p class="text-xs text-muted-foreground mt-1">Be as specific as possible to help us address the issue quickly</p>
+        </div>
+
+        <!-- Location (Optional) -->
+        <div>
+          <label class="block text-sm font-medium text-card-foreground mb-1">
+            Location in Property
+          </label>
+          <div class="relative">
+            <i data-lucide="map-pin" class="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground"></i>
+            <input
+              type="text"
+              name="location"
+              class="w-full bg-background border border-input rounded-md pl-10 pr-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+              placeholder="e.g., Kitchen, Master Bathroom, Living Room"
+            />
+          </div>
+        </div>
+
+        <!-- Form Actions -->
+        <div class="flex gap-3 pt-4 border-t border-border">
+          <button type="submit" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90">
+            <i data-lucide="send" class="w-4 h-4"></i>
+            Submit Request
+          </button>
+          <a href="{% url 'rentals:tenant-dashboard' %}" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors bg-muted text-muted-foreground hover:bg-accent border border-border">
+            <i data-lucide="x" class="w-4 h-4"></i>
+            Cancel
+          </a>
+        </div>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,80 @@
+{% extends "rentals/base.html" %}
+
+{% block title %}Expense Report{% endblock %}
+
+{% block content %}
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.financials.ExpenseReportView">
+  <div class="container mx-auto px-4 max-w-7xl">
+    <!-- Page Header -->
+    {{ page_header|safe }}
+
+    <!-- Expenses by Category -->
+    <div class="bg-card border border-border rounded-lg p-6 mb-6">
+      <div class="flex items-center gap-2 mb-4">
+        <i data-lucide="pie-chart" class="w-5 h-5 text-primary"></i>
+        <h2 class="text-xl font-semibold text-card-foreground">Expenses by Category</h2>
+      </div>
+
+      {% if category_totals %}
+      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        {% for cat in category_totals %}
+        <div class="p-4 bg-accent/50 rounded-md border border-border text-center">
+          <p class="text-sm text-muted-foreground mb-1">{{ cat.category }}</p>
+          <p class="text-2xl font-bold text-red-600 dark:text-red-400">${{ cat.total|floatformat:2 }}</p>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-muted-foreground text-center py-4">No expense categories found</p>
+      {% endif %}
+    </div>
+
+    <!-- Recent Expenses Table -->
+    <div class="bg-card border border-border rounded-lg p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <i data-lucide="file-text" class="w-5 h-5 text-primary"></i>
+        <h2 class="text-xl font-semibold text-card-foreground">Recent Expenses</h2>
+      </div>
+
+      {% if recent_expenses %}
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Date</th>
+              <th class="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Property</th>
+              <th class="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Category</th>
+              <th class="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Description</th>
+              <th class="text-right py-3 px-4 text-sm font-medium text-muted-foreground">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for expense in recent_expenses %}
+            <tr class="border-b border-border hover:bg-accent/50 transition-colors">
+              <td class="py-3 px-4 text-card-foreground">{{ expense.date|date:"M d, Y" }}</td>
+              <td class="py-3 px-4 text-card-foreground">{{ expense.property.name }}</td>
+              <td class="py-3 px-4">
+                <span class="inline-flex items-center gap-1 text-sm text-muted-foreground">
+                  <i data-lucide="tag" class="w-3 h-3"></i>
+                  {{ expense.get_category_display }}
+                </span>
+              </td>
+              <td class="py-3 px-4 text-sm text-muted-foreground">{{ expense.description|truncatewords:8 }}</td>
+              <td class="py-3 px-4 text-right text-red-600 dark:text-red-400 font-semibold">
+                ${{ expense.amount|floatformat:2 }}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="text-center py-12">
+        <i data-lucide="inbox" class="w-12 h-12 mx-auto text-muted-foreground mb-3"></i>
+        <p class="text-muted-foreground">No expenses found</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

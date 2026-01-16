@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Throttle Demo - djust</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    {% load static %}
+    <link rel="stylesheet" href="{% static 'css/theme.css' %}">
+    <style>
+        body {
+            background: var(--color-bg);
+            color: var(--color-text);
+        }
+        .fixed-stats {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            min-width: 600px;
+            max-width: 90vw;
+        }
+        .spacer {
+            height: 3000px;
+            background: linear-gradient(to bottom,
+                rgba(59, 130, 246, 0.15) 0%,
+                rgba(59, 130, 246, 0.25) 25%,
+                rgba(59, 130, 246, 0.35) 50%,
+                rgba(59, 130, 246, 0.45) 75%,
+                rgba(59, 130, 246, 0.55) 100%
+            );
+            padding-top: 150px;
+        }
+        .scroll-marker {
+            text-align: center;
+            padding: 20px;
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            margin: 100px auto;
+            max-width: 400px;
+            font-size: 24px;
+            font-weight: bold;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            color: var(--color-text);
+        }
+        .stat-card {
+            background: var(--color-bg);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            padding: 1rem;
+        }
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            margin-bottom: 0.25rem;
+            color: var(--color-text);
+        }
+        .stat-label {
+            font-size: 0.875rem;
+            color: var(--color-text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .success-card {
+            background: rgba(16, 185, 129, 0.1);
+            border: 2px solid rgb(16, 185, 129);
+        }
+        .success-value {
+            color: rgb(16, 185, 129);
+        }
+        .theme-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1001;
+            background: var(--color-bg-elevated);
+            border: 1px solid var(--color-border);
+            color: var(--color-text);
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            font-size: 1.25rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Theme Toggle Button -->
+    <button class="theme-toggle" onclick="toggleTheme()">🌓</button>
+
+    <div data-liveview-root>
+        <!-- Fixed Stats Panel -->
+        <div class="fixed-stats">
+            <div class="card border-0" style="background: transparent;">
+                <div class="card-body">
+                    <h3 class="mb-3" style="color: var(--color-text);">⏱️ Throttle Demo - Scroll Events</h3>
+
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6">
+                            <div class="stat-card">
+                                <div class="stat-value">{{ scroll_y }}px</div>
+                                <div class="stat-label">Scroll Position</div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="stat-card success-card">
+                                <div class="stat-value success-value">{{ update_count }}</div>
+                                <div class="stat-label">Server Updates</div>
+                                <small style="color: var(--color-text-muted);">Max 10/second</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
+                        <h6 style="color: var(--color-text); margin-bottom: 0.75rem;">How to test:</h6>
+                        <ol style="color: var(--color-text-muted); margin-bottom: 0.5rem;">
+                            <li>Open browser console: <code style="background: var(--color-bg); padding: 0.2rem 0.4rem; border-radius: 4px; color: var(--color-text);">window.djustDebug = true</code></li>
+                            <li>Scroll rapidly up and down</li>
+                            <li>Watch console - you'll see throttle logs</li>
+                            <li>Notice "Server Updates" limited to ~10/second</li>
+                        </ol>
+                        <p style="color: var(--color-text-muted); margin: 0; font-size: 0.875rem;">
+                            <strong style="color: var(--color-text);">Config:</strong> <code style="background: var(--color-bg); padding: 0.2rem 0.4rem; border-radius: 4px; color: var(--color-text);">@throttle(interval=0.1, leading=True, trailing=True)</code>
+                        </p>
+                    </div>
+
+                    <div class="d-flex gap-2">
+                        <a href="/demos/" class="btn btn-outline-secondary btn-sm" style="border-color: var(--color-border); color: var(--color-text);">
+                            ← Back to Demos
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Scrollable Content -->
+        <div class="spacer">
+            <div class="scroll-marker">⬆️ Scroll to top</div>
+            <div class="scroll-marker">Keep scrolling...</div>
+            <div class="scroll-marker">Halfway there!</div>
+            <div class="scroll-marker">Almost at bottom...</div>
+            <div class="scroll-marker">⬇️ Bottom reached!</div>
+        </div>
+    </div>
+
+    <!-- Theme Toggle Script -->
+    <script>
+        // Initialize theme from localStorage
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+        }
+    </script>
+
+    <!-- Scroll Event Handler -->
+    <script>
+        // Wait for djust to be ready
+        document.addEventListener('DOMContentLoaded', function() {
+            // Wait a tick for djust initialization
+            setTimeout(function() {
+                // Attach scroll listener
+                window.addEventListener('scroll', function() {
+                    const scrollY = Math.round(window.scrollY);
+                    // Call djustHandleEvent which is exposed by the embedded JS
+                    if (window.djustHandleEvent) {
+                        window.djustHandleEvent('on_scroll', { scroll_y: scrollY });
+                    } else {
+                        console.warn('[Throttle Demo] window.djustHandleEvent not available yet');
+                    }
+                });
+
+                console.log('[Throttle Demo] Scroll listener attached');
+                console.log('[Throttle Demo] Try: window.djustDebug = true');
+            }, 100);
+        });
+    </script>
+</body>
+</html>

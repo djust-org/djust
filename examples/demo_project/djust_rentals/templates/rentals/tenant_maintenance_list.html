@@ -1,0 +1,121 @@
+{% extends "rentals/base.html" %}
+
+{% block title %}My Maintenance Requests{% endblock %}
+
+{% block content %}
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.tenant_portal.TenantMaintenanceListView">
+  <div class="container mx-auto px-4 max-w-7xl">
+    <!-- Page Header -->
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+      {{ page_header|safe }}
+      <a href="{% url 'rentals:tenant-maintenance-create' %}" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90 self-start">
+        <i data-lucide="plus" class="w-4 h-4"></i>
+        Submit New Request
+      </a>
+    </div>
+
+    <!-- Status Filter -->
+    <div class="bg-card border border-border rounded-lg p-4 mb-6">
+      <div class="flex flex-wrap gap-2">
+        <button @click="filter_by_status" data-status="all" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors border
+          {% if filter_status == 'all' %}bg-primary text-primary-foreground border-primary{% else %}bg-muted text-muted-foreground border-border hover:bg-accent{% endif %}">
+          <i data-lucide="list" class="w-4 h-4"></i>
+          All ({{ total_count }})
+        </button>
+        {% for val, label in status_choices %}
+        <button @click="filter_by_status" data-status="{{ val }}" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors border
+          {% if filter_status == val %}
+            {% if val == 'completed' %}bg-green-500 text-white border-green-500
+            {% elif val == 'in_progress' %}bg-blue-500 text-white border-blue-500
+            {% else %}bg-primary text-primary-foreground border-primary{% endif %}
+          {% else %}bg-muted text-muted-foreground border-border hover:bg-accent{% endif %}">
+          {% if val == 'completed' %}<i data-lucide="check-circle" class="w-4 h-4"></i>
+          {% elif val == 'in_progress' %}<i data-lucide="loader" class="w-4 h-4"></i>
+          {% else %}<i data-lucide="clock" class="w-4 h-4"></i>{% endif %}
+          {{ label }}
+        </button>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Maintenance Requests List -->
+    <div class="space-y-4">
+      {% for req in requests %}
+      <div class="bg-card border border-border rounded-lg p-6">
+        <!-- Header -->
+        <div class="flex flex-col md:flex-row md:justify-between md:items-start gap-4 mb-4">
+          <div>
+            <h3 class="text-xl font-semibold text-card-foreground">{{ req.title }}</h3>
+            <div class="flex items-center gap-2 mt-1 text-sm text-muted-foreground">
+              <i data-lucide="calendar" class="w-3 h-3"></i>
+              <span>Submitted {{ req.created_at|date:"M d, Y" }}</span>
+            </div>
+          </div>
+          <div class="flex gap-2">
+            <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium
+              {% if req.priority == 'urgent' %}bg-red-500 text-white
+              {% elif req.priority == 'high' %}bg-orange-500 text-white
+              {% elif req.priority == 'medium' %}bg-yellow-500 text-white
+              {% else %}bg-green-500 text-white{% endif %}">
+              {{ req.get_priority_display }}
+            </span>
+            <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium
+              {% if req.status == 'completed' %}bg-green-500 text-white
+              {% elif req.status == 'in_progress' %}bg-blue-500 text-white
+              {% else %}bg-muted text-muted-foreground{% endif %}">
+              {{ req.get_status_display }}
+            </span>
+          </div>
+        </div>
+
+        <!-- Description -->
+        <p class="text-card-foreground mb-4">{{ req.description }}</p>
+
+        <!-- Details Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm pt-4 border-t border-border">
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <i data-lucide="home" class="w-3 h-3 text-muted-foreground"></i>
+              <p class="text-muted-foreground">Property</p>
+            </div>
+            <p class="text-card-foreground font-medium">{{ req.property.name }}</p>
+          </div>
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <i data-lucide="user-check" class="w-3 h-3 text-muted-foreground"></i>
+              <p class="text-muted-foreground">Assigned To</p>
+            </div>
+            <p class="text-card-foreground font-medium">{{ req.assigned_to|default:"Not assigned" }}</p>
+          </div>
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <i data-lucide="dollar-sign" class="w-3 h-3 text-muted-foreground"></i>
+              <p class="text-muted-foreground">Estimated Cost</p>
+            </div>
+            <p class="text-card-foreground font-medium">
+              {% if req.estimated_cost %}${{ req.estimated_cost|floatformat:2 }}{% else %}TBD{% endif %}
+            </p>
+          </div>
+        </div>
+
+        <!-- Notes -->
+        {% if req.notes %}
+        <div class="mt-4 p-3 bg-accent/50 rounded-md border border-border">
+          <div class="flex items-center gap-2 mb-1">
+            <i data-lucide="file-text" class="w-3 h-3 text-primary"></i>
+            <p class="text-sm font-medium text-card-foreground">Notes:</p>
+          </div>
+          <p class="text-sm text-muted-foreground">{{ req.notes }}</p>
+        </div>
+        {% endif %}
+      </div>
+      {% empty %}
+      <div class="bg-card border border-border rounded-lg p-12 text-center">
+        <i data-lucide="inbox" class="w-12 h-12 mx-auto text-muted-foreground mb-3"></i>
+        <p class="text-muted-foreground">No maintenance requests found</p>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

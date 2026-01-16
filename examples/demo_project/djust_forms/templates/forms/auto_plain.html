@@ -1,0 +1,90 @@
+{% extends 'base.html' %}
+
+{% block title %}Auto Form (Plain) - djust{% endblock %}
+
+{% block nav_forms_active %}active{% endblock %}
+
+{% block extra_styles %}
+<style>
+.plain-container {
+    max-width: 600px;
+    margin: 40px auto;
+    background: white;
+    padding: 30px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+.plain-container h2 { margin-top: 0; color: #333; }
+.plain-container .text-muted { color: #666; font-size: 14px; }
+.plain-container button {
+    padding: 10px 20px;
+    margin: 5px 5px 5px 0;
+    cursor: pointer;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+}
+.plain-container button[type="submit"] {
+    background: #4CAF50;
+    color: white;
+    border: none;
+}
+.plain-container .alert {
+    padding: 12px;
+    margin-bottom: 15px;
+    border-radius: 4px;
+}
+.plain-container .alert-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+.plain-container .alert-danger { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+.plain-container .info-box {
+    background: #e7f3ff;
+    padding: 15px;
+    margin-top: 20px;
+    border-radius: 4px;
+}
+.plain-container .info-box h5 { margin-top: 0; }
+.plain-container .info-box ul { margin-bottom: 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="plain-container">
+    <h2>Contact Form - Plain HTML</h2>
+    <p class="text-muted">Auto-rendered using Plain adapter (minimal styling)</p>
+
+    {% if success_message %}
+    <div class="alert alert-success">
+        {{ success_message }}
+        <button type="button" style="float: right; border: none; background: none; font-size: 20px;" @click="clear_message">&times;</button>
+    </div>
+    {% endif %}
+
+    {% if error_message %}
+    <div class="alert alert-danger">
+        {{ error_message }}
+        <button type="button" style="float: right; border: none; background: none; font-size: 20px;" @click="clear_message">&times;</button>
+    </div>
+    {% endif %}
+
+    <form @submit="submit_form" onsubmit="return false;">
+        {% csrf_token %}
+
+        <!-- Auto-rendered form using Plain adapter -->
+        {{ auto_form_html }}
+
+        <div>
+            <button type="submit">Send Message</button>
+            <button type="button" @click="reset_form">Reset</button>
+        </div>
+    </form>
+
+    <div class="info-box">
+        <h5>Plain HTML Features:</h5>
+        <ul>
+            <li>Minimal CSS styling</li>
+            <li>Semantic HTML5 markup</li>
+            <li>Easy to customize</li>
+            <li>Auto-rendered with as_live(framework='plain')</li>
+        </ul>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,94 @@
+{% extends "rentals/base.html" %}
+
+{% block title %}Financial Dashboard - Rental Management{% endblock %}
+
+{% block content %}
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.financials.FinancialDashboardView">
+  <div class="container mx-auto px-4 max-w-7xl">
+    <!-- Page Header with Lucide Icon -->
+    {{ page_header|safe }}
+
+    <!-- Period Selector -->
+    <div class="bg-card border border-border rounded-lg p-6 mb-6">
+      <div class="flex items-center justify-between">
+        <div>
+          <h3 class="text-sm font-medium text-muted-foreground mb-1">Analysis Period</h3>
+          <p class="text-foreground">{{ start_date|date:"M d, Y" }} - {{ end_date|date:"M d, Y" }}</p>
+        </div>
+        <div class="flex gap-2">
+          <button @click="change_period" data-period="month"
+                  class="px-4 py-2 rounded-md text-sm font-medium transition-colors {% if period == 'month' %}bg-primary text-primary-foreground{% else %}bg-muted text-muted-foreground hover:bg-accent{% endif %}">
+            Month
+          </button>
+          <button @click="change_period" data-period="quarter"
+                  class="px-4 py-2 rounded-md text-sm font-medium transition-colors {% if period == 'quarter' %}bg-primary text-primary-foreground{% else %}bg-muted text-muted-foreground hover:bg-accent{% endif %}">
+            Quarter
+          </button>
+          <button @click="change_period" data-period="year"
+                  class="px-4 py-2 rounded-md text-sm font-medium transition-colors {% if period == 'year' %}bg-primary text-primary-foreground{% else %}bg-muted text-muted-foreground hover:bg-accent{% endif %}">
+            Year
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Key Metrics - Using StatCard Components -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      {% for stat_card in stat_cards %}
+        {{ stat_card|safe }}
+      {% endfor %}
+    </div>
+
+    <!-- Two Column Layout -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- Income by Property -->
+      <div class="bg-card border border-border rounded-lg p-6">
+        <div class="flex items-center gap-2 mb-4">
+          <i data-lucide="home" class="w-5 h-5 text-primary"></i>
+          <h2 class="text-xl font-semibold text-card-foreground">Income by Property</h2>
+        </div>
+
+        {% if income_by_property %}
+        <div class="space-y-3">
+          {% for item in income_by_property %}
+          <div class="flex justify-between items-center py-2 border-b border-border last:border-0">
+            <p class="text-card-foreground">{{ item.property.name }}</p>
+            <p class="text-green-600 dark:text-green-400 font-semibold">${{ item.income|floatformat:0 }}</p>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-center py-8">
+          <i data-lucide="inbox" class="w-12 h-12 mx-auto mb-3 text-muted-foreground"></i>
+          <p class="text-muted-foreground">No income data for this period</p>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Expenses by Category -->
+      <div class="bg-card border border-border rounded-lg p-6">
+        <div class="flex items-center gap-2 mb-4">
+          <i data-lucide="receipt" class="w-5 h-5 text-primary"></i>
+          <h2 class="text-xl font-semibold text-card-foreground">Expenses by Category</h2>
+        </div>
+
+        {% if expenses_by_category %}
+        <div class="space-y-3">
+          {% for item in expenses_by_category %}
+          <div class="flex justify-between items-center py-2 border-b border-border last:border-0">
+            <p class="text-card-foreground">{{ item.category }}</p>
+            <p class="text-red-600 dark:text-red-400 font-semibold">${{ item.total|floatformat:0 }}</p>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-center py-8">
+          <i data-lucide="inbox" class="w-12 h-12 mx-auto mb-3 text-muted-foreground"></i>
+          <p class="text-muted-foreground">No expense data for this period</p>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

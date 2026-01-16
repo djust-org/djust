@@ -1,0 +1,92 @@
+{% extends "rentals/base.html" %}
+
+{% block title %}Profit & Loss{% endblock %}
+
+{% block content %}
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.financials.ProfitLossView">
+  <div class="container mx-auto px-4 max-w-7xl">
+    <!-- Page Header -->
+    {{ page_header|safe }}
+
+    <!-- Year-to-Date Summary -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      <!-- YTD Income -->
+      <div class="bg-card border border-border rounded-lg p-6 text-center">
+        <div class="flex items-center justify-center gap-2 mb-2">
+          <i data-lucide="trending-up" class="w-5 h-5 text-green-600 dark:text-green-400"></i>
+          <p class="text-sm text-muted-foreground">YTD Income</p>
+        </div>
+        <p class="text-3xl font-bold text-green-600 dark:text-green-400">${{ ytd_income|floatformat:2 }}</p>
+      </div>
+
+      <!-- YTD Expenses -->
+      <div class="bg-card border border-border rounded-lg p-6 text-center">
+        <div class="flex items-center justify-center gap-2 mb-2">
+          <i data-lucide="trending-down" class="w-5 h-5 text-red-600 dark:text-red-400"></i>
+          <p class="text-sm text-muted-foreground">YTD Expenses</p>
+        </div>
+        <p class="text-3xl font-bold text-red-600 dark:text-red-400">${{ ytd_expenses|floatformat:2 }}</p>
+      </div>
+
+      <!-- YTD Profit -->
+      <div class="bg-card border border-border rounded-lg p-6 text-center">
+        <div class="flex items-center justify-center gap-2 mb-2">
+          <i data-lucide="dollar-sign" class="w-5 h-5 {% if ytd_profit >= 0 %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}"></i>
+          <p class="text-sm text-muted-foreground">YTD Profit</p>
+        </div>
+        <p class="text-3xl font-bold {% if ytd_profit >= 0 %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">
+          ${{ ytd_profit|floatformat:2 }}
+        </p>
+      </div>
+    </div>
+
+    <!-- Monthly P&L Table -->
+    <div class="bg-card border border-border rounded-lg p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <i data-lucide="calendar" class="w-5 h-5 text-primary"></i>
+        <h2 class="text-xl font-semibold text-card-foreground">Monthly Profit & Loss</h2>
+      </div>
+
+      {% if monthly_pl %}
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Month</th>
+              <th class="text-right py-3 px-4 text-sm font-medium text-muted-foreground">Income</th>
+              <th class="text-right py-3 px-4 text-sm font-medium text-muted-foreground">Expenses</th>
+              <th class="text-right py-3 px-4 text-sm font-medium text-muted-foreground">Profit</th>
+              <th class="text-right py-3 px-4 text-sm font-medium text-muted-foreground">Margin</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for month in monthly_pl %}
+            <tr class="border-b border-border hover:bg-accent/50 transition-colors">
+              <td class="py-3 px-4 text-card-foreground font-medium">{{ month.month }}</td>
+              <td class="py-3 px-4 text-right text-green-600 dark:text-green-400">${{ month.income|floatformat:2 }}</td>
+              <td class="py-3 px-4 text-right text-red-600 dark:text-red-400">${{ month.expenses|floatformat:2 }}</td>
+              <td class="py-3 px-4 text-right font-semibold {% if month.profit >= 0 %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">
+                ${{ month.profit|floatformat:2 }}
+              </td>
+              <td class="py-3 px-4 text-right text-muted-foreground">
+                {% if month.income > 0 %}
+                  {% widthratio month.profit month.income 100 %}%
+                {% else %}
+                  -
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="text-center py-12">
+        <i data-lucide="inbox" class="w-12 h-12 mx-auto text-muted-foreground mb-3"></i>
+        <p class="text-muted-foreground">No profit & loss data available</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

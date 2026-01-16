@@ -1,0 +1,1439 @@
+{% extends "base.html" %}
+
+{% block title %}djust Playground - Interactive Demos{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block extra_head %}
+<style>
+    /* Dark Code Editor Aesthetic */
+    :root {
+        --playground-bg: #0d1117;
+        --playground-surface: #161b22;
+        --playground-elevated: #1c2128;
+        --playground-border: #30363d;
+        --playground-text: #c9d1d9;
+        --playground-text-muted: #8b949e;
+        --playground-accent: #58a6ff;
+        --playground-accent-glow: rgba(88, 166, 255, 0.1);
+        --playground-success: #3fb950;
+        --playground-warning: #d29922;
+        --playground-danger: #f85149;
+        --playground-code-bg: #0d1117;
+    }
+
+    body {
+        background: var(--playground-bg);
+        color: var(--playground-text);
+    }
+
+    /* Playground Layout */
+    .playground-container {
+        min-height: calc(100vh - 70px);
+        padding: 0;
+    }
+
+    /* Top Navigation Bar */
+    .playground-topbar {
+        background: var(--playground-surface);
+        border-bottom: 1px solid var(--playground-border);
+        padding: 1rem 2rem;
+        position: sticky;
+        top: 70px;
+        z-index: 100;
+        backdrop-filter: blur(10px);
+    }
+
+    .playground-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 1rem;
+    }
+
+    .playground-title {
+        font-size: 1.75rem;
+        font-weight: 700;
+        color: var(--playground-text);
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .playground-title-accent {
+        color: var(--playground-accent);
+        font-family: 'Courier New', monospace;
+    }
+
+    /* Filter Controls */
+    .playground-filters {
+        display: flex;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .filter-group {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .filter-label {
+        font-size: 0.875rem;
+        color: var(--playground-text-muted);
+        font-weight: 500;
+    }
+
+    .filter-select {
+        background: var(--playground-elevated);
+        border: 1px solid var(--playground-border);
+        border-radius: 6px;
+        padding: 0.375rem 0.75rem;
+        color: var(--playground-text);
+        font-size: 0.875rem;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .filter-select:hover {
+        border-color: var(--playground-accent);
+    }
+
+    .filter-select:focus {
+        outline: none;
+        border-color: var(--playground-accent);
+        box-shadow: 0 0 0 3px var(--playground-accent-glow);
+    }
+
+    /* Category Tabs */
+    .category-tabs {
+        display: flex;
+        gap: 0.5rem;
+        overflow-x: auto;
+        padding-bottom: 0.5rem;
+    }
+
+    .category-tab {
+        padding: 0.5rem 1.25rem;
+        background: transparent;
+        border: 1px solid var(--playground-border);
+        border-radius: 6px;
+        color: var(--playground-text-muted);
+        cursor: pointer;
+        font-size: 0.875rem;
+        font-weight: 500;
+        white-space: nowrap;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .category-tab:hover {
+        background: var(--playground-elevated);
+        border-color: var(--playground-accent);
+        color: var(--playground-text);
+    }
+
+    .category-tab.active {
+        background: var(--playground-accent-glow);
+        border-color: var(--playground-accent);
+        color: var(--playground-accent);
+    }
+
+    .category-count {
+        background: var(--playground-surface);
+        padding: 0.125rem 0.5rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+    }
+
+    /* Main Content Area */
+    .playground-main {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 1.5rem;
+        padding: 2rem;
+        max-width: 1400px;
+        margin: 0 auto;
+    }
+
+    /* Demo Card */
+    .demo-card {
+        background: var(--playground-surface);
+        border: 1px solid var(--playground-border);
+        border-radius: 12px;
+        overflow: hidden;
+        transition: all 0.3s;
+        display: none;
+    }
+
+    .demo-card.visible {
+        display: block;
+    }
+
+    .demo-card:hover {
+        border-color: var(--playground-accent);
+        box-shadow: 0 0 20px var(--playground-accent-glow);
+    }
+
+    /* Demo Header */
+    .demo-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 1.25rem 1.5rem;
+        border-bottom: 1px solid var(--playground-border);
+        background: var(--playground-elevated);
+    }
+
+    .demo-info {
+        flex: 1;
+    }
+
+    .demo-title-row {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .demo-icon {
+        font-size: 1.5rem;
+    }
+
+    .demo-title {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: var(--playground-text);
+        margin: 0;
+    }
+
+    .demo-description {
+        color: var(--playground-text-muted);
+        font-size: 0.875rem;
+        margin: 0;
+    }
+
+    .demo-badges {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+
+    .demo-badge {
+        padding: 0.25rem 0.625rem;
+        background: var(--playground-surface);
+        border: 1px solid var(--playground-border);
+        border-radius: 4px;
+        font-size: 0.75rem;
+        color: var(--playground-text-muted);
+        font-family: 'Courier New', monospace;
+    }
+
+    .demo-badge.decorator {
+        border-color: var(--playground-accent);
+        color: var(--playground-accent);
+        background: var(--playground-accent-glow);
+    }
+
+    .demo-badge.feature {
+        border-color: var(--playground-success);
+        color: var(--playground-success);
+        background: rgba(63, 185, 80, 0.1);
+    }
+
+    .demo-badge.complexity-easy {
+        border-color: var(--playground-success);
+        color: var(--playground-success);
+    }
+
+    .demo-badge.complexity-medium {
+        border-color: var(--playground-warning);
+        color: var(--playground-warning);
+    }
+
+    .demo-badge.complexity-advanced {
+        border-color: var(--playground-danger);
+        color: var(--playground-danger);
+    }
+
+    /* Split View: Preview + Code */
+    .demo-content {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0;
+    }
+
+    .demo-preview {
+        padding: 2rem;
+        background: var(--playground-bg);
+        border-right: 1px solid var(--playground-border);
+        min-height: 300px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .demo-code-area {
+        background: var(--playground-code-bg);
+        display: flex;
+        flex-direction: column;
+    }
+
+    /* Code Tabs */
+    .code-tabs {
+        display: flex;
+        gap: 0;
+        background: var(--playground-elevated);
+        border-bottom: 1px solid var(--playground-border);
+    }
+
+    .code-tab {
+        padding: 0.75rem 1.25rem;
+        background: transparent;
+        border: none;
+        color: var(--playground-text-muted);
+        cursor: pointer;
+        font-size: 0.875rem;
+        font-weight: 500;
+        transition: all 0.2s;
+        border-bottom: 2px solid transparent;
+        font-family: 'Courier New', monospace;
+    }
+
+    .code-tab:hover {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--playground-text);
+    }
+
+    .code-tab.active {
+        color: var(--playground-accent);
+        border-bottom-color: var(--playground-accent);
+        background: rgba(88, 166, 255, 0.05);
+    }
+
+    .code-tab-icon {
+        margin-right: 0.5rem;
+    }
+
+    .code-content {
+        flex: 1;
+        overflow: auto;
+        max-height: 400px;
+    }
+
+    .code-tab-pane {
+        display: none;
+        padding: 0;
+    }
+
+    .code-tab-pane.active {
+        display: block;
+    }
+
+    /* Quick Links */
+    .demo-footer {
+        padding: 1rem 1.5rem;
+        background: var(--playground-elevated);
+        border-top: 1px solid var(--playground-border);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .demo-link {
+        color: var(--playground-accent);
+        text-decoration: none;
+        font-size: 0.875rem;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        transition: all 0.2s;
+    }
+
+    .demo-link:hover {
+        color: var(--playground-text);
+        gap: 0.75rem;
+    }
+
+    /* Empty State */
+    .empty-state {
+        text-align: center;
+        padding: 4rem 2rem;
+        color: var(--playground-text-muted);
+    }
+
+    .empty-state-icon {
+        font-size: 4rem;
+        margin-bottom: 1rem;
+        opacity: 0.5;
+    }
+
+    .empty-state-text {
+        font-size: 1.125rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .empty-state-subtext {
+        font-size: 0.875rem;
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+        .demo-content {
+            grid-template-columns: 1fr;
+        }
+
+        .demo-preview {
+            border-right: none;
+            border-bottom: 1px solid var(--playground-border);
+        }
+
+        .playground-main {
+            padding: 1rem;
+        }
+
+        .playground-topbar {
+            padding: 1rem;
+        }
+    }
+
+    /* Stats Bar */
+    .stats-bar {
+        display: flex;
+        gap: 2rem;
+        padding: 1rem 1.5rem;
+        background: var(--playground-surface);
+        border-bottom: 1px solid var(--playground-border);
+    }
+
+    .stat-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.875rem;
+    }
+
+    .stat-label {
+        color: var(--playground-text-muted);
+    }
+
+    .stat-value {
+        color: var(--playground-accent);
+        font-weight: 600;
+        font-family: 'Courier New', monospace;
+    }
+
+    /* Glow effect for active elements */
+    .glow {
+        animation: glow 2s ease-in-out infinite;
+    }
+
+    @keyframes glow {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div data-liveview-root class="playground-container">
+    <!-- Top Navigation -->
+    <div class="playground-topbar">
+        <div class="playground-header">
+            <h1 class="playground-title">
+                <span>⚡</span>
+                <span class="playground-title-accent">djust</span>
+                <span>Playground</span>
+            </h1>
+            <div class="playground-filters">
+                <div class="filter-group">
+                    <label class="filter-label">Decorator:</label>
+                    <select class="filter-select" id="filter-decorator">
+                        <option value="">All</option>
+                        <option value="debounce">@debounce</option>
+                        <option value="throttle">@throttle</option>
+                        <option value="cache">@cache</option>
+                        <option value="optimistic">@optimistic</option>
+                        <option value="client_state">@client_state</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">Complexity:</label>
+                    <select class="filter-select" id="filter-complexity">
+                        <option value="">All</option>
+                        <option value="easy">Easy</option>
+                        <option value="medium">Medium</option>
+                        <option value="advanced">Advanced</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Category Tabs -->
+        <div class="category-tabs">
+            <button class="category-tab active" data-category="all">
+                <span>All Demos</span>
+                <span class="category-count">15</span>
+            </button>
+            <button class="category-tab" data-category="basic">
+                <span>⚡ Basic</span>
+                <span class="category-count">2</span>
+            </button>
+            <button class="category-tab" data-category="state">
+                <span>🔄 State Management</span>
+                <span class="category-count">5</span>
+            </button>
+            <button class="category-tab" data-category="components">
+                <span>🧩 Components</span>
+                <span class="category-count">5</span>
+            </button>
+            <button class="category-tab" data-category="advanced">
+                <span>🚀 Advanced</span>
+                <span class="category-count">3</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Stats Bar -->
+    <div class="stats-bar">
+        <div class="stat-item">
+            <span class="stat-label">Total Demos:</span>
+            <span class="stat-value" id="total-demos">15</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-label">Visible:</span>
+            <span class="stat-value" id="visible-demos">15</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-label">Performance:</span>
+            <span class="stat-value">10-100x faster</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-label">Bundle Size:</span>
+            <span class="stat-value">~5KB</span>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="playground-main">
+        <!-- Counter Demo -->
+        <div class="demo-card visible" data-category="basic" data-complexity="easy">
+            <div class="demo-header">
+                <div class="demo-info">
+                    <div class="demo-title-row">
+                        <span class="demo-icon">⚡</span>
+                        <h3 class="demo-title">Counter</h3>
+                    </div>
+                    <p class="demo-description">Simple reactive counter with real-time state updates</p>
+                </div>
+                <div class="demo-badges">
+                    <span class="demo-badge feature">real-time</span>
+                    <span class="demo-badge feature">@click</span>
+                    <span class="demo-badge complexity-easy">Easy</span>
+                </div>
+            </div>
+            <div class="demo-content">
+                <div class="demo-preview">
+                    <div style="text-align: center;">
+                        <div style="font-size: 4rem; font-weight: 700; color: var(--playground-accent); margin-bottom: 2rem;">
+                            {{ counter }}
+                        </div>
+                        <div style="display: flex; gap: 1rem; justify-content: center;">
+                            <button @click="decrement" class="btn btn-outline-primary">-</button>
+                            <button @click="reset" class="btn btn-outline-secondary">Reset</button>
+                            <button @click="increment" class="btn btn-primary">+</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="demo-code-area">
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="counter-python">
+                            <span class="code-tab-icon">🐍</span>Python
+                        </button>
+                        <button class="code-tab" data-tab="counter-html">
+                            <span class="code-tab-icon">📄</span>HTML
+                        </button>
+                    </div>
+                    <div class="code-content">
+                        <div class="code-tab-pane active" id="counter-python">
+                            {{ counter_code_python|safe }}
+                        </div>
+                        <div class="code-tab-pane" id="counter-html">
+                            {{ counter_code_html|safe }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-footer">
+                <a href="/demos/counter/" class="demo-link">
+                    <span>View Full Demo</span>
+                    <span>→</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Dropdown Demo -->
+        <div class="demo-card visible" data-category="basic" data-complexity="easy">
+            <div class="demo-header">
+                <div class="demo-info">
+                    <div class="demo-title-row">
+                        <span class="demo-icon">📋</span>
+                        <h3 class="demo-title">Dropdown</h3>
+                    </div>
+                    <p class="demo-description">Interactive dropdown with dynamic state management</p>
+                </div>
+                <div class="demo-badges">
+                    <span class="demo-badge feature">toggle</span>
+                    <span class="demo-badge feature">selection</span>
+                    <span class="demo-badge complexity-easy">Easy</span>
+                </div>
+            </div>
+            <div class="demo-content">
+                <div class="demo-preview">
+                    <div class="dropdown">
+                        <button @click="toggle_dropdown" class="dropdown-toggle">
+                            <span>{{ selected_item }}</span>
+                            <span>{% if dropdown_open %}▲{% else %}▼{% endif %}</span>
+                        </button>
+                        {% if dropdown_open %}
+                        <div class="dropdown-menu">
+                            {% for item in dropdown_items %}
+                            <div @click="select_item" data-item="{{ item }}" class="dropdown-item">
+                                {{ item }}
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="demo-code-area">
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="dropdown-python">
+                            <span class="code-tab-icon">🐍</span>Python
+                        </button>
+                        <button class="code-tab" data-tab="dropdown-html">
+                            <span class="code-tab-icon">📄</span>HTML
+                        </button>
+                    </div>
+                    <div class="code-content">
+                        <div class="code-tab-pane active" id="dropdown-python">
+                            {{ dropdown_code_python|safe }}
+                        </div>
+                        <div class="code-tab-pane" id="dropdown-html">
+                            {{ dropdown_code_html|safe }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-footer">
+                <a href="/demos/dropdown/" class="demo-link">
+                    <span>View Full Demo</span>
+                    <span>→</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Debounce Demo -->
+        <div class="demo-card visible" data-category="state" data-complexity="medium" data-decorator="debounce">
+            <div class="demo-header">
+                <div class="demo-info">
+                    <div class="demo-title-row">
+                        <span class="demo-icon">⏱️</span>
+                        <h3 class="demo-title">Debounce Search</h3>
+                    </div>
+                    <p class="demo-description">Search with 500ms debouncing - reduces server calls by ~90%</p>
+                </div>
+                <div class="demo-badges">
+                    <span class="demo-badge decorator">@debounce</span>
+                    <span class="demo-badge feature">500ms wait</span>
+                    <span class="demo-badge complexity-medium">Medium</span>
+                </div>
+            </div>
+            <div class="demo-content">
+                <div class="demo-preview">
+                    <div style="width: 100%; max-width: 400px;">
+                        <input
+                            type="text"
+                            class="form-control form-control-lg"
+                            @input="debounce_search"
+                            placeholder="Type something..."
+                            value="{{ debounce_query }}"
+                        >
+                        <div style="margin-top: 1.5rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div style="background: var(--playground-elevated); border: 2px solid var(--playground-accent); border-radius: 8px; padding: 1rem; text-align: center;">
+                                <div style="font-size: 0.75rem; color: var(--playground-text-muted); margin-bottom: 0.5rem;">Query</div>
+                                <div style="font-size: 1.25rem; font-weight: 700; color: var(--playground-accent);">{{ debounce_query|default:"(empty)" }}</div>
+                            </div>
+                            <div style="background: var(--playground-elevated); border: 2px solid var(--playground-success); border-radius: 8px; padding: 1rem; text-align: center;">
+                                <div style="font-size: 0.75rem; color: var(--playground-text-muted); margin-bottom: 0.5rem;">Server Calls</div>
+                                <div style="font-size: 1.25rem; font-weight: 700; color: var(--playground-success);">{{ debounce_count }}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="demo-code-area">
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="debounce-python">
+                            <span class="code-tab-icon">🐍</span>Python
+                        </button>
+                        <button class="code-tab" data-tab="debounce-html">
+                            <span class="code-tab-icon">📄</span>HTML
+                        </button>
+                    </div>
+                    <div class="code-content">
+                        <div class="code-tab-pane active" id="debounce-python">
+                            {{ debounce_code_python|safe }}
+                        </div>
+                        <div class="code-tab-pane" id="debounce-html">
+                            {{ debounce_code_html|safe }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-footer">
+                <a href="/demos/debounce/" class="demo-link">
+                    <span>View Full Demo</span>
+                    <span>→</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Cache Demo -->
+        <div class="demo-card visible" data-category="state" data-complexity="medium" data-decorator="cache">
+            <div class="demo-header">
+                <div class="demo-info">
+                    <div class="demo-title-row">
+                        <span class="demo-icon">💾</span>
+                        <h3 class="demo-title">Client-Side Cache</h3>
+                    </div>
+                    <p class="demo-description">Product search with 5min TTL caching - instant repeat searches</p>
+                </div>
+                <div class="demo-badges">
+                    <span class="demo-badge decorator">@cache</span>
+                    <span class="demo-badge feature">5min TTL</span>
+                    <span class="demo-badge complexity-medium">Medium</span>
+                </div>
+            </div>
+            <div class="demo-content">
+                <div class="demo-preview">
+                    <div style="width: 100%;">
+                        <input
+                            type="text"
+                            class="form-control form-control-lg"
+                            @input="cache_search"
+                            placeholder="Try: laptop, mouse, keyboard..."
+                            value="{{ cache_query }}"
+                        >
+                        <div style="margin-top: 1.5rem; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem;">
+                            <div style="background: var(--playground-elevated); border: 2px solid var(--playground-accent); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                                <div style="font-size: 0.75rem; color: var(--playground-text-muted);">Server Calls</div>
+                                <div style="font-size: 1.25rem; font-weight: 700; color: var(--playground-accent);">{{ cache_server_calls }}</div>
+                            </div>
+                            <div style="background: var(--playground-elevated); border: 2px solid var(--playground-success); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                                <div style="font-size: 0.75rem; color: var(--playground-text-muted);">Efficiency</div>
+                                <div style="font-size: 1.25rem; font-weight: 700; color: var(--playground-success);">{{ cache_efficiency }}%</div>
+                            </div>
+                            <div style="background: var(--playground-elevated); border: 2px solid var(--playground-border); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                                <div style="font-size: 0.75rem; color: var(--playground-text-muted);">Results</div>
+                                <div style="font-size: 1.25rem; font-weight: 700;">{{ cache_results|length }}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="demo-code-area">
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="cache-python">
+                            <span class="code-tab-icon">🐍</span>Python
+                        </button>
+                        <button class="code-tab" data-tab="cache-html">
+                            <span class="code-tab-icon">📄</span>HTML
+                        </button>
+                    </div>
+                    <div class="code-content">
+                        <div class="code-tab-pane active" id="cache-python">
+                            {{ cache_code_python|safe }}
+                        </div>
+                        <div class="code-tab-pane" id="cache-html">
+                            {{ cache_code_html|safe }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-footer">
+                <a href="/demos/cache/" class="demo-link">
+                    <span>View Full Demo</span>
+                    <span>→</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Smart Dashboard Demo -->
+        <div class="demo-card visible" data-category="state" data-complexity="advanced" data-decorator="client_state">
+            <div class="demo-header">
+                <div class="demo-info">
+                    <div class="demo-title-row">
+                        <span class="demo-icon">🏠</span>
+                        <h3 class="demo-title">Smart Dashboard</h3>
+                    </div>
+                    <p class="demo-description">IoT dashboard with @client_state - pub/sub between components</p>
+                </div>
+                <div class="demo-badges">
+                    <span class="demo-badge decorator">@client_state</span>
+                    <span class="demo-badge feature">pub/sub</span>
+                    <span class="demo-badge complexity-advanced">Advanced</span>
+                </div>
+            </div>
+            <div class="demo-content">
+                <div class="demo-preview">
+                    <div style="text-align: center; padding: 1rem;">
+                        <div style="font-size: 1rem; color: var(--playground-text-muted); margin-bottom: 1rem;">
+                            Interactive IoT Dashboard Demo
+                        </div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div style="background: var(--playground-elevated); border: 1px solid var(--playground-border); border-radius: 8px; padding: 1rem;">
+                                <div style="font-size: 0.875rem; color: var(--playground-text-muted);">Temperature</div>
+                                <div style="font-size: 2rem; font-weight: 700; color: var(--playground-accent);">72°F</div>
+                            </div>
+                            <div style="background: var(--playground-elevated); border: 1px solid var(--playground-border); border-radius: 8px; padding: 1rem;">
+                                <div style="font-size: 0.875rem; color: var(--playground-text-muted);">Humidity</div>
+                                <div style="font-size: 2rem; font-weight: 700; color: var(--playground-success);">45%</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="demo-code-area">
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="dashboard-python">
+                            <span class="code-tab-icon">🐍</span>Python
+                        </button>
+                        <button class="code-tab" data-tab="dashboard-info">
+                            <span class="code-tab-icon">ℹ️</span>Info
+                        </button>
+                    </div>
+                    <div class="code-content">
+                        <div class="code-tab-pane active" id="dashboard-python">
+                            <pre style="margin: 0; padding: 1.5rem; background: var(--playground-code-bg); color: var(--playground-text); font-family: 'Courier New', monospace; font-size: 0.875rem; line-height: 1.5;"><code>@client_state(bus="iot_sensors")
+def set_temperature(self, temp):
+    self.temperature = temp
+    # Publishes to all subscribers
+
+@client_state(bus="iot_sensors")
+def set_humidity(self, humidity):
+    self.humidity = humidity
+    # Updates without server round-trip</code></pre>
+                        </div>
+                        <div class="code-tab-pane" id="dashboard-info">
+                            <div style="padding: 1.5rem; color: var(--playground-text-muted); font-size: 0.875rem; line-height: 1.6;">
+                                <p style="margin: 0 0 1rem 0;">The @client_state decorator enables client-side state synchronization between components without server round-trips.</p>
+                                <p style="margin: 0;"><strong>Key features:</strong> Pub/Sub pattern, zero latency updates, event bus architecture</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-footer">
+                <a href="/demos/smart-dashboard/" class="demo-link">
+                    <span>View Full Demo</span>
+                    <span>→</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Throttle Demo -->
+        <div class="demo-card visible" data-category="state" data-complexity="medium" data-decorator="throttle">
+            <div class="demo-header">
+                <div class="demo-info">
+                    <div class="demo-title-row">
+                        <span class="demo-icon">⏱️</span>
+                        <h3 class="demo-title">Throttle Scroll</h3>
+                    </div>
+                    <p class="demo-description">Scroll position tracking with 200ms throttling</p>
+                </div>
+                <div class="demo-badges">
+                    <span class="demo-badge decorator">@throttle</span>
+                    <span class="demo-badge feature">200ms interval</span>
+                    <span class="demo-badge complexity-medium">Medium</span>
+                </div>
+            </div>
+            <div class="demo-content">
+                <div class="demo-preview">
+                    <div style="text-align: center;">
+                        <div style="font-size: 1rem; color: var(--playground-text-muted); margin-bottom: 1rem;">
+                            Scroll Event Throttling Demo
+                        </div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--playground-accent);">
+                            Max 5 calls/sec
+                        </div>
+                    </div>
+                </div>
+                <div class="demo-code-area">
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="throttle-python">
+                            <span class="code-tab-icon">🐍</span>Python
+                        </button>
+                    </div>
+                    <div class="code-content">
+                        <div class="code-tab-pane active" id="throttle-python">
+                            <pre style="margin: 0; padding: 1.5rem; background: var(--playground-code-bg); color: var(--playground-text); font-family: 'Courier New', monospace; font-size: 0.875rem; line-height: 1.5;"><code>@throttle(wait=0.2)
+def on_scroll(self, position=0, **kwargs):
+    self.scroll_position = position
+    # Max 5 calls per second</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-footer">
+                <a href="/demos/throttle/" class="demo-link">
+                    <span>View Full Demo</span>
+                    <span>→</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Optimistic Todo Demo -->
+        <div class="demo-card visible" data-category="state" data-complexity="advanced" data-decorator="optimistic">
+            <div class="demo-header">
+                <div class="demo-info">
+                    <div class="demo-title-row">
+                        <span class="demo-icon">✅</span>
+                        <h3 class="demo-title">Optimistic Todo</h3>
+                    </div>
+                    <p class="demo-description">Todo list with optimistic UI updates - instant feedback</p>
+                </div>
+                <div class="demo-badges">
+                    <span class="demo-badge decorator">@optimistic</span>
+                    <span class="demo-badge feature">instant UI</span>
+                    <span class="demo-badge complexity-advanced">Advanced</span>
+                </div>
+            </div>
+            <div class="demo-content">
+                <div class="demo-preview">
+                    <div style="text-align: center;">
+                        <div style="font-size: 1rem; color: var(--playground-text-muted); margin-bottom: 1rem;">
+                            Optimistic Updates Demo
+                        </div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--playground-accent);">
+                            Zero-latency UX
+                        </div>
+                    </div>
+                </div>
+                <div class="demo-code-area">
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="optimistic-python">
+                            <span class="code-tab-icon">🐍</span>Python
+                        </button>
+                    </div>
+                    <div class="code-content">
+                        <div class="code-tab-pane active" id="optimistic-python">
+                            <pre style="margin: 0; padding: 1.5rem; background: var(--playground-code-bg); color: var(--playground-text); font-family: 'Courier New', monospace; font-size: 0.875rem; line-height: 1.5;"><code>@optimistic
+def toggle_todo(self, id, **kwargs):
+    todo = self.get_todo(id)
+    todo.completed = not todo.completed
+    # UI updates instantly</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-footer">
+                <a href="/demos/optimistic-todo/" class="demo-link">
+                    <span>View Full Demo</span>
+                    <span>→</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Component Showcase -->
+        <div class="demo-card visible" data-category="components" data-complexity="medium">
+            <div class="demo-header">
+                <div class="demo-info">
+                    <div class="demo-title-row">
+                        <span class="demo-icon">🧩</span>
+                        <h3 class="demo-title">Component Showcase</h3>
+                    </div>
+                    <p class="demo-description">Reusable components with automatic Rust optimization</p>
+                </div>
+                <div class="demo-badges">
+                    <span class="demo-badge feature">reusable</span>
+                    <span class="demo-badge feature">auto-rust</span>
+                    <span class="demo-badge complexity-medium">Medium</span>
+                </div>
+            </div>
+            <div class="demo-content">
+                <div class="demo-preview">
+                    <div style="text-align: center;">
+                        <div style="font-size: 1rem; color: var(--playground-text-muted); margin-bottom: 1rem;">
+                            Component System Demo
+                        </div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--playground-accent);">
+                            Automatic Optimization
+                        </div>
+                    </div>
+                </div>
+                <div class="demo-code-area">
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="component-python">
+                            <span class="code-tab-icon">🐍</span>Python
+                        </button>
+                    </div>
+                    <div class="code-content">
+                        <div class="code-tab-pane active" id="component-python">
+                            <pre style="margin: 0; padding: 1.5rem; background: var(--playground-code-bg); color: var(--playground-text); font-family: 'Courier New', monospace; font-size: 0.875rem; line-height: 1.5;"><code>class Badge(Component):
+    def __init__(self, text, variant="primary"):
+        self.text = text
+        self.variant = variant
+
+    def render(self):
+        return f'&lt;span class="badge-{self.variant}"&gt;{self.text}&lt;/span&gt;'</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-footer">
+                <a href="/demos/component-showcase/" class="demo-link">
+                    <span>View Full Demo</span>
+                    <span>→</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Toast Demo -->
+        <div class="demo-card visible" data-category="components" data-complexity="easy">
+            <div class="demo-header">
+                <div class="demo-info">
+                    <div class="demo-title-row">
+                        <span class="demo-icon">🍞</span>
+                        <h3 class="demo-title">Toast Notifications</h3>
+                    </div>
+                    <p class="demo-description">Elegant toast notifications with auto-dismiss</p>
+                </div>
+                <div class="demo-badges">
+                    <span class="demo-badge feature">notifications</span>
+                    <span class="demo-badge feature">auto-dismiss</span>
+                    <span class="demo-badge complexity-easy">Easy</span>
+                </div>
+            </div>
+            <div class="demo-content">
+                <div class="demo-preview">
+                    <div style="text-align: center;">
+                        <button class="btn btn-primary">Show Toast</button>
+                    </div>
+                </div>
+                <div class="demo-code-area">
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="toast-python">
+                            <span class="code-tab-icon">🐍</span>Python
+                        </button>
+                    </div>
+                    <div class="code-content">
+                        <div class="code-tab-pane active" id="toast-python">
+                            <pre style="margin: 0; padding: 1.5rem; background: var(--playground-code-bg); color: var(--playground-text); font-family: 'Courier New', monospace; font-size: 0.875rem; line-height: 1.5;"><code>def show_toast(self):
+    self.toast = Toast(
+        message="Success!",
+        variant="success",
+        duration=3000
+    )</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-footer">
+                <a href="/demos/toast/" class="demo-link">
+                    <span>View Full Demo</span>
+                    <span>→</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Navbar Demo -->
+        <div class="demo-card visible" data-category="components" data-complexity="easy">
+            <div class="demo-header">
+                <div class="demo-info">
+                    <div class="demo-title-row">
+                        <span class="demo-icon">🧭</span>
+                        <h3 class="demo-title">Responsive Navbar</h3>
+                    </div>
+                    <p class="demo-description">Mobile-friendly navigation component</p>
+                </div>
+                <div class="demo-badges">
+                    <span class="demo-badge feature">responsive</span>
+                    <span class="demo-badge feature">mobile</span>
+                    <span class="demo-badge complexity-easy">Easy</span>
+                </div>
+            </div>
+            <div class="demo-content">
+                <div class="demo-preview">
+                    <div style="text-align: center;">
+                        <div style="font-size: 1rem; color: var(--playground-text-muted);">
+                            Responsive Navigation Component
+                        </div>
+                    </div>
+                </div>
+                <div class="demo-code-area">
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="navbar-python">
+                            <span class="code-tab-icon">🐍</span>Python
+                        </button>
+                    </div>
+                    <div class="code-content">
+                        <div class="code-tab-pane active" id="navbar-python">
+                            <pre style="margin: 0; padding: 1.5rem; background: var(--playground-code-bg); color: var(--playground-text); font-family: 'Courier New', monospace; font-size: 0.875rem; line-height: 1.5;"><code>class NavBar(Component):
+    def __init__(self, items, active_item=None):
+        self.items = items
+        self.active_item = active_item</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-footer">
+                <a href="/demos/navbar/" class="demo-link">
+                    <span>View Full Demo</span>
+                    <span>→</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Offcanvas Demo -->
+        <div class="demo-card visible" data-category="components" data-complexity="medium">
+            <div class="demo-header">
+                <div class="demo-info">
+                    <div class="demo-title-row">
+                        <span class="demo-icon">📱</span>
+                        <h3 class="demo-title">Offcanvas Panel</h3>
+                    </div>
+                    <p class="demo-description">Slide-out panel for mobile navigation</p>
+                </div>
+                <div class="demo-badges">
+                    <span class="demo-badge feature">slide-out</span>
+                    <span class="demo-badge feature">overlay</span>
+                    <span class="demo-badge complexity-medium">Medium</span>
+                </div>
+            </div>
+            <div class="demo-content">
+                <div class="demo-preview">
+                    <div style="text-align: center;">
+                        <button class="btn btn-primary">Show Panel</button>
+                    </div>
+                </div>
+                <div class="demo-code-area">
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="offcanvas-python">
+                            <span class="code-tab-icon">🐍</span>Python
+                        </button>
+                    </div>
+                    <div class="code-content">
+                        <div class="code-tab-pane active" id="offcanvas-python">
+                            <pre style="margin: 0; padding: 1.5rem; background: var(--playground-code-bg); color: var(--playground-text); font-family: 'Courier New', monospace; font-size: 0.875rem; line-height: 1.5;"><code>def toggle_offcanvas(self):
+    self.offcanvas_open = not self.offcanvas_open</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-footer">
+                <a href="/demos/offcanvas/" class="demo-link">
+                    <span>View Full Demo</span>
+                    <span>→</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Rust Components Demo -->
+        <div class="demo-card visible" data-category="components" data-complexity="advanced">
+            <div class="demo-header">
+                <div class="demo-info">
+                    <div class="demo-title-row">
+                        <span class="demo-icon">🦀</span>
+                        <h3 class="demo-title">Rust Components</h3>
+                    </div>
+                    <p class="demo-description">Components compiled to Rust for maximum performance</p>
+                </div>
+                <div class="demo-badges">
+                    <span class="demo-badge feature">rust</span>
+                    <span class="demo-badge feature">10-100x faster</span>
+                    <span class="demo-badge complexity-advanced">Advanced</span>
+                </div>
+            </div>
+            <div class="demo-content">
+                <div class="demo-preview">
+                    <div style="text-align: center;">
+                        <div style="font-size: 1rem; color: var(--playground-text-muted); margin-bottom: 1rem;">
+                            Rust-Compiled Components
+                        </div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--playground-accent);">
+                            Native Speed
+                        </div>
+                    </div>
+                </div>
+                <div class="demo-code-area">
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="rust-info">
+                            <span class="code-tab-icon">ℹ️</span>Info
+                        </button>
+                    </div>
+                    <div class="code-content">
+                        <div class="code-tab-pane active" id="rust-info">
+                            <div style="padding: 1.5rem; color: var(--playground-text-muted); font-size: 0.875rem; line-height: 1.6;">
+                                <p style="margin: 0 0 1rem 0;">Components automatically compile to Rust when performance thresholds are exceeded.</p>
+                                <p style="margin: 0;"><strong>Benefits:</strong> 10-100x faster rendering, sub-millisecond VDOM diffing, zero overhead</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-footer">
+                <a href="/demos/rust-components/" class="demo-link">
+                    <span>View Full Demo</span>
+                    <span>→</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Performance Test -->
+        <div class="demo-card visible" data-category="advanced" data-complexity="advanced">
+            <div class="demo-header">
+                <div class="demo-info">
+                    <div class="demo-title-row">
+                        <span class="demo-icon">⚡</span>
+                        <h3 class="demo-title">Performance Test</h3>
+                    </div>
+                    <p class="demo-description">VDOM stress testing with 1000s of elements</p>
+                </div>
+                <div class="demo-badges">
+                    <span class="demo-badge feature">stress-test</span>
+                    <span class="demo-badge feature">benchmarks</span>
+                    <span class="demo-badge complexity-advanced">Advanced</span>
+                </div>
+            </div>
+            <div class="demo-content">
+                <div class="demo-preview">
+                    <div style="text-align: center;">
+                        <div style="font-size: 1rem; color: var(--playground-text-muted); margin-bottom: 1rem;">
+                            VDOM Performance Benchmarks
+                        </div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--playground-accent);">
+                            &lt;100μs diffing
+                        </div>
+                    </div>
+                </div>
+                <div class="demo-code-area">
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="perf-info">
+                            <span class="code-tab-icon">ℹ️</span>Info
+                        </button>
+                    </div>
+                    <div class="code-content">
+                        <div class="code-tab-pane active" id="perf-info">
+                            <div style="padding: 1.5rem; color: var(--playground-text-muted); font-size: 0.875rem; line-height: 1.6;">
+                                <p style="margin: 0 0 1rem 0;">Stress test the VDOM engine with thousands of dynamic elements.</p>
+                                <p style="margin: 0;"><strong>Metrics:</strong> Template rendering, VDOM diffing, patch generation, DOM updates</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-footer">
+                <a href="/demos/performance/" class="demo-link">
+                    <span>View Full Demo</span>
+                    <span>→</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- DataTable Demo -->
+        <div class="demo-card visible" data-category="advanced" data-complexity="advanced">
+            <div class="demo-header">
+                <div class="demo-info">
+                    <div class="demo-title-row">
+                        <span class="demo-icon">📊</span>
+                        <h3 class="demo-title">Product DataTable</h3>
+                    </div>
+                    <p class="demo-description">Sortable, filterable data table with pagination</p>
+                </div>
+                <div class="demo-badges">
+                    <span class="demo-badge feature">sorting</span>
+                    <span class="demo-badge feature">filtering</span>
+                    <span class="demo-badge complexity-advanced">Advanced</span>
+                </div>
+            </div>
+            <div class="demo-content">
+                <div class="demo-preview">
+                    <div style="text-align: center;">
+                        <div style="font-size: 1rem; color: var(--playground-text-muted); margin-bottom: 1rem;">
+                            Interactive Data Table
+                        </div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--playground-accent);">
+                            Full CRUD
+                        </div>
+                    </div>
+                </div>
+                <div class="demo-code-area">
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="datatable-python">
+                            <span class="code-tab-icon">🐍</span>Python
+                        </button>
+                    </div>
+                    <div class="code-content">
+                        <div class="code-tab-pane active" id="datatable-python">
+                            <pre style="margin: 0; padding: 1.5rem; background: var(--playground-code-bg); color: var(--playground-text); font-family: 'Courier New', monospace; font-size: 0.875rem; line-height: 1.5;"><code>def sort_column(self, column, **kwargs):
+    if self.sort_column == column:
+        self.sort_desc = not self.sort_desc
+    else:
+        self.sort_column = column</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-footer">
+                <a href="/demos/datatable/" class="demo-link">
+                    <span>View Full Demo</span>
+                    <span>→</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Kitchen Sink -->
+        <div class="demo-card visible" data-category="advanced" data-complexity="advanced">
+            <div class="demo-header">
+                <div class="demo-info">
+                    <div class="demo-title-row">
+                        <span class="demo-icon">🎨</span>
+                        <h3 class="demo-title">Kitchen Sink</h3>
+                    </div>
+                    <p class="demo-description">All components and features in one comprehensive demo</p>
+                </div>
+                <div class="demo-badges">
+                    <span class="demo-badge feature">comprehensive</span>
+                    <span class="demo-badge feature">showcase</span>
+                    <span class="demo-badge complexity-advanced">Advanced</span>
+                </div>
+            </div>
+            <div class="demo-content">
+                <div class="demo-preview">
+                    <div style="text-align: center;">
+                        <div style="font-size: 1rem; color: var(--playground-text-muted); margin-bottom: 1rem;">
+                            Complete Feature Showcase
+                        </div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--playground-accent);">
+                            Everything
+                        </div>
+                    </div>
+                </div>
+                <div class="demo-code-area">
+                    <div class="code-tabs">
+                        <button class="code-tab active" data-tab="kitchen-info">
+                            <span class="code-tab-icon">ℹ️</span>Info
+                        </button>
+                    </div>
+                    <div class="code-content">
+                        <div class="code-tab-pane active" id="kitchen-info">
+                            <div style="padding: 1.5rem; color: var(--playground-text-muted); font-size: 0.875rem; line-height: 1.6;">
+                                <p style="margin: 0 0 1rem 0;">Explore all djust features in a single comprehensive demo.</p>
+                                <p style="margin: 0;"><strong>Includes:</strong> All decorators, components, state management patterns, and advanced features</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="demo-footer">
+                <a href="/demos/kitchen-sink/" class="demo-link">
+                    <span>View Full Demo</span>
+                    <span>→</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Empty State (hidden by default) -->
+        <div class="empty-state" id="empty-state" style="display: none;">
+            <div class="empty-state-icon">🔍</div>
+            <div class="empty-state-text">No demos match your filters</div>
+            <div class="empty-state-subtext">Try adjusting your search criteria</div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Tab switching
+document.addEventListener('click', (e) => {
+    const tab = e.target.closest('.code-tab');
+    if (!tab) return;
+
+    const tabId = tab.getAttribute('data-tab');
+    const codeArea = tab.closest('.demo-code-area');
+
+    // Remove active from all tabs in this demo
+    codeArea.querySelectorAll('.code-tab').forEach(t => t.classList.remove('active'));
+    codeArea.querySelectorAll('.code-tab-pane').forEach(p => p.classList.remove('active'));
+
+    // Activate clicked tab
+    tab.classList.add('active');
+    document.getElementById(tabId)?.classList.add('active');
+});
+
+// Category filtering
+const categoryTabs = document.querySelectorAll('.category-tab');
+const demoCards = document.querySelectorAll('.demo-card');
+
+categoryTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+        const category = tab.getAttribute('data-category');
+
+        // Update active tab
+        categoryTabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+
+        // Filter demos
+        filterDemos();
+    });
+});
+
+// Decorator and complexity filtering
+const decoratorFilter = document.getElementById('filter-decorator');
+const complexityFilter = document.getElementById('filter-complexity');
+
+decoratorFilter?.addEventListener('change', filterDemos);
+complexityFilter?.addEventListener('change', filterDemos);
+
+function filterDemos() {
+    const activeCategory = document.querySelector('.category-tab.active')?.getAttribute('data-category') || 'all';
+    const selectedDecorator = decoratorFilter?.value || '';
+    const selectedComplexity = complexityFilter?.value || '';
+
+    let visibleCount = 0;
+
+    demoCards.forEach(card => {
+        const cardCategory = card.getAttribute('data-category');
+        const cardDecorator = card.getAttribute('data-decorator') || '';
+        const cardComplexity = card.getAttribute('data-complexity') || '';
+
+        const categoryMatch = activeCategory === 'all' || cardCategory === activeCategory;
+        const decoratorMatch = !selectedDecorator || cardDecorator === selectedDecorator;
+        const complexityMatch = !selectedComplexity || cardComplexity === selectedComplexity;
+
+        if (categoryMatch && decoratorMatch && complexityMatch) {
+            card.classList.add('visible');
+            visibleCount++;
+        } else {
+            card.classList.remove('visible');
+        }
+    });
+
+    // Update stats
+    document.getElementById('visible-demos').textContent = visibleCount;
+
+    // Show/hide empty state
+    const emptyState = document.getElementById('empty-state');
+    if (visibleCount === 0) {
+        emptyState.style.display = 'block';
+    } else {
+        emptyState.style.display = 'none';
+    }
+}
+
+// Initialize
+filterDemos();
+</script>
+{% endblock %}

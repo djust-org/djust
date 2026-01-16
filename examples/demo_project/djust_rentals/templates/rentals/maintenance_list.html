@@ -1,0 +1,93 @@
+{% extends "rentals/base.html" %}
+
+{% block title %}Maintenance Requests - Rental Management{% endblock %}
+
+{% block content %}
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.maintenance.MaintenanceListView">
+  <div class="container mx-auto px-4 max-w-7xl">
+    <!-- Page Header with Lucide Icon and Add Button -->
+    {{ page_header|safe }}
+
+    <!-- Search and Filters -->
+    <div class="bg-card border border-border rounded-lg p-6 mb-6">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <!-- Search -->
+        <div>
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            <div class="flex items-center gap-1">
+              <i data-lucide="search" class="w-4 h-4"></i>
+              Search Requests
+            </div>
+          </label>
+          <input type="text"
+                 @input="search"
+                 value="{{ search_query }}"
+                 placeholder="Search by title, description, or property..."
+                 class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
+        </div>
+
+        <!-- Priority Filter -->
+        <div>
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            <div class="flex items-center gap-1">
+              <i data-lucide="alert-triangle" class="w-4 h-4"></i>
+              Priority
+            </div>
+          </label>
+          <select @change="filter_by_priority"
+                  class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
+            <option value="all" {% if filter_priority == 'all' %}selected{% endif %}>All Priorities</option>
+            {% for val, label in priority_choices %}
+            <option value="{{ val }}" {% if filter_priority == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <!-- Status Filter -->
+        <div>
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            <div class="flex items-center gap-1">
+              <i data-lucide="filter" class="w-4 h-4"></i>
+              Status
+            </div>
+          </label>
+          <select @change="filter_by_status"
+                  class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
+            <option value="pending" {% if filter_status == 'pending' %}selected{% endif %}>Pending (Open + In Progress)</option>
+            <option value="all" {% if filter_status == 'all' %}selected{% endif %}>All Statuses</option>
+            {% for val, label in status_choices %}
+            <option value="{{ val }}" {% if filter_status == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <!-- Sort By -->
+        <div>
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            <div class="flex items-center gap-1">
+              <i data-lucide="arrow-up-down" class="w-4 h-4"></i>
+              Sort By
+            </div>
+          </label>
+          <select @change="sort_requests"
+                  class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
+            <option value="created" {% if sort_by == 'created' %}selected{% endif %}>Date Created</option>
+            <option value="priority" {% if sort_by == 'priority' %}selected{% endif %}>Priority</option>
+            <option value="property" {% if sort_by == 'property' %}selected{% endif %}>Property</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Summary Stats - Using StatCard Components -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      {% for stat_card in stat_cards %}
+        {{ stat_card|safe }}
+      {% endfor %}
+    </div>
+
+    <!-- Maintenance Requests Table - Using DataTable Component -->
+    {{ maintenance_table|safe }}
+  </div>
+</div>
+{% endblock %}

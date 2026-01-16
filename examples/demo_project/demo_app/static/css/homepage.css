@@ -1,0 +1,124 @@
+/* djust Homepage - Homepage-specific styles
+ * Theme system (colors, typography, base styles) is provided by theme.css
+ * This file contains homepage-specific component styling
+ */
+
+/* ============================================
+   Homepage-Specific Overrides
+   ============================================ */
+
+/* Bootstrap container override */
+.section-modern .container {
+    max-width: 1200px;
+}
+
+/* Navbar togglers for mobile */
+.navbar-toggler {
+    border-color: var(--color-border);
+}
+
+.navbar-toggler-icon {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba(255, 255, 255, 0.75)' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+}
+
+/* ============================================
+   Hero Section - Homepage Specific
+   ============================================ */
+.hero-section {
+    position: relative;
+}
+
+/* ============================================
+   Sections - Homepage Specific
+   ============================================ */
+.section-modern {
+    border-bottom: 1px solid var(--color-border);
+}
+
+/* ============================================
+   Demo Cards with Live Content
+   ============================================ */
+.demo-card-live {
+    border: 1px solid var(--color-border);
+    overflow: hidden;
+}
+
+.demo-card-live:hover {
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.demo-card-live iframe {
+    background: var(--color-bg);
+}
+
+/* ============================================
+   Code Blocks
+   ============================================ */
+.code-header-modern {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+/* ============================================
+   Comparison Table
+   ============================================ */
+.comparison-table-modern thead {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.comparison-table-modern tbody tr:last-child td {
+    border-bottom: none;
+}
+
+/* ============================================
+   Metrics - Gradient styling
+   ============================================ */
+.metric-value-modern {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+/* ============================================
+   Path Cards
+   ============================================ */
+.path-card-recommended {
+    border-color: var(--color-accent);
+}
+
+/* ============================================
+   Hosting Section - Gradient Background
+   ============================================ */
+.hosting-section-modern {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.hosting-grid {
+    margin: var(--spacing-2xl) 0;
+}
+
+.hosting-feature-modern h4 {
+    color: white;
+}
+
+.hosting-feature-modern p {
+    color: rgba(255, 255, 255, 0.9);
+}
+
+/* ============================================
+   Table Highlight
+   ============================================ */
+.comparison-table-modern .highlight-col {
+    background: var(--color-accent-muted);
+}
+
+/* ============================================
+   Responsive
+   ============================================ */
+@media (max-width: 768px) {
+    .usecase-grid,
+    .hosting-grid {
+        grid-template-columns: 1fr;
+    }
+}

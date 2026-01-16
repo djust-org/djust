@@ -1,0 +1,233 @@
+{% extends "rentals/base.html" %}
+
+{% block title %}{{ request.title }} - Maintenance Request{% endblock %}
+
+{% block content %}
+<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.maintenance.MaintenanceDetailView">
+  <div class="container mx-auto px-4 max-w-6xl">
+    {% if error_message %}
+    <div class="bg-destructive/10 border border-destructive text-destructive-foreground px-4 py-3 rounded-lg mb-6">
+      {{ error_message }}
+    </div>
+    <a href="{% url 'rentals:maintenance-list' %}" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90">
+      <i data-lucide="arrow-left" class="w-4 h-4"></i>
+      Back to Maintenance
+    </a>
+    {% else %}
+    <!-- Page Header with Actions -->
+    {{ page_header|safe }}
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- Main Details -->
+      <div class="lg:col-span-2 space-y-6">
+        <!-- Request Information -->
+        <div class="bg-card border border-border rounded-lg p-6">
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+              <i data-lucide="wrench" class="w-5 h-5 text-primary"></i>
+              <h2 class="text-xl font-semibold text-card-foreground">Request Details</h2>
+            </div>
+            <div class="flex items-center gap-2">
+              {{ status_badge|safe }}
+              {{ priority_badge|safe }}
+            </div>
+          </div>
+
+          <div class="space-y-4">
+            <!-- Description -->
+            <div>
+              <p class="text-sm text-muted-foreground mb-1">Description</p>
+              <p class="text-card-foreground">{{ request.description }}</p>
+            </div>
+
+            <!-- Property and Tenant -->
+            <div class="grid grid-cols-2 gap-4 pt-4 border-t border-border">
+              <div>
+                <p class="text-sm text-muted-foreground mb-1">Property</p>
+                <p class="font-medium">
+                  <a href="{% url 'rentals:property-detail' request.property.pk %}" class="text-primary hover:underline inline-flex items-center gap-1">
+                    {{ request.property.name }}
+                    <i data-lucide="external-link" class="w-3 h-3"></i>
+                  </a>
+                </p>
+                <p class="text-sm text-muted-foreground">{{ request.property.address }}</p>
+              </div>
+              {% if request.tenant %}
+              <div>
+                <p class="text-sm text-muted-foreground mb-1">Reported by</p>
+                <p class="font-medium">
+                  <a href="{% url 'rentals:tenant-detail' request.tenant.pk %}" class="text-primary hover:underline inline-flex items-center gap-1">
+                    {{ request.tenant.user.get_full_name }}
+                    <i data-lucide="external-link" class="w-3 h-3"></i>
+                  </a>
+                </p>
+                <p class="text-sm text-muted-foreground">{{ request.tenant.user.email }}</p>
+              </div>
+              {% endif %}
+            </div>
+
+            <!-- Timeline -->
+            <div class="grid grid-cols-2 gap-4 pt-4 border-t border-border">
+              <div>
+                <p class="text-sm text-muted-foreground mb-1">Created</p>
+                <div class="flex items-center gap-1">
+                  <i data-lucide="calendar" class="w-4 h-4 text-muted-foreground"></i>
+                  <p class="text-card-foreground">{{ request.created_at|date:"M d, Y" }}</p>
+                </div>
+              </div>
+              <div>
+                <p class="text-sm text-muted-foreground mb-1">Days Open</p>
+                <div class="flex items-center gap-1">
+                  <i data-lucide="clock" class="w-4 h-4 text-muted-foreground"></i>
+                  <p class="text-card-foreground {% if days_open > 7 %}text-yellow-600 dark:text-yellow-400 font-semibold{% elif days_open > 30 %}text-red-600 dark:text-red-400 font-semibold{% endif %}">
+                    {{ days_open }} days
+                  </p>
+                </div>
+              </div>
+              {% if request.completed_at %}
+              <div>
+                <p class="text-sm text-muted-foreground mb-1">Completed</p>
+                <div class="flex items-center gap-1">
+                  <i data-lucide="check-circle" class="w-4 h-4 text-green-600 dark:text-green-400"></i>
+                  <p class="text-card-foreground">{{ request.completed_at|date:"M d, Y" }}</p>
+                </div>
+              </div>
+              <div>
+                <p class="text-sm text-muted-foreground mb-1">Time to Complete</p>
+                <div class="flex items-center gap-1">
+                  <i data-lucide="timer" class="w-4 h-4 text-muted-foreground"></i>
+                  <p class="text-green-600 dark:text-green-400 font-semibold">{{ time_to_complete }} days</p>
+                </div>
+              </div>
+              {% endif %}
+            </div>
+
+            <!-- Assigned Contractor -->
+            {% if request.assigned_to %}
+            <div class="pt-4 border-t border-border">
+              <p class="text-sm text-muted-foreground mb-1">Assigned To</p>
+              <div class="flex items-center gap-1">
+                <i data-lucide="user-check" class="w-4 h-4 text-primary"></i>
+                <p class="text-card-foreground font-medium">{{ request.assigned_to }}</p>
+              </div>
+            </div>
+            {% endif %}
+
+            <!-- Notes -->
+            {% if request.notes %}
+            <div class="pt-4 border-t border-border">
+              <p class="text-sm text-muted-foreground mb-2">Notes</p>
+              <div class="bg-accent/50 rounded-md p-3 border border-border">
+                <p class="text-card-foreground whitespace-pre-line text-sm">{{ request.notes }}</p>
+              </div>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <!-- Sidebar -->
+      <div class="space-y-6">
+        <!-- Cost Summary -->
+        <div class="bg-card border border-border rounded-lg p-6">
+          <div class="flex items-center gap-2 mb-4">
+            <i data-lucide="dollar-sign" class="w-5 h-5 text-primary"></i>
+            <h3 class="text-lg font-semibold text-card-foreground">Cost</h3>
+          </div>
+          <div class="space-y-3">
+            <div>
+              <p class="text-sm text-muted-foreground mb-1">Estimated Cost</p>
+              {% if request.estimated_cost %}
+              <p class="text-2xl font-bold text-card-foreground">${{ request.estimated_cost|floatformat:0 }}</p>
+              {% else %}
+              <p class="text-xl text-muted-foreground">TBD</p>
+              {% endif %}
+            </div>
+            <div class="pt-3 border-t border-border">
+              <p class="text-sm text-muted-foreground mb-1">Actual Cost</p>
+              {% if request.actual_cost %}
+              <p class="text-2xl font-bold text-green-600 dark:text-green-400">${{ request.actual_cost|floatformat:0 }}</p>
+              {% if request.estimated_cost %}
+              <p class="text-xs text-muted-foreground mt-1">
+                {% if request.actual_cost > request.estimated_cost %}
+                  Over budget by ${{ request.actual_cost|add:"-"|add:request.estimated_cost|floatformat:0 }}
+                {% elif request.actual_cost < request.estimated_cost %}
+                  Under budget by ${{ request.estimated_cost|add:"-"|add:request.actual_cost|floatformat:0 }}
+                {% else %}
+                  On budget
+                {% endif %}
+              </p>
+              {% endif %}
+              {% else %}
+              <p class="text-xl text-muted-foreground">TBD</p>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+        <!-- Status Timeline -->
+        <div class="bg-card border border-border rounded-lg p-6">
+          <div class="flex items-center gap-2 mb-4">
+            <i data-lucide="activity" class="w-5 h-5 text-primary"></i>
+            <h3 class="text-lg font-semibold text-card-foreground">Status</h3>
+          </div>
+          <div class="space-y-3">
+            <div class="flex items-center gap-3">
+              {% if request.status == 'completed' %}
+              <div class="w-10 h-10 rounded-full bg-green-500/10 border border-green-500/20 flex items-center justify-center">
+                <i data-lucide="check-circle" class="w-5 h-5 text-green-600 dark:text-green-400"></i>
+              </div>
+              {% elif request.status == 'in_progress' %}
+              <div class="w-10 h-10 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
+                <i data-lucide="loader" class="w-5 h-5 text-blue-600 dark:text-blue-400"></i>
+              </div>
+              {% elif request.status == 'cancelled' %}
+              <div class="w-10 h-10 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                <i data-lucide="x-circle" class="w-5 h-5 text-red-600 dark:text-red-400"></i>
+              </div>
+              {% else %}
+              <div class="w-10 h-10 rounded-full bg-yellow-500/10 border border-yellow-500/20 flex items-center justify-center">
+                <i data-lucide="clock" class="w-5 h-5 text-yellow-600 dark:text-yellow-400"></i>
+              </div>
+              {% endif %}
+              <div>
+                <p class="font-medium text-card-foreground">{{ request.get_status_display }}</p>
+                <p class="text-sm text-muted-foreground">Current status</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="bg-card border border-border rounded-lg p-6">
+          <div class="flex items-center gap-2 mb-4">
+            <i data-lucide="zap" class="w-5 h-5 text-primary"></i>
+            <h3 class="text-lg font-semibold text-card-foreground">Quick Actions</h3>
+          </div>
+          <div class="space-y-2">
+            <a href="{% url 'rentals:maintenance-update' request.pk %}" class="flex items-center justify-center gap-2 w-full bg-primary text-primary-foreground hover:bg-primary/90 py-2 rounded-md transition-colors">
+              <i data-lucide="edit" class="w-4 h-4"></i>
+              Update Request
+            </a>
+            <a href="{% url 'rentals:property-detail' request.property.pk %}" class="flex items-center justify-center gap-2 w-full bg-muted text-muted-foreground hover:bg-accent py-2 rounded-md border border-border transition-colors">
+              <i data-lucide="home" class="w-4 h-4"></i>
+              View Property
+            </a>
+            {% if request.tenant %}
+            <a href="{% url 'rentals:tenant-detail' request.tenant.pk %}" class="flex items-center justify-center gap-2 w-full bg-muted text-muted-foreground hover:bg-accent py-2 rounded-md border border-border transition-colors">
+              <i data-lucide="user" class="w-4 h-4"></i>
+              View Tenant
+            </a>
+            {% endif %}
+            <a href="{% url 'rentals:maintenance-list' %}" class="flex items-center justify-center gap-2 w-full bg-muted text-muted-foreground hover:bg-accent py-2 rounded-md border border-border transition-colors">
+              <i data-lucide="arrow-left" class="w-4 h-4"></i>
+              Back to Maintenance
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

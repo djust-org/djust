@@ -1,0 +1,61 @@
+{% extends 'base.html' %}
+
+{% block title %}Auto Form (Tailwind) - djust{% endblock %}
+
+{% block nav_forms_active %}active{% endblock %}
+
+{% block extra_styles %}
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+body { background: #f3f4f6; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 mt-8 max-w-2xl">
+    <div class="bg-white rounded-lg shadow-lg p-6">
+        <h2 class="text-2xl font-bold text-gray-800 mb-2">Contact Form - Tailwind CSS</h2>
+        <p class="text-gray-600 mb-6">Auto-rendered using Tailwind framework adapter</p>
+
+        {% if success_message %}
+        <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4">
+            {{ success_message }}
+            <button type="button" class="float-right" @click="clear_message">&times;</button>
+        </div>
+        {% endif %}
+
+        {% if error_message %}
+        <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+            {{ error_message }}
+            <button type="button" class="float-right" @click="clear_message">&times;</button>
+        </div>
+        {% endif %}
+
+        <form @submit="submit_form" onsubmit="return false;">
+            {% csrf_token %}
+
+            <!-- Auto-rendered form using Tailwind adapter -->
+            {{ auto_form_html }}
+
+            <div class="space-y-2 mt-4">
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+                    Send Message
+                </button>
+                <button type="button" class="w-full bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded" @click="reset_form">
+                    Reset
+                </button>
+            </div>
+        </form>
+
+        <div class="mt-6 bg-blue-50 p-4 rounded">
+            <h5 class="font-bold text-gray-800 mb-2">Tailwind CSS Features:</h5>
+            <ul class="text-sm text-gray-600 space-y-1">
+                <li>• Utility-first CSS classes</li>
+                <li>• Responsive design built-in</li>
+                <li>• Modern form styling</li>
+                <li>• Auto-rendered with as_live(framework='tailwind')</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}

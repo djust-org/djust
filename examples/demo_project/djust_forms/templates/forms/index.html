@@ -1,0 +1,189 @@
+{% extends 'base.html' %}
+
+{% block title %}Forms - djust{% endblock %}
+
+{% block nav_forms_active %}active{% endblock %}
+
+{% block extra_styles %}
+.hero-section {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 2rem 0;
+    margin-bottom: 3rem;
+}
+{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<div class="hero-section">
+    <div class="container">
+        <h1 class="display-4">Django Forms Integration</h1>
+        <p class="lead">
+            Comprehensive forms integration with djust, featuring real-time validation,
+            error handling, and seamless LiveView integration.
+        </p>
+    </div>
+</div>
+
+<div class="container">
+    <div class="row">
+        <!-- Registration Form -->
+        <div class="col-md-6 mb-4">
+            <div class="demo-card">
+                <h3>
+                    <span class="badge bg-primary">Demo</span>
+                    Registration Form
+                </h3>
+                <p>
+                    User registration with password matching, username validation,
+                    and terms acceptance. Demonstrates field-level validation.
+                </p>
+                <ul class="list-unstyled">
+                    <li>✓ Real-time field validation</li>
+                    <li>✓ Password matching</li>
+                    <li>✓ Custom clean methods</li>
+                    <li>✓ Checkbox validation</li>
+                </ul>
+                <a href="/forms/registration/" class="btn btn-primary">Try Demo</a>
+            </div>
+        </div>
+
+        <!-- Contact Form -->
+        <div class="col-md-6 mb-4">
+            <div class="demo-card">
+                <h3>
+                    <span class="badge bg-success">Demo</span>
+                    Contact Form
+                </h3>
+                <p>
+                    Contact form with dropdowns, radio buttons, and text areas.
+                    Shows various field types working together.
+                </p>
+                <ul class="list-unstyled">
+                    <li>✓ Select dropdowns</li>
+                    <li>✓ Radio buttons</li>
+                    <li>✓ Text areas</li>
+                    <li>✓ Spam detection</li>
+                </ul>
+                <a href="/forms/contact/" class="btn btn-success">Try Demo</a>
+            </div>
+        </div>
+
+        <!-- Profile Form -->
+        <div class="col-md-6 mb-4">
+            <div class="demo-card">
+                <h3>
+                    <span class="badge bg-info">Demo</span>
+                    Profile Form
+                </h3>
+                <p>
+                    Profile editing with dates, URLs, and optional fields.
+                    Demonstrates complex field types and validation.
+                </p>
+                <ul class="list-unstyled">
+                    <li>✓ Date fields</li>
+                    <li>✓ URL validation</li>
+                    <li>✓ Phone validation</li>
+                    <li>✓ Optional fields</li>
+                </ul>
+                <a href="/forms/profile/" class="btn btn-info text-white">Try Demo</a>
+            </div>
+        </div>
+
+        <!-- Auto-Rendered Form -->
+        <div class="col-md-6 mb-4">
+            <div class="demo-card">
+                <h3>
+                    <span class="badge bg-warning text-dark">NEW</span>
+                    Auto-Rendered Forms
+                </h3>
+                <p>
+                    Automatic form rendering with framework-specific styling.
+                    Zero manual HTML - choose your CSS framework!
+                </p>
+                <ul class="list-unstyled">
+                    <li>✓ Auto-rendered fields</li>
+                    <li>✓ 3 CSS frameworks (Bootstrap, Tailwind, Plain)</li>
+                    <li>✓ Built-in validation</li>
+                    <li>✓ One method call</li>
+                </ul>
+                    <a href="/forms/auto/compare/" class="btn btn-warning text-dark d-block mb-2">Compare Frameworks</a>
+                    <div class="d-flex gap-2">
+                        <a href="/forms/auto/" class="btn btn-sm btn-outline-primary">Bootstrap</a>
+                        <a href="/forms/auto/tailwind/" class="btn btn-sm btn-outline-info">Tailwind</a>
+                        <a href="/forms/auto/plain/" class="btn btn-sm btn-outline-secondary">Plain</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Features -->
+        <div class="col-md-6 mb-4">
+            <div class="card h-100 shadow-sm bg-light">
+                <div class="card-body">
+                    <h3 class="card-title">Features</h3>
+                    <ul class="list-unstyled">
+                        <li class="mb-2">
+                            <strong>Real-time Validation:</strong> Fields validate as you type
+                        </li>
+                        <li class="mb-2">
+                            <strong>Django Forms:</strong> Uses actual Django forms on backend
+                        </li>
+                        <li class="mb-2">
+                            <strong>LiveView Integration:</strong> Seamless reactive updates
+                        </li>
+                        <li class="mb-2">
+                            <strong>Error Display:</strong> Clear, Bootstrap-styled errors
+                        </li>
+                        <li class="mb-2">
+                            <strong>Form Helpers:</strong> Easy field rendering
+                        </li>
+                        <li class="mb-2">
+                            <strong>Custom Validation:</strong> Field and form-level validation
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-4 mb-5">
+        <div class="col-12">
+            <div class="card border-primary">
+                <div class="card-header bg-primary text-white">
+                    <h4 class="mb-0">Documentation</h4>
+                </div>
+                <div class="card-body">
+                    <h5>Using FormMixin in Your Views</h5>
+                    <pre class="bg-light p-3 rounded"><code>from djust import LiveView, FormMixin
+from django import forms
+
+class MyForm(forms.Form):
+    name = forms.CharField(max_length=100)
+    email = forms.EmailField()
+
+class MyFormView(FormMixin, LiveView):
+    form_class = MyForm
+
+    def form_valid(self, form):
+        # Handle valid form submission
+        self.success_message = "Form submitted!"
+
+    def form_invalid(self, form):
+        # Handle errors
+        self.error_message = "Please fix errors"</code></pre>
+
+                    <h5 class="mt-4">Template Usage</h5>
+                    <pre class="bg-light p-3 rounded"><code>&lt;form @submit="submit_form"&gt;
+    &lt;input name="name" @change="validate_field" data-field="name" /&gt;
+    {% templatetag openblock %} if field_errors.name {% templatetag closeblock %}
+        &lt;div class="error"&gt;{% templatetag openvariable %} field_errors.name {% templatetag closevariable %}&lt;/div&gt;
+    {% templatetag openblock %} endif {% templatetag closeblock %}
+    &lt;button type="submit"&gt;Submit&lt;/button&gt;
+&lt;/form&gt;</code></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

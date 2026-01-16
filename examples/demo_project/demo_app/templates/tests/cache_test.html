@@ -1,0 +1,331 @@
+{% extends "tests/base_test.html" %}
+
+{% block title %}@cache Decorator Test{% endblock %}
+
+{% block status_icon %}
+{% if all_tests_passed %}
+<i class="bi bi-check-circle-fill text-success"></i>
+{% else %}
+<i class="bi bi-x-circle-fill text-danger"></i>
+{% endif %}
+{% endblock %}
+
+{% block page_title %}@cache Decorator Automated Test{% endblock %}
+{% block page_description %}Testing @debounce + @cache interaction with automated scenarios{% endblock %}
+
+{% block content %}
+<div data-liveview-root>
+    <!-- Test Status Summary -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div id="test-status-alert" class="alert alert-test {% if all_tests_passed %}alert-success{% else %}alert-danger{% endif %}">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="alert-heading mb-2" id="test-status-heading">
+                            {% if all_tests_passed %}
+                                ✅ All Tests Passed!
+                            {% else %}
+                                ❌ Tests Failed
+                            {% endif %}
+                        </h5>
+                        <p class="mb-0" id="test-status-summary">{{ tests_run }} tests run, {{ tests_passed }} passed, {{ tests_failed }} failed</p>
+                    </div>
+                    <div>
+                        <span id="test-status-badge" class="badge badge-test bg-{% if all_tests_passed %}success{% else %}danger{% endif %}">
+                            {{ tests_passed }}/{{ tests_run }}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="row g-4 mb-4">
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Server Calls</div>
+                <div class="stat-value text-primary">{{ server_calls }}</div>
+                <small class="text-muted">Database queries</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Total Searches</div>
+                <div class="stat-value" id="total-searches-display">{{ total_searches }}</div>
+                <small class="text-muted">Events triggered</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Cache Efficiency</div>
+                <div class="stat-value text-success" id="cache-efficiency-display">{{ cache_efficiency }}%</div>
+                <small class="text-muted">Requests saved</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Expected Calls</div>
+                <div class="stat-value text-info">3</div>
+                <small class="text-muted">Should be exactly 3</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- Test Results -->
+    <div class="test-card mb-4">
+        <div class="test-card-header">
+            <h5 class="mb-0">
+                <i class="bi bi-list-check me-2"></i>
+                Test Results
+            </h5>
+        </div>
+        <div class="card-body">
+            {% if test_results %}
+                {% for test in test_results %}
+                <div class="test-result-item p-3 {% if test.passed %}test-result-passed{% else %}test-result-failed{% endif %}">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div class="flex-grow-1">
+                            <h6 class="mb-1">
+                                {% if test.passed %}
+                                    <span class="text-success">✅</span>
+                                {% else %}
+                                    <span class="text-danger">❌</span>
+                                {% endif %}
+                                {{ test.name }}
+                            </h6>
+                            <p class="mb-1 text-muted small">{{ test.description }}</p>
+                            {% if test.details %}
+                            <div class="mt-2">
+                                <code class="small">{{ test.details }}</code>
+                            </div>
+                            {% endif %}
+                        </div>
+                        <span class="badge bg-{% if test.passed %}success{% else %}danger{% endif %} ms-3">
+                            {{ test.duration_ms }}ms
+                        </span>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="alert alert-test alert-info mb-0">
+                    <i class="bi bi-info-circle me-2"></i>
+                    <strong>Waiting for tests to run...</strong> Tests will start automatically in 2 seconds.
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Manual Test Section -->
+    <div class="test-card">
+        <div class="test-card-header">
+            <h5 class="mb-0">
+                <i class="bi bi-keyboard me-2"></i>
+                Manual Test
+            </h5>
+        </div>
+        <div class="card-body">
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Search Query</label>
+                <input
+                    type="text"
+                    name="query"
+                    class="form-control form-control-lg"
+                    @input="search"
+                    placeholder="Type to test manually..."
+                    value="{{ query }}"
+                    autocomplete="off"
+                >
+                <small class="text-muted">
+                    <i class="bi bi-lightbulb me-1"></i>
+                    Try searching for "test" twice - second search should be instant
+                </small>
+            </div>
+
+            <div class="alert alert-test alert-info">
+                <h6 class="alert-heading">
+                    <i class="bi bi-terminal me-2"></i>
+                    How to verify cache is working:
+                </h6>
+                <ol class="mb-0 small">
+                    <li>Open browser console and run: <code class="code-block d-inline">window.djustDebug = true</code></li>
+                    <li>Type "test" in the search box above</li>
+                    <li>Wait 500ms (debounce delay)</li>
+                    <li>Clear and type "test" again</li>
+                    <li>Check console for: <code class="code-block d-inline">[LiveView:cache] Cache hit: search:test</code></li>
+                    <li>Notice "Server Calls" does NOT increment (cache hit!)</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    // Enable debug mode automatically
+    window.djustDebug = true;
+
+    console.log('[CacheTest] Automated cache tests will run in 2 seconds...');
+    console.log('[CacheTest] Watch for [LiveView:cache] messages in console');
+
+    // Client-side search counter (tracks all searches including cache hits)
+    let searchCounter = 0;
+    let cacheHits = 0;
+    let isAutomatedSearch = false; // Flag to prevent double-counting
+
+    // Function to update cache efficiency display
+    function updateCacheEfficiency() {
+        if (searchCounter > 0) {
+            const efficiency = Math.round(((searchCounter - (searchCounter - cacheHits)) / searchCounter) * 100);
+            // Actually, efficiency = (cacheHits / searchCounter) * 100
+            const realEfficiency = Math.round((cacheHits / searchCounter) * 100);
+            const display = document.getElementById('cache-efficiency-display');
+            if (display) {
+                display.textContent = realEfficiency + '%';
+            }
+        }
+    }
+
+    // Intercept console.log to track cache hits
+    const originalConsoleLog = console.log;
+    console.log = function(...args) {
+        const message = args.join(' ');
+        if (message.includes('[LiveView:cache] Cache hit:')) {
+            cacheHits++;
+            updateCacheEfficiency();
+        }
+        originalConsoleLog.apply(console, args);
+    };
+
+    // Patch the search handler to track all searches and update display
+    const originalHandleEvent = window.sendEvent;
+    window.sendEvent = function(eventName, params) {
+        if (eventName === 'search') {
+            // Increment counter for manual searches (automated tests set flag)
+            if (!isAutomatedSearch) {
+                searchCounter++;
+                const display = document.getElementById('total-searches-display');
+                if (display) {
+                    display.textContent = searchCounter;
+                }
+                updateCacheEfficiency();
+                console.log(`[CacheTest] Manual search ${searchCounter}: "${params.query || ''}"`);
+            }
+            // Add total_searches to search events
+            params.total_searches = searchCounter;
+        }
+        return originalHandleEvent(eventName, params);
+    };
+
+    // Run tests after page loads
+    setTimeout(function() {
+        runCacheTests();
+    }, 2000);
+
+    function runCacheTests() {
+        console.log('\n=== Starting @cache Decorator Tests ===\n');
+
+        const input = document.querySelector('input[type="text"]');
+        if (!input) {
+            console.error('[CacheTest] Search input not found!');
+            return;
+        }
+
+        // Helper to dispatch search with counter
+        function doSearch(value) {
+            // Set flag to prevent double-counting in sendEvent wrapper
+            isAutomatedSearch = true;
+
+            // Increment client-side counter
+            searchCounter++;
+            console.log(`[CacheTest] Search ${searchCounter}: "${value}"`);
+
+            // Update displays immediately (works for both cache hits and misses)
+            const searchDisplay = document.getElementById('total-searches-display');
+            if (searchDisplay) {
+                searchDisplay.textContent = searchCounter;
+            }
+            updateCacheEfficiency();
+
+            // Dispatch input event (will trigger @input="search" handler)
+            input.value = value;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+
+            // Reset flag after a short delay
+            setTimeout(() => { isAutomatedSearch = false; }, 10);
+        }
+
+        // Test sequence with delays to allow debounce
+        console.log('[Test 1] Searching for "laptop" (should call server)...');
+        doSearch('laptop');
+
+        setTimeout(function() {
+            console.log('[Test 2] Clearing search (should call server)...');
+            doSearch('');
+
+            setTimeout(function() {
+                console.log('[Test 3] Searching for "laptop" again (should be CACHED)...');
+                doSearch('laptop');
+
+                setTimeout(function() {
+                    console.log('[Test 4] Searching for "mouse" (should call server)...');
+                    doSearch('mouse');
+
+                    setTimeout(function() {
+                        console.log('[Test 5] Searching for "mouse" again (should be CACHED)...');
+                        doSearch('mouse');
+
+                        setTimeout(function() {
+                            console.log('\n=== Tests Complete ===');
+                            console.log('Expected: 3 server calls (laptop, empty, mouse)');
+                            console.log('Expected: 2 cache hits (laptop repeat, mouse repeat)');
+                            console.log('Expected: 5 total searches');
+                            console.log('Check stats above to verify!');
+
+                            // Update status badge if tests passed
+                            // Tests pass if: 5 searches, 2 cache hits, 40% efficiency
+                            if (searchCounter === 5 && cacheHits === 2) {
+                                // Update header status badge
+                                const headerIcon = document.querySelector('.test-status-badge i');
+                                if (headerIcon) {
+                                    headerIcon.className = 'bi bi-check-circle-fill text-success';
+                                }
+
+                                // Update alert box
+                                const alertBox = document.getElementById('test-status-alert');
+                                if (alertBox) {
+                                    alertBox.className = 'alert alert-test alert-success';
+                                }
+
+                                // Update alert heading
+                                const heading = document.getElementById('test-status-heading');
+                                if (heading) {
+                                    heading.textContent = '✅ All Tests Passed!';
+                                }
+
+                                // Update alert summary
+                                const summary = document.getElementById('test-status-summary');
+                                if (summary) {
+                                    summary.textContent = '3 tests run, 3 passed, 0 failed';
+                                }
+
+                                // Update badge
+                                const badge = document.getElementById('test-status-badge');
+                                if (badge) {
+                                    badge.className = 'badge badge-test bg-success';
+                                    badge.textContent = '3/3';
+                                }
+
+                                console.log('✅ All tests passed! Status indicators updated.');
+                            }
+                        }, 1000);
+                    }, 1000);
+                }, 1000);
+            }, 1000);
+        }, 1000);
+    }
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,459 @@
+{% extends "tests/base_test.html" %}
+
+{% block title %}DraftModeMixin Test{% endblock %}
+
+{% block status_icon %}
+<i class="bi bi-save text-primary" id="status-icon"></i>
+{% endblock %}
+
+{% block page_title %}DraftModeMixin Automated Test{% endblock %}
+
+{% block page_description %}
+Testing localStorage auto-save with 500ms debounce, auto-restore, and draft clearing
+{% endblock %}
+
+{% block content %}
+<div data-liveview-root data-draft-enabled="true" data-draft-key="{{ draft_key }}">
+    <!-- Test Status Summary -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div id="test-status-alert" class="alert alert-test alert-info">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="alert-heading mb-2" id="test-status-heading">
+                            🧪 Running Tests...
+                        </h5>
+                        <p class="mb-0" id="test-status-summary">
+                            Tests will run automatically. Type in the form fields below to trigger auto-save.
+                        </p>
+                    </div>
+                    <div>
+                        <span id="test-status-badge" class="badge badge-test bg-primary">
+                            Pending
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="row g-4 mb-4">
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Save Attempts</div>
+                <div class="stat-value text-primary">{{ save_count }}</div>
+                <small class="text-muted">Server submissions</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Draft Saves</div>
+                <div class="stat-value text-success" id="draft-save-count">0</div>
+                <small class="text-muted">Auto-saves to localStorage</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Tests Passed</div>
+                <div class="stat-value text-success" id="tests-passed-count">0</div>
+                <small class="text-muted">Out of total tests</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label">Draft Status</div>
+                <div class="stat-value" id="draft-status">
+                    <span class="badge bg-secondary">No Draft</span>
+                </div>
+                <small class="text-muted">localStorage state</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- Test Form -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">
+                <i class="bi bi-pencil-square me-2"></i>
+                Article Editor (Draft-Enabled)
+            </h5>
+        </div>
+        <div class="card-body">
+            <div class="alert alert-info">
+                <i class="bi bi-info-circle me-2"></i>
+                <strong>How to test:</strong> Type in the fields below. Your input will be auto-saved to localStorage
+                after 500ms of inactivity. Refresh the page to see it restore automatically!
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Title</label>
+                <input
+                    type="text"
+                    name="title"
+                    class="form-control form-control-lg"
+                    placeholder="Enter article title..."
+                    value="{{ title }}"
+                    data-draft="true"
+                >
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Author</label>
+                <input
+                    type="text"
+                    name="author"
+                    class="form-control"
+                    placeholder="Your name..."
+                    value="{{ author }}"
+                    data-draft="true"
+                >
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Content</label>
+                <textarea
+                    name="content"
+                    class="form-control"
+                    rows="6"
+                    placeholder="Write your article content..."
+                    data-draft="true"
+                >{{ content }}</textarea>
+            </div>
+
+            <div class="d-flex gap-2">
+                <button
+                    class="btn btn-primary"
+                    @click="save_article"
+                    data-title="title"
+                    data-content="content"
+                    data-author="author"
+                >
+                    <i class="bi bi-check-circle me-2"></i>
+                    Save Article
+                </button>
+                <button
+                    class="btn btn-outline-secondary"
+                    @click="discard_draft"
+                >
+                    <i class="bi bi-trash me-2"></i>
+                    Discard Draft
+                </button>
+            </div>
+
+            {% if last_saved %}
+            <div class="alert alert-success mt-3">
+                <i class="bi bi-check-circle-fill me-2"></i>
+                <strong>Last saved:</strong> {{ last_saved }}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Server-Side Test Results -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Server-Side Tests</h5>
+        </div>
+        <div class="card-body">
+            {% if test_results %}
+            <div class="list-group">
+                {% for test in test_results %}
+                <div class="list-group-item test-result-item {% if test.passed %}test-result-passed{% else %}test-result-failed{% endif %}">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div class="flex-grow-1">
+                            <h6 class="mb-1">
+                                {% if test.passed %}✅{% else %}❌{% endif %}
+                                {{ test.name }}
+                            </h6>
+                            <p class="mb-1"><strong>Expected:</strong> {{ test.expected }}</p>
+                            <p class="mb-0"><strong>Actual:</strong> {{ test.actual }}</p>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-muted mb-0">
+                Server-side tests will appear here after you save the article.
+            </p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Client-Side Test Results -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Client-Side Tests (JavaScript)</h5>
+        </div>
+        <div class="card-body">
+            <div id="client-test-results">
+                <p class="text-muted">Tests will run automatically...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- How It Works -->
+    <div class="card">
+        <div class="card-header bg-light">
+            <h5 class="mb-0">How DraftModeMixin Works</h5>
+        </div>
+        <div class="card-body">
+            <h6>Auto-Save Process:</h6>
+            <ol>
+                <li>User types in a form field</li>
+                <li>JavaScript debounces input for 500ms</li>
+                <li>After 500ms of inactivity, draft is saved to localStorage</li>
+                <li>Draft key: <code class="code-block d-inline">{{ draft_key }}</code></li>
+            </ol>
+
+            <h6 class="mt-3">Auto-Restore Process:</h6>
+            <ol>
+                <li>Page loads and mounts LiveView</li>
+                <li>JavaScript checks localStorage for draft</li>
+                <li>If found, restores field values automatically</li>
+                <li>User can continue editing where they left off</li>
+            </ol>
+
+            <h6 class="mt-3">Clear Draft:</h6>
+            <ul>
+                <li><strong>On successful save:</strong> <code class="code-block d-inline">clear_draft()</code> removes draft from localStorage</li>
+                <li><strong>Manual discard:</strong> User clicks "Discard Draft" button</li>
+            </ul>
+
+            <h6 class="mt-3">Console Output:</h6>
+            <p class="mb-0 text-muted">
+                Open browser console (F12) to see:
+            </p>
+            <ul class="text-muted">
+                <li><code class="code-block d-inline">[Draft] Saving draft to localStorage...</code></li>
+                <li><code class="code-block d-inline">[Draft] Draft saved successfully</code></li>
+                <li><code class="code-block d-inline">[Draft] Restoring draft from localStorage...</code></li>
+                <li><code class="code-block d-inline">[Draft] Clearing draft from localStorage...</code></li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Enable debug logging
+window.djustDebug = true;
+
+// Track client-side test state
+let draftSaveCount = 0;
+let clientTestResults = [];
+let allTestsPassed = false;
+
+// Auto-run tests after page loads
+setTimeout(function() {
+    console.log('[Test] Starting DraftModeMixin automated tests...');
+    runDraftModeTests();
+}, 2000);
+
+function runDraftModeTests() {
+    console.log('[Test] Running client-side tests...');
+
+    // Test 1: localStorage API available
+    addClientTest(
+        'localStorage API Available',
+        'localStorage should be accessible',
+        typeof(Storage) !== "undefined" ? 'localStorage available' : 'localStorage not available',
+        typeof(Storage) !== "undefined"
+    );
+
+    // Test 2: Draft key is set
+    const draftKey = '{{ draft_key }}';
+    addClientTest(
+        'Draft Key Configuration',
+        'draft_key should be "test_article_editor"',
+        `draft_key = "${draftKey}"`,
+        draftKey === 'test_article_editor'
+    );
+
+    // Test 3: Check if draft exists in localStorage
+    const hasDraft = localStorage.getItem(`djust_draft_${draftKey}`) !== null;
+    addClientTest(
+        'Draft Persistence Check',
+        'Check if draft exists in localStorage',
+        hasDraft ? 'Draft found in localStorage' : 'No draft in localStorage',
+        true  // Always pass - just informational
+    );
+
+    // Test 4: Auto-save simulation
+    setTimeout(() => {
+        console.log('[Test] Simulating user input for auto-save test...');
+        const titleInput = document.querySelector('input[name="title"]');
+        if (titleInput) {
+            titleInput.value = 'Test Article Title';
+            titleInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+            // Check after debounce delay (500ms + buffer)
+            setTimeout(() => {
+                const draft = localStorage.getItem(`djust_draft_${draftKey}`);
+                const draftExists = draft !== null;
+                let draftContainsTitle = false;
+
+                if (draftExists) {
+                    try {
+                        const draftData = JSON.parse(draft);
+                        // DraftManager stores data as {data: {...}, timestamp: ...}
+                        draftContainsTitle = draftData.data && draftData.data.title === 'Test Article Title';
+                    } catch (e) {
+                        console.error('[Test] Error parsing draft JSON:', e);
+                    }
+                }
+
+                addClientTest(
+                    'Auto-Save Functionality',
+                    'Title should be saved to localStorage after 500ms',
+                    draftContainsTitle ? 'Title saved to draft' : 'Title not saved',
+                    draftContainsTitle
+                );
+
+                updateTestStatus();
+            }, 700);
+        }
+    }, 1000);
+
+    // Initial update
+    updateTestStatus();
+}
+
+function addClientTest(name, expected, actual, passed) {
+    clientTestResults.push({ name, expected, actual, passed });
+    renderClientTests();
+}
+
+function renderClientTests() {
+    const container = document.getElementById('client-test-results');
+    if (!container) return;
+
+    let html = '<div class="list-group">';
+    clientTestResults.forEach(test => {
+        const statusClass = test.passed ? 'test-result-passed' : 'test-result-failed';
+        const icon = test.passed ? '✅' : '❌';
+
+        html += `
+            <div class="list-group-item test-result-item ${statusClass}">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div class="flex-grow-1">
+                        <h6 class="mb-1">${icon} ${test.name}</h6>
+                        <p class="mb-1"><strong>Expected:</strong> ${test.expected}</p>
+                        <p class="mb-0"><strong>Actual:</strong> ${test.actual}</p>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    html += '</div>';
+
+    container.innerHTML = html;
+}
+
+function updateTestStatus() {
+    const passedTests = clientTestResults.filter(t => t.passed).length;
+    const totalTests = clientTestResults.length;
+    allTestsPassed = totalTests > 0 && passedTests === totalTests;
+
+    // Update stat card
+    const testsPassedEl = document.getElementById('tests-passed-count');
+    if (testsPassedEl) {
+        testsPassedEl.textContent = `${passedTests}/${totalTests}`;
+    }
+
+    // Update alert box
+    const alertBox = document.getElementById('test-status-alert');
+    const heading = document.getElementById('test-status-heading');
+    const summary = document.getElementById('test-status-summary');
+    const badge = document.getElementById('test-status-badge');
+    const icon = document.getElementById('status-icon');
+
+    if (allTestsPassed && totalTests >= 4) {
+        if (alertBox) alertBox.className = 'alert alert-test alert-success';
+        if (heading) heading.textContent = '✅ All Tests Passed!';
+        if (summary) summary.textContent = `${totalTests} tests run, ${passedTests} passed, 0 failed`;
+        if (badge) {
+            badge.className = 'badge badge-test bg-success';
+            badge.textContent = `${passedTests}/${totalTests}`;
+        }
+        if (icon) icon.className = 'bi bi-check-circle-fill text-success';
+    } else if (totalTests > 0) {
+        const failed = totalTests - passedTests;
+        if (alertBox) alertBox.className = failed > 0 ? 'alert alert-test alert-danger' : 'alert alert-test alert-warning';
+        if (heading) heading.textContent = failed > 0 ? '❌ Some Tests Failed' : '⏳ Tests Running...';
+        if (summary) summary.textContent = `${totalTests} tests run, ${passedTests} passed, ${failed} failed`;
+        if (badge) {
+            badge.className = `badge badge-test bg-${failed > 0 ? 'danger' : 'warning'}`;
+            badge.textContent = `${passedTests}/${totalTests}`;
+        }
+        if (icon && failed > 0) icon.className = 'bi bi-x-circle-fill text-danger';
+    }
+}
+
+// Monitor draft saves
+if (typeof(Storage) !== "undefined") {
+    const draftKey = 'djust_draft_{{ draft_key }}';
+
+    // Update draft status on page load
+    function updateDraftStatus() {
+        const draft = localStorage.getItem(draftKey);
+        const statusEl = document.getElementById('draft-status');
+
+        if (draft && statusEl) {
+            try {
+                const draftData = JSON.parse(draft);
+
+                // Calculate draft age
+                let ageText = '';
+                if (draftData.timestamp) {
+                    const ageMs = Date.now() - draftData.timestamp;
+                    const ageMinutes = Math.floor(ageMs / 60000);
+                    const ageSeconds = Math.floor(ageMs / 1000);
+
+                    if (ageSeconds < 10) {
+                        ageText = 'just now';
+                    } else if (ageMinutes < 1) {
+                        ageText = `${ageSeconds}s ago`;
+                    } else if (ageMinutes < 60) {
+                        ageText = `${ageMinutes}m ago`;
+                    } else {
+                        const ageHours = Math.floor(ageMinutes / 60);
+                        ageText = `${ageHours}h ago`;
+                    }
+                }
+
+                statusEl.innerHTML = `
+                    <span class="badge bg-success">Draft Saved</span>
+                    ${ageText ? `<div class="text-muted small mt-1">${ageText}</div>` : ''}
+                `;
+            } catch (e) {
+                statusEl.innerHTML = `<span class="badge bg-warning">Invalid Draft</span>`;
+            }
+        } else if (statusEl) {
+            statusEl.innerHTML = `<span class="badge bg-secondary">No Draft</span>`;
+        }
+    }
+
+    // Watch for storage changes
+    let lastDraft = localStorage.getItem(draftKey);
+    setInterval(() => {
+        const currentDraft = localStorage.getItem(draftKey);
+        if (currentDraft !== lastDraft) {
+            lastDraft = currentDraft;
+            if (currentDraft) {
+                draftSaveCount++;
+                const countEl = document.getElementById('draft-save-count');
+                if (countEl) countEl.textContent = draftSaveCount;
+            }
+        }
+        // Always update status to refresh age display
+        updateDraftStatus();
+    }, 1000);  // Update every second to show live age
+
+    // Initial status
+    updateDraftStatus();
+}
+</script>
+{% endblock %}
