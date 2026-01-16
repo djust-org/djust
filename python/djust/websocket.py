@@ -758,6 +758,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             "get_stats": {"ttl": 60, "key_params": []}
         }
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         if not self.view_instance:
             return {}
 
@@ -778,9 +781,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             'ttl': cache_info.get('ttl', 60),
                             'key_params': cache_info.get('key_params', [])
                         }
-            except Exception:
-                # Skip any methods that can't be inspected
-                pass
+            except Exception as e:
+                # Skip methods that can't be inspected, but log for debugging
+                logger.debug(f"Could not inspect method '{name}' for cache config: {e}")
 
         return cache_config
 

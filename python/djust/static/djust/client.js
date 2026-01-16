@@ -17,7 +17,11 @@ function handleServerResponse(data, eventName, triggerElement) {
     try {
         // Handle cache storage (from @cache decorator)
         if (data.cache_request_id && pendingCacheRequests.has(data.cache_request_id)) {
-            const { cacheKey, ttl } = pendingCacheRequests.get(data.cache_request_id);
+            const { cacheKey, ttl, timeoutId } = pendingCacheRequests.get(data.cache_request_id);
+            // Clear the cleanup timeout since we received a response
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
             const expiresAt = Date.now() + (ttl * 1000);
             addToCache(cacheKey, {
                 patches: data.patches,
@@ -478,8 +482,9 @@ const throttleState = new Map();  // Map<handlerName, {lastCall, timeoutId, pend
 const optimisticUpdates = new Map(); // Map<eventName, {element, originalState}>
 const pendingEvents = new Set(); // Set<eventName> (for loading indicators)
 const resultCache = new Map(); // Map<cacheKey, {patches, expiresAt}>
-const pendingCacheRequests = new Map(); // Map<requestId, {cacheKey, ttl}>
+const pendingCacheRequests = new Map(); // Map<requestId, {cacheKey, ttl, timeoutId}>
 const CACHE_MAX_SIZE = 100; // Maximum number of cached entries (LRU eviction)
+const PENDING_CACHE_TIMEOUT = 30000; // Cleanup pending cache requests after 30 seconds
 
 // Cache configuration from server (event_name -> {ttl, key_params})
 const cacheConfig = new Map();
@@ -528,11 +533,20 @@ window.djust.setCacheConfig = setCacheConfig;
 window.setCacheConfig = setCacheConfig;
 
 /**
- * Build a cache key from event name and parameters
+ * Build a cache key from event name and parameters.
+ *
+ * Cache keys are deterministic: the same event name + params will always produce
+ * the same key. This is intentional - it allows caching across repeated requests.
+ *
+ * Note: Cache keys are global across all views. If two different views have handlers
+ * with the same name and are called with the same params, they will share cache entries.
+ * This is typically fine since event handler names are usually unique per view, but
+ * use key_params in the @cache decorator to disambiguate if needed.
+ *
  * @param {string} eventName - The event handler name
  * @param {Object} params - Event parameters
  * @param {Array<string>} keyParams - Which params to include in key (if specified)
- * @returns {string} Cache key
+ * @returns {string} Cache key in format "eventName:param1=value1:param2=value2"
  */
 function buildCacheKey(eventName, params, keyParams = null) {
     // Filter out internal params (starting with _)
@@ -584,6 +598,54 @@ function getCachedResult(cacheKey) {
     }
     return null;
 }
+
+/**
+ * Clear all cached results.
+ * Useful when data has changed and cached responses are stale.
+ */
+function clearCache() {
+    const size = resultCache.size;
+    resultCache.clear();
+    if (globalThis.djustDebug) {
+        console.log(`[LiveView:cache] Cleared all ${size} cached entries`);
+    }
+}
+
+/**
+ * Invalidate cache entries matching a pattern.
+ * @param {string|RegExp} pattern - Event name prefix or regex to match against cache keys
+ * @returns {number} Number of entries invalidated
+ *
+ * @example
+ * // Invalidate all cache entries for "search" handler
+ * window.djust.invalidateCache('search');
+ *
+ * @example
+ * // Invalidate using regex pattern
+ * window.djust.invalidateCache(/^user_/);
+ */
+function invalidateCache(pattern) {
+    let count = 0;
+    const isRegex = pattern instanceof RegExp;
+
+    for (const key of resultCache.keys()) {
+        const matches = isRegex ? pattern.test(key) : key.startsWith(pattern);
+        if (matches) {
+            resultCache.delete(key);
+            count++;
+        }
+    }
+
+    if (globalThis.djustDebug) {
+        console.log(`[LiveView:cache] Invalidated ${count} entries matching: ${pattern}`);
+    }
+
+    return count;
+}
+
+// Expose cache invalidation API under djust namespace
+window.djust.clearCache = clearCache;
+window.djust.invalidateCache = invalidateCache;
 
 // StateBus - Client-side State Coordination (Phase 5)
 class StateBus {
@@ -1262,21 +1324,24 @@ const globalLoadingManager = {
 
     // Scan and register all elements with @loading attributes
     scanAndRegister() {
-        // Find all elements with @loading.* attributes
-        const allElements = document.querySelectorAll('*');
-        allElements.forEach(element => {
-            const hasLoadingAttr = Array.from(element.attributes).some(
-                attr => attr.name.startsWith('@loading.')
+        // Use targeted attribute selectors for better performance on large pages
+        // Note: CSS attribute selectors need escaped @ symbol
+        const selectors = [
+            '[\\@loading\\.disable]',
+            '[\\@loading\\.show]',
+            '[\\@loading\\.hide]',
+            '[\\@loading\\.class]'
+        ].join(',');
+
+        const loadingElements = document.querySelectorAll(selectors);
+        loadingElements.forEach(element => {
+            // Find the associated event from @click, @submit, etc.
+            const eventAttr = Array.from(element.attributes).find(
+                attr => attr.name.startsWith('@') && !attr.name.startsWith('@loading')
             );
-            if (hasLoadingAttr) {
-                // Find the associated event from @click, @submit, etc.
-                const eventAttr = Array.from(element.attributes).find(
-                    attr => attr.name.startsWith('@') && !attr.name.startsWith('@loading')
-                );
-                const eventName = eventAttr ? eventAttr.value : null;
-                if (eventName) {
-                    this.register(element, eventName);
-                }
+            const eventName = eventAttr ? eventAttr.value : null;
+            if (eventName) {
+                this.register(element, eventName);
             }
         });
         if (globalThis.djustDebug) {
@@ -1434,8 +1499,18 @@ async function handleEvent(eventName, params = {}) {
         const cacheRequestId = generateCacheRequestId();
         const ttl = config.ttl || 60;
 
+        // Set up cleanup timeout to prevent memory leaks if request fails
+        const timeoutId = setTimeout(() => {
+            if (pendingCacheRequests.has(cacheRequestId)) {
+                pendingCacheRequests.delete(cacheRequestId);
+                if (globalThis.djustDebug) {
+                    console.log(`[LiveView:cache] Cleaned up stale pending request: ${cacheRequestId}`);
+                }
+            }
+        }, PENDING_CACHE_TIMEOUT);
+
         // Store pending cache request (will be fulfilled when response arrives)
-        pendingCacheRequests.set(cacheRequestId, { cacheKey, ttl });
+        pendingCacheRequests.set(cacheRequestId, { cacheKey, ttl, timeoutId });
 
         // Add cache request ID to params
         paramsWithCache = { ...params, _cacheRequestId: cacheRequestId };
