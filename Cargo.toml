@@ -39,7 +39,7 @@ parking_lot = "0.12"  # Faster sync primitives
 tracing = "0.1"  # Structured logging
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 pyo3-async-runtimes = { version = "0.22", features = ["tokio-runtime"] }  # PyO3 async bridge (matches pyo3 0.22)
-bincode = "1.3"  # Internal message serialization
+bincode = "3.0"  # Internal message serialization
 tokio-test = "0.4"  # Tokio testing utilities
 uuid = { version = "1.11", features = ["v4", "serde"] }  # UUID for view identification (Phase 6)
 
