@@ -448,8 +448,11 @@ class LiveView(View):
         Returns:
             Stream object for chaining
         """
+        def default_dom_id(x):
+            return getattr(x, 'id', None) or getattr(x, 'pk', None) or id(x)
+
         if dom_id is None:
-            dom_id = lambda x: getattr(x, 'id', None) or getattr(x, 'pk', None) or id(x)
+            dom_id = default_dom_id
 
         if name not in self._streams or reset:
             self._streams[name] = Stream(name, dom_id)
@@ -2452,7 +2455,6 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         from .config import config
         from django.conf import settings
         import json
-        import os
 
         # Get WebSocket setting from config
         use_websocket = config.get("use_websocket", True)

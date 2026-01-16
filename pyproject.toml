@@ -71,9 +71,10 @@ djust = "djust.cli:main"
 
 [project.urls]
 Homepage = "https://djust.org"
-Documentation = "https://djust.org/docs"
-Repository = "https://github.com/johnrtipton/djust"
-Issues = "https://github.com/johnrtipton/djust/issues"
+Documentation = "https://djust.org/quickstart/"
+Repository = "https://github.com/djust-org/djust"
+Issues = "https://github.com/djust-org/djust/issues"
+Changelog = "https://github.com/djust-org/djust/blob/main/CHANGELOG.md"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

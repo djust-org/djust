@@ -320,7 +320,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if has_prerendered:
                 # OPTIMIZATION: Client already has pre-rendered HTML from initial HTTP request
                 # Skip rendering and only establish VDOM baseline for future patches
-                logger.info(f"Skipping HTML generation - client has pre-rendered content")
+                logger.info("Skipping HTML generation - client has pre-rendered content")
 
                 if self.use_actors and self.actor_handle:
                     # Initialize actor with empty render (just establish state)
@@ -835,7 +835,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 # Update the RustLiveView with the new template (keeps old VDOM for diffing!)
                 if hasattr(self.view_instance, '_rust_view') and self.view_instance._rust_view:
-                    logger.debug(f"Updating template in existing RustLiveView")
+                    logger.debug("Updating template in existing RustLiveView")
                     await database_sync_to_async(
                         self.view_instance._rust_view.update_template
                     )(new_template)
@@ -856,7 +856,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 # Handle case where no patches are generated
                 if not patches:
-                    logger.info(f"No patches generated, sending full reload")
+                    logger.info("No patches generated, sending full reload")
                     await self.send_json({
                         "type": "reload",
                         "file": file_path,

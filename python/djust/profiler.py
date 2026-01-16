@@ -33,7 +33,6 @@ import time
 import logging
 import statistics
 import threading
-from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import wraps

@@ -19,9 +19,7 @@ Examples:
 """
 
 import argparse
-import json
 import sys
-from typing import Optional
 
 
 def setup_django():
@@ -123,20 +121,20 @@ def cmd_health(args):
 
         # Check Rust extension
         try:
-            from djust._rust import RustLiveView
+            from djust._rust import RustLiveView  # noqa: F401
             print("[+] Rust extension: Available")
         except ImportError:
             print("[!] Rust extension: Not available (performance degraded)")
 
         # Check optional dependencies
         try:
-            import zstandard
+            import zstandard  # noqa: F401
             print("[+] zstd compression: Available")
         except ImportError:
             print("[ ] zstd compression: Not installed (pip install zstandard)")
 
         try:
-            import orjson
+            import orjson  # noqa: F401
             print("[+] orjson: Available (faster JSON)")
         except ImportError:
             print("[ ] orjson: Not installed (pip install orjson)")
@@ -342,10 +340,10 @@ def main():
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
 
     # stats command
-    stats_parser = subparsers.add_parser('stats', help='Show state backend statistics')
+    subparsers.add_parser('stats', help='Show state backend statistics')
 
     # health command
-    health_parser = subparsers.add_parser('health', help='Run health checks')
+    subparsers.add_parser('health', help='Run health checks')
 
     # profile command
     profile_parser = subparsers.add_parser('profile', help='Show profiling statistics')

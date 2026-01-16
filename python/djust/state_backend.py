@@ -20,7 +20,7 @@ import logging
 import warnings
 from abc import ABC, abstractmethod
 from threading import RLock
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any, Tuple
 from djust._rust import RustLiveView
 from djust.profiler import profiler
 

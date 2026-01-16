@@ -7,14 +7,11 @@ timing breakdowns.
 """
 
 import time
-import traceback
 import threading
 import functools
-from typing import Dict, List, Any, Optional, Callable, Tuple
+from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
 from contextlib import contextmanager
-from django.db import connection
-from django.db.backends.utils import CursorDebugWrapper
 
 
 @dataclass
@@ -170,7 +167,7 @@ class MemoryTracker:
 
         # Check if psutil is available
         try:
-            import psutil
+            import psutil  # noqa: F401
             self.enabled = True
         except ImportError:
             pass

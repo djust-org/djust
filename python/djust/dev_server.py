@@ -5,7 +5,6 @@ This module provides file watching and hot reload capabilities for djust develop
 """
 
 import logging
-import os
 import threading
 import time
 from pathlib import Path

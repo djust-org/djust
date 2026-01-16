@@ -7,7 +7,7 @@ patch generation, error handling, and performance metrics.
 
 import pytest
 import json
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from unittest.mock import Mock, AsyncMock, patch
 from django.template import TemplateDoesNotExist
 
 
