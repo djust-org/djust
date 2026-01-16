@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-01-16
+
+### Fixed
+- Fix `@loading.disable` attribute not disabling buttons during async operations
+- Implement complete client-side caching for `@cache` decorator
+- Fix Linux wheel platform tags for PyPI compatibility (manylinux2017)
+
+### Added
+- Cache invalidation API: `window.djust.clearCache()` and `window.djust.invalidateCache(pattern)`
+- LRU cache eviction with configurable size limit (100 entries)
+- Namespace all globals under `window.djust` (with backward compatibility)
+- `@loading.show` now supports custom display values (e.g., `@loading.show="flex"`)
+
+### Changed
+- Optimize `scanAndRegister()` with targeted CSS selectors for better performance
+- Gate debug console.log behind `djustDebug` flag
+
 ## [0.1.0] - 2025-12-10
 
 Initial public release of djust — Phoenix LiveView-style reactive server-side rendering for Django, powered by Rust.

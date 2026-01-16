@@ -55,7 +55,12 @@ jobs:
       - name: Install maturin
         run: pip install maturin
 
-      - name: Build wheel
+      - name: Build wheel (Linux)
+        if: runner.os == 'Linux'
+        run: maturin build --release --strip --manylinux 2017
+
+      - name: Build wheel (non-Linux)
+        if: runner.os != 'Linux'
         run: maturin build --release --strip
 
       - name: Upload wheel
