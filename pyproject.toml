@@ -82,6 +82,10 @@ module-name = "djust._rust"
 python-source = "python"
 bindings = "pyo3"
 manifest-path = "crates/djust_live/Cargo.toml"
+include = [
+    { path = "LICENSE", format = "sdist" },
+    { path = "README.md", format = "sdist" },
+]
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py", "*_test.py"]
