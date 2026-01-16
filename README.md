@@ -4,7 +4,7 @@
 
 djust brings Phoenix LiveView-style reactive components to Django, with performance that feels native. Write server-side Python code with automatic, instant client updates—no JavaScript bundling, no build step, no complexity.
 
-🌐 **[djust.org](https://djust.org)** | 📖 **[Documentation](https://djust.org/docs)** | 🎮 **[Live Playground](https://djust.org/playground)**
+🌐 **[djust.org](https://djust.org)** | 🚀 **[Quick Start](https://djust.org/quickstart/)** | 🎮 **[Playground](https://djust.org/playground/)**
 
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
@@ -633,7 +633,7 @@ djust is open source (MIT licensed) and free forever. If you're using djust in p
 
 - ⭐ **Star this repo** - Help others discover djust
 - 💜 **[GitHub Sponsors](https://github.com/sponsors/djust-org)** - Monthly support from $5/month
-- 🚀 **[djust.org/pricing](https://djust.org/pricing)** - Premium templates, components, and managed hosting
+- 🚀 **[Pricing](https://djust.org/pricing/)** - Premium templates, components, and managed hosting
 - 🏢 **Enterprise support** - Priority support and custom development
 
 Your support helps us maintain and improve djust for everyone!
@@ -683,9 +683,8 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## 💬 Community & Support
 
 - 🌐 **[djust.org](https://djust.org)** - Official website
-- 📖 **[Documentation](https://djust.org/docs)** - Full documentation
-- 🎮 **[Playground](https://djust.org/playground)** - Try djust in your browser
-- 💬 **[Discord](https://discord.gg/djust)** - Community chat
+- 🚀 **[Quick Start](https://djust.org/quickstart/)** - Get started in minutes
+- 🎮 **[Playground](https://djust.org/playground/)** - Try djust in your browser
 - 🐛 **[Issues](https://github.com/djust-org/djust/issues)** - Bug reports & feature requests
 - 📧 **Email**: support@djust.org
 
