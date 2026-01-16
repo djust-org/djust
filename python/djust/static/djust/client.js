@@ -277,6 +277,11 @@ class LiveViewWebSocket {
                     console.log('[LiveView] VDOM version initialized:', clientVdomVersion);
                 }
 
+                // Initialize cache configuration from mount response
+                if (data.cache_config) {
+                    setCacheConfig(data.cache_config);
+                }
+
                 // OPTIMIZATION: Skip HTML replacement if content was pre-rendered via HTTP GET
                 if (this.skipMountHtml) {
                     console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
@@ -469,6 +474,85 @@ const optimisticUpdates = new Map(); // Map<eventName, {element, originalState}>
 const pendingEvents = new Set(); // Set<eventName> (for loading indicators)
 const resultCache = new Map(); // Map<cacheKey, {patches, expiresAt}>
 const pendingCacheRequests = new Map(); // Map<requestId, {cacheKey, ttl}>
+
+// Cache configuration from server (event_name -> {ttl, key_params})
+const cacheConfig = new Map();
+
+/**
+ * Set cache configuration for handlers (called during mount)
+ * @param {Object} config - Map of handler names to cache config {ttl, key_params}
+ */
+function setCacheConfig(config) {
+    if (!config) return;
+
+    Object.entries(config).forEach(([handlerName, handlerConfig]) => {
+        cacheConfig.set(handlerName, handlerConfig);
+        if (globalThis.djustDebug) {
+            console.log(`[LiveView:cache] Configured cache for ${handlerName}:`, handlerConfig);
+        }
+    });
+}
+
+// Expose setCacheConfig for server/tests
+window.setCacheConfig = setCacheConfig;
+
+/**
+ * Build a cache key from event name and parameters
+ * @param {string} eventName - The event handler name
+ * @param {Object} params - Event parameters
+ * @param {Array<string>} keyParams - Which params to include in key (if specified)
+ * @returns {string} Cache key
+ */
+function buildCacheKey(eventName, params, keyParams = null) {
+    // Filter out internal params (starting with _)
+    const cacheParams = {};
+    let usedKeyParams = false;
+
+    if (keyParams && keyParams.length > 0) {
+        // Try to use specified key params
+        keyParams.forEach(key => {
+            if (params.hasOwnProperty(key)) {
+                cacheParams[key] = params[key];
+                usedKeyParams = true;
+            }
+        });
+    }
+
+    // If no keyParams specified OR none of the keyParams were found in params,
+    // fall back to using all non-internal params for the cache key
+    if (!usedKeyParams) {
+        Object.keys(params).forEach(key => {
+            if (!key.startsWith('_')) {
+                cacheParams[key] = params[key];
+            }
+        });
+    }
+
+    // Build key: eventName:param1=value1:param2=value2
+    const paramParts = Object.keys(cacheParams)
+        .sort()
+        .map(k => `${k}=${JSON.stringify(cacheParams[k])}`)
+        .join(':');
+
+    return paramParts ? `${eventName}:${paramParts}` : eventName;
+}
+
+/**
+ * Check if there's a valid cached result for this request
+ * @param {string} cacheKey - The cache key to check
+ * @returns {Object|null} Cached data if valid, null otherwise
+ */
+function getCachedResult(cacheKey) {
+    const cached = resultCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+        return cached;
+    }
+    // Clean up expired entry
+    if (cached) {
+        resultCache.delete(cacheKey);
+    }
+    return null;
+}
 
 // StateBus - Client-side State Coordination (Phase 5)
 class StateBus {
@@ -1096,23 +1180,168 @@ function clearOptimisticState(eventName) {
 }
 
 // Global Loading Manager (Phase 5)
+// Handles @loading.disable, @loading.class, @loading.show, @loading.hide attributes
 const globalLoadingManager = {
+    // Map of element -> { originalState, modifiers }
+    registeredElements: new Map(),
+    pendingEvents: new Set(),
+
+    // Register an element with @loading attributes
+    register(element, eventName) {
+        const modifiers = [];
+        const originalState = {};
+
+        // Parse @loading.* attributes
+        Array.from(element.attributes).forEach(attr => {
+            const match = attr.name.match(/^@loading\.(.+)$/);
+            if (match) {
+                const modifier = match[1];
+                if (modifier === 'disable') {
+                    modifiers.push({ type: 'disable' });
+                    originalState.disabled = element.disabled;
+                } else if (modifier === 'show') {
+                    modifiers.push({ type: 'show' });
+                    originalState.display = element.style.display;
+                } else if (modifier === 'hide') {
+                    modifiers.push({ type: 'hide' });
+                    originalState.display = element.style.display;
+                } else if (modifier === 'class') {
+                    const className = attr.value;
+                    if (className) {
+                        modifiers.push({ type: 'class', value: className });
+                    }
+                }
+            }
+        });
+
+        if (modifiers.length > 0) {
+            this.registeredElements.set(element, { eventName, modifiers, originalState });
+            if (globalThis.djustDebug) {
+                console.log(`[Loading] Registered element for "${eventName}":`, modifiers);
+            }
+        }
+    },
+
+    // Scan and register all elements with @loading attributes
+    scanAndRegister() {
+        // Find all elements with @loading.* attributes
+        const allElements = document.querySelectorAll('*');
+        allElements.forEach(element => {
+            const hasLoadingAttr = Array.from(element.attributes).some(
+                attr => attr.name.startsWith('@loading.')
+            );
+            if (hasLoadingAttr) {
+                // Find the associated event from @click, @submit, etc.
+                const eventAttr = Array.from(element.attributes).find(
+                    attr => attr.name.startsWith('@') && !attr.name.startsWith('@loading')
+                );
+                const eventName = eventAttr ? eventAttr.value : null;
+                if (eventName) {
+                    this.register(element, eventName);
+                }
+            }
+        });
+        if (globalThis.djustDebug) {
+            console.log(`[Loading] Scanned ${this.registeredElements.size} elements with @loading attributes`);
+        }
+    },
+
     startLoading(eventName, triggerElement) {
+        this.pendingEvents.add(eventName);
+
+        // Apply loading state to trigger element
         if (triggerElement) {
             triggerElement.classList.add('djust-loading');
-            triggerElement.disabled = true;
+
+            // Check if trigger element has @loading.disable
+            const hasDisable = triggerElement.hasAttribute('@loading.disable');
+            if (globalThis.djustDebug) {
+                console.log(`[Loading] triggerElement:`, triggerElement);
+                console.log(`[Loading] hasAttribute('@loading.disable'):`, hasDisable);
+            }
+            if (hasDisable) {
+                triggerElement.disabled = true;
+            }
         }
+
+        // Apply loading state to all registered elements watching this event
+        this.registeredElements.forEach((config, element) => {
+            if (config.eventName === eventName) {
+                this.applyLoadingState(element, config);
+            }
+        });
+
         document.body.classList.add('djust-global-loading');
+
+        if (globalThis.djustDebug) {
+            console.log(`[Loading] Started: ${eventName}`);
+        }
     },
 
     stopLoading(eventName, triggerElement) {
+        this.pendingEvents.delete(eventName);
+
+        // Remove loading state from trigger element
         if (triggerElement) {
             triggerElement.classList.remove('djust-loading');
-            triggerElement.disabled = false;
+            // Check if trigger element has @loading.disable
+            const hasDisable = triggerElement.hasAttribute('@loading.disable');
+            if (hasDisable) {
+                triggerElement.disabled = false;
+            }
         }
+
+        // Remove loading state from all registered elements watching this event
+        this.registeredElements.forEach((config, element) => {
+            if (config.eventName === eventName) {
+                this.removeLoadingState(element, config);
+            }
+        });
+
         document.body.classList.remove('djust-global-loading');
+
+        if (globalThis.djustDebug) {
+            console.log(`[Loading] Stopped: ${eventName}`);
+        }
+    },
+
+    applyLoadingState(element, config) {
+        config.modifiers.forEach(modifier => {
+            if (modifier.type === 'disable') {
+                element.disabled = true;
+            } else if (modifier.type === 'show') {
+                element.style.display = '';
+            } else if (modifier.type === 'hide') {
+                element.style.display = 'none';
+            } else if (modifier.type === 'class') {
+                element.classList.add(modifier.value);
+            }
+        });
+    },
+
+    removeLoadingState(element, config) {
+        config.modifiers.forEach(modifier => {
+            if (modifier.type === 'disable') {
+                element.disabled = config.originalState.disabled || false;
+            } else if (modifier.type === 'show') {
+                element.style.display = config.originalState.display || 'none';
+            } else if (modifier.type === 'hide') {
+                element.style.display = config.originalState.display || '';
+            } else if (modifier.type === 'class') {
+                element.classList.remove(modifier.value);
+            }
+        });
     }
 };
+
+// Make globalLoadingManager available globally for tests
+window.globalLoadingManager = globalLoadingManager;
+
+// Generate unique request ID for cache tracking
+let cacheRequestCounter = 0;
+function generateCacheRequestId() {
+    return `cache_${Date.now()}_${++cacheRequestCounter}`;
+}
 
 // Main Event Handler
 async function handleEvent(eventName, params = {}) {
@@ -1120,10 +1349,59 @@ async function handleEvent(eventName, params = {}) {
 
     // Start loading state
     const triggerElement = params._targetElement;
+
+    // Check client-side cache first
+    const config = cacheConfig.get(eventName);
+    const keyParams = config?.key_params || null;
+    const cacheKey = buildCacheKey(eventName, params, keyParams);
+    const cached = getCachedResult(cacheKey);
+
+    if (cached) {
+        // Cache hit! Apply cached patches without server round-trip
+        if (globalThis.djustDebug) {
+            console.log(`[LiveView:cache] Cache hit: ${cacheKey}`);
+        }
+
+        // Still show brief loading state for UX consistency
+        globalLoadingManager.startLoading(eventName, triggerElement);
+
+        // Apply cached patches
+        if (cached.patches && cached.patches.length > 0) {
+            applyPatches(cached.patches);
+            initReactCounters();
+            initTodoItems();
+            bindLiveViewEvents();
+        }
+
+        globalLoadingManager.stopLoading(eventName, triggerElement);
+        return;
+    }
+
+    // Cache miss - need to fetch from server
+    if (globalThis.djustDebug && cacheConfig.has(eventName)) {
+        console.log(`[LiveView:cache] Cache miss: ${cacheKey}`);
+    }
+
     globalLoadingManager.startLoading(eventName, triggerElement);
 
+    // Prepare params for request
+    let paramsWithCache = params;
+
+    // Only set up caching for events with @cache decorator
+    if (config) {
+        // Generate cache request ID for cacheable events
+        const cacheRequestId = generateCacheRequestId();
+        const ttl = config.ttl || 60;
+
+        // Store pending cache request (will be fulfilled when response arrives)
+        pendingCacheRequests.set(cacheRequestId, { cacheKey, ttl });
+
+        // Add cache request ID to params
+        paramsWithCache = { ...params, _cacheRequestId: cacheRequestId };
+    }
+
     // Try WebSocket first
-    if (liveViewWS && liveViewWS.sendEvent(eventName, params, triggerElement)) {
+    if (liveViewWS && liveViewWS.sendEvent(eventName, paramsWithCache, triggerElement)) {
         return;
     }
 
@@ -1139,7 +1417,7 @@ async function handleEvent(eventName, params = {}) {
                 'X-CSRFToken': csrfToken,
                 'X-Djust-Event': eventName
             },
-            body: JSON.stringify(params)
+            body: JSON.stringify(paramsWithCache)
         });
 
         if (!response.ok) {
@@ -1523,6 +1801,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initialize Draft Mode
     initDraftMode();
+
+    // Scan and register @loading attributes
+    globalLoadingManager.scanAndRegister();
 
     // Start heartbeat
     liveViewWS.startHeartbeat();

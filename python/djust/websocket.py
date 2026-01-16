@@ -407,6 +407,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if html is not None:
             response["html"] = html
 
+        # Include cache configuration for handlers with @cache decorator
+        cache_config = self._extract_cache_config()
+        if cache_config:
+            response["cache_config"] = cache_config
+
         await self.send_json(response)
 
     async def handle_event(self, data: Dict[str, Any]):
@@ -742,6 +747,42 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             "error": "An error occurred processing your request.",
                         }
                     )
+
+    def _extract_cache_config(self) -> Dict[str, Any]:
+        """
+        Extract cache configuration from handlers with @cache decorator.
+
+        Returns a dict mapping handler names to their cache config:
+        {
+            "search": {"ttl": 300, "key_params": ["query"]},
+            "get_stats": {"ttl": 60, "key_params": []}
+        }
+        """
+        if not self.view_instance:
+            return {}
+
+        cache_config = {}
+
+        # Inspect all methods for @cache decorator metadata
+        for name in dir(self.view_instance):
+            if name.startswith('_'):
+                continue
+
+            try:
+                method = getattr(self.view_instance, name)
+                if callable(method) and hasattr(method, '_djust_decorators'):
+                    decorators = method._djust_decorators
+                    if 'cache' in decorators:
+                        cache_info = decorators['cache']
+                        cache_config[name] = {
+                            'ttl': cache_info.get('ttl', 60),
+                            'key_params': cache_info.get('key_params', [])
+                        }
+            except Exception:
+                # Skip any methods that can't be inspected
+                pass
+
+        return cache_config
 
     async def send_json(self, data: Dict[str, Any]):
         """Send JSON message to client with Django type support"""
