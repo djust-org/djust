@@ -4,6 +4,8 @@
 
 djust brings Phoenix LiveView-style reactive components to Django, with performance that feels native. Write server-side Python code with automatic, instant client updates—no JavaScript bundling, no build step, no complexity.
 
+🌐 **[djust.org](https://djust.org)** | 📖 **[Documentation](https://djust.org/docs)** | 🎮 **[Live Playground](https://djust.org/playground)**
+
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Django 3.2+](https://img.shields.io/badge/django-3.2+-green.svg)](https://www.djangoproject.com/)
@@ -82,7 +84,7 @@ pip install djust
 
 ```bash
 # Clone the repository
-git clone https://github.com/johnrtipton/djust.git
+git clone https://github.com/djust-org/djust.git
 cd djust
 
 # Install Rust (if needed)
@@ -110,7 +112,7 @@ make help
 
 ```bash
 # Clone the repository
-git clone https://github.com/johnrtipton/djust.git
+git clone https://github.com/djust-org/djust.git
 cd djust
 
 # Install Rust (if needed)
@@ -132,7 +134,7 @@ maturin develop --release
 
 ```bash
 # Clone the repository
-git clone https://github.com/johnrtipton/djust.git
+git clone https://github.com/djust-org/djust.git
 cd djust
 
 # Install Rust (if needed)
@@ -627,11 +629,12 @@ cargo doc --open
 
 ## 💰 Supporting djust
 
-djust is open source (MIT licensed) and free forever. If you're using djust in production or want to support development, check out our [Monetization Strategy](MONETIZATION.md) for ways to contribute:
+djust is open source (MIT licensed) and free forever. If you're using djust in production or want to support development:
 
-- 💜 [GitHub Sponsors](https://github.com/sponsors/johnrtipton) - Monthly support from $5/month
-- 🚀 Premium offerings (coming soon) - SaaS starter kits, components, managed hosting
-- 🏢 Enterprise support - Priority support and custom development
+- ⭐ **Star this repo** - Help others discover djust
+- 💜 **[GitHub Sponsors](https://github.com/sponsors/djust-org)** - Monthly support from $5/month
+- 🚀 **[djust.org/pricing](https://djust.org/pricing)** - Premium templates, components, and managed hosting
+- 🏢 **Enterprise support** - Priority support and custom development
 
 Your support helps us maintain and improve djust for everyone!
 
@@ -677,13 +680,15 @@ MIT License - see [LICENSE](LICENSE) file for details.
 - Uses [html5ever](https://github.com/servo/html5ever) for HTML parsing
 - Powered by the amazing Rust and Django communities
 
-## 💬 Support
+## 💬 Community & Support
 
-- 📖 [Documentation](https://djust.org/docs)
-- 💬 [Discord Community](https://discord.gg/djust)
-- 🐛 [Issue Tracker](https://github.com/johnrtipton/djust/issues)
-- 📧 Email: support@djust.org
+- 🌐 **[djust.org](https://djust.org)** - Official website
+- 📖 **[Documentation](https://djust.org/docs)** - Full documentation
+- 🎮 **[Playground](https://djust.org/playground)** - Try djust in your browser
+- 💬 **[Discord](https://discord.gg/djust)** - Community chat
+- 🐛 **[Issues](https://github.com/djust-org/djust/issues)** - Bug reports & feature requests
+- 📧 **Email**: support@djust.org
 
 ---
 
-Made with ❤️ by the djust community
+**[djust.org](https://djust.org)** — Made with ❤️ by the djust community
