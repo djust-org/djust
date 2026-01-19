@@ -67,9 +67,11 @@ def coerce_parameter_types(
         origin = get_origin(expected_type)
         if origin is Union:
             # Get non-None types from Union (handles Optional[T])
+            # For Union types like Union[int, str], coerce to the first non-None type.
+            # This means Union[int, str] will try int coercion first.
             args = [arg for arg in get_args(expected_type) if arg is not type(None)]
             if args:
-                expected_type = args[0]  # Use first non-None type
+                expected_type = args[0]
                 origin = get_origin(expected_type)
 
         # Only coerce if value is a string
@@ -258,7 +260,11 @@ def validate_handler_params(
             error_msg += f"  - {err['param']}: expected {err['expected']}, got {err['actual']}"
             # Add hint for common string->type coercion failures
             if err['actual'] == 'str' and err['expected'] in ('int', 'float', 'bool'):
-                error_msg += f" (value: {repr(err.get('value', '?'))[:30]})"
+                # Truncate repr safely to avoid cutting mid-escape sequence
+                val_repr = repr(err.get('value', '?'))
+                if len(val_repr) > 30:
+                    val_repr = val_repr[:27] + '...'
+                error_msg += f" (value: {val_repr})"
                 error_msg += f"\n    Hint: Coercion failed. Check that the value is valid for {err['expected']}."
             error_msg += "\n"
 

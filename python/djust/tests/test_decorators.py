@@ -186,6 +186,48 @@ class TestEventHandlerDecorator:
         metadata = my_handler._djust_decorators["event_handler"]
         assert metadata["param_names"] == ["custom", "params"]
 
+    def test_event_handler_coerce_types_default(self):
+        """Test that coerce_types defaults to True"""
+
+        @event_handler
+        def my_handler(self, count: int = 0, **kwargs):
+            pass
+
+        metadata = my_handler._djust_decorators["event_handler"]
+        assert "coerce_types" in metadata
+        assert metadata["coerce_types"] is True
+
+    def test_event_handler_coerce_types_explicit_true(self):
+        """Test coerce_types=True is stored in metadata"""
+
+        @event_handler(coerce_types=True)
+        def my_handler(self, count: int = 0, **kwargs):
+            pass
+
+        metadata = my_handler._djust_decorators["event_handler"]
+        assert metadata["coerce_types"] is True
+
+    def test_event_handler_coerce_types_false(self):
+        """Test coerce_types=False disables type coercion"""
+
+        @event_handler(coerce_types=False)
+        def my_handler(self, count: int = 0, **kwargs):
+            pass
+
+        metadata = my_handler._djust_decorators["event_handler"]
+        assert metadata["coerce_types"] is False
+
+    def test_event_handler_coerce_types_with_description(self):
+        """Test coerce_types works with other parameters"""
+
+        @event_handler(description="Test handler", coerce_types=False)
+        def my_handler(self, value: str = "", **kwargs):
+            pass
+
+        metadata = my_handler._djust_decorators["event_handler"]
+        assert metadata["description"] == "Test handler"
+        assert metadata["coerce_types"] is False
+
 
 class TestDecoratorMetadata:
     """Test decorator metadata attachment."""

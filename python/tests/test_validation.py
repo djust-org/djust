@@ -11,7 +11,7 @@ Tests cover:
 """
 
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Optional, Union
 from uuid import UUID
 
 import pytest
@@ -413,9 +413,19 @@ class TestCoerceParameterTypes:
         def handler(self, enabled: bool):
             pass
 
-        for value in ["false", "False", "0", "no", "off", ""]:
+        for value in ["false", "False", "0", "no", "off"]:
             result = coerce_parameter_types(handler, {"enabled": value})
             assert result["enabled"] is False, f"Expected False for '{value}'"
+
+    def test_coerce_empty_string_to_bool(self):
+        """Test that empty string explicitly coerces to False for bool"""
+
+        def handler(self, enabled: bool):
+            pass
+
+        result = coerce_parameter_types(handler, {"enabled": ""})
+        assert result["enabled"] is False
+        assert isinstance(result["enabled"], bool)
 
     def test_coerce_string_to_decimal(self):
         """Test that string is coerced to Decimal"""
@@ -501,6 +511,26 @@ class TestCoerceParameterTypes:
 
         result = coerce_parameter_types(handler, {"count": "42"})
         assert result["count"] == 42
+
+    def test_coerce_union_uses_first_non_none_type(self):
+        """Test that Union types coerce to the first non-None type.
+
+        For Union[int, str], coercion will try int first. This is documented
+        behavior - if you need different behavior, use a specific type.
+        """
+
+        def handler(self, value: Union[int, str] = 0):
+            pass
+
+        # "42" can be coerced to int, so it becomes int
+        result = coerce_parameter_types(handler, {"value": "42"})
+        assert result["value"] == 42
+        assert isinstance(result["value"], int)
+
+        # "hello" can't be coerced to int, so it stays as string
+        result = coerce_parameter_types(handler, {"value": "hello"})
+        assert result["value"] == "hello"
+        assert isinstance(result["value"], str)
 
     def test_coerce_invalid_int_keeps_original(self):
         """Test that invalid int conversion keeps original value"""
