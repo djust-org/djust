@@ -112,32 +112,62 @@ def sort_properties(self, value: str = "name"):
 
 ## Type Hints and Validation
 
-### Runtime Type Validation
+### Automatic Type Coercion
 
-djust validates parameter types using type hints at runtime:
+Template `data-*` attributes always send values as strings. djust **automatically coerces** these strings to the expected types based on your type hints:
 
 ```python
 @event_handler()
 def update_quantity(self, item_id: int, quantity: int = 1):
     """
-    Types are validated at runtime.
-    Passing a string for item_id will raise a validation error.
+    item_id and quantity are automatically coerced from strings.
+    Template sends: data-item-id="123" data-quantity="5"
+    Handler receives: item_id=123, quantity=5 (as integers)
     """
     self.items[item_id].quantity = quantity
 ```
 
-### Supported Types
+This means you can use proper type hints and djust handles the conversion automatically.
+
+### Supported Type Coercions
+
+| Type | String Input | Coerced Value |
+|------|--------------|---------------|
+| `int` | `"123"`, `"-45"` | `123`, `-45` |
+| `float` | `"3.14"`, `"-273.15"` | `3.14`, `-273.15` |
+| `bool` | `"true"`, `"1"`, `"yes"`, `"on"` | `True` |
+| `bool` | `"false"`, `"0"`, `"no"`, `"off"`, `""` | `False` |
+| `Decimal` | `"123.45"` | `Decimal("123.45")` |
+| `UUID` | `"550e8400-e29b-..."` | `UUID("550e8400-...")` |
+| `list` | `"a,b,c"` | `["a", "b", "c"]` |
+| `List[int]` | `"1,2,3"` | `[1, 2, 3]` |
+| `Optional[int]` | `"42"` | `42` |
+
+### Example Usage
 
 ```python
 @event_handler()
 def example_types(
     self,
-    name: str = "",           # String
-    count: int = 0,           # Integer
-    price: float = 0.0,       # Float
-    active: bool = False,     # Boolean
+    name: str = "",           # String (no conversion needed)
+    count: int = 0,           # Coerced from "123" to 123
+    price: float = 0.0,       # Coerced from "9.99" to 9.99
+    active: bool = False,     # Coerced from "true" to True
+    tags: list = [],          # Coerced from "a,b,c" to ["a","b","c"]
     **kwargs                  # Accept any additional params
 ):
+    pass
+```
+
+### Disabling Type Coercion
+
+If you need raw string values, disable coercion with `coerce_types=False`:
+
+```python
+@event_handler(coerce_types=False)
+def raw_handler(self, value: str = "", **kwargs):
+    """Receives raw string values from template, no coercion"""
+    # value is exactly what the template sent
     pass
 ```
 
@@ -450,29 +480,33 @@ def handler(self, value: str = "", **kwargs):
     pass
 ```
 
-#### Issue: Type validation fails
+#### Issue: Type coercion fails
 
-**Symptoms**: Error: `expected int, got str`
+**Symptoms**: Error: `expected int, got str` with hint about coercion failure
 
-**Solution**: Ensure type hints match what's sent:
+**Cause**: The string value can't be converted to the expected type (e.g., `"abc"` can't become an `int`).
+
+**Solution**: Ensure template sends valid values:
 
 ```python
-# Template sends string
-<button @click="delete_item" data-item-id="123">Delete</button>
+# Template sends invalid string for int
+<button @click="delete_item" data-item-id="not_a_number">Delete</button>
 
-# Handler expects int
+# ❌ This will fail - "not_a_number" can't be coerced to int
 @event_handler()
 def delete_item(self, item_id: int):
     pass
 
-# ✅ Convert in template
+# ✅ Correct - template sends valid integer string
 <button @click="delete_item" data-item-id="{{ item.id }}">Delete</button>
 
-# ✅ Or accept string and convert
+# Handler receives item_id as int (automatically coerced)
 @event_handler()
-def delete_item(self, item_id: str):
-    item_id = int(item_id)
+def delete_item(self, item_id: int):
+    Item.objects.filter(id=item_id).delete()  # Works!
 ```
+
+**Note**: With automatic type coercion, you no longer need to manually convert types. Just use proper type hints and ensure templates send valid values.
 
 ### Best Practices Checklist
 

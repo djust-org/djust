@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Automatic type coercion for event handler parameters** - Template `data-*` attributes (always strings) are now automatically converted to expected types based on handler type hints. Supports `int`, `float`, `bool`, `Decimal`, `UUID`, `list`, `List[T]`, and `Optional[T]`.
+- New `coerce_types` parameter for `@event_handler()` decorator to disable coercion when raw strings are needed
+- Enhanced error messages with hints when type coercion fails
+
 ## [0.1.2] - 2026-01-16
 
 ### Fixed
