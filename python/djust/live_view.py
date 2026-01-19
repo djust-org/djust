@@ -2161,8 +2161,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # Call the event handler
             handler = getattr(self, event_name, None)
             if handler and callable(handler):
-                # Validate parameters before calling handler
-                validation = validate_handler_params(handler, params, event_name)
+                # Check if handler has coerce_types setting from @event_handler decorator
+                coerce = True  # Default to coercion enabled
+                if hasattr(handler, "_djust_decorators"):
+                    event_meta = handler._djust_decorators.get("event_handler", {})
+                    coerce = event_meta.get("coerce_types", True)
+
+                # Validate and coerce parameters before calling handler
+                # Type coercion automatically converts string values from data-* attributes
+                # to the expected types based on handler type hints
+                validation = validate_handler_params(handler, params, event_name, coerce=coerce)
                 if not validation["valid"]:
                     logger.error(f"Parameter validation failed: {validation['error']}")
                     return JsonResponse(
@@ -2178,8 +2186,10 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                         status=400,
                     )
 
-                if params:
-                    handler(**params)
+                # Use coerced params (string -> int, bool, etc. based on type hints)
+                coerced_params = validation.get("coerced_params", params)
+                if coerced_params:
+                    handler(**coerced_params)
                 else:
                     handler()
 
