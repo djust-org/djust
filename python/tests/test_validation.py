@@ -387,6 +387,16 @@ class TestCoerceParameterTypes:
         assert result["count"] == 42
         assert isinstance(result["count"], int)
 
+    def test_coerce_negative_string_to_int(self):
+        """Test that negative number strings are coerced correctly"""
+
+        def handler(self, offset: int):
+            pass
+
+        result = coerce_parameter_types(handler, {"offset": "-123"})
+        assert result["offset"] == -123
+        assert isinstance(result["offset"], int)
+
     def test_coerce_string_to_float(self):
         """Test that string is coerced to float"""
 
@@ -396,6 +406,41 @@ class TestCoerceParameterTypes:
         result = coerce_parameter_types(handler, {"price": "3.14"})
         assert result["price"] == 3.14
         assert isinstance(result["price"], float)
+
+    def test_coerce_negative_string_to_float(self):
+        """Test that negative float strings are coerced correctly"""
+
+        def handler(self, temperature: float):
+            pass
+
+        result = coerce_parameter_types(handler, {"temperature": "-273.15"})
+        assert result["temperature"] == -273.15
+        assert isinstance(result["temperature"], float)
+
+    def test_coerce_float_special_values(self):
+        """Test that float special values (inf, nan) are handled.
+
+        Note: These are valid Python float values but may be unexpected
+        in some contexts. The coercion allows them since they are valid floats.
+        """
+        import math
+
+        def handler(self, value: float):
+            pass
+
+        # Infinity
+        result = coerce_parameter_types(handler, {"value": "inf"})
+        assert math.isinf(result["value"])
+        assert result["value"] > 0
+
+        # Negative infinity
+        result = coerce_parameter_types(handler, {"value": "-inf"})
+        assert math.isinf(result["value"])
+        assert result["value"] < 0
+
+        # NaN
+        result = coerce_parameter_types(handler, {"value": "nan"})
+        assert math.isnan(result["value"])
 
     def test_coerce_string_to_bool_true_values(self):
         """Test that various truthy strings are coerced to True"""
