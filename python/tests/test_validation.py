@@ -6,14 +6,20 @@ Tests cover:
 - Unexpected parameters
 - Type validation
 - **kwargs handling
+- Automatic type coercion
 - Edge cases
 """
+
+from decimal import Decimal
+from typing import List, Optional, Union
+from uuid import UUID
 
 import pytest
 from djust.validation import (
     validate_handler_params,
     validate_parameter_types,
     get_handler_signature_info,
+    coerce_parameter_types,
 )
 
 
@@ -293,7 +299,7 @@ class TestValidationIntegration:
         assert result["valid"] is True
 
     def test_real_world_scenario_update_quantity(self):
-        """Test validation for realistic update handler with type checking"""
+        """Test validation for realistic update handler with type coercion"""
 
         class ItemView:
             def update_quantity(self, item_id: int, quantity: int = 1):
@@ -302,15 +308,23 @@ class TestValidationIntegration:
 
         view = ItemView()
 
-        # Type error: passing string for int
+        # With automatic coercion, string "123" is coerced to int 123
         result = validate_handler_params(
             view.update_quantity, {"item_id": "123", "quantity": 5}, "update_quantity"
+        )
+        assert result["valid"] is True
+        assert result["coerced_params"]["item_id"] == 123  # Coerced from "123"
+        assert result["coerced_params"]["quantity"] == 5
+
+        # Invalid string that can't be coerced to int
+        result = validate_handler_params(
+            view.update_quantity, {"item_id": "not_an_int", "quantity": 5}, "update_quantity"
         )
         assert result["valid"] is False
         assert "wrong parameter types" in result["error"]
         assert result["type_errors"][0]["param"] == "item_id"
 
-        # Correct usage
+        # Integer values work directly
         result = validate_handler_params(
             view.update_quantity, {"item_id": 123, "quantity": 5}, "update_quantity"
         )
@@ -358,6 +372,329 @@ class TestEdgeCases:
         assert isinstance(result["valid"], bool)
         assert isinstance(result["expected"], list)
         assert isinstance(result["provided"], list)
+
+
+class TestCoerceParameterTypes:
+    """Test coerce_parameter_types function"""
+
+    def test_coerce_string_to_int(self):
+        """Test that string is coerced to int"""
+
+        def handler(self, count: int):
+            pass
+
+        result = coerce_parameter_types(handler, {"count": "42"})
+        assert result["count"] == 42
+        assert isinstance(result["count"], int)
+
+    def test_coerce_negative_string_to_int(self):
+        """Test that negative number strings are coerced correctly"""
+
+        def handler(self, offset: int):
+            pass
+
+        result = coerce_parameter_types(handler, {"offset": "-123"})
+        assert result["offset"] == -123
+        assert isinstance(result["offset"], int)
+
+    def test_coerce_string_to_float(self):
+        """Test that string is coerced to float"""
+
+        def handler(self, price: float):
+            pass
+
+        result = coerce_parameter_types(handler, {"price": "3.14"})
+        assert result["price"] == 3.14
+        assert isinstance(result["price"], float)
+
+    def test_coerce_negative_string_to_float(self):
+        """Test that negative float strings are coerced correctly"""
+
+        def handler(self, temperature: float):
+            pass
+
+        result = coerce_parameter_types(handler, {"temperature": "-273.15"})
+        assert result["temperature"] == -273.15
+        assert isinstance(result["temperature"], float)
+
+    def test_coerce_float_special_values(self):
+        """Test that float special values (inf, nan) are handled.
+
+        Note: These are valid Python float values but may be unexpected
+        in some contexts. The coercion allows them since they are valid floats.
+        """
+        import math
+
+        def handler(self, value: float):
+            pass
+
+        # Infinity
+        result = coerce_parameter_types(handler, {"value": "inf"})
+        assert math.isinf(result["value"])
+        assert result["value"] > 0
+
+        # Negative infinity
+        result = coerce_parameter_types(handler, {"value": "-inf"})
+        assert math.isinf(result["value"])
+        assert result["value"] < 0
+
+        # NaN
+        result = coerce_parameter_types(handler, {"value": "nan"})
+        assert math.isnan(result["value"])
+
+    def test_coerce_string_to_bool_true_values(self):
+        """Test that various truthy strings are coerced to True"""
+
+        def handler(self, enabled: bool):
+            pass
+
+        for value in ["true", "True", "TRUE", "1", "yes", "on"]:
+            result = coerce_parameter_types(handler, {"enabled": value})
+            assert result["enabled"] is True, f"Expected True for '{value}'"
+
+    def test_coerce_string_to_bool_false_values(self):
+        """Test that other strings are coerced to False"""
+
+        def handler(self, enabled: bool):
+            pass
+
+        for value in ["false", "False", "0", "no", "off"]:
+            result = coerce_parameter_types(handler, {"enabled": value})
+            assert result["enabled"] is False, f"Expected False for '{value}'"
+
+    def test_coerce_empty_string_to_bool(self):
+        """Test that empty string explicitly coerces to False for bool"""
+
+        def handler(self, enabled: bool):
+            pass
+
+        result = coerce_parameter_types(handler, {"enabled": ""})
+        assert result["enabled"] is False
+        assert isinstance(result["enabled"], bool)
+
+    def test_coerce_string_to_decimal(self):
+        """Test that string is coerced to Decimal"""
+
+        def handler(self, amount: Decimal):
+            pass
+
+        result = coerce_parameter_types(handler, {"amount": "123.45"})
+        assert result["amount"] == Decimal("123.45")
+        assert isinstance(result["amount"], Decimal)
+
+    def test_coerce_string_to_uuid(self):
+        """Test that string is coerced to UUID"""
+
+        def handler(self, id: UUID):
+            pass
+
+        uuid_str = "550e8400-e29b-41d4-a716-446655440000"
+        result = coerce_parameter_types(handler, {"id": uuid_str})
+        assert result["id"] == UUID(uuid_str)
+        assert isinstance(result["id"], UUID)
+
+    def test_coerce_string_to_list(self):
+        """Test that comma-separated string is coerced to list"""
+
+        def handler(self, tags: list):
+            pass
+
+        result = coerce_parameter_types(handler, {"tags": "a,b,c"})
+        assert result["tags"] == ["a", "b", "c"]
+
+    def test_coerce_string_to_typed_list(self):
+        """Test that comma-separated string is coerced to typed List[int]"""
+
+        def handler(self, ids: List[int]):
+            pass
+
+        result = coerce_parameter_types(handler, {"ids": "1,2,3"})
+        assert result["ids"] == [1, 2, 3]
+        assert all(isinstance(x, int) for x in result["ids"])
+
+    def test_coerce_empty_string_to_int(self):
+        """Test that empty string is coerced to 0 for int"""
+
+        def handler(self, count: int):
+            pass
+
+        result = coerce_parameter_types(handler, {"count": ""})
+        assert result["count"] == 0
+
+    def test_coerce_empty_string_to_list(self):
+        """Test that empty string is coerced to empty list"""
+
+        def handler(self, tags: list):
+            pass
+
+        result = coerce_parameter_types(handler, {"tags": ""})
+        assert result["tags"] == []
+
+    def test_coerce_preserves_non_string_values(self):
+        """Test that non-string values are preserved"""
+
+        def handler(self, count: int):
+            pass
+
+        result = coerce_parameter_types(handler, {"count": 42})
+        assert result["count"] == 42
+
+    def test_coerce_skips_params_without_type_hints(self):
+        """Test that params without type hints are preserved as-is"""
+
+        def handler(self, value):
+            pass
+
+        result = coerce_parameter_types(handler, {"value": "test"})
+        assert result["value"] == "test"
+
+    def test_coerce_handles_optional_types(self):
+        """Test that Optional[int] is handled correctly"""
+
+        def handler(self, count: Optional[int] = None):
+            pass
+
+        result = coerce_parameter_types(handler, {"count": "42"})
+        assert result["count"] == 42
+
+    def test_coerce_union_uses_first_non_none_type(self):
+        """Test that Union types coerce to the first non-None type.
+
+        For Union[int, str], coercion will try int first. This is documented
+        behavior - if you need different behavior, use a specific type.
+        """
+
+        def handler(self, value: Union[int, str] = 0):
+            pass
+
+        # "42" can be coerced to int, so it becomes int
+        result = coerce_parameter_types(handler, {"value": "42"})
+        assert result["value"] == 42
+        assert isinstance(result["value"], int)
+
+        # "hello" can't be coerced to int, so it stays as string
+        result = coerce_parameter_types(handler, {"value": "hello"})
+        assert result["value"] == "hello"
+        assert isinstance(result["value"], str)
+
+    def test_coerce_invalid_int_keeps_original(self):
+        """Test that invalid int conversion keeps original value"""
+
+        def handler(self, count: int):
+            pass
+
+        result = coerce_parameter_types(handler, {"count": "not_an_int"})
+        # Should keep original since coercion failed
+        assert result["count"] == "not_an_int"
+
+    def test_coerce_invalid_uuid_keeps_original(self):
+        """Test that invalid UUID conversion keeps original value"""
+
+        def handler(self, id: UUID):
+            pass
+
+        result = coerce_parameter_types(handler, {"id": "not-a-uuid"})
+        assert result["id"] == "not-a-uuid"
+
+
+class TestCoercionIntegration:
+    """Integration tests for coercion with validation"""
+
+    def test_validation_with_coercion_succeeds(self):
+        """Test that validation passes after coercion"""
+
+        def handler(self, item_id: int, quantity: int = 1):
+            pass
+
+        # String values that would fail without coercion
+        result = validate_handler_params(
+            handler, {"item_id": "123", "quantity": "5"}, "update_item"
+        )
+        assert result["valid"] is True
+        assert result["coerced_params"]["item_id"] == 123
+        assert result["coerced_params"]["quantity"] == 5
+
+    def test_validation_fails_for_unconvertible_values(self):
+        """Test that validation fails when coercion can't convert"""
+
+        def handler(self, count: int):
+            pass
+
+        result = validate_handler_params(handler, {"count": "not_an_int"}, "test_event")
+        assert result["valid"] is False
+        assert "wrong parameter types" in result["error"]
+
+    def test_coercion_can_be_disabled(self):
+        """Test that coercion can be disabled"""
+
+        def handler(self, count: int):
+            pass
+
+        result = validate_handler_params(
+            handler, {"count": "42"}, "test_event", coerce=False
+        )
+        assert result["valid"] is False  # String "42" doesn't match int
+
+    def test_real_world_toggle_sender_scenario(self):
+        """Test the Mail Manager toggle_sender scenario that caused 11 handler fixes"""
+
+        class InboxView:
+            def toggle_sender(self, sender_id: int = 0, **kwargs):
+                """Toggle sender expansion"""
+                pass
+
+        view = InboxView()
+
+        # This is exactly what the template sends: string from data-sender-id
+        result = validate_handler_params(
+            view.toggle_sender, {"sender_id": "123"}, "toggle_sender"
+        )
+
+        assert result["valid"] is True
+        assert result["coerced_params"]["sender_id"] == 123
+        assert isinstance(result["coerced_params"]["sender_id"], int)
+
+    def test_real_world_update_quantity_scenario(self):
+        """Test realistic e-commerce update quantity handler"""
+
+        class CartView:
+            def update_quantity(self, item_id: int, quantity: int = 1, **kwargs):
+                """Update item quantity in cart"""
+                pass
+
+        view = CartView()
+
+        # Template sends: data-item-id="456" data-quantity="3"
+        result = validate_handler_params(
+            view.update_quantity,
+            {"item_id": "456", "quantity": "3"},
+            "update_quantity",
+        )
+
+        assert result["valid"] is True
+        assert result["coerced_params"]["item_id"] == 456
+        assert result["coerced_params"]["quantity"] == 3
+
+    def test_real_world_filter_with_bool(self):
+        """Test filter handler with boolean parameter"""
+
+        class ListView:
+            def toggle_filter(self, enabled: bool = False, category: str = "all", **kwargs):
+                """Toggle filter visibility"""
+                pass
+
+        view = ListView()
+
+        # Template sends: data-enabled="true" data-category="electronics"
+        result = validate_handler_params(
+            view.toggle_filter,
+            {"enabled": "true", "category": "electronics"},
+            "toggle_filter",
+        )
+
+        assert result["valid"] is True
+        assert result["coerced_params"]["enabled"] is True
+        assert result["coerced_params"]["category"] == "electronics"
 
 
 if __name__ == "__main__":

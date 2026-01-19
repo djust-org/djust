@@ -29,16 +29,25 @@ def _add_decorator_metadata(func: Callable, key: str, value: Any) -> None:
     func._djust_decorators[key] = value  # type: ignore
 
 
-def event_handler(params: Optional[List[str]] = None, description: str = "") -> Callable[[F], F]:
+def event_handler(
+    params: Optional[List[str]] = None,
+    description: str = "",
+    coerce_types: bool = True,
+) -> Callable[[F], F]:
     """
     Mark method as event handler with automatic signature introspection.
 
     Auto-extracts parameter names, types, and descriptions from function signature.
     Stores metadata in _djust_decorators for validation and debug panel.
 
+    By default, string parameters from template data-* attributes are automatically
+    coerced to the expected types based on type hints (e.g., "123" -> 123 for int).
+    Set coerce_types=False to receive raw string values.
+
     Args:
         params: Optional explicit parameter list (overrides auto-extraction)
         description: Human-readable description (overrides docstring)
+        coerce_types: Whether to coerce string params to expected types (default: True)
 
     Usage:
         @event_handler
@@ -49,7 +58,13 @@ def event_handler(params: Optional[List[str]] = None, description: str = "") -> 
 
         @event_handler(description="Update item quantity")
         def update_item(self, item_id: int, quantity: int, **kwargs):
+            # item_id and quantity are automatically coerced from strings
             self.items[item_id].quantity = quantity
+
+        @event_handler(coerce_types=False)
+        def raw_handler(self, value: str = "", **kwargs):
+            # Receives raw string values from template
+            pass
 
     Metadata Structure:
         The decorator stores comprehensive metadata in func._djust_decorators["event_handler"]:
@@ -59,7 +74,8 @@ def event_handler(params: Optional[List[str]] = None, description: str = "") -> 
             "description": "Search items",
             "accepts_kwargs": True,
             "required": [],
-            "optional": ["value"]
+            "optional": ["value"],
+            "coerce_types": True
         }
 
     Note: You can also use the shorter @event alias.
@@ -92,6 +108,7 @@ def event_handler(params: Optional[List[str]] = None, description: str = "") -> 
                 "accepts_kwargs": sig_info["accepts_kwargs"],
                 "required": [p["name"] for p in sig_info["params"] if p["required"]],
                 "optional": [p["name"] for p in sig_info["params"] if not p["required"]],
+                "coerce_types": coerce_types,  # Whether to coerce string params
             },
         )
 
