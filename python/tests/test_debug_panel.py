@@ -200,6 +200,7 @@ class TestDebugInfoInjection:
     def test_debug_info_injected_when_debug_true(self, mock_settings):
         """Test that debug info is injected when DEBUG=True"""
         mock_settings.DEBUG = True
+        mock_settings.STATIC_URL = "/static/"
 
         class MyView(LiveView):
             template_string = """
@@ -252,6 +253,7 @@ class TestDebugInfoInjection:
     def test_debug_info_not_injected_when_debug_false(self, mock_settings):
         """Test that debug info is NOT injected when DEBUG=False"""
         mock_settings.DEBUG = False
+        mock_settings.STATIC_URL = "/static/"
 
         class MyView(LiveView):
             template_string = """
@@ -288,6 +290,7 @@ class TestDebugInfoInjection:
     def test_debug_css_injected_in_head(self, mock_settings):
         """Test that debug CSS is injected in <head> tag"""
         mock_settings.DEBUG = True
+        mock_settings.STATIC_URL = "/static/"
 
         class MyView(LiveView):
             template_string = """
@@ -329,6 +332,7 @@ class TestDebugPanelMetadata:
     def test_handler_params_in_debug_info(self, mock_settings):
         """Test that handler parameters are correctly serialized"""
         mock_settings.DEBUG = True
+        mock_settings.STATIC_URL = "/static/"
 
         class MyView(LiveView):
             template_string = "<div>Test</div>"

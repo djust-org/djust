@@ -22,6 +22,15 @@ from .drafts import DraftModeMixin
 from .optimization.fingerprint import FingerprintMixin, fingerprint
 from .profiler import profiler, profile
 
+# Import testing utilities (for pytest/unittest integration)
+from .testing import (
+    LiveViewTestClient,
+    SnapshotTestMixin,
+    performance_test,
+    MockRequest,
+    create_test_view,
+)
+
 # Import Rust functions
 try:
     from ._rust import render_template, diff_html, RustLiveView
@@ -194,4 +203,10 @@ __all__ = [
     # Profiler
     "profiler",
     "profile",
+    # Testing utilities
+    "LiveViewTestClient",
+    "SnapshotTestMixin",
+    "performance_test",
+    "MockRequest",
+    "create_test_view",
 ]

@@ -4,7 +4,7 @@ WebSocket consumer for LiveView real-time updates
 
 import json
 import msgpack
-from typing import Dict, Any, Optional
+from typing import Callable, Dict, Any, Optional
 from channels.generic.websocket import AsyncWebsocketConsumer
 from .live_view import DjangoJSONEncoder
 from .validation import validate_handler_params
@@ -15,6 +15,21 @@ try:
 except ImportError:
     create_session_actor = None
     SessionActorHandle = None
+
+
+def get_handler_coerce_setting(handler: Callable) -> bool:
+    """
+    Get the coerce_types setting from a handler's @event_handler decorator.
+
+    Args:
+        handler: The event handler method
+
+    Returns:
+        True if type coercion should be enabled (default), False if disabled
+    """
+    if hasattr(handler, '_djust_decorators'):
+        return handler._djust_decorators.get("event_handler", {}).get("coerce_types", True)
+    return True
 
 
 class LiveViewConsumer(AsyncWebsocketConsumer):
@@ -564,7 +579,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     event_data.pop("component_id", None)
 
                     # Validate parameters before calling handler
-                    validation = validate_handler_params(handler, event_data, event_name)
+                    coerce = get_handler_coerce_setting(handler)
+                    validation = validate_handler_params(handler, event_data, event_name, coerce=coerce)
                     if not validation["valid"]:
                         logger.error(f"Parameter validation failed: {validation['error']}")
                         await self.send_json(
@@ -598,7 +614,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         return
 
                     # Validate parameters before calling handler
-                    validation = validate_handler_params(handler, params, event_name)
+                    coerce = get_handler_coerce_setting(handler)
+                    validation = validate_handler_params(handler, params, event_name, coerce=coerce)
                     if not validation["valid"]:
                         logger.error(f"Parameter validation failed: {validation['error']}")
                         await self.send_json(
