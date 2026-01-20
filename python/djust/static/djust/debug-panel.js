@@ -1889,7 +1889,7 @@
                                         <span class="state-trigger ${entry.trigger === 'mount' ? 'trigger-mount' : 'trigger-event'}">
                                             ${entry.trigger === 'mount' ? '🚀' : '⚡'} ${entry.trigger}
                                         </span>
-                                        ${entry.eventName ? `<span class="state-event-name">${entry.eventName}</span>` : ''}
+                                        ${entry.eventName ? `<span class="state-event-name">${this.escapeHtml(entry.eventName)}</span>` : ''}
                                         <span class="state-change-count">${changes.length} change${changes.length === 1 ? '' : 's'}</span>
                                         <span class="state-time">${this.formatTime(entry.timestamp)}</span>
                                     </div>
@@ -1900,7 +1900,7 @@
                                                 ${changes.map(change => `
                                                     <div class="state-change-item ${change.type}">
                                                         <span class="change-type-badge ${change.type}">${change.type}</span>
-                                                        <span class="change-key">${change.key}</span>
+                                                        <span class="change-key">${this.escapeHtml(change.key)}</span>
                                                         ${change.type !== 'removed' ? `
                                                             <div class="change-values">
                                                                 ${change.type === 'modified' ? `
@@ -1944,12 +1944,23 @@
         captureState(trigger, eventName = null, state = null) {
             // Capture current state from variables if not provided
             const currentState = state || (this.variables ? { ...this.variables } : {});
+            const now = Date.now();
+
+            // Deduplication: skip if same event was captured within 100ms
+            // This prevents duplicate entries from logEvent() and processDebugInfo()
+            if (this.stateHistory.length > 0) {
+                const lastEntry = this.stateHistory[0];
+                const timeDiff = now - lastEntry.timestamp;
+                if (timeDiff < 100 && lastEntry.eventName === eventName && lastEntry.trigger === trigger) {
+                    return; // Skip duplicate
+                }
+            }
 
             const entry = {
                 trigger: trigger,
                 eventName: eventName,
                 state: this.cloneState(currentState),
-                timestamp: Date.now(),
+                timestamp: now,
                 _expanded: false
             };
 
@@ -2040,12 +2051,14 @@
             try {
                 const json = JSON.stringify(value, null, 2);
                 // Truncate very long values
+                let result = json;
                 if (json.length > 500) {
-                    return json.substring(0, 500) + '\n... (truncated)';
+                    result = json.substring(0, 500) + '\n... (truncated)';
                 }
-                return json;
+                // Escape HTML to prevent XSS
+                return this.escapeHtml(result);
             } catch (e) {
-                return String(value);
+                return this.escapeHtml(String(value));
             }
         }
 
@@ -3010,6 +3023,14 @@
                 second: '2-digit',
                 fractionalSecondDigits: 3
             });
+        }
+
+        escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            const text = String(str);
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
         renderElementBadge(element) {

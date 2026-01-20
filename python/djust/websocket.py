@@ -17,6 +17,21 @@ except ImportError:
     SessionActorHandle = None
 
 
+def get_handler_coerce_setting(handler) -> bool:
+    """
+    Get the coerce_types setting from a handler's @event_handler decorator.
+
+    Args:
+        handler: The event handler method
+
+    Returns:
+        True if type coercion should be enabled (default), False if disabled
+    """
+    if hasattr(handler, '_djust_decorators'):
+        return handler._djust_decorators.get("event_handler", {}).get("coerce_types", True)
+    return True
+
+
 class LiveViewConsumer(AsyncWebsocketConsumer):
     """
     WebSocket consumer for handling LiveView connections.
@@ -563,12 +578,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     event_data = params.copy()
                     event_data.pop("component_id", None)
 
-                    # Check if handler has coerce_types setting from @event_handler decorator
-                    coerce = True
-                    if hasattr(handler, '_djust_decorators'):
-                        coerce = handler._djust_decorators.get("event_handler", {}).get("coerce_types", True)
-
                     # Validate parameters before calling handler
+                    coerce = get_handler_coerce_setting(handler)
                     validation = validate_handler_params(handler, event_data, event_name, coerce=coerce)
                     if not validation["valid"]:
                         logger.error(f"Parameter validation failed: {validation['error']}")
@@ -602,12 +613,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         await self.send_json({"type": "error", "error": error_msg})
                         return
 
-                    # Check if handler has coerce_types setting from @event_handler decorator
-                    coerce = True
-                    if hasattr(handler, '_djust_decorators'):
-                        coerce = handler._djust_decorators.get("event_handler", {}).get("coerce_types", True)
-
                     # Validate parameters before calling handler
+                    coerce = get_handler_coerce_setting(handler)
                     validation = validate_handler_params(handler, params, event_name, coerce=coerce)
                     if not validation["valid"]:
                         logger.error(f"Parameter validation failed: {validation['error']}")

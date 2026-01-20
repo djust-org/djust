@@ -34,13 +34,12 @@ Example usage:
 """
 
 import functools
-import hashlib
 import inspect
 import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Type
 from unittest.mock import MagicMock, patch
 
 from django.test import RequestFactory
@@ -85,7 +84,7 @@ class LiveViewTestClient:
         self.patches: List[Any] = []
         self._mounted = False
 
-    def mount(self, **params) -> 'LiveViewTestClient':
+    def mount(self, **params: Any) -> 'LiveViewTestClient':
         """
         Initialize the view with optional params.
 
@@ -129,7 +128,7 @@ class LiveViewTestClient:
 
         return self
 
-    def send_event(self, event_name: str, **params) -> Dict[str, Any]:
+    def send_event(self, event_name: str, **params: Any) -> Dict[str, Any]:
         """
         Send an event and return the result.
 
@@ -283,7 +282,7 @@ class LiveViewTestClient:
         template = get_template(template_name)
         return template.render(context)
 
-    def assert_state(self, **expected):
+    def assert_state(self, **expected: Any) -> None:
         """
         Assert state variables match expected values.
 
@@ -312,7 +311,7 @@ class LiveViewTestClient:
                     f"got {actual_value!r}"
                 )
 
-    def assert_state_contains(self, **expected):
+    def assert_state_contains(self, **expected: Any) -> None:
         """
         Assert state variables contain expected values (for collections).
 
@@ -576,7 +575,7 @@ class MockRequest:
 def create_test_view(
     view_class: Type,
     user: Optional[Any] = None,
-    **mount_params
+    **mount_params: Any
 ) -> Any:
     """
     Helper to quickly create and mount a view for testing.
