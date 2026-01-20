@@ -4,7 +4,7 @@ WebSocket consumer for LiveView real-time updates
 
 import json
 import msgpack
-from typing import Dict, Any, Optional
+from typing import Callable, Dict, Any, Optional
 from channels.generic.websocket import AsyncWebsocketConsumer
 from .live_view import DjangoJSONEncoder
 from .validation import validate_handler_params
@@ -17,7 +17,7 @@ except ImportError:
     SessionActorHandle = None
 
 
-def get_handler_coerce_setting(handler) -> bool:
+def get_handler_coerce_setting(handler: Callable) -> bool:
     """
     Get the coerce_types setting from a handler's @event_handler decorator.
 

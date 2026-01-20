@@ -40,7 +40,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Type
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from django.test import RequestFactory
 
