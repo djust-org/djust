@@ -676,6 +676,30 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # For views with dynamic templates (template as property),
                 # patches may be empty because VDOM state is lost on recreation.
                 # In that case, send full HTML update.
+
+                # Patch compression: if patch count exceeds threshold and HTML is smaller,
+                # send HTML instead of patches for better performance
+                PATCH_COUNT_THRESHOLD = 100
+                if patches:
+                    patch_list = json.loads(patches)
+                    patch_count = len(patch_list)
+                    if patch_count > PATCH_COUNT_THRESHOLD:
+                        # Compare sizes to decide whether to send patches or HTML
+                        patches_size = len(patches.encode('utf-8'))
+                        html_size = len(html.encode('utf-8'))
+                        # If HTML is at least 30% smaller, send HTML instead
+                        if html_size < patches_size * 0.7:
+                            import sys
+                            print(
+                                f"[WebSocket] Patch compression: {patch_count} patches ({patches_size}B) "
+                                f"-> sending HTML ({html_size}B) instead",
+                                file=sys.stderr,
+                            )
+                            # Reset VDOM and send HTML
+                            if hasattr(self.view_instance, '_rust_view') and self.view_instance._rust_view:
+                                self.view_instance._rust_view.reset()
+                            patches = None
+
                 if patches:
                     if self.use_binary:
                         # Send as MessagePack

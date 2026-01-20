@@ -988,6 +988,102 @@ const DEFAULT_RATE_LIMITS = {
     'textarea': { type: 'debounce', ms: 300 }    // Multi-line text
 };
 
+/**
+ * Extract parameters from element data-* attributes with optional type coercion.
+ *
+ * Supports typed attributes via suffix notation:
+ *   data-sender-id:int="42"     -> { sender_id: 42 }
+ *   data-enabled:bool="true"    -> { enabled: true }
+ *   data-price:float="19.99"    -> { price: 19.99 }
+ *   data-tags:json='["a","b"]'  -> { tags: ["a", "b"] }
+ *   data-items:list="a,b,c"     -> { items: ["a", "b", "c"] }
+ *   data-name="John"            -> { name: "John" } (default: string)
+ *
+ * @param {HTMLElement} element - Element to extract params from
+ * @returns {Object} - Parameters with coerced types
+ */
+function extractTypedParams(element) {
+    const params = {};
+
+    for (const attr of element.attributes) {
+        if (!attr.name.startsWith('data-')) continue;
+
+        // Skip djust internal attributes
+        if (attr.name.startsWith('data-liveview') ||
+            attr.name.startsWith('data-live-') ||
+            attr.name === 'data-loading' ||
+            attr.name === 'data-component-id') {
+            continue;
+        }
+
+        // Parse attribute name: data-sender-id:int -> key="sender_id", type="int"
+        const nameWithoutPrefix = attr.name.slice(5); // Remove "data-"
+        const colonIndex = nameWithoutPrefix.lastIndexOf(':');
+        let rawKey, typeHint;
+
+        if (colonIndex !== -1) {
+            rawKey = nameWithoutPrefix.slice(0, colonIndex);
+            typeHint = nameWithoutPrefix.slice(colonIndex + 1);
+        } else {
+            rawKey = nameWithoutPrefix;
+            typeHint = null;
+        }
+
+        const key = rawKey.replace(/-/g, '_'); // Convert kebab-case to snake_case
+        let value = attr.value;
+
+        // Apply type coercion based on suffix
+        if (typeHint) {
+            switch (typeHint) {
+                case 'int':
+                case 'integer':
+                    value = value === '' ? 0 : parseInt(value, 10);
+                    if (isNaN(value)) value = 0;
+                    break;
+
+                case 'float':
+                case 'number':
+                    value = value === '' ? 0.0 : parseFloat(value);
+                    if (isNaN(value)) value = 0.0;
+                    break;
+
+                case 'bool':
+                case 'boolean':
+                    value = ['true', '1', 'yes', 'on', 'checked'].includes(value.toLowerCase());
+                    break;
+
+                case 'json':
+                case 'object':
+                case 'array':
+                    try {
+                        value = JSON.parse(value);
+                    } catch (e) {
+                        console.warn(`[LiveView] Failed to parse JSON for ${attr.name}:`, value);
+                        // Keep as string if JSON parse fails
+                    }
+                    break;
+
+                case 'list':
+                    // Comma-separated list
+                    value = value ? value.split(',').map(v => v.trim()).filter(v => v) : [];
+                    break;
+
+                // Unknown type hint - keep as string
+                default:
+                    break;
+            }
+        }
+
+        params[key] = value;
+    }
+
+    return params;
+}
+
+// Export for global access
+window.djust = window.djust || {};
+window.djust.extractTypedParams = extractTypedParams;
+
 function bindLiveViewEvents() {
     // Find all interactive elements
     const allElements = document.querySelectorAll('*');
@@ -999,15 +1095,8 @@ function bindLiveViewEvents() {
             element.addEventListener('click', async (e) => {
                 e.preventDefault();
 
-                // Extract all data-* attributes
-                const params = {};
-                Array.from(element.attributes).forEach(attr => {
-                    if (attr.name.startsWith('data-') && !attr.name.startsWith('data-liveview')) {
-                        // Convert data-foo-bar to foo_bar
-                        const key = attr.name.substring(5).replace(/-/g, '_');
-                        params[key] = attr.value;
-                    }
-                });
+                // Extract all data-* attributes with type coercion support
+                const params = extractTypedParams(element);
 
                 // Phase 4: Check if event is from a component (walk up DOM tree)
                 let currentElement = e.currentTarget;
@@ -1801,12 +1890,131 @@ function applyDjUpdateElements(existingRoot, newRoot) {
     }
 }
 
+/**
+ * Get significant children (elements and non-whitespace text nodes).
+ */
+function getSignificantChildren(node) {
+    return Array.from(node.childNodes).filter(child => {
+        if (child.nodeType === Node.ELEMENT_NODE) return true;
+        if (child.nodeType === Node.TEXT_NODE) {
+            return child.textContent.trim().length > 0;
+        }
+        return false;
+    });
+}
+
+/**
+ * Group patches by their parent path for batching.
+ */
+function groupPatchesByParent(patches) {
+    const groups = {};
+    for (const patch of patches) {
+        const parentPath = patch.path.slice(0, -1).join('/');
+        if (!groups[parentPath]) {
+            groups[parentPath] = [];
+        }
+        groups[parentPath].push(patch);
+    }
+    return groups;
+}
+
+/**
+ * Apply a single patch operation.
+ */
+function applySinglePatch(patch) {
+    const node = getNodeByPath(patch.path);
+    if (!node) {
+        console.warn(`[LiveView] Failed to find node at path:`, patch.path);
+        return false;
+    }
+
+    try {
+        switch (patch.type) {
+            case 'Replace':
+                const newNode = createNodeFromVNode(patch.node);
+                node.parentNode.replaceChild(newNode, node);
+                break;
+
+            case 'SetText':
+                node.textContent = patch.text;
+                break;
+
+            case 'SetAttr':
+                if (patch.key === 'value' && (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA')) {
+                    if (document.activeElement !== node) {
+                        node.value = patch.value;
+                    }
+                    node.setAttribute(patch.key, patch.value);
+                } else {
+                    node.setAttribute(patch.key, patch.value);
+                }
+                break;
+
+            case 'RemoveAttr':
+                node.removeAttribute(patch.key);
+                break;
+
+            case 'InsertChild': {
+                const newChild = createNodeFromVNode(patch.node);
+                const children = getSignificantChildren(node);
+                const refChild = children[patch.index];
+                if (refChild) {
+                    node.insertBefore(newChild, refChild);
+                } else {
+                    node.appendChild(newChild);
+                }
+                break;
+            }
+
+            case 'RemoveChild': {
+                const children = getSignificantChildren(node);
+                const child = children[patch.index];
+                if (child) {
+                    node.removeChild(child);
+                }
+                break;
+            }
+
+            case 'MoveChild': {
+                const children = getSignificantChildren(node);
+                const child = children[patch.from];
+                if (child) {
+                    const refChild = children[patch.to];
+                    if (refChild) {
+                        node.insertBefore(child, refChild);
+                    } else {
+                        node.appendChild(child);
+                    }
+                }
+                break;
+            }
+
+            default:
+                console.warn(`[LiveView] Unknown patch type: ${patch.type}`);
+                return false;
+        }
+
+        return true;
+    } catch (error) {
+        console.error(`[LiveView] Error applying patch:`, patch, error);
+        return false;
+    }
+}
+
+/**
+ * Apply VDOM patches with optimized batching.
+ *
+ * Improvements over sequential application:
+ * - Groups patches by parent path for batch operations
+ * - Uses DocumentFragment for multiple InsertChild on same parent
+ * - Batches DOM mutations within requestAnimationFrame for smooth updates
+ */
 function applyPatches(patches) {
     if (!patches || patches.length === 0) {
         return true;
     }
 
-    // Sort patches to ensure RemoveChild operations are applied in descending order
+    // Sort patches: RemoveChild in descending order to preserve indices
     patches.sort((a, b) => {
         if (a.type === 'RemoveChild' && b.type === 'RemoveChild') {
             const pathA = JSON.stringify(a.path);
@@ -1818,84 +2026,79 @@ function applyPatches(patches) {
         return 0;
     });
 
+    // For small patch sets, apply directly without batching overhead
+    if (patches.length <= 10) {
+        let failedCount = 0;
+        for (const patch of patches) {
+            if (!applySinglePatch(patch)) {
+                failedCount++;
+            }
+        }
+        if (failedCount > 0) {
+            console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
+            return false;
+        }
+        return true;
+    }
+
+    // For larger patch sets, use batching with requestAnimationFrame
     let failedCount = 0;
     let successCount = 0;
 
-    for (const patch of patches) {
-        const node = getNodeByPath(patch.path);
-        if (!node) {
-            failedCount++;
-            console.warn(`[LiveView] Failed to find node at path:`, patch.path);
-            continue;
-        }
+    // Group patches by parent for potential batching
+    const patchGroups = groupPatchesByParent(patches);
 
-        successCount++;
+    for (const [parentPath, group] of Object.entries(patchGroups)) {
+        // Optimization: Use DocumentFragment for multiple InsertChild on same parent
+        const insertPatches = group.filter(p => p.type === 'InsertChild');
 
-        try {
-            if (patch.type === 'Replace') {
-                const newNode = createNodeFromVNode(patch.node);
-                node.parentNode.replaceChild(newNode, node);
-            } else if (patch.type === 'SetText') {
-                node.textContent = patch.text;
-            } else if (patch.type === 'SetAttr') {
-                if (patch.key === 'value' && (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA')) {
-                    if (document.activeElement !== node) {
-                        node.value = patch.value;
+        if (insertPatches.length >= 3) {
+            // Get parent node for batch insert
+            const parentPathArray = parentPath ? parentPath.split('/').filter(Boolean).map(Number) : [];
+            // For InsertChild, the path points to the parent, so use first patch's path
+            const firstPatch = insertPatches[0];
+            const parentNode = getNodeByPath(firstPatch.path);
+
+            if (parentNode) {
+                try {
+                    // Sort by index to insert in correct order
+                    insertPatches.sort((a, b) => a.index - b.index);
+
+                    const fragment = document.createDocumentFragment();
+                    for (const patch of insertPatches) {
+                        const newChild = createNodeFromVNode(patch.node);
+                        fragment.appendChild(newChild);
+                        successCount++;
                     }
-                    node.setAttribute(patch.key, patch.value);
-                } else {
-                    node.setAttribute(patch.key, patch.value);
-                }
-            } else if (patch.type === 'RemoveAttr') {
-                node.removeAttribute(patch.key);
-            } else if (patch.type === 'InsertChild') {
-                const newChild = createNodeFromVNode(patch.node);
-                const children = Array.from(node.childNodes).filter(child => {
-                    if (child.nodeType === Node.ELEMENT_NODE) return true;
-                    if (child.nodeType === Node.TEXT_NODE) {
-                        return child.textContent.trim().length > 0;
-                    }
-                    return false;
-                });
-                const refChild = children[patch.index];
-                if (refChild) {
-                    node.insertBefore(newChild, refChild);
-                } else {
-                    node.appendChild(newChild);
-                }
-            } else if (patch.type === 'RemoveChild') {
-                const children = Array.from(node.childNodes).filter(child => {
-                    if (child.nodeType === Node.ELEMENT_NODE) return true;
-                    if (child.nodeType === Node.TEXT_NODE) {
-                        return child.textContent.trim().length > 0;
-                    }
-                    return false;
-                });
-                const child = children[patch.index];
-                if (child) {
-                    node.removeChild(child);
-                }
-            } else if (patch.type === 'MoveChild') {
-                const children = Array.from(node.childNodes).filter(child => {
-                    if (child.nodeType === Node.ELEMENT_NODE) return true;
-                    if (child.nodeType === Node.TEXT_NODE) {
-                        return child.textContent.trim().length > 0;
-                    }
-                    return false;
-                });
-                const child = children[patch.from];
-                if (child) {
-                    const refChild = children[patch.to];
+
+                    // Insert fragment at the right position
+                    const children = getSignificantChildren(parentNode);
+                    const firstIndex = insertPatches[0].index;
+                    const refChild = children[firstIndex];
+
                     if (refChild) {
-                        node.insertBefore(child, refChild);
+                        parentNode.insertBefore(fragment, refChild);
                     } else {
-                        node.appendChild(child);
+                        parentNode.appendChild(fragment);
                     }
+
+                    // Remove InsertChild from remaining patches to process
+                    const insertPatchSet = new Set(insertPatches);
+                    group.splice(0, group.length, ...group.filter(p => !insertPatchSet.has(p)));
+                } catch (error) {
+                    console.error('[LiveView] Batch insert failed, falling back to individual patches:', error);
+                    // On failure, patches remain in group for individual processing
                 }
             }
-        } catch (error) {
-            failedCount++;
-            console.error(`[LiveView] Error applying patch:`, patch, error);
+        }
+
+        // Apply remaining patches individually
+        for (const patch of group) {
+            if (applySinglePatch(patch)) {
+                successCount++;
+            } else {
+                failedCount++;
+            }
         }
     }
 

@@ -257,16 +257,22 @@ def validate_handler_params(
     if type_errors:
         error_msg = f"Handler '{event_name}' received wrong parameter types:\n"
         for err in type_errors:
-            error_msg += f"  - {err['param']}: expected {err['expected']}, got {err['actual']}"
-            # Add hint for common string->type coercion failures
-            if err['actual'] == 'str' and err['expected'] in ('int', 'float', 'bool'):
-                # Truncate repr safely to avoid cutting mid-escape sequence
-                val_repr = repr(err.get('value', '?'))
-                if len(val_repr) > 30:
-                    val_repr = val_repr[:27] + '...'
-                error_msg += f" (value: {val_repr})"
-                error_msg += f"\n    Hint: Coercion failed. Check that the value is valid for {err['expected']}."
-            error_msg += "\n"
+            # Truncate repr safely to avoid cutting mid-escape sequence
+            val_repr = repr(err.get('value', '?'))
+            if len(val_repr) > 50:
+                val_repr = val_repr[:47] + '...'
+
+            error_msg += f"  - {err['param']}: expected {err['expected']}, got {err['actual']} ({val_repr})\n"
+
+            # Add detailed hint with actionable fix suggestions
+            hint = format_type_error_hint(
+                param=err['param'],
+                expected=err['expected'],
+                actual=err['actual'],
+                value=err.get('value'),
+                coercion_attempted=coerce,
+            )
+            error_msg += hint + "\n\n"
 
         return {
             "valid": False,
@@ -404,3 +410,124 @@ def get_handler_signature_info(handler: Callable) -> Dict[str, Any]:
         "description": inspect.getdoc(handler) or "",
         "accepts_kwargs": accepts_kwargs,
     }
+
+
+def format_type_error_hint(
+    param: str,
+    expected: str,
+    actual: str,
+    value: Any,
+    coercion_attempted: bool = True,
+) -> str:
+    """
+    Format a validation error with actionable hints.
+
+    Provides clear guidance on how to fix type mismatches,
+    with specific suggestions based on the mismatch type.
+
+    Args:
+        param: Parameter name that failed validation
+        expected: Expected type name
+        actual: Actual type name
+        value: The actual value received
+        coercion_attempted: Whether type coercion was tried
+
+    Returns:
+        Formatted hint string
+    """
+    # Build appropriate hint based on the type mismatch
+    if expected == "int" and actual == "str":
+        return _get_string_to_int_hint(param, value, coercion_attempted)
+    elif expected == "float" and actual == "str":
+        return _get_string_to_float_hint(param, value, coercion_attempted)
+    elif expected == "bool" and actual == "str":
+        return _get_string_to_bool_hint(param, value, coercion_attempted)
+    elif expected == "list" and actual == "str":
+        return _get_string_to_list_hint(param, value, coercion_attempted)
+    elif expected == "Decimal" and actual == "str":
+        return _get_string_to_decimal_hint(param, value, coercion_attempted)
+    else:
+        # Generic hint
+        return f"    Hint: Check that the value is valid for type '{expected}'."
+
+
+def _get_string_to_int_hint(param: str, value: Any, coercion_attempted: bool) -> str:
+    """Generate hint for string->int coercion failure."""
+    hint = "    This is a common issue! Template data-* attributes are always strings.\n\n"
+
+    if coercion_attempted:
+        hint += f"    The value '{value}' could not be converted to int.\n"
+        hint += "    Check that it's a valid integer (e.g., '42', not '42.5' or 'abc').\n\n"
+
+    hint += "    Quick fixes:\n"
+    hint += "      1. Use typed template attribute:\n"
+    hint += f"         data-{param.replace('_', '-')}:int=\"{{{{ value }}}}\"\n"
+    hint += "      2. Ensure the value is numeric in your template:\n"
+    hint += f"         data-{param.replace('_', '-')}=\"{{{{ item.id|default:0 }}}}\""
+
+    return hint
+
+
+def _get_string_to_float_hint(param: str, value: Any, coercion_attempted: bool) -> str:
+    """Generate hint for string->float coercion failure."""
+    hint = "    Template data-* attributes are always strings.\n\n"
+
+    if coercion_attempted:
+        hint += f"    The value '{value}' could not be converted to float.\n"
+        hint += "    Check that it's a valid number (e.g., '3.14' or '42').\n\n"
+
+    hint += "    Quick fixes:\n"
+    hint += "      1. Use typed template attribute:\n"
+    hint += f"         data-{param.replace('_', '-')}:float=\"{{{{ value }}}}\"\n"
+    hint += "      2. Ensure the value is numeric in your template:\n"
+    hint += f"         data-{param.replace('_', '-')}=\"{{{{ item.price|default:0.0 }}}}\""
+
+    return hint
+
+
+def _get_string_to_bool_hint(param: str, value: Any, coercion_attempted: bool) -> str:
+    """Generate hint for string->bool coercion failure."""
+    hint = "    Template data-* attributes pass 'true'/'false' as strings.\n\n"
+
+    if coercion_attempted:
+        hint += f"    The value '{value}' was treated as False.\n"
+        hint += "    Valid true values: 'true', '1', 'yes', 'on'\n\n"
+
+    hint += "    Quick fixes:\n"
+    hint += "      1. Use typed template attribute:\n"
+    hint += f"         data-{param.replace('_', '-')}:bool=\"{{{{ value|yesno:'true,false' }}}}\"\n"
+    hint += "      2. Use proper boolean string:\n"
+    hint += f"         data-{param.replace('_', '-')}=\"{{{{ item.enabled|yesno:'true,false' }}}}\""
+
+    return hint
+
+
+def _get_string_to_list_hint(param: str, value: Any, coercion_attempted: bool) -> str:
+    """Generate hint for string->list coercion failure."""
+    hint = "    Lists should be passed as JSON or comma-separated strings.\n\n"
+
+    hint += "    Quick fixes:\n"
+    hint += "      1. Use JSON typed attribute:\n"
+    hint += f"         data-{param.replace('_', '-')}:json=\"{{{{ values|safe }}}}\"\n"
+    hint += "      2. Use comma-separated list:\n"
+    hint += f"         data-{param.replace('_', '-')}:list=\"a,b,c\"\n"
+    hint += "      3. Pass as JSON string:\n"
+    hint += f"         data-{param.replace('_', '-')}='[\"a\", \"b\", \"c\"]'"
+
+    return hint
+
+
+def _get_string_to_decimal_hint(param: str, value: Any, coercion_attempted: bool) -> str:
+    """Generate hint for string->Decimal coercion failure."""
+    hint = "    Decimal values require valid numeric strings.\n\n"
+
+    if coercion_attempted:
+        hint += f"    The value '{value}' could not be converted to Decimal.\n\n"
+
+    hint += "    Quick fixes:\n"
+    hint += "      1. Ensure the value is a valid decimal:\n"
+    hint += f"         data-{param.replace('_', '-')}=\"{{{{ item.price }}}}\"\n"
+    hint += "      2. Use a default value:\n"
+    hint += f"         data-{param.replace('_', '-')}=\"{{{{ item.price|default:'0.00' }}}}\""
+
+    return hint
