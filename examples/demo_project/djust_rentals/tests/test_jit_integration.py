@@ -15,7 +15,7 @@ from django.test.utils import CaptureQueriesContext
 from django.contrib.auth.models import User
 from datetime import date, timedelta
 
-from djust.testing import LiveViewTestClient, MockRequest, performance_test
+from djust.testing import LiveViewTestClient
 
 from djust_rentals.views.dashboard import RentalDashboardView
 from djust_rentals.models import Property, Tenant, Lease, MaintenanceRequest, Payment
