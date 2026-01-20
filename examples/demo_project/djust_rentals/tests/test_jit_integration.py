@@ -5,6 +5,8 @@ Tests verify that:
 1. JIT reduces query count on dashboard (eliminates N+1)
 2. All data is serialized correctly
 3. Performance meets targets
+
+Uses djust testing utilities for cleaner test code.
 """
 
 from django.test import TestCase
@@ -12,6 +14,8 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.contrib.auth.models import User
 from datetime import date, timedelta
+
+from djust.testing import LiveViewTestClient, MockRequest, performance_test
 
 from djust_rentals.views.dashboard import RentalDashboardView
 from djust_rentals.models import Property, Tenant, Lease, MaintenanceRequest, Payment
@@ -93,21 +97,11 @@ class RentalDashboardJITTestCase(TestCase):
         When JIT auto-serialization is fully integrated, query count should
         further reduce via automatic select_related/prefetch_related.
         """
-        view = RentalDashboardView()
-
-        # Create mock request
-        class MockRequest:
-            user = None
-            session = {}
-            META = {}
-            GET = {}
-            POST = {}
-
-        request = MockRequest()
-        view.mount(request)
+        client = LiveViewTestClient(RentalDashboardView)
+        client.mount()
 
         with CaptureQueriesContext(connection) as ctx:
-            context = view.get_context_data()
+            context = client.view_instance.get_context_data()
 
             # Access serialized data to trigger any lazy evaluation
             _ = context['properties']
@@ -133,18 +127,11 @@ class RentalDashboardJITTestCase(TestCase):
 
     def test_dashboard_data_completeness(self):
         """Verify all dashboard data serialized correctly."""
-        view = RentalDashboardView()
+        client = LiveViewTestClient(RentalDashboardView)
+        client.mount()
 
-        class MockRequest:
-            user = None
-            session = {}
-            META = {}
-            GET = {}
-            POST = {}
-
-        request = MockRequest()
-        view.mount(request)
-        context = view.get_context_data()
+        # Check computed context data (these are calculated in get_context_data, not state)
+        context = client.view_instance.get_context_data()
 
         # Check metrics
         assert 'total_properties' in context
@@ -158,9 +145,6 @@ class RentalDashboardJITTestCase(TestCase):
 
         assert 'monthly_income' in context
         assert context['monthly_income'] > 0
-
-        # Check properties list
-        assert 'properties' in context
         assert len(context['properties']) > 0
 
         prop = context['properties'][0]
@@ -170,9 +154,7 @@ class RentalDashboardJITTestCase(TestCase):
         assert 'status' in prop
 
         # Check maintenance list
-        assert 'pending_maintenance' in context
         maintenance_list = context['pending_maintenance']
-
         if len(maintenance_list) > 0:
             req = maintenance_list[0]
             assert 'title' in req
@@ -180,9 +162,7 @@ class RentalDashboardJITTestCase(TestCase):
             assert 'priority' in req
 
         # Check expiring leases
-        assert 'expiring_soon' in context
         expiring = context['expiring_soon']
-
         if len(expiring) > 0:
             lease = expiring[0]
             assert 'property_name' in lease
@@ -191,22 +171,15 @@ class RentalDashboardJITTestCase(TestCase):
 
     def test_dashboard_search_performance(self):
         """Test search functionality with debouncing."""
-        view = RentalDashboardView()
-
-        class MockRequest:
-            user = None
-            session = {}
-            META = {}
-            GET = {}
-            POST = {}
-
-        request = MockRequest()
-        view.mount(request)
+        client = LiveViewTestClient(RentalDashboardView)
+        client.mount()
 
         with CaptureQueriesContext(connection) as ctx:
             # Search should only trigger when debounce timer expires
-            view.search_properties(query="Property")
-            context = view.get_context_data()
+            result = client.send_event('search_properties', query="Property")
+            assert result['success'], f"Search failed: {result.get('error')}"
+
+            context = client.view_instance.get_context_data()
             _ = context['properties']
 
         query_count = len(ctx.captured_queries)
@@ -217,22 +190,15 @@ class RentalDashboardJITTestCase(TestCase):
 
     def test_dashboard_filter_performance(self):
         """Test filter functionality."""
-        view = RentalDashboardView()
-
-        class MockRequest:
-            user = None
-            session = {}
-            META = {}
-            GET = {}
-            POST = {}
-
-        request = MockRequest()
-        view.mount(request)
+        client = LiveViewTestClient(RentalDashboardView)
+        client.mount()
 
         with CaptureQueriesContext(connection) as ctx:
             # Filter by status
-            view.filter_properties(status="active")
-            context = view.get_context_data()
+            result = client.send_event('filter_properties', status="active")
+            assert result['success'], f"Filter failed: {result.get('error')}"
+
+            context = client.view_instance.get_context_data()
             _ = context['properties']
 
         query_count = len(ctx.captured_queries)
@@ -248,18 +214,9 @@ class RentalDashboardJITTestCase(TestCase):
         This test verifies that JIT produces the same structure as
         the manual serialization in the dashboard view.
         """
-        view = RentalDashboardView()
-
-        class MockRequest:
-            user = None
-            session = {}
-            META = {}
-            GET = {}
-            POST = {}
-
-        request = MockRequest()
-        view.mount(request)
-        context = view.get_context_data()
+        client = LiveViewTestClient(RentalDashboardView)
+        client.mount()
+        context = client.view_instance.get_context_data()
 
         # Verify structure matches manual serialization
         if len(context['properties']) > 0:
@@ -292,13 +249,13 @@ class MaintenanceRequestJITTestCase(TestCase):
             first_name="Test",
             last_name="User",
         )
-        tenant = Tenant.objects.create(
+        cls.tenant = Tenant.objects.create(
             user=user,
             phone="555-0000",
             emergency_contact_name="Emergency Contact",
             emergency_contact_phone="555-1111",
         )
-        prop = Property.objects.create(
+        cls.prop = Property.objects.create(
             name="Test Property",
             address="123 Test St",
             city="Test City",
@@ -315,8 +272,8 @@ class MaintenanceRequestJITTestCase(TestCase):
         # Create 20 maintenance requests
         for i in range(20):
             MaintenanceRequest.objects.create(
-                property=prop,
-                tenant=tenant,
+                property=cls.prop,
+                tenant=cls.tenant,
                 title=f"Request {i}",
                 description=f"Description {i}",
                 priority="urgent" if i % 5 == 0 else "medium",
@@ -329,8 +286,6 @@ class MaintenanceRequestJITTestCase(TestCase):
 
         Note: Future JIT optimization should use select_related automatically.
         """
-        from djust_rentals.models import MaintenanceRequest
-
         with CaptureQueriesContext(connection) as ctx:
             # Get maintenance requests
             requests = MaintenanceRequest.objects.filter(
@@ -361,8 +316,8 @@ class JITEdgeCasesTestCase(TestCase):
     def setUpTestData(cls):
         """Create minimal test data."""
         user = User.objects.create(
-            username="testuser",
-            email="test@example.com",
+            username="testuser2",
+            email="test2@example.com",
             first_name="Test",
             last_name="User",
         )
@@ -373,7 +328,7 @@ class JITEdgeCasesTestCase(TestCase):
             emergency_contact_phone="555-1111",
         )
         cls.property = Property.objects.create(
-            name="Test Property",
+            name="Test Property Edge",
             address="123 Test St",
             city="Test City",
             state="CA",
@@ -401,20 +356,12 @@ class JITEdgeCasesTestCase(TestCase):
                 context = super().get_context_data(**kwargs)
                 return context
 
-        view = TestView()
-
-        class MockRequest:
-            user = None
-            session = {}
-            META = {}
-            GET = {}
-            POST = {}
-
-        request = MockRequest()
-        view.mount(request)
+        # Use LiveViewTestClient for cleaner test setup
+        client = LiveViewTestClient(TestView)
+        client.mount()
 
         with CaptureQueriesContext(connection) as ctx:
-            context = view.get_context_data()
+            context = client.view_instance.get_context_data()
             _ = context.get('leases', [])
 
         # Should not crash with empty queryset
@@ -449,20 +396,11 @@ class JITEdgeCasesTestCase(TestCase):
                 context = super().get_context_data(**kwargs)
                 return context
 
-        view = TestView()
-
-        class MockRequest:
-            user = None
-            session = {}
-            META = {}
-            GET = {}
-            POST = {}
-
-        request = MockRequest()
-        view.mount(request)
+        client = LiveViewTestClient(TestView)
+        client.mount()
 
         with CaptureQueriesContext(connection) as ctx:
-            context = view.get_context_data()
+            context = client.view_instance.get_context_data()
             leases = context.get('leases', [])
             assert len(leases) == 10, "Should respect queryset slicing"
 
@@ -500,20 +438,11 @@ class JITEdgeCasesTestCase(TestCase):
                 context = super().get_context_data(**kwargs)
                 return context
 
-        view = TestView()
-
-        class MockRequest:
-            user = None
-            session = {}
-            META = {}
-            GET = {}
-            POST = {}
-
-        request = MockRequest()
-        view.mount(request)
+        client = LiveViewTestClient(TestView)
+        client.mount()
 
         with CaptureQueriesContext(connection) as ctx:
-            context = view.get_context_data()
+            context = client.view_instance.get_context_data()
             leases = context.get('leases', [])
             assert len(leases) > 0, "Should return filtered results"
 
