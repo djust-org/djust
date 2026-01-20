@@ -40,7 +40,6 @@ import re
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Type
-from unittest.mock import MagicMock
 
 from django.test import RequestFactory
 
@@ -252,6 +251,7 @@ class LiveViewTestClient:
                     continue
                 state[name] = value
             except AttributeError:
+                # Property may raise AttributeError if dependencies aren't set
                 pass
 
         return state
@@ -452,6 +452,7 @@ def performance_test(
     max_time_ms: float = 100,
     max_queries: int = 10,
     track_memory: bool = False,
+    max_memory_bytes: Optional[int] = None,
 ):
     """
     Decorator for performance testing event handlers.
@@ -462,6 +463,7 @@ def performance_test(
         max_time_ms: Maximum execution time in milliseconds
         max_queries: Maximum number of database queries
         track_memory: Whether to track memory usage (slower)
+        max_memory_bytes: Maximum memory allocation in bytes (requires track_memory=True)
 
     Usage:
         @performance_test(max_time_ms=50, max_queries=5)
@@ -531,6 +533,12 @@ def performance_test(
                     f"First {min(5, query_count)} queries:\n" +
                     '\n'.join(query_summary)
                 )
+
+            if max_memory_bytes is not None and memory_used is not None:
+                if memory_used > max_memory_bytes:
+                    errors.append(
+                        f"Memory usage {memory_used:,} bytes exceeded max {max_memory_bytes:,} bytes"
+                    )
 
             if errors:
                 raise AssertionError(
