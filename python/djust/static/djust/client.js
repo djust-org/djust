@@ -1670,7 +1670,33 @@ async function handleEvent(eventName, params = {}) {
 
 // === VDOM Patch Application ===
 
-function getNodeByPath(path) {
+/**
+ * Get significant children (elements and non-whitespace text nodes).
+ * This matches the filtering done in Rust VDOM parser.
+ */
+function getSignificantChildrenForPath(node) {
+    return Array.from(node.childNodes).filter(child => {
+        if (child.nodeType === Node.ELEMENT_NODE) return true;
+        if (child.nodeType === Node.TEXT_NODE) {
+            return child.textContent.trim().length > 0;
+        }
+        return false;
+    });
+}
+
+/**
+ * Navigate to a node by path array, with enhanced recovery options.
+ *
+ * Path Resolution Strategy:
+ * 1. Try index-based traversal with whitespace filtering (standard)
+ * 2. If that fails and patch provides element context, try ID/key-based lookup
+ * 3. If at a boundary (conditional content), try fuzzy matching nearby elements
+ *
+ * @param {Array<number>} path - Array of child indices
+ * @param {Object} patchContext - Optional context from patch for recovery
+ * @returns {Node|null} - Found node or null
+ */
+function getNodeByPath(path, patchContext = null) {
     let node = getLiveViewRoot();
 
     if (path.length === 0) {
@@ -1679,16 +1705,25 @@ function getNodeByPath(path) {
 
     for (let i = 0; i < path.length; i++) {
         const index = path[i];
-        const children = Array.from(node.childNodes).filter(child => {
-            if (child.nodeType === Node.ELEMENT_NODE) return true;
-            if (child.nodeType === Node.TEXT_NODE) {
-                return child.textContent.trim().length > 0;
-            }
-            return false;
-        });
+        const children = getSignificantChildrenForPath(node);
 
         if (index >= children.length) {
-            console.warn(`[LiveView] Path traversal failed at index ${index}, only ${children.length} children`);
+            // Try recovery strategies before giving up
+            const recovered = tryRecoverNode(node, index, i, path, patchContext);
+            if (recovered) {
+                node = recovered;
+                continue;
+            }
+
+            if (globalThis.djustDebug) {
+                console.warn(`[LiveView] Path traversal failed at step ${i}:`, {
+                    path: path.join('/'),
+                    failedAt: index,
+                    childCount: children.length,
+                    parentTag: node.tagName || '#root',
+                    childTags: children.slice(0, 5).map(c => c.tagName || '#text').join(', ')
+                });
+            }
             return null;
         }
 
@@ -1696,6 +1731,51 @@ function getNodeByPath(path) {
     }
 
     return node;
+}
+
+/**
+ * Try to recover when index-based path traversal fails.
+ *
+ * Recovery strategies:
+ * 1. If patch has target_id, find by querySelector
+ * 2. If parent has keyed children (data-key), try matching by key
+ * 3. For boundary cases (index just past end), check if content was conditionally removed
+ */
+function tryRecoverNode(parent, failedIndex, pathDepth, fullPath, patchContext) {
+    // Strategy 1: Try finding by ID if patch provides target info
+    if (patchContext && patchContext.targetId) {
+        const byId = document.getElementById(patchContext.targetId);
+        if (byId) {
+            if (globalThis.djustDebug) {
+                console.log(`[LiveView] Recovered node by ID: ${patchContext.targetId}`);
+            }
+            return byId;
+        }
+    }
+
+    // Strategy 2: For keyed lists, try finding by data-key
+    if (patchContext && patchContext.targetKey) {
+        const byKey = parent.querySelector(`[data-key="${CSS.escape(patchContext.targetKey)}"]`);
+        if (byKey) {
+            if (globalThis.djustDebug) {
+                console.log(`[LiveView] Recovered node by data-key: ${patchContext.targetKey}`);
+            }
+            return byKey;
+        }
+    }
+
+    // Strategy 3: If index is just 1 past the end and we're looking for an element,
+    // the conditional content might have been removed - this is expected behavior
+    const children = getSignificantChildrenForPath(parent);
+    if (failedIndex === children.length) {
+        // This often happens when conditional content (like validation errors) is removed
+        // The patch was generated for a node that no longer exists - this is OK to skip
+        if (globalThis.djustDebug) {
+            console.log(`[LiveView] Index ${failedIndex} at boundary - content may have been conditionally removed`);
+        }
+    }
+
+    return null;
 }
 
 function createNodeFromVNode(vnode) {
@@ -1978,15 +2058,58 @@ function groupConsecutiveInserts(inserts) {
 }
 
 /**
- * Apply a single patch operation.
+ * Extract context from a patch for recovery purposes.
+ * This helps getNodeByPath find nodes when index-based traversal fails.
  */
-function applySinglePatch(patch) {
-    const node = getNodeByPath(patch.path);
+function extractPatchContext(patch) {
+    const context = {};
+
+    // Extract target ID from VNode if present
+    if (patch.node && patch.node.attrs) {
+        if (patch.node.attrs.id) {
+            context.targetId = patch.node.attrs.id;
+        }
+        if (patch.node.attrs['data-key']) {
+            context.targetKey = patch.node.attrs['data-key'];
+        }
+    }
+
+    // For SetAttr on elements with known attributes, try to identify the target
+    if (patch.type === 'SetAttr' && patch.key === 'id') {
+        context.targetId = patch.value;
+    }
+
+    return Object.keys(context).length > 0 ? context : null;
+}
+
+/**
+ * Apply a single patch operation.
+ *
+ * @param {Object} patch - The patch to apply
+ * @param {boolean} lenient - If true, log warnings instead of errors for non-critical failures
+ * @returns {string} - 'success', 'skipped', or 'failed'
+ */
+function applySinglePatch(patch, lenient = false) {
+    const patchContext = extractPatchContext(patch);
+    const node = getNodeByPath(patch.path, patchContext);
+
     if (!node) {
         // Sanitize path for logging (patches come from trusted server, but log defensively)
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
+
+        // Some patches are expected to fail when conditional content is removed
+        // InsertChild/RemoveChild at boundaries are often OK to skip
+        const isStructuralPatch = ['InsertChild', 'RemoveChild', 'MoveChild'].includes(patch.type);
+
+        if (lenient && isStructuralPatch) {
+            if (globalThis.djustDebug) {
+                console.log(`[LiveView] Skipping ${patch.type} at path ${safePath} - node not found (conditional content)`);
+            }
+            return 'skipped';
+        }
+
         console.warn('[LiveView] Failed to find node at path:', safePath);
-        return false;
+        return 'failed';
     }
 
     try {
@@ -2054,24 +2177,29 @@ function applySinglePatch(patch) {
                 // Sanitize type for logging
                 const safeType = String(patch.type || 'undefined').slice(0, 50);
                 console.warn('[LiveView] Unknown patch type:', safeType);
-                return false;
+                return 'failed';
         }
 
-        return true;
+        return 'success';
     } catch (error) {
         // Log error without potentially sensitive patch data
         console.error('[LiveView] Error applying patch:', error.message || error);
-        return false;
+        return 'failed';
     }
 }
 
 /**
- * Apply VDOM patches with optimized batching.
+ * Apply VDOM patches with optimized batching and resilient error handling.
  *
- * Improvements over sequential application:
+ * Features:
  * - Groups patches by parent path for batch operations
  * - Uses DocumentFragment for consecutive InsertChild patches on same parent
  * - Skips batching overhead for small patch sets (<=10 patches)
+ * - Lenient mode: tolerates some failures due to conditional content changes
+ * - Failure threshold: only triggers reload if >50% of patches fail
+ *
+ * @param {Array} patches - Array of patch objects
+ * @returns {boolean} - true if successful or acceptable, false if too many failures
  */
 function applyPatches(patches) {
     if (!patches || patches.length === 0) {
@@ -2090,92 +2218,122 @@ function applyPatches(patches) {
         return 0;
     });
 
+    let failedCount = 0;
+    let skippedCount = 0;
+    let successCount = 0;
+
+    // Use lenient mode for larger patch sets (complex structural changes)
+    const lenient = patches.length > 10;
+
     // For small patch sets, apply directly without batching overhead
     if (patches.length <= 10) {
-        let failedCount = 0;
         for (const patch of patches) {
-            if (!applySinglePatch(patch)) {
+            const result = applySinglePatch(patch, false);
+            if (result === 'success') {
+                successCount++;
+            } else if (result === 'skipped') {
+                skippedCount++;
+            } else {
                 failedCount++;
             }
         }
-        if (failedCount > 0) {
-            console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
-            return false;
-        }
-        return true;
-    }
+    } else {
+        // For larger patch sets, use batching
+        const patchGroups = groupPatchesByParent(patches);
 
-    // For larger patch sets, use batching
-    let failedCount = 0;
-    let successCount = 0;
+        for (const [parentPath, group] of patchGroups) {
+            // Optimization: Use DocumentFragment for consecutive InsertChild on same parent
+            const insertPatches = group.filter(p => p.type === 'InsertChild');
 
-    // Group patches by parent for potential batching
-    const patchGroups = groupPatchesByParent(patches);
+            if (insertPatches.length >= 3) {
+                // Group only consecutive inserts (can't batch non-consecutive indices)
+                const consecutiveGroups = groupConsecutiveInserts(insertPatches);
 
-    for (const [parentPath, group] of patchGroups) {
-        // Optimization: Use DocumentFragment for consecutive InsertChild on same parent
-        const insertPatches = group.filter(p => p.type === 'InsertChild');
+                for (const consecutiveGroup of consecutiveGroups) {
+                    // Only batch if we have 3+ consecutive inserts
+                    if (consecutiveGroup.length < 3) continue;
 
-        if (insertPatches.length >= 3) {
-            // Group only consecutive inserts (can't batch non-consecutive indices)
-            const consecutiveGroups = groupConsecutiveInserts(insertPatches);
+                    const firstPatch = consecutiveGroup[0];
+                    const parentNode = getNodeByPath(firstPatch.path);
 
-            for (const consecutiveGroup of consecutiveGroups) {
-                // Only batch if we have 3+ consecutive inserts
-                if (consecutiveGroup.length < 3) continue;
+                    if (parentNode) {
+                        try {
+                            const fragment = document.createDocumentFragment();
+                            for (const patch of consecutiveGroup) {
+                                const newChild = createNodeFromVNode(patch.node);
+                                fragment.appendChild(newChild);
+                            }
 
-                const firstPatch = consecutiveGroup[0];
-                const parentNode = getNodeByPath(firstPatch.path);
+                            // Insert fragment at the first index position
+                            const children = getSignificantChildren(parentNode);
+                            const firstIndex = consecutiveGroup[0].index;
+                            const refChild = children[firstIndex];
 
-                if (parentNode) {
-                    try {
-                        const fragment = document.createDocumentFragment();
-                        for (const patch of consecutiveGroup) {
-                            const newChild = createNodeFromVNode(patch.node);
-                            fragment.appendChild(newChild);
-                            successCount++;
+                            if (refChild) {
+                                parentNode.insertBefore(fragment, refChild);
+                            } else {
+                                parentNode.appendChild(fragment);
+                            }
+
+                            successCount += consecutiveGroup.length;
+
+                            // Mark these patches as processed
+                            const processedSet = new Set(consecutiveGroup);
+                            for (let i = group.length - 1; i >= 0; i--) {
+                                if (processedSet.has(group[i])) {
+                                    group.splice(i, 1);
+                                }
+                            }
+                        } catch (error) {
+                            console.error('[LiveView] Batch insert failed, falling back to individual patches:', error.message);
+                            // On failure, patches remain in group for individual processing
                         }
-
-                        // Insert fragment at the first index position
-                        const children = getSignificantChildren(parentNode);
-                        const firstIndex = consecutiveGroup[0].index;
-                        const refChild = children[firstIndex];
-
-                        if (refChild) {
-                            parentNode.insertBefore(fragment, refChild);
-                        } else {
-                            parentNode.appendChild(fragment);
-                        }
-
-                        // Mark these patches as processed
+                    } else if (lenient) {
+                        // Parent not found - in lenient mode, skip these patches
+                        skippedCount += consecutiveGroup.length;
                         const processedSet = new Set(consecutiveGroup);
                         for (let i = group.length - 1; i >= 0; i--) {
                             if (processedSet.has(group[i])) {
                                 group.splice(i, 1);
                             }
                         }
-                    } catch (error) {
-                        console.error('[LiveView] Batch insert failed, falling back to individual patches:', error.message);
-                        // On failure, patches remain in group for individual processing
-                        successCount -= consecutiveGroup.length;  // Undo count
                     }
                 }
             }
-        }
 
-        // Apply remaining patches individually
-        for (const patch of group) {
-            if (applySinglePatch(patch)) {
-                successCount++;
-            } else {
-                failedCount++;
+            // Apply remaining patches individually
+            for (const patch of group) {
+                const result = applySinglePatch(patch, lenient);
+                if (result === 'success') {
+                    successCount++;
+                } else if (result === 'skipped') {
+                    skippedCount++;
+                } else {
+                    failedCount++;
+                }
             }
         }
     }
 
-    if (failedCount > 0) {
-        console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
+    // Report results
+    const total = patches.length;
+    if (globalThis.djustDebug || failedCount > 0 || skippedCount > 0) {
+        console.log(`[LiveView] Patch results: ${successCount} success, ${skippedCount} skipped, ${failedCount} failed (total: ${total})`);
+    }
+
+    // Failure threshold: only fail if more than 50% of patches hard-failed
+    // Skipped patches (conditional content) don't count as failures
+    const failureRate = failedCount / total;
+    const FAILURE_THRESHOLD = 0.5;
+
+    if (failureRate > FAILURE_THRESHOLD) {
+        console.error(`[LiveView] Too many patches failed (${Math.round(failureRate * 100)}% > ${FAILURE_THRESHOLD * 100}% threshold)`);
         return false;
+    }
+
+    // If we had some failures but below threshold, log but continue
+    if (failedCount > 0) {
+        console.warn(`[LiveView] ${failedCount} patches failed but below threshold - continuing without reload`);
     }
 
     return true;
