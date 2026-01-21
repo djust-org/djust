@@ -3183,15 +3183,13 @@
                     const parsedState = JSON.parse(saved);
                     this.state = { ...this.state, ...parsedState };
 
-                    // Restore panel visibility if it was open
-                    if (parsedState.isOpen) {
-                        // Use setTimeout to ensure DOM is ready
-                        setTimeout(() => this.open(), 0);
-                    }
-
-                    // Restore active tab if saved
-                    if (parsedState.activeTab) {
-                        setTimeout(() => this.switchTab(parsedState.activeTab), 0);
+                    // Restore panel visibility and active tab if saved
+                    // Combined into single setTimeout to reduce queued microtasks
+                    if (parsedState.isOpen || parsedState.activeTab) {
+                        setTimeout(() => {
+                            if (parsedState.isOpen) this.open();
+                            if (parsedState.activeTab) this.switchTab(parsedState.activeTab);
+                        }, 0);
                     }
                 } catch (e) {
                     console.warn('[djust] Failed to load debug panel state:', e);
