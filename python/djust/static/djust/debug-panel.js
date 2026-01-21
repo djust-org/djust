@@ -3333,7 +3333,17 @@
             const saved = localStorage.getItem('djust-debug-state');
             if (saved) {
                 try {
-                    this.state = { ...this.state, ...JSON.parse(saved) };
+                    const parsedState = JSON.parse(saved);
+                    this.state = { ...this.state, ...parsedState };
+
+                    // Restore panel visibility and active tab if saved
+                    // Combined into single setTimeout to reduce queued microtasks
+                    if (parsedState.isOpen || parsedState.activeTab) {
+                        setTimeout(() => {
+                            if (parsedState.isOpen) this.open();
+                            if (parsedState.activeTab) this.switchTab(parsedState.activeTab);
+                        }, 0);
+                    }
                 } catch (e) {
                     console.warn('[djust] Failed to load debug panel state:', e);
                 }
