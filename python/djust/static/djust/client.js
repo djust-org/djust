@@ -1907,13 +1907,13 @@ function getSignificantChildren(node) {
  * Group patches by their parent path for batching.
  */
 function groupPatchesByParent(patches) {
-    const groups = {};
+    const groups = new Map(); // Use Map to avoid prototype pollution
     for (const patch of patches) {
         const parentPath = patch.path.slice(0, -1).join('/');
-        if (!groups[parentPath]) {
-            groups[parentPath] = [];
+        if (!groups.has(parentPath)) {
+            groups.set(parentPath, []);
         }
-        groups[parentPath].push(patch);
+        groups.get(parentPath).push(patch);
     }
     return groups;
 }
@@ -1924,7 +1924,9 @@ function groupPatchesByParent(patches) {
 function applySinglePatch(patch) {
     const node = getNodeByPath(patch.path);
     if (!node) {
-        console.warn(`[LiveView] Failed to find node at path:`, patch.path);
+        // Sanitize path for logging (patches come from trusted server, but log defensively)
+        const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
+        console.warn('[LiveView] Failed to find node at path:', safePath);
         return false;
     }
 
@@ -1990,13 +1992,16 @@ function applySinglePatch(patch) {
             }
 
             default:
-                console.warn(`[LiveView] Unknown patch type: ${patch.type}`);
+                // Sanitize type for logging
+                const safeType = String(patch.type || 'undefined').slice(0, 50);
+                console.warn('[LiveView] Unknown patch type:', safeType);
                 return false;
         }
 
         return true;
     } catch (error) {
-        console.error(`[LiveView] Error applying patch:`, patch, error);
+        // Log error without potentially sensitive patch data
+        console.error('[LiveView] Error applying patch:', error.message || error);
         return false;
     }
 }
@@ -2048,13 +2053,11 @@ function applyPatches(patches) {
     // Group patches by parent for potential batching
     const patchGroups = groupPatchesByParent(patches);
 
-    for (const [parentPath, group] of Object.entries(patchGroups)) {
+    for (const [parentPath, group] of patchGroups) {
         // Optimization: Use DocumentFragment for multiple InsertChild on same parent
         const insertPatches = group.filter(p => p.type === 'InsertChild');
 
         if (insertPatches.length >= 3) {
-            // Get parent node for batch insert
-            const parentPathArray = parentPath ? parentPath.split('/').filter(Boolean).map(Number) : [];
             // For InsertChild, the path points to the parent, so use first patch's path
             const firstPatch = insertPatches[0];
             const parentNode = getNodeByPath(firstPatch.path);
