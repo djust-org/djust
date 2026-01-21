@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Automatic type coercion for event handler parameters** - Template `data-*` attributes (always strings) are now automatically converted to expected types based on handler type hints. Supports `int`, `float`, `bool`, `Decimal`, `UUID`, `list`, `List[T]`, and `Optional[T]`.
 - New `coerce_types` parameter for `@event_handler()` decorator to disable coercion when raw strings are needed
 - Enhanced error messages with hints when type coercion fails
+- **Testing utilities** (`djust.testing`) for testing LiveViews without browser/WebSocket:
+  - `LiveViewTestClient` - Mount views, send events, assert state changes
+  - `SnapshotTestMixin` - Compare rendered HTML against stored snapshots
+  - `@performance_test` decorator - Fail tests if handlers exceed time/query thresholds
+  - `MockRequest` and `create_test_view` helpers
+- **Debug Panel - State Timeline** - View history of state changes with before/after diffs, timeline scrubbing, and state restoration
 
 ## [0.1.2] - 2026-01-16
 

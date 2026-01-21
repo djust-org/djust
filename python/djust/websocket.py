@@ -3,12 +3,16 @@ WebSocket consumer for LiveView real-time updates
 """
 
 import json
+import logging
+import sys
 import msgpack
 from typing import Callable, Dict, Any, Optional
 from channels.generic.websocket import AsyncWebsocketConsumer
 from .live_view import DjangoJSONEncoder
 from .validation import validate_handler_params
 from .profiler import profiler
+
+logger = logging.getLogger(__name__)
 
 try:
     from ._rust import create_session_actor, SessionActorHandle
@@ -93,7 +97,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """Handle incoming WebSocket messages"""
         import logging
         import traceback
-        import sys
 
         logger = logging.getLogger(__name__)
 
@@ -433,7 +436,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """Handle client events"""
         import logging
         import traceback
-        import sys
         import time
         from djust.performance import PerformanceTracker
 
@@ -655,9 +657,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             with tracker.track("VDOM Diff"):
                                 with profiler.profile(profiler.OP_RENDER):
                                     html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+                                patch_list = None  # Initialize for later use
                                 if patches:
                                     patch_list = json.loads(patches)
-                                    tracker.track_patches(len(patch_list))
+                                    tracker.track_patches(len(patch_list), patch_list)
                                     profiler.record(profiler.OP_DIFF, 0)  # Mark diff occurred
                         timing['render'] = (time.perf_counter() - render_start) * 1000  # Convert to ms
 
@@ -676,10 +679,33 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # For views with dynamic templates (template as property),
                 # patches may be empty because VDOM state is lost on recreation.
                 # In that case, send full HTML update.
-                if patches:
+
+                # Patch compression: if patch count exceeds threshold and HTML is smaller,
+                # send HTML instead of patches for better performance
+                PATCH_COUNT_THRESHOLD = 100
+                # Note: patch_list was already parsed earlier for performance tracking
+                if patches and patch_list:
+                    patch_count = len(patch_list)
+                    if patch_count > PATCH_COUNT_THRESHOLD:
+                        # Compare sizes to decide whether to send patches or HTML
+                        patches_size = len(patches.encode('utf-8'))
+                        html_size = len(html.encode('utf-8'))
+                        # If HTML is at least 30% smaller, send HTML instead
+                        if html_size < patches_size * 0.7:
+                            logger.debug(
+                                "Patch compression: %d patches (%dB) -> sending HTML (%dB) instead",
+                                patch_count, patches_size, html_size
+                            )
+                            # Reset VDOM and send HTML
+                            if hasattr(self.view_instance, '_rust_view') and self.view_instance._rust_view:
+                                self.view_instance._rust_view.reset()
+                            patches = None
+                            patch_list = None
+
+                if patches and patch_list:
                     if self.use_binary:
-                        # Send as MessagePack
-                        patches_data = msgpack.packb(json.loads(patches))
+                        # Send as MessagePack (reuse parsed patch_list)
+                        patches_data = msgpack.packb(patch_list)
                         await self.send(bytes_data=patches_data)
                     else:
                         # Send as JSON
@@ -690,7 +716,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                         response = {
                             "type": "patch",
-                            "patches": json.loads(patches),
+                            "patches": patch_list,  # Reuse parsed patch_list
                             "version": version,
                             "timing": timing,  # Include basic timing for backward compatibility
                             "performance": perf_summary,  # Include comprehensive performance data
@@ -712,8 +738,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     html_content = await sync_to_async(
                         self.view_instance._extract_liveview_content
                     )(html)
-
-                    import sys
 
                     print(
                         "[WebSocket] No patches generated, sending full HTML update",

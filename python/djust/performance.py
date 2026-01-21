@@ -363,18 +363,117 @@ class PerformanceTracker:
         import sys
         self.context_size = sys.getsizeof(str(context))  # Rough estimate
 
-    def track_patches(self, patch_count: int):
-        """Track the number of patches generated."""
+    def track_patches(self, patch_count: int, patches: Optional[List[Dict[str, Any]]] = None):
+        """Track the number of patches generated and provide actionable recommendations.
+
+        Args:
+            patch_count: The number of patches generated
+            patches: Optional list of patch dictionaries for detailed analysis
+        """
         self.patch_count = patch_count
 
-        # Warning for excessive patches
+        # Warning for excessive patches with detailed recommendations
         if patch_count > 20 and self.current_node:
+            recommendations = self._generate_patch_recommendations(patch_count, patches)
             self.current_node.add_warning(
                 'excessive_patches',
-                f'Too many patches generated: {patch_count}',
+                f'Excessive Patches: {patch_count} patches generated',
                 patch_count=patch_count,
-                recommendation='Consider using JIT serialization pattern'
+                recommendations=recommendations,
+                docs_url='https://djust.dev/docs/performance/lists'
             )
+
+    def _generate_patch_recommendations(
+        self, patch_count: int, patches: Optional[List[Dict[str, Any]]] = None
+    ) -> List[Dict[str, str]]:
+        """Generate specific recommendations based on patch analysis.
+
+        Args:
+            patch_count: The number of patches generated
+            patches: Optional list of patch dictionaries for detailed analysis
+
+        Returns:
+            List of recommendation dictionaries with 'title' and 'description' keys
+        """
+        recommendations = []
+
+        if patches:
+            # Analyze patch types
+            insert_count = sum(1 for p in patches if p.get('type') == 'InsertChild')
+            remove_count = sum(1 for p in patches if p.get('type') == 'RemoveChild')
+            replace_count = sum(1 for p in patches if p.get('type') == 'Replace')
+            move_count = sum(1 for p in patches if p.get('type') == 'MoveChild')
+
+            # High insert/remove ratio suggests list without keys
+            if insert_count > 10 or remove_count > 10:
+                recommendations.append({
+                    'title': 'Add keys to list items',
+                    'description': (
+                        f'Detected {insert_count} inserts and {remove_count} removes. '
+                        'Add data-key="{{ item.id }}" to list items for efficient reordering.'
+                    ),
+                    'code_example': '<div class="item" data-key="{{ item.id }}">{{ item.name }}</div>',
+                    'priority': 'high'
+                })
+
+            # Many replace patches suggest full re-renders
+            if replace_count > 5:
+                recommendations.append({
+                    'title': 'Reduce full node replacements',
+                    'description': (
+                        f'Detected {replace_count} full node replacements. '
+                        'Consider restructuring templates to minimize DOM changes.'
+                    ),
+                    'priority': 'medium'
+                })
+
+            # No move patches but high churn suggests missing keys
+            if move_count == 0 and (insert_count > 5 or remove_count > 5):
+                recommendations.append({
+                    'title': 'Enable keyed diffing',
+                    'description': (
+                        'List reordering is creating new nodes instead of moving existing ones. '
+                        'Add unique data-key attributes to enable efficient MoveChild operations.'
+                    ),
+                    'priority': 'high'
+                })
+
+        # General recommendations based on patch count
+        if patch_count > 100:
+            recommendations.append({
+                'title': 'Use pagination',
+                'description': (
+                    f'{patch_count} patches is very high. '
+                    'Paginate lists to 50 items per page to reduce DOM size and patch count.'
+                ),
+                'code_example': "{% include 'djust/pagination.html' with page_obj=page_obj %}",
+                'priority': 'high'
+            })
+        elif patch_count > 50:
+            recommendations.append({
+                'title': 'Consider JIT serialization',
+                'description': (
+                    'Use the JIT serialization pattern to defer data loading until needed. '
+                    'This reduces initial render size and improves responsiveness.'
+                ),
+                'code_example': '@property\ndef items(self):\n    return self._items_cache or self._load_items()',
+                'priority': 'medium'
+            })
+
+        # If no specific recommendations, add general guidance
+        if not recommendations:
+            recommendations.append({
+                'title': 'Review list rendering',
+                'description': (
+                    f'{patch_count} patches generated. Common causes: '
+                    '(1) Lists without data-key attributes, '
+                    '(2) Large datasets without pagination, '
+                    '(3) Nested structures with frequent updates.'
+                ),
+                'priority': 'medium'
+            })
+
+        return recommendations
 
     def get_summary(self) -> Dict[str, Any]:
         """Get complete performance summary."""

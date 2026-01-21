@@ -63,12 +63,22 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
             let tag = name.local.to_string();
             let mut vnode = VNode::element(tag.clone());
 
-            // Convert attributes
+            // Convert attributes and extract data-key for keyed diffing
             let mut attributes = HashMap::new();
+            let mut key: Option<String> = None;
             for attr in attrs.borrow().iter() {
-                attributes.insert(attr.name.local.to_string(), attr.value.to_string());
+                let attr_name = attr.name.local.to_string();
+                let attr_value = attr.value.to_string();
+
+                // Extract data-key for efficient list diffing
+                if attr_name == "data-key" && !attr_value.is_empty() {
+                    key = Some(attr_value.clone());
+                }
+
+                attributes.insert(attr_name, attr_value);
             }
             vnode.attrs = attributes;
+            vnode.key = key;
 
             // Convert children
             let mut children = Vec::new();
@@ -258,5 +268,63 @@ mod tests {
         assert_eq!(vnode.children.len(), 2);
         assert!(vnode.children[0].is_text());
         assert_eq!(vnode.children[1].tag, "span");
+    }
+
+    #[test]
+    fn test_parse_data_key_attribute() {
+        // Test that data-key attribute is extracted and set as VNode.key
+        let html = r#"<div data-key="item-123">Content</div>"#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.tag, "div");
+        assert_eq!(vnode.key, Some("item-123".to_string()));
+        // data-key should still be in attrs for DOM rendering
+        assert_eq!(vnode.attrs.get("data-key"), Some(&"item-123".to_string()));
+    }
+
+    #[test]
+    fn test_parse_list_with_data_keys() {
+        // Test parsing a list where each item has a data-key for efficient diffing
+        let html = r#"
+            <ul>
+                <li data-key="1">Item 1</li>
+                <li data-key="2">Item 2</li>
+                <li data-key="3">Item 3</li>
+            </ul>
+        "#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.tag, "ul");
+        assert_eq!(vnode.children.len(), 3);
+
+        // Each child should have its key extracted
+        assert_eq!(vnode.children[0].key, Some("1".to_string()));
+        assert_eq!(vnode.children[1].key, Some("2".to_string()));
+        assert_eq!(vnode.children[2].key, Some("3".to_string()));
+    }
+
+    #[test]
+    fn test_parse_empty_data_key_ignored() {
+        // Test that empty data-key values are not set as keys
+        let html = r#"<div data-key="">Content</div>"#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.tag, "div");
+        assert_eq!(vnode.key, None);
+    }
+
+    #[test]
+    fn test_parse_nested_data_keys() {
+        // Test that data-key works at any nesting level
+        let html = r#"
+            <div data-key="parent">
+                <span data-key="child">Nested content</span>
+            </div>
+        "#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.key, Some("parent".to_string()));
+        assert_eq!(vnode.children.len(), 1);
+        assert_eq!(vnode.children[0].key, Some("child".to_string()));
     }
 }
