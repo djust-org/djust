@@ -1034,18 +1034,41 @@ function extractTypedParams(element) {
 
         // Apply type coercion based on suffix
         if (typeHint) {
+            // Sanitize attribute name for logging (truncate, alphanumeric only)
+            const safeAttrName = String(attr.name).slice(0, 50).replace(/[^a-z0-9-:]/gi, '_');
+
             switch (typeHint) {
                 case 'int':
-                case 'integer':
-                    value = value === '' ? 0 : parseInt(value, 10);
-                    if (isNaN(value)) value = 0;
+                case 'integer': {
+                    if (value === '') {
+                        value = 0;
+                    } else {
+                        const parsed = parseInt(value, 10);
+                        if (isNaN(parsed)) {
+                            console.warn(`[LiveView] Invalid int value for ${safeAttrName}: "${value}", using null`);
+                            value = null;  // Let server-side validation handle invalid input
+                        } else {
+                            value = parsed;
+                        }
+                    }
                     break;
+                }
 
                 case 'float':
-                case 'number':
-                    value = value === '' ? 0.0 : parseFloat(value);
-                    if (isNaN(value)) value = 0.0;
+                case 'number': {
+                    if (value === '') {
+                        value = 0.0;
+                    } else {
+                        const parsed = parseFloat(value);
+                        if (isNaN(parsed)) {
+                            console.warn(`[LiveView] Invalid float value for ${safeAttrName}: "${value}", using null`);
+                            value = null;  // Let server-side validation handle invalid input
+                        } else {
+                            value = parsed;
+                        }
+                    }
                     break;
+                }
 
                 case 'bool':
                 case 'boolean':
@@ -1058,10 +1081,8 @@ function extractTypedParams(element) {
                     try {
                         value = JSON.parse(value);
                     } catch (e) {
-                        // Sanitize attribute name for logging (truncate, alphanumeric only)
-                        const safeAttrName = String(attr.name).slice(0, 50).replace(/[^a-z0-9-:]/gi, '_');
-                        console.warn('[LiveView] Failed to parse JSON for', safeAttrName);
-                        // Keep as string if JSON parse fails
+                        console.warn(`[LiveView] Failed to parse JSON for ${safeAttrName}: "${value}"`);
+                        // Keep as string if JSON parse fails - server will validate
                     }
                     break;
 
@@ -1072,6 +1093,7 @@ function extractTypedParams(element) {
 
                 // Unknown type hint - keep as string
                 default:
+                    console.warn(`[LiveView] Unknown type hint "${typeHint}" for ${safeAttrName}, keeping as string`);
                     break;
             }
         }
@@ -1921,6 +1943,41 @@ function groupPatchesByParent(patches) {
 }
 
 /**
+ * Group InsertChild patches with consecutive indices.
+ * Only consecutive inserts can be batched with DocumentFragment.
+ *
+ * Example: [2, 3, 4, 7, 8] -> [[2,3,4], [7,8]]
+ *
+ * @param {Array} inserts - Array of InsertChild patches
+ * @returns {Array<Array>} - Groups of consecutive inserts
+ */
+function groupConsecutiveInserts(inserts) {
+    if (inserts.length === 0) return [];
+
+    // Sort by index first
+    inserts.sort((a, b) => a.index - b.index);
+
+    const groups = [];
+    let currentGroup = [inserts[0]];
+
+    for (let i = 1; i < inserts.length; i++) {
+        // Check if this insert is consecutive with the previous one
+        if (inserts[i].index === inserts[i - 1].index + 1) {
+            currentGroup.push(inserts[i]);
+        } else {
+            // Start a new group
+            groups.push(currentGroup);
+            currentGroup = [inserts[i]];
+        }
+    }
+
+    // Don't forget the last group
+    groups.push(currentGroup);
+
+    return groups;
+}
+
+/**
  * Apply a single patch operation.
  */
 function applySinglePatch(patch) {
@@ -2013,8 +2070,8 @@ function applySinglePatch(patch) {
  *
  * Improvements over sequential application:
  * - Groups patches by parent path for batch operations
- * - Uses DocumentFragment for multiple InsertChild on same parent
- * - Batches DOM mutations within requestAnimationFrame for smooth updates
+ * - Uses DocumentFragment for consecutive InsertChild patches on same parent
+ * - Skips batching overhead for small patch sets (<=10 patches)
  */
 function applyPatches(patches) {
     if (!patches || patches.length === 0) {
@@ -2050,54 +2107,67 @@ function applyPatches(patches) {
 
     // For larger patch sets, use batching
     let failedCount = 0;
+    let successCount = 0;
 
     // Group patches by parent for potential batching
     const patchGroups = groupPatchesByParent(patches);
 
     for (const [parentPath, group] of patchGroups) {
-        // Optimization: Use DocumentFragment for multiple InsertChild on same parent
+        // Optimization: Use DocumentFragment for consecutive InsertChild on same parent
         const insertPatches = group.filter(p => p.type === 'InsertChild');
 
         if (insertPatches.length >= 3) {
-            // For InsertChild, the path points to the parent, so use first patch's path
-            const firstPatch = insertPatches[0];
-            const parentNode = getNodeByPath(firstPatch.path);
+            // Group only consecutive inserts (can't batch non-consecutive indices)
+            const consecutiveGroups = groupConsecutiveInserts(insertPatches);
 
-            if (parentNode) {
-                try {
-                    // Sort by index to insert in correct order
-                    insertPatches.sort((a, b) => a.index - b.index);
+            for (const consecutiveGroup of consecutiveGroups) {
+                // Only batch if we have 3+ consecutive inserts
+                if (consecutiveGroup.length < 3) continue;
 
-                    const fragment = document.createDocumentFragment();
-                    for (const patch of insertPatches) {
-                        const newChild = createNodeFromVNode(patch.node);
-                        fragment.appendChild(newChild);
+                const firstPatch = consecutiveGroup[0];
+                const parentNode = getNodeByPath(firstPatch.path);
+
+                if (parentNode) {
+                    try {
+                        const fragment = document.createDocumentFragment();
+                        for (const patch of consecutiveGroup) {
+                            const newChild = createNodeFromVNode(patch.node);
+                            fragment.appendChild(newChild);
+                            successCount++;
+                        }
+
+                        // Insert fragment at the first index position
+                        const children = getSignificantChildren(parentNode);
+                        const firstIndex = consecutiveGroup[0].index;
+                        const refChild = children[firstIndex];
+
+                        if (refChild) {
+                            parentNode.insertBefore(fragment, refChild);
+                        } else {
+                            parentNode.appendChild(fragment);
+                        }
+
+                        // Mark these patches as processed
+                        const processedSet = new Set(consecutiveGroup);
+                        for (let i = group.length - 1; i >= 0; i--) {
+                            if (processedSet.has(group[i])) {
+                                group.splice(i, 1);
+                            }
+                        }
+                    } catch (error) {
+                        console.error('[LiveView] Batch insert failed, falling back to individual patches:', error.message);
+                        // On failure, patches remain in group for individual processing
+                        successCount -= consecutiveGroup.length;  // Undo count
                     }
-
-                    // Insert fragment at the right position
-                    const children = getSignificantChildren(parentNode);
-                    const firstIndex = insertPatches[0].index;
-                    const refChild = children[firstIndex];
-
-                    if (refChild) {
-                        parentNode.insertBefore(fragment, refChild);
-                    } else {
-                        parentNode.appendChild(fragment);
-                    }
-
-                    // Remove InsertChild from remaining patches to process
-                    const insertPatchSet = new Set(insertPatches);
-                    group.splice(0, group.length, ...group.filter(p => !insertPatchSet.has(p)));
-                } catch (error) {
-                    console.error('[LiveView] Batch insert failed, falling back to individual patches:', error);
-                    // On failure, patches remain in group for individual processing
                 }
             }
         }
 
         // Apply remaining patches individually
         for (const patch of group) {
-            if (!applySinglePatch(patch)) {
+            if (applySinglePatch(patch)) {
+                successCount++;
+            } else {
                 failedCount++;
             }
         }

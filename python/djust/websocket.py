@@ -3,6 +3,7 @@ WebSocket consumer for LiveView real-time updates
 """
 
 import json
+import logging
 import sys
 import msgpack
 from typing import Callable, Dict, Any, Optional
@@ -10,6 +11,8 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from .live_view import DjangoJSONEncoder
 from .validation import validate_handler_params
 from .profiler import profiler
+
+logger = logging.getLogger(__name__)
 
 try:
     from ._rust import create_session_actor, SessionActorHandle
@@ -654,6 +657,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             with tracker.track("VDOM Diff"):
                                 with profiler.profile(profiler.OP_RENDER):
                                     html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+                                patch_list = None  # Initialize for later use
                                 if patches:
                                     patch_list = json.loads(patches)
                                     tracker.track_patches(len(patch_list), patch_list)
@@ -679,9 +683,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Patch compression: if patch count exceeds threshold and HTML is smaller,
                 # send HTML instead of patches for better performance
                 PATCH_COUNT_THRESHOLD = 100
-                patch_list = None
-                if patches:
-                    patch_list = json.loads(patches)
+                # Note: patch_list was already parsed earlier for performance tracking
+                if patches and patch_list:
                     patch_count = len(patch_list)
                     if patch_count > PATCH_COUNT_THRESHOLD:
                         # Compare sizes to decide whether to send patches or HTML
@@ -689,10 +692,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         html_size = len(html.encode('utf-8'))
                         # If HTML is at least 30% smaller, send HTML instead
                         if html_size < patches_size * 0.7:
-                            print(
-                                f"[WebSocket] Patch compression: {patch_count} patches ({patches_size}B) "
-                                f"-> sending HTML ({html_size}B) instead",
-                                file=sys.stderr,
+                            logger.debug(
+                                "Patch compression: %d patches (%dB) -> sending HTML (%dB) instead",
+                                patch_count, patches_size, html_size
                             )
                             # Reset VDOM and send HTML
                             if hasattr(self.view_instance, '_rust_view') and self.view_instance._rust_view:
