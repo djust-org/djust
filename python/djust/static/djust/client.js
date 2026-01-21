@@ -1670,7 +1670,31 @@ async function handleEvent(eventName, params = {}) {
 
 // === VDOM Patch Application ===
 
-function getNodeByPath(path) {
+/**
+ * Resolve a DOM node using ID-based lookup (primary) or path traversal (fallback).
+ *
+ * Resolution strategy:
+ * 1. If djustId is provided, try querySelector('[data-dj="..."]') - O(1), reliable
+ * 2. Fall back to index-based path traversal
+ *
+ * @param {Array<number>} path - Index-based path (fallback)
+ * @param {string|null} djustId - Compact djust ID for direct lookup (e.g., "1a")
+ * @returns {Node|null} - Found node or null
+ */
+function getNodeByPath(path, djustId = null) {
+    // Strategy 1: ID-based resolution (fast, reliable)
+    if (djustId) {
+        const byId = document.querySelector(`[data-dj="${CSS.escape(djustId)}"]`);
+        if (byId) {
+            return byId;
+        }
+        // ID not found - fall through to path-based
+        if (globalThis.djustDebug) {
+            console.log(`[LiveView] ID lookup failed for data-dj="${djustId}", trying path`);
+        }
+    }
+
+    // Strategy 2: Index-based path traversal (fallback)
     let node = getLiveViewRoot();
 
     if (path.length === 0) {
@@ -1688,7 +1712,9 @@ function getNodeByPath(path) {
         });
 
         if (index >= children.length) {
-            console.warn(`[LiveView] Path traversal failed at index ${index}, only ${children.length} children`);
+            if (globalThis.djustDebug) {
+                console.warn(`[LiveView] Path traversal failed at index ${index}, only ${children.length} children`);
+            }
             return null;
         }
 
@@ -1979,13 +2005,19 @@ function groupConsecutiveInserts(inserts) {
 
 /**
  * Apply a single patch operation.
+ *
+ * Patches include:
+ * - `path`: Index-based path (fallback)
+ * - `d`: Compact djust ID for O(1) querySelector lookup
  */
 function applySinglePatch(patch) {
-    const node = getNodeByPath(patch.path);
+    // Use ID-based resolution (d field) with path as fallback
+    const node = getNodeByPath(patch.path, patch.d);
     if (!node) {
-        // Sanitize path for logging (patches come from trusted server, but log defensively)
+        // Sanitize for logging (patches come from trusted server, but log defensively)
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
-        console.warn('[LiveView] Failed to find node at path:', safePath);
+        const safeId = patch.d ? String(patch.d).slice(0, 20) : 'none';
+        console.warn(`[LiveView] Failed to find node: path=${safePath}, id=${safeId}`);
         return false;
     }
 
@@ -2125,7 +2157,8 @@ function applyPatches(patches) {
                 if (consecutiveGroup.length < 3) continue;
 
                 const firstPatch = consecutiveGroup[0];
-                const parentNode = getNodeByPath(firstPatch.path);
+                // Use ID-based resolution for parent node
+                const parentNode = getNodeByPath(firstPatch.path, firstPatch.d);
 
                 if (parentNode) {
                     try {

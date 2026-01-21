@@ -10,10 +10,56 @@ use djust_core::Result;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub mod diff;
 pub mod parser;
 pub mod patch;
+
+// ============================================================================
+// Compact ID Generation (Base62)
+// ============================================================================
+
+/// Global counter for generating unique IDs within a parse session
+static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Base62 character set: 0-9, a-z, A-Z
+const BASE62_CHARS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+/// Convert a number to base62 string (compact encoding)
+///
+/// Examples:
+/// - 0 → "0"
+/// - 61 → "Z"
+/// - 62 → "10"
+/// - 3843 → "ZZ"
+///
+/// 2 chars = 3,844 unique IDs (sufficient for most pages)
+/// 3 chars = 238,328 unique IDs (sufficient for any page)
+pub fn to_base62(mut n: u64) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+
+    let mut result = Vec::new();
+    while n > 0 {
+        result.push(BASE62_CHARS[(n % 62) as usize]);
+        n /= 62;
+    }
+    result.reverse();
+    String::from_utf8(result).unwrap()
+}
+
+/// Generate the next unique djust_id
+pub fn next_djust_id() -> String {
+    let id = ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+    to_base62(id)
+}
+
+/// Reset the ID counter (call before parsing a new document)
+pub fn reset_id_counter() {
+    ID_COUNTER.store(0, Ordering::SeqCst);
+}
 
 /// A virtual DOM node
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -23,6 +69,10 @@ pub struct VNode {
     pub children: Vec<VNode>,
     pub text: Option<String>,
     pub key: Option<String>,
+    /// Compact unique identifier for reliable patch targeting (e.g., "0", "1a", "2b")
+    /// Stored in DOM as data-d attribute for O(1) querySelector lookup
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub djust_id: Option<String>,
 }
 
 impl VNode {
@@ -33,6 +83,7 @@ impl VNode {
             children: Vec::new(),
             text: None,
             key: None,
+            djust_id: None,
         }
     }
 
@@ -43,7 +94,13 @@ impl VNode {
             children: Vec::new(),
             text: Some(content.into()),
             key: None,
+            djust_id: None,
         }
+    }
+
+    pub fn with_djust_id(mut self, id: impl Into<String>) -> Self {
+        self.djust_id = Some(id.into());
+        self
     }
 
     pub fn with_attr(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
@@ -72,32 +129,66 @@ impl VNode {
 }
 
 /// A patch operation to apply to the DOM
+///
+/// Each patch includes:
+/// - `path`: Index-based path for fallback traversal
+/// - `d`: Compact djust_id for O(1) querySelector lookup (e.g., "1a")
+///
+/// Client resolution strategy:
+/// 1. Try querySelector('[data-d="1a"]') - fast, reliable
+/// 2. Fall back to index-based path traversal if ID not found
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Patch {
     /// Replace a node at path
-    Replace { path: Vec<usize>, node: VNode },
+    Replace {
+        path: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
+        node: VNode,
+    },
     /// Update text content
-    SetText { path: Vec<usize>, text: String },
+    SetText {
+        path: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
+        text: String,
+    },
     /// Set an attribute
     SetAttr {
         path: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
         key: String,
         value: String,
     },
     /// Remove an attribute
-    RemoveAttr { path: Vec<usize>, key: String },
-    /// Insert a child at index
+    RemoveAttr {
+        path: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
+        key: String,
+    },
+    /// Insert a child at index (d = parent's djust_id)
     InsertChild {
         path: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
         index: usize,
         node: VNode,
     },
-    /// Remove a child at index
-    RemoveChild { path: Vec<usize>, index: usize },
-    /// Move a child from one index to another
+    /// Remove a child at index (d = parent's djust_id)
+    RemoveChild {
+        path: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
+        index: usize,
+    },
+    /// Move a child from one index to another (d = parent's djust_id)
     MoveChild {
         path: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
         from: usize,
         to: usize,
     },

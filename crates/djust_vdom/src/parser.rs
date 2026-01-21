@@ -1,13 +1,31 @@
 //! HTML parser for converting HTML strings to virtual DOM
+//!
+//! Generates compact `data-dj` IDs on each element for reliable patch targeting.
 
-use crate::VNode;
+use crate::{next_djust_id, reset_id_counter, VNode};
 use djust_core::{DjangoRustError, Result};
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use std::collections::HashMap;
 
+/// Parse HTML into a virtual DOM with compact IDs for patch targeting.
+///
+/// Each element receives a `data-dj` attribute with a base62-encoded unique ID.
+/// These IDs enable O(1) querySelector lookup on the client, avoiding fragile
+/// index-based path traversal.
+///
+/// Example output:
+/// ```html
+/// <div data-dj="0">
+///   <span data-dj="1">Hello</span>
+///   <span data-dj="2">World</span>
+/// </div>
+/// ```
 pub fn parse_html(html: &str) -> Result<VNode> {
+    // Reset ID counter for this parse session
+    reset_id_counter();
+
     let dom = parse_document(RcDom::default(), Default::default())
         .from_utf8()
         .read_from(&mut html.as_bytes())
@@ -63,9 +81,17 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
             let tag = name.local.to_string();
             let mut vnode = VNode::element(tag.clone());
 
+            // Generate compact unique ID for this element
+            let djust_id = next_djust_id();
+            vnode.djust_id = Some(djust_id.clone());
+
             // Convert attributes and extract data-key for keyed diffing
             let mut attributes = HashMap::new();
             let mut key: Option<String> = None;
+
+            // Add data-dj attribute for client-side querySelector lookup
+            attributes.insert("data-dj".to_string(), djust_id);
+
             for attr in attrs.borrow().iter() {
                 let attr_name = attr.name.local.to_string();
                 let attr_value = attr.value.to_string();
@@ -73,6 +99,11 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                 // Extract data-key for efficient list diffing
                 if attr_name == "data-key" && !attr_value.is_empty() {
                     key = Some(attr_value.clone());
+                }
+
+                // Don't overwrite our generated data-dj if template already has one
+                if attr_name == "data-dj" {
+                    continue;
                 }
 
                 attributes.insert(attr_name, attr_value);
