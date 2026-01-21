@@ -697,5 +697,132 @@ class TestCoercionIntegration:
         assert result["coerced_params"]["category"] == "electronics"
 
 
+class TestFormatTypeErrorHint:
+    """Tests for the format_type_error_hint function and helpers."""
+
+    def test_string_to_int_hint_includes_template_syntax(self):
+        """Test that int hint includes typed attribute syntax."""
+        from djust.validation import format_type_error_hint
+
+        hint = format_type_error_hint(
+            param="sender_id",
+            expected="int",
+            actual="str",
+            value="abc",
+            coercion_attempted=True,
+        )
+
+        assert "data-sender-id:int" in hint
+        assert "could not be converted to int" in hint
+        assert "Quick fixes" in hint
+
+    def test_string_to_float_hint(self):
+        """Test that float hint includes appropriate guidance."""
+        from djust.validation import format_type_error_hint
+
+        hint = format_type_error_hint(
+            param="price",
+            expected="float",
+            actual="str",
+            value="invalid",
+            coercion_attempted=True,
+        )
+
+        assert "data-price:float" in hint
+        assert "could not be converted to float" in hint
+
+    def test_string_to_bool_hint(self):
+        """Test that bool hint includes valid true values."""
+        from djust.validation import format_type_error_hint
+
+        hint = format_type_error_hint(
+            param="enabled",
+            expected="bool",
+            actual="str",
+            value="maybe",
+            coercion_attempted=True,
+        )
+
+        assert "data-enabled:bool" in hint
+        assert "true" in hint.lower()
+        assert "yesno" in hint
+
+    def test_string_to_list_hint(self):
+        """Test that list hint includes JSON and comma-separated options."""
+        from djust.validation import format_type_error_hint
+
+        hint = format_type_error_hint(
+            param="tags",
+            expected="list",
+            actual="str",
+            value="not a list",
+            coercion_attempted=True,
+        )
+
+        assert "data-tags:json" in hint
+        assert "data-tags:list" in hint
+        assert "comma-separated" in hint.lower()
+
+    def test_string_to_decimal_hint(self):
+        """Test that Decimal hint provides appropriate guidance."""
+        from djust.validation import format_type_error_hint
+
+        hint = format_type_error_hint(
+            param="amount",
+            expected="Decimal",
+            actual="str",
+            value="$100",
+            coercion_attempted=True,
+        )
+
+        assert "data-amount" in hint
+        assert "Decimal" in hint or "decimal" in hint
+
+    def test_generic_hint_for_unknown_types(self):
+        """Test that unknown type combinations get a generic hint."""
+        from djust.validation import format_type_error_hint
+
+        hint = format_type_error_hint(
+            param="custom",
+            expected="CustomType",
+            actual="dict",
+            value={},
+            coercion_attempted=True,
+        )
+
+        assert "CustomType" in hint
+        assert "Hint:" in hint
+
+    def test_hint_without_coercion_attempted(self):
+        """Test hint when coercion was not attempted."""
+        from djust.validation import format_type_error_hint
+
+        hint = format_type_error_hint(
+            param="count",
+            expected="int",
+            actual="str",
+            value="42",
+            coercion_attempted=False,
+        )
+
+        # Should still provide quick fixes but not mention failed conversion
+        assert "Quick fixes" in hint
+        assert "could not be converted" not in hint
+
+    def test_param_name_kebab_conversion(self):
+        """Test that snake_case params are converted to kebab-case in hints."""
+        from djust.validation import format_type_error_hint
+
+        hint = format_type_error_hint(
+            param="user_profile_id",
+            expected="int",
+            actual="str",
+            value="abc",
+            coercion_attempted=True,
+        )
+
+        assert "data-user-profile-id:int" in hint
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

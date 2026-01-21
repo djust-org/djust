@@ -1084,6 +1084,98 @@
                     margin-top: 6px;
                 }
 
+                /* Enhanced recommendations list styles */
+                .recommendations-list {
+                    margin-top: 10px;
+                    padding: 10px;
+                    background: rgba(15, 23, 42, 0.6);
+                    border-radius: 6px;
+                    border: 1px solid rgba(59, 130, 246, 0.2);
+                }
+
+                .recommendations-header {
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: #e2e8f0;
+                    margin-bottom: 10px;
+                    padding-bottom: 6px;
+                    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+                }
+
+                .recommendation-item {
+                    padding: 10px;
+                    margin-bottom: 8px;
+                    border-radius: 4px;
+                    background: rgba(30, 41, 59, 0.5);
+                    border-left: 3px solid #64748b;
+                }
+
+                .recommendation-item:last-child {
+                    margin-bottom: 0;
+                }
+
+                .recommendation-item.priority-high {
+                    border-left-color: #f59e0b;
+                    background: rgba(245, 158, 11, 0.08);
+                }
+
+                .recommendation-item.priority-medium {
+                    border-left-color: #3b82f6;
+                    background: rgba(59, 130, 246, 0.08);
+                }
+
+                .recommendation-item.priority-low {
+                    border-left-color: #10b981;
+                    background: rgba(16, 185, 129, 0.08);
+                }
+
+                .recommendation-title {
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: #f1f5f9;
+                    margin-bottom: 4px;
+                }
+
+                .recommendation-description {
+                    font-size: 11px;
+                    color: #cbd5e1;
+                    line-height: 1.5;
+                    margin-bottom: 6px;
+                }
+
+                .recommendation-code {
+                    background: rgba(15, 23, 42, 0.8);
+                    padding: 8px 10px;
+                    border-radius: 4px;
+                    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+                    font-size: 11px;
+                    color: #a5f3fc;
+                    overflow-x: auto;
+                    white-space: pre-wrap;
+                    word-break: break-all;
+                }
+
+                .warning-docs-link,
+                .timing-warning-docs-link {
+                    display: inline-block;
+                    margin-top: 8px;
+                    padding: 4px 10px;
+                    background: rgba(59, 130, 246, 0.15);
+                    border: 1px solid rgba(59, 130, 246, 0.3);
+                    border-radius: 4px;
+                    color: #93c5fd;
+                    font-size: 11px;
+                    text-decoration: none;
+                    transition: all 0.2s ease;
+                }
+
+                .warning-docs-link:hover,
+                .timing-warning-docs-link:hover {
+                    background: rgba(59, 130, 246, 0.25);
+                    border-color: rgba(59, 130, 246, 0.5);
+                    color: #bfdbfe;
+                }
+
                 .warning-more {
                     padding: 6px 12px;
                     text-align: center;
@@ -2917,11 +3009,61 @@
                 details.push(`<span class="warning-detail">Threshold: ${warning.threshold}ms</span>`);
             }
 
+            // Handle legacy single recommendation
             if (warning.recommendation) {
                 details.push(`<span class="warning-recommendation">💡 ${warning.recommendation}</span>`);
             }
 
+            // Handle new recommendations array with detailed info
+            if (warning.recommendations && Array.isArray(warning.recommendations)) {
+                details.push(this.renderRecommendationsList(warning.recommendations));
+            }
+
+            // Add docs link if available
+            if (warning.docs_url) {
+                details.push(`<a href="${warning.docs_url}" target="_blank" class="warning-docs-link">📖 View documentation</a>`);
+            }
+
             return details.length > 0 ? `<div class="warning-details">${details.join('')}</div>` : '';
+        }
+
+        renderRecommendationsList(recommendations) {
+            if (!recommendations || recommendations.length === 0) {
+                return '';
+            }
+
+            const sortedRecs = [...recommendations].sort((a, b) => {
+                const priorityOrder = { high: 0, medium: 1, low: 2 };
+                return (priorityOrder[a.priority] || 2) - (priorityOrder[b.priority] || 2);
+            });
+
+            let html = '<div class="recommendations-list">';
+            html += '<div class="recommendations-header">💡 Recommendations:</div>';
+
+            sortedRecs.forEach((rec, idx) => {
+                const priorityClass = `priority-${rec.priority || 'medium'}`;
+                html += `<div class="recommendation-item ${priorityClass}">`;
+                html += `<div class="recommendation-title">${idx + 1}. ${rec.title || 'Suggestion'}</div>`;
+
+                if (rec.description) {
+                    html += `<div class="recommendation-description">${rec.description}</div>`;
+                }
+
+                if (rec.code_example) {
+                    html += `<div class="recommendation-code"><code>${this.escapeHtml(rec.code_example)}</code></div>`;
+                }
+
+                html += '</div>';
+            });
+
+            html += '</div>';
+            return html;
+        }
+
+        escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
         renderPerformanceTree(performance) {
@@ -2969,8 +3111,19 @@
                         html += '</div>';
                         html += '<div class="timing-warning-message">' + warning.message + '</div>';
 
+                        // Handle legacy single recommendation
                         if (warning.recommendation) {
                             html += '<div class="timing-warning-recommendation">💡 ' + warning.recommendation + '</div>';
+                        }
+
+                        // Handle new recommendations array with detailed info
+                        if (warning.recommendations && Array.isArray(warning.recommendations)) {
+                            html += this.renderRecommendationsList(warning.recommendations);
+                        }
+
+                        // Add docs link if available
+                        if (warning.docs_url) {
+                            html += '<a href="' + warning.docs_url + '" target="_blank" class="timing-warning-docs-link">📖 View documentation</a>';
                         }
 
                         html += '</div>';

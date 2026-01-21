@@ -1058,7 +1058,9 @@ function extractTypedParams(element) {
                     try {
                         value = JSON.parse(value);
                     } catch (e) {
-                        console.warn(`[LiveView] Failed to parse JSON for ${attr.name}:`, value);
+                        // Sanitize attribute name for logging (truncate, alphanumeric only)
+                        const safeAttrName = String(attr.name).slice(0, 50).replace(/[^a-z0-9-:]/gi, '_');
+                        console.warn('[LiveView] Failed to parse JSON for', safeAttrName);
                         // Keep as string if JSON parse fails
                     }
                     break;
@@ -2046,9 +2048,8 @@ function applyPatches(patches) {
         return true;
     }
 
-    // For larger patch sets, use batching with requestAnimationFrame
+    // For larger patch sets, use batching
     let failedCount = 0;
-    let successCount = 0;
 
     // Group patches by parent for potential batching
     const patchGroups = groupPatchesByParent(patches);
@@ -2071,7 +2072,6 @@ function applyPatches(patches) {
                     for (const patch of insertPatches) {
                         const newChild = createNodeFromVNode(patch.node);
                         fragment.appendChild(newChild);
-                        successCount++;
                     }
 
                     // Insert fragment at the right position
@@ -2097,9 +2097,7 @@ function applyPatches(patches) {
 
         // Apply remaining patches individually
         for (const patch of group) {
-            if (applySinglePatch(patch)) {
-                successCount++;
-            } else {
+            if (!applySinglePatch(patch)) {
                 failedCount++;
             }
         }

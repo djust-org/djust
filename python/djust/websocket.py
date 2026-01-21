@@ -3,6 +3,7 @@ WebSocket consumer for LiveView real-time updates
 """
 
 import json
+import sys
 import msgpack
 from typing import Callable, Dict, Any, Optional
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -93,7 +94,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """Handle incoming WebSocket messages"""
         import logging
         import traceback
-        import sys
 
         logger = logging.getLogger(__name__)
 
@@ -433,7 +433,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """Handle client events"""
         import logging
         import traceback
-        import sys
         import time
         from djust.performance import PerformanceTracker
 
@@ -657,7 +656,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
                                 if patches:
                                     patch_list = json.loads(patches)
-                                    tracker.track_patches(len(patch_list))
+                                    tracker.track_patches(len(patch_list), patch_list)
                                     profiler.record(profiler.OP_DIFF, 0)  # Mark diff occurred
                         timing['render'] = (time.perf_counter() - render_start) * 1000  # Convert to ms
 
@@ -680,6 +679,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Patch compression: if patch count exceeds threshold and HTML is smaller,
                 # send HTML instead of patches for better performance
                 PATCH_COUNT_THRESHOLD = 100
+                patch_list = None
                 if patches:
                     patch_list = json.loads(patches)
                     patch_count = len(patch_list)
@@ -689,7 +689,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         html_size = len(html.encode('utf-8'))
                         # If HTML is at least 30% smaller, send HTML instead
                         if html_size < patches_size * 0.7:
-                            import sys
                             print(
                                 f"[WebSocket] Patch compression: {patch_count} patches ({patches_size}B) "
                                 f"-> sending HTML ({html_size}B) instead",
@@ -699,11 +698,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             if hasattr(self.view_instance, '_rust_view') and self.view_instance._rust_view:
                                 self.view_instance._rust_view.reset()
                             patches = None
+                            patch_list = None
 
-                if patches:
+                if patches and patch_list:
                     if self.use_binary:
-                        # Send as MessagePack
-                        patches_data = msgpack.packb(json.loads(patches))
+                        # Send as MessagePack (reuse parsed patch_list)
+                        patches_data = msgpack.packb(patch_list)
                         await self.send(bytes_data=patches_data)
                     else:
                         # Send as JSON
@@ -714,7 +714,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                         response = {
                             "type": "patch",
-                            "patches": json.loads(patches),
+                            "patches": patch_list,  # Reuse parsed patch_list
                             "version": version,
                             "timing": timing,  # Include basic timing for backward compatibility
                             "performance": perf_summary,  # Include comprehensive performance data
@@ -736,8 +736,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     html_content = await sync_to_async(
                         self.view_instance._extract_liveview_content
                     )(html)
-
-                    import sys
 
                     print(
                         "[WebSocket] No patches generated, sending full HTML update",
