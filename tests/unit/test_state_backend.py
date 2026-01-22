@@ -47,7 +47,8 @@ class TestRustSerialization:
 
         # First render to create VDOM
         html1 = view.render()
-        assert html1 == "<div>1</div>"
+        # HTML now includes data-dj attributes for ID-based patching
+        assert "<div" in html1 and ">1</div>" in html1
 
         # Serialize and deserialize
         serialized = view.serialize_msgpack()
@@ -55,12 +56,13 @@ class TestRustSerialization:
 
         # Verify state was preserved
         html2 = view2.render()
-        assert html2 == "<div>1</div>"  # State preserved
+        assert "<div" in html2 and ">1</div>" in html2  # State preserved
 
         # Update and render again to verify VDOM works
         view2.update_state({"count": 2})
         html3, patches, version = view2.render_with_diff()
-        assert html3 == "<div>2</div>"
+        # render_with_diff returns hydrated HTML with data-dj attributes
+        assert "<div" in html3 and ">2</div>" in html3
         assert version >= 1  # Version counter was preserved
 
     def test_serialize_complex_state(self):

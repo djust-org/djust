@@ -294,12 +294,19 @@ class LiveViewWebSocket {
                 }
 
                 // OPTIMIZATION: Skip HTML replacement if content was pre-rendered via HTTP GET
-                if (this.skipMountHtml) {
+                // BUT: Force hydration if server HTML has data-dj attributes for reliable patching
+                // Server sends has_ids flag to avoid client-side string search
+                const hasDataDjAttrs = data.has_ids === true;
+                if (this.skipMountHtml && !hasDataDjAttrs) {
                     console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
                     this.skipMountHtml = false; // Reset flag
                     bindLiveViewEvents(); // Bind events to existing content
                 } else if (data.html) {
                     // Replace page content with server-rendered HTML
+                    // This is required when using ID-based patch targeting (data-dj attributes)
+                    if (hasDataDjAttrs) {
+                        console.log('[LiveView] Hydrating DOM with data-dj attributes for reliable patching');
+                    }
                     let container = document.querySelector('[data-live-view]');
                     if (!container) {
                         container = document.querySelector('[data-liveview-root]');
@@ -308,6 +315,7 @@ class LiveViewWebSocket {
                         container.innerHTML = data.html;
                         bindLiveViewEvents();
                     }
+                    this.skipMountHtml = false; // Reset flag
                 }
                 break;
 
@@ -424,7 +432,9 @@ class LiveViewWebSocket {
                 }
 
                 // Always send mount message to initialize server-side session
-                this.mount(viewPath);
+                // Pass URL query params so server mount can read filters (e.g., ?sender=80)
+                const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+                this.mount(viewPath, urlParams);
             } else {
                 console.warn('[LiveView] Container found but no view path specified');
             }
@@ -1670,7 +1680,41 @@ async function handleEvent(eventName, params = {}) {
 
 // === VDOM Patch Application ===
 
-function getNodeByPath(path) {
+/**
+ * Sanitize a djust ID for safe logging (defense-in-depth).
+ * @param {*} id - The ID to sanitize
+ * @returns {string} - Sanitized ID safe for logging
+ */
+function sanitizeIdForLog(id) {
+    if (!id) return 'none';
+    return String(id).slice(0, 20).replace(/[^\w-]/g, '');
+}
+
+/**
+ * Resolve a DOM node using ID-based lookup (primary) or path traversal (fallback).
+ *
+ * Resolution strategy:
+ * 1. If djustId is provided, try querySelector('[data-dj="..."]') - O(1), reliable
+ * 2. Fall back to index-based path traversal
+ *
+ * @param {Array<number>} path - Index-based path (fallback)
+ * @param {string|null} djustId - Compact djust ID for direct lookup (e.g., "1a")
+ * @returns {Node|null} - Found node or null
+ */
+function getNodeByPath(path, djustId = null) {
+    // Strategy 1: ID-based resolution (fast, reliable)
+    if (djustId) {
+        const byId = document.querySelector(`[data-dj="${CSS.escape(djustId)}"]`);
+        if (byId) {
+            return byId;
+        }
+        // ID not found - fall through to path-based
+        if (globalThis.djustDebug) {
+            console.log(`[LiveView] ID lookup failed for data-dj="${sanitizeIdForLog(djustId)}", trying path`);
+        }
+    }
+
+    // Strategy 2: Index-based path traversal (fallback)
     let node = getLiveViewRoot();
 
     if (path.length === 0) {
@@ -1688,7 +1732,12 @@ function getNodeByPath(path) {
         });
 
         if (index >= children.length) {
-            console.warn(`[LiveView] Path traversal failed at index ${index}, only ${children.length} children`);
+            if (globalThis.djustDebug) {
+                // Explicit number coercion for safe logging
+                const safeIndex = Number(index) || 0;
+                const safeLen = Number(children.length) || 0;
+                console.warn(`[LiveView] Path traversal failed at index ${safeIndex}, only ${safeLen} children`);
+            }
             return null;
         }
 
@@ -1979,13 +2028,18 @@ function groupConsecutiveInserts(inserts) {
 
 /**
  * Apply a single patch operation.
+ *
+ * Patches include:
+ * - `path`: Index-based path (fallback)
+ * - `d`: Compact djust ID for O(1) querySelector lookup
  */
 function applySinglePatch(patch) {
-    const node = getNodeByPath(patch.path);
+    // Use ID-based resolution (d field) with path as fallback
+    const node = getNodeByPath(patch.path, patch.d);
     if (!node) {
-        // Sanitize path for logging (patches come from trusted server, but log defensively)
+        // Sanitize for logging (patches come from trusted server, but log defensively)
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
-        console.warn('[LiveView] Failed to find node at path:', safePath);
+        console.warn(`[LiveView] Failed to find node: path=${safePath}, id=${sanitizeIdForLog(patch.d)}`);
         return false;
     }
 
@@ -2125,7 +2179,8 @@ function applyPatches(patches) {
                 if (consecutiveGroup.length < 3) continue;
 
                 const firstPatch = consecutiveGroup[0];
-                const parentNode = getNodeByPath(firstPatch.path);
+                // Use ID-based resolution for parent node
+                const parentNode = getNodeByPath(firstPatch.path, firstPatch.d);
 
                 if (parentNode) {
                     try {

@@ -6,33 +6,40 @@
 use crate::{Patch, VNode};
 
 /// Apply a patch to a virtual DOM tree (for testing purposes)
+///
+/// Note: The `d` field (djust_id) is used for client-side resolution
+/// and is ignored here since we're working with in-memory VNodes.
 pub fn apply_patch(root: &mut VNode, patch: &Patch) {
     match patch {
-        Patch::Replace { path, node } => {
+        Patch::Replace { path, node, .. } => {
             if let Some(target) = get_node_mut(root, path) {
                 *target = node.clone();
             }
         }
 
-        Patch::SetText { path, text } => {
+        Patch::SetText { path, text, .. } => {
             if let Some(target) = get_node_mut(root, path) {
                 target.text = Some(text.clone());
             }
         }
 
-        Patch::SetAttr { path, key, value } => {
+        Patch::SetAttr {
+            path, key, value, ..
+        } => {
             if let Some(target) = get_node_mut(root, path) {
                 target.attrs.insert(key.clone(), value.clone());
             }
         }
 
-        Patch::RemoveAttr { path, key } => {
+        Patch::RemoveAttr { path, key, .. } => {
             if let Some(target) = get_node_mut(root, path) {
                 target.attrs.remove(key);
             }
         }
 
-        Patch::InsertChild { path, index, node } => {
+        Patch::InsertChild {
+            path, index, node, ..
+        } => {
             if let Some(target) = get_node_mut(root, path) {
                 if *index <= target.children.len() {
                     target.children.insert(*index, node.clone());
@@ -40,7 +47,7 @@ pub fn apply_patch(root: &mut VNode, patch: &Patch) {
             }
         }
 
-        Patch::RemoveChild { path, index } => {
+        Patch::RemoveChild { path, index, .. } => {
             if let Some(target) = get_node_mut(root, path) {
                 if *index < target.children.len() {
                     target.children.remove(*index);
@@ -48,7 +55,7 @@ pub fn apply_patch(root: &mut VNode, patch: &Patch) {
             }
         }
 
-        Patch::MoveChild { path, from, to } => {
+        Patch::MoveChild { path, from, to, .. } => {
             if let Some(target) = get_node_mut(root, path) {
                 if *from < target.children.len() && *to <= target.children.len() {
                     let node = target.children.remove(*from);
@@ -82,6 +89,7 @@ mod tests {
         let mut root = VNode::text("old");
         let patch = Patch::SetText {
             path: vec![],
+            d: None,
             text: "new".to_string(),
         };
 
@@ -94,6 +102,7 @@ mod tests {
         let mut root = VNode::element("div");
         let patch = Patch::SetAttr {
             path: vec![],
+            d: Some("0".to_string()),
             key: "class".to_string(),
             value: "active".to_string(),
         };
@@ -107,6 +116,7 @@ mod tests {
         let mut root = VNode::element("div");
         let patch = Patch::InsertChild {
             path: vec![],
+            d: Some("0".to_string()),
             index: 0,
             node: VNode::text("child"),
         };

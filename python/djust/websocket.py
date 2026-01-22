@@ -273,8 +273,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         # Create request with session
         try:
+            from urllib.parse import urlencode
             factory = RequestFactory()
-            request = factory.get("/")
+            # Include URL query params (e.g., ?sender=80) in the request
+            query_string = urlencode(params) if params else ''
+            path_with_query = f"/?{query_string}" if query_string else "/"
+            request = factory.get(path_with_query)
 
             # Add session from WebSocket scope
             from django.contrib.sessions.backends.db import SessionStore
@@ -336,9 +340,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         try:
             if has_prerendered:
-                # OPTIMIZATION: Client already has pre-rendered HTML from initial HTTP request
-                # Skip rendering and only establish VDOM baseline for future patches
-                logger.info("Skipping HTML generation - client has pre-rendered content")
+                # Client has pre-rendered HTML but we still need to send hydrated HTML
+                # when using ID-based patching (data-dj attributes) for reliable VDOM sync
+                logger.info("Client has pre-rendered content - sending hydrated HTML for ID-based patching")
 
                 if self.use_actors and self.actor_handle:
                     # Initialize actor with empty render (just establish state)
@@ -348,14 +352,21 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         context_data,
                         self.view_instance,
                     )
+                    html = result.get("html")
                     version = result.get("version", 1)
                 else:
                     # Initialize Rust view and sync state for future patches
                     await sync_to_async(self.view_instance._initialize_rust_view)(request)
                     await sync_to_async(self.view_instance._sync_state_to_rust)()
 
-                    # Establish VDOM baseline without sending HTML
-                    _, _, version = await sync_to_async(self.view_instance.render_with_diff)()
+                    # Generate hydrated HTML with data-dj attributes for reliable patch targeting
+                    html, _, version = await sync_to_async(self.view_instance.render_with_diff)()
+
+                    # Strip comments and normalize whitespace
+                    html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
+
+                    # Extract innerHTML of [data-liveview-root]
+                    html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
 
             elif self.use_actors and self.actor_handle:
                 # Phase 5: Use actor system for rendering
@@ -424,6 +435,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Only include HTML if it was generated (not skipped due to pre-rendering)
         if html is not None:
             response["html"] = html
+            # Flag indicating HTML has data-dj attributes for ID-based patching
+            response["has_ids"] = "data-dj=" in html
 
         # Include cache configuration for handlers with @cache decorator
         cache_config = self._extract_cache_config()
