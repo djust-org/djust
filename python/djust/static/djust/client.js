@@ -1690,7 +1690,9 @@ function getNodeByPath(path, djustId = null) {
         }
         // ID not found - fall through to path-based
         if (globalThis.djustDebug) {
-            console.log(`[LiveView] ID lookup failed for data-dj="${djustId}", trying path`);
+            // Sanitize for logging (defense-in-depth)
+            const safeId = String(djustId).slice(0, 20).replace(/[^\w-]/g, '');
+            console.log(`[LiveView] ID lookup failed for data-dj="${safeId}", trying path`);
         }
     }
 
@@ -1713,7 +1715,10 @@ function getNodeByPath(path, djustId = null) {
 
         if (index >= children.length) {
             if (globalThis.djustDebug) {
-                console.warn(`[LiveView] Path traversal failed at index ${index}, only ${children.length} children`);
+                // Explicit number coercion for safe logging
+                const safeIndex = Number(index) || 0;
+                const safeLen = Number(children.length) || 0;
+                console.warn(`[LiveView] Path traversal failed at index ${safeIndex}, only ${safeLen} children`);
             }
             return null;
         }
@@ -2016,7 +2021,7 @@ function applySinglePatch(patch) {
     if (!node) {
         // Sanitize for logging (patches come from trusted server, but log defensively)
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
-        const safeId = patch.d ? String(patch.d).slice(0, 20) : 'none';
+        const safeId = patch.d ? String(patch.d).slice(0, 20).replace(/[^\w-]/g, '') : 'none';
         console.warn(`[LiveView] Failed to find node: path=${safePath}, id=${safeId}`);
         return false;
     }
