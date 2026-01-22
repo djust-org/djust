@@ -6,7 +6,7 @@ making variables like GOOGLE_ANALYTICS_ID, user, messages, etc. available.
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from djust import LiveView
 from django.test import RequestFactory, override_settings
 from django.contrib.sessions.middleware import SessionMiddleware
