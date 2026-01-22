@@ -295,7 +295,8 @@ class LiveViewWebSocket {
 
                 // OPTIMIZATION: Skip HTML replacement if content was pre-rendered via HTTP GET
                 // BUT: Force hydration if server HTML has data-dj attributes for reliable patching
-                const hasDataDjAttrs = data.html && data.html.includes('data-dj=');
+                // Server sends has_ids flag to avoid client-side string search
+                const hasDataDjAttrs = data.has_ids === true;
                 if (this.skipMountHtml && !hasDataDjAttrs) {
                     console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
                     this.skipMountHtml = false; // Reset flag

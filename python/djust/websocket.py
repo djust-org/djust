@@ -368,12 +368,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # Extract innerHTML of [data-liveview-root]
                     html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
 
-                # DEBUG: Log whether HTML has data-dj attributes
-                has_data_dj = html and "data-dj=" in html
-                print(f"[DEBUG] has_prerendered mount - HTML length: {len(html) if html else 0}, has data-dj: {has_data_dj}", file=sys.stderr)
-                if html:
-                    print(f"[DEBUG] HTML preview: {html[:200]}...", file=sys.stderr)
-
             elif self.use_actors and self.actor_handle:
                 # Phase 5: Use actor system for rendering
                 logger.info(f"Mounting {view_path} with actor system")
@@ -441,6 +435,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Only include HTML if it was generated (not skipped due to pre-rendering)
         if html is not None:
             response["html"] = html
+            # Flag indicating HTML has data-dj attributes for ID-based patching
+            response["has_ids"] = "data-dj=" in html
 
         # Include cache configuration for handlers with @cache decorator
         cache_config = self._extract_cache_config()

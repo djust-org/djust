@@ -20,7 +20,21 @@ pub mod patch;
 // Compact ID Generation (Base62)
 // ============================================================================
 
-/// Global counter for generating unique IDs within a parse session
+/// Global counter for generating unique IDs within a parse session.
+///
+/// # Thread Safety
+///
+/// This counter is atomic and safe for concurrent access. However, when multiple
+/// requests parse HTML concurrently, their IDs will interleave (e.g., request A
+/// gets "0", "2", "4" while request B gets "1", "3", "5"). This is acceptable
+/// because:
+///
+/// 1. Each request produces its own HTML output with its own set of IDs
+/// 2. The diff algorithm uses the OLD node's ID for patch targeting
+/// 3. IDs only need to be unique within a single HTML document
+///
+/// Call `reset_id_counter()` before parsing if you need deterministic IDs
+/// (e.g., for testing), but this is not required in production.
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Base62 character set: 0-9, a-z, A-Z
