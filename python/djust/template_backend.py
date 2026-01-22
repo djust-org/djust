@@ -23,6 +23,7 @@ Then use standard Django views:
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -177,6 +178,11 @@ class DjustTemplate:
     Compatible with Django's template interface.
     """
 
+    # Pre-compiled regex patterns for template inheritance processing
+    _BLOCK_START_RE = re.compile(r'{%\s*block\s+(\w+)\s*%}')
+    _BLOCK_END_RE = re.compile(r'{%\s*endblock\s*(?:\w+\s*)?%}')
+    _EXTENDS_RE = re.compile(r'{%\s*extends\s+["\']([^"\']+)["\']\s*%}')
+
     def __init__(
         self,
         template_string: str,
@@ -309,8 +315,6 @@ class DjustTemplate:
         6. Repeating until no more {% extends %} tags are found
         7. Stripping all block wrappers at the end
         """
-        import re
-
         template_source = self.template_string
         max_depth = 10  # Prevent infinite loops
         depth = 0
@@ -320,7 +324,7 @@ class DjustTemplate:
 
         while depth < max_depth:
             # Check for {% extends 'parent.html' %} at start of template
-            match = re.match(r'{%\s*extends\s+["\']([^"\']+)["\']\s*%}', template_source.strip())
+            match = self._EXTENDS_RE.match(template_source.strip())
             if not match:
                 break
 
@@ -372,17 +376,12 @@ class DjustTemplate:
         Returns:
             Template with blocks replaced
         """
-        import re
-
-        block_start_pattern = re.compile(r'{%\s*block\s+(\w+)\s*%}')
-        block_end_pattern = re.compile(r'{%\s*endblock\s*(?:\w+\s*)?%}')
-
         result = []
         pos = 0
 
         while pos < len(template_source):
             # Find next block start
-            start_match = block_start_pattern.search(template_source, pos)
+            start_match = self._BLOCK_START_RE.search(template_source, pos)
             if not start_match:
                 # No more blocks, append rest of template
                 result.append(template_source[pos:])
@@ -401,8 +400,8 @@ class DjustTemplate:
             block_end_pos = None
 
             while depth > 0 and search_pos < len(template_source):
-                next_start = block_start_pattern.search(template_source, search_pos)
-                next_end = block_end_pattern.search(template_source, search_pos)
+                next_start = self._BLOCK_START_RE.search(template_source, search_pos)
+                next_end = self._BLOCK_END_RE.search(template_source, search_pos)
 
                 if next_end is None:
                     # No matching endblock - malformed template
@@ -461,16 +460,11 @@ class DjustTemplate:
         Returns:
             Template with block wrappers removed
         """
-        import re
-
-        block_start_pattern = re.compile(r'{%\s*block\s+(\w+)\s*%}')
-        block_end_pattern = re.compile(r'{%\s*endblock\s*(?:\w+\s*)?%}')
-
         result = []
         pos = 0
 
         while pos < len(template_source):
-            start_match = block_start_pattern.search(template_source, pos)
+            start_match = self._BLOCK_START_RE.search(template_source, pos)
             if not start_match:
                 result.append(template_source[pos:])
                 break
@@ -487,8 +481,8 @@ class DjustTemplate:
             block_end_pos = None
 
             while depth > 0 and search_pos < len(template_source):
-                next_start = block_start_pattern.search(template_source, search_pos)
-                next_end = block_end_pattern.search(template_source, search_pos)
+                next_start = self._BLOCK_START_RE.search(template_source, search_pos)
+                next_end = self._BLOCK_END_RE.search(template_source, search_pos)
 
                 if next_end is None:
                     break
@@ -530,16 +524,11 @@ class DjustTemplate:
         Returns:
             Dict mapping block names to their content (without wrapper tags)
         """
-        import re
-
         blocks = {}
-        block_start_pattern = re.compile(r'{%\s*block\s+(\w+)\s*%}')
-        block_end_pattern = re.compile(r'{%\s*endblock\s*(?:\w+\s*)?%}')
-
         pos = 0
         while pos < len(template_source):
             # Find next block start
-            start_match = block_start_pattern.search(template_source, pos)
+            start_match = self._BLOCK_START_RE.search(template_source, pos)
             if not start_match:
                 break
 
@@ -552,8 +541,8 @@ class DjustTemplate:
             content_end = None
 
             while depth > 0 and search_pos < len(template_source):
-                next_start = block_start_pattern.search(template_source, search_pos)
-                next_end = block_end_pattern.search(template_source, search_pos)
+                next_start = self._BLOCK_START_RE.search(template_source, search_pos)
+                next_end = self._BLOCK_END_RE.search(template_source, search_pos)
 
                 if next_end is None:
                     # No matching endblock - malformed template

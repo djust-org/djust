@@ -292,15 +292,28 @@ Default
             template = self.create_template(leaf_source, [tmpdir])
             resolved = template._resolve_template_inheritance()
 
-            # Block a should have root default
-            assert ">A<" in resolved or "A" in resolved
+            # Verify the exact structure: block wrappers stripped, content preserved
+            # The resolved output should be: <html>\nA\nB-MIDDLE\nC-LEAF\n</html>
+            assert "<html>" in resolved
+            assert "</html>" in resolved
+
+            # Block a should have root default (single 'A' not part of another word)
+            # Remove known strings to check 'A' appears on its own
+            resolved_without_known = resolved.replace("B-MIDDLE", "").replace("C-LEAF", "")
+            assert "\nA\n" in resolved_without_known or "A\n" in resolved_without_known
+
             # Block b should have middle override
             assert "B-MIDDLE" in resolved
+
             # Block c should have leaf override
             assert "C-LEAF" in resolved
-            # Original defaults should be gone
-            assert ">B<" not in resolved or "B" not in resolved.replace("B-MIDDLE", "")
-            assert ">C<" not in resolved or "C" not in resolved.replace("C-LEAF", "")
+
+            # Original defaults 'B' and 'C' (standalone) should not be present
+            # Check there's no standalone 'B' (only B-MIDDLE should exist)
+            import re
+            # Match standalone B or C (word boundary)
+            assert not re.search(r'\bB\b(?!-)', resolved), f"Found standalone 'B' in: {resolved}"
+            assert not re.search(r'\bC\b(?!-)', resolved), f"Found standalone 'C' in: {resolved}"
 
 
 class TestDjustOrgDocsInheritance:
