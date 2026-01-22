@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-01-22
+
 ### Added
+- **ID-based VDOM patch resolution** - Elements now receive unique `data-dj` attributes for reliable patch targeting. Fixes issues where conditional content changes caused patch failures. Uses compact base62 encoding to minimize HTML overhead (~3-4%).
 - **Automatic type coercion for event handler parameters** - Template `data-*` attributes (always strings) are now automatically converted to expected types based on handler type hints. Supports `int`, `float`, `bool`, `Decimal`, `UUID`, `list`, `List[T]`, and `Optional[T]`.
 - New `coerce_types` parameter for `@event_handler()` decorator to disable coercion when raw strings are needed
 - Enhanced error messages with hints when type coercion fails
@@ -17,6 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `@performance_test` decorator - Fail tests if handlers exceed time/query thresholds
   - `MockRequest` and `create_test_view` helpers
 - **Debug Panel - State Timeline** - View history of state changes with before/after diffs, timeline scrubbing, and state restoration
+- `VNode.to_html()` method for serializing VDOM back to HTML with data-dj attributes
+- URL query parameters now passed to server mount for filter support
+
+### Fixed
+- Debug panel visibility now restored correctly on page load
+- VDOM patch path traversal failures on complex page structures with conditional content
+
+### Changed
+- Patches now include `d` field (djust_id) for O(1) client-side element lookup via `querySelector`
+- Client uses ID-based resolution first, falls back to index-based path traversal
+- Improved log sanitization for defense-in-depth security
 
 ## [0.1.2] - 2026-01-16
 
@@ -135,4 +149,7 @@ pip install djust[performance]  # orjson + zstd
 
 ---
 
-[0.1.0]: https://github.com/johnrtipton/djust/releases/tag/v0.1.0
+[0.1.3]: https://github.com/djust-org/djust/releases/tag/v0.1.3
+[0.1.2]: https://github.com/djust-org/djust/releases/tag/v0.1.2
+[0.1.1]: https://github.com/djust-org/djust/releases/tag/v0.1.1
+[0.1.0]: https://github.com/djust-org/djust/releases/tag/v0.1.0
