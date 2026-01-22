@@ -22,7 +22,7 @@ djust_core = { path = "../djust_core" }
 djust_components = { path = "../djust_components" }
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 tempfile = "3.8"
 
 [[bench]]
