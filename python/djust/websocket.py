@@ -31,7 +31,7 @@ def get_handler_coerce_setting(handler: Callable) -> bool:
     Returns:
         True if type coercion should be enabled (default), False if disabled
     """
-    if hasattr(handler, '_djust_decorators'):
+    if hasattr(handler, "_djust_decorators"):
         return handler._djust_decorators.get("event_handler", {}).get("coerce_types", True)
     return True
 
@@ -250,6 +250,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # Store WebSocket session_id in view for consistent VDOM caching
             # This ensures mount and all subsequent events use the same VDOM instance
             self.view_instance._websocket_session_id = self.session_id
+            # Store path and query string for path-aware cache keys
+            # This ensures /emails/ and /emails/?sender=1 get separate VDOM caches
+            self.view_instance._websocket_path = self.scope.get("path", "/")
+            self.view_instance._websocket_query_string = self.scope.get("query_string", b"").decode(
+                "utf-8"
+            )
 
             # Check if view uses actor-based state management
             self.use_actors = getattr(view_class, "use_actors", False)
@@ -274,9 +280,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Create request with session
         try:
             from urllib.parse import urlencode
+
             factory = RequestFactory()
             # Include URL query params (e.g., ?sender=80) in the request
-            query_string = urlencode(params) if params else ''
+            query_string = urlencode(params) if params else ""
             path_with_query = f"/?{query_string}" if query_string else "/"
             request = factory.get(path_with_query)
 
@@ -342,7 +349,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if has_prerendered:
                 # Client has pre-rendered HTML but we still need to send hydrated HTML
                 # when using ID-based patching (data-dj attributes) for reliable VDOM sync
-                logger.info("Client has pre-rendered content - sending hydrated HTML for ID-based patching")
+                logger.info(
+                    "Client has pre-rendered content - sending hydrated HTML for ID-based patching"
+                )
 
                 if self.use_actors and self.actor_handle:
                     # Initialize actor with empty render (just establish state)
@@ -363,7 +372,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     html, _, version = await sync_to_async(self.view_instance.render_with_diff)()
 
                     # Strip comments and normalize whitespace
-                    html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
+                    html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(
+                        html
+                    )
 
                     # Extract innerHTML of [data-liveview-root]
                     html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
@@ -595,7 +606,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                     # Validate parameters before calling handler
                     coerce = get_handler_coerce_setting(handler)
-                    validation = validate_handler_params(handler, event_data, event_name, coerce=coerce)
+                    validation = validate_handler_params(
+                        handler, event_data, event_name, coerce=coerce
+                    )
                     if not validation["valid"]:
                         logger.error(f"Parameter validation failed: {validation['error']}")
                         await self.send_json(
@@ -618,7 +631,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         await sync_to_async(handler)(**event_data)
                     else:
                         await sync_to_async(handler)()
-                    timing['handler'] = (time.perf_counter() - handler_start) * 1000  # Convert to ms
+                    timing["handler"] = (
+                        time.perf_counter() - handler_start
+                    ) * 1000  # Convert to ms
                 else:
                     # Regular event: route to handler method
                     handler = getattr(self.view_instance, event_name, None)
@@ -656,7 +671,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     await sync_to_async(handler)(**params)
                                 else:
                                     await sync_to_async(handler)()
-                        timing['handler'] = (time.perf_counter() - handler_start) * 1000  # Convert to ms
+                        timing["handler"] = (
+                            time.perf_counter() - handler_start
+                        ) * 1000  # Convert to ms
 
                         # Get updated HTML and patches with tracking
                         render_start = time.perf_counter()
@@ -669,13 +686,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             # Render and generate patches with tracking
                             with tracker.track("VDOM Diff"):
                                 with profiler.profile(profiler.OP_RENDER):
-                                    html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+                                    html, patches, version = await sync_to_async(
+                                        self.view_instance.render_with_diff
+                                    )()
                                 patch_list = None  # Initialize for later use
                                 if patches:
                                     patch_list = json.loads(patches)
                                     tracker.track_patches(len(patch_list), patch_list)
                                     profiler.record(profiler.OP_DIFF, 0)  # Mark diff occurred
-                        timing['render'] = (time.perf_counter() - render_start) * 1000  # Convert to ms
+                        timing["render"] = (
+                            time.perf_counter() - render_start
+                        ) * 1000  # Convert to ms
 
                 # Check if form reset is requested (FormMixin sets this flag)
                 should_reset_form = getattr(self.view_instance, "_should_reset_form", False)
@@ -701,16 +722,21 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     patch_count = len(patch_list)
                     if patch_count > PATCH_COUNT_THRESHOLD:
                         # Compare sizes to decide whether to send patches or HTML
-                        patches_size = len(patches.encode('utf-8'))
-                        html_size = len(html.encode('utf-8'))
+                        patches_size = len(patches.encode("utf-8"))
+                        html_size = len(html.encode("utf-8"))
                         # If HTML is at least 30% smaller, send HTML instead
                         if html_size < patches_size * 0.7:
                             logger.debug(
                                 "Patch compression: %d patches (%dB) -> sending HTML (%dB) instead",
-                                patch_count, patches_size, html_size
+                                patch_count,
+                                patches_size,
+                                html_size,
                             )
                             # Reset VDOM and send HTML
-                            if hasattr(self.view_instance, '_rust_view') and self.view_instance._rust_view:
+                            if (
+                                hasattr(self.view_instance, "_rust_view")
+                                and self.view_instance._rust_view
+                            ):
                                 self.view_instance._rust_view.reset()
                             patches = None
                             patch_list = None
@@ -722,7 +748,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         await self.send(bytes_data=patches_data)
                     else:
                         # Send as JSON
-                        timing['total'] = (time.perf_counter() - start_time) * 1000  # Total server time
+                        timing["total"] = (
+                            time.perf_counter() - start_time
+                        ) * 1000  # Total server time
 
                         # Get comprehensive performance summary
                         perf_summary = tracker.get_summary()
@@ -813,6 +841,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         }
         """
         import logging
+
         logger = logging.getLogger(__name__)
 
         if not self.view_instance:
@@ -822,18 +851,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         # Inspect all methods for @cache decorator metadata
         for name in dir(self.view_instance):
-            if name.startswith('_'):
+            if name.startswith("_"):
                 continue
 
             try:
                 method = getattr(self.view_instance, name)
-                if callable(method) and hasattr(method, '_djust_decorators'):
+                if callable(method) and hasattr(method, "_djust_decorators"):
                     decorators = method._djust_decorators
-                    if 'cache' in decorators:
-                        cache_info = decorators['cache']
+                    if "cache" in decorators:
+                        cache_info = decorators["cache"]
                         cache_config[name] = {
-                            'ttl': cache_info.get('ttl', 60),
-                            'key_params': cache_info.get('key_params', [])
+                            "ttl": cache_info.get("ttl", 60),
+                            "key_params": cache_info.get("key_params", []),
                         }
             except Exception as e:
                 # Skip methods that can't be inspected, but log for debugging
@@ -862,18 +891,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             int: Number of caches cleared successfully
         """
         import logging
-        logger = logging.getLogger('djust.hotreload')
+
+        logger = logging.getLogger("djust.hotreload")
 
         from django.template import engines
+
         caches_cleared = 0
 
         for engine in engines.all():
-            if hasattr(engine, 'engine'):
+            if hasattr(engine, "engine"):
                 try:
                     # Clear cached templates from loaders
-                    if hasattr(engine.engine, 'template_loaders'):
+                    if hasattr(engine.engine, "template_loaders"):
                         for loader in engine.engine.template_loaders:
-                            if hasattr(loader, 'reset'):
+                            if hasattr(loader, "reset"):
                                 loader.reset()
                                 caches_cleared += 1
                 except Exception as e:
@@ -903,7 +934,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         from django.template import TemplateDoesNotExist
         from json import JSONDecodeError
 
-        logger = logging.getLogger('djust.hotreload')
+        logger = logging.getLogger("djust.hotreload")
         file_path = event.get("file", "unknown")
 
         # If we have an active view, re-render and send patch
@@ -915,28 +946,28 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 self._clear_template_caches()
 
                 # Force view to reload template by clearing cached template
-                if hasattr(self.view_instance, '_template'):
-                    delattr(self.view_instance, '_template')
+                if hasattr(self.view_instance, "_template"):
+                    delattr(self.view_instance, "_template")
 
                 # Get the new template content
                 try:
-                    new_template = await database_sync_to_async(
-                        self.view_instance.get_template
-                    )()
+                    new_template = await database_sync_to_async(self.view_instance.get_template)()
                 except TemplateDoesNotExist as e:
                     logger.error(f"Template not found for hot reload: {e}")
-                    await self.send_json({
-                        "type": "reload",
-                        "file": file_path,
-                    })
+                    await self.send_json(
+                        {
+                            "type": "reload",
+                            "file": file_path,
+                        }
+                    )
                     return
 
                 # Update the RustLiveView with the new template (keeps old VDOM for diffing!)
-                if hasattr(self.view_instance, '_rust_view') and self.view_instance._rust_view:
+                if hasattr(self.view_instance, "_rust_view") and self.view_instance._rust_view:
                     logger.debug("Updating template in existing RustLiveView")
-                    await database_sync_to_async(
-                        self.view_instance._rust_view.update_template
-                    )(new_template)
+                    await database_sync_to_async(self.view_instance._rust_view.update_template)(
+                        new_template
+                    )
 
                 # Re-render the view to get patches (track time)
                 render_start = time.time()
@@ -946,7 +977,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 render_time = (time.time() - render_start) * 1000  # Convert to ms
 
                 patch_count = len(patches) if patches else 0
-                logger.info(f"Generated {patch_count} patches in {render_time:.2f}ms, version={version}")
+                logger.info(
+                    f"Generated {patch_count} patches in {render_time:.2f}ms, version={version}"
+                )
 
                 # Warn if patch generation is slow
                 if render_time > 100:
@@ -955,52 +988,65 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Handle case where no patches are generated
                 if not patches:
                     logger.info("No patches generated, sending full reload")
-                    await self.send_json({
-                        "type": "reload",
-                        "file": file_path,
-                    })
+                    await self.send_json(
+                        {
+                            "type": "reload",
+                            "file": file_path,
+                        }
+                    )
                     return
 
                 # Parse patches if they're a JSON string
                 try:
                     import json as json_module
+
                     if isinstance(patches, str):
                         patches = json_module.loads(patches)
                 except (JSONDecodeError, ValueError) as e:
                     logger.error(f"Failed to parse patches JSON: {e}")
-                    await self.send_json({
-                        "type": "reload",
-                        "file": file_path,
-                    })
+                    await self.send_json(
+                        {
+                            "type": "reload",
+                            "file": file_path,
+                        }
+                    )
                     return
 
                 # Send the patches to the client
-                await self.send_json({
-                    "type": "patch",
-                    "patches": patches,
-                    "version": version,
-                    "hotreload": True,
-                    "file": file_path,
-                })
+                await self.send_json(
+                    {
+                        "type": "patch",
+                        "patches": patches,
+                        "version": version,
+                        "hotreload": True,
+                        "file": file_path,
+                    }
+                )
 
                 total_time = (time.time() - start_time) * 1000
-                logger.info(f"✅ Sent {patch_count} patches for {file_path} (total: {total_time:.2f}ms)")
+                logger.info(
+                    f"✅ Sent {patch_count} patches for {file_path} (total: {total_time:.2f}ms)"
+                )
 
             except Exception as e:
                 # Catch-all for unexpected errors
                 logger.exception(f"Error generating patches for {file_path}: {e}")
                 # Fallback to full reload on error
-                await self.send_json({
-                    "type": "reload",
-                    "file": file_path,
-                })
+                await self.send_json(
+                    {
+                        "type": "reload",
+                        "file": file_path,
+                    }
+                )
         else:
             # No active view, just reload the page
             logger.debug(f"No active view, sending full reload for {file_path}")
-            await self.send_json({
-                "type": "reload",
-                "file": file_path,
-            })
+            await self.send_json(
+                {
+                    "type": "reload",
+                    "file": file_path,
+                }
+            )
 
     @classmethod
     async def broadcast_reload(cls, file_path: str):
@@ -1021,7 +1067,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 {
                     "type": "hotreload.message",
                     "file": file_path,
-                }
+                },
             )
 
 

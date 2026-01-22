@@ -2,12 +2,14 @@
 LiveView base class and decorator for reactive Django views
 """
 
+import hashlib
 import json
 import logging
 import os
 import sys
 from datetime import datetime, date, time
 from decimal import Decimal
+from urllib.parse import parse_qs, urlencode
 from uuid import UUID
 from typing import Any, Dict, Optional, Callable
 from django.http import HttpResponse, JsonResponse
@@ -256,9 +258,9 @@ class Stream:
 
     def delete(self, item_or_id: Any) -> None:
         """Mark item for deletion."""
-        if hasattr(item_or_id, 'id'):
+        if hasattr(item_or_id, "id"):
             item_id = item_or_id.id
-        elif hasattr(item_or_id, 'pk'):
+        elif hasattr(item_or_id, "pk"):
             item_id = item_or_id.pk
         else:
             item_id = item_or_id
@@ -266,8 +268,9 @@ class Stream:
         self._deleted_ids.add(item_id)
         # Remove from items list if present
         self.items = [
-            item for item in self.items
-            if getattr(item, 'id', getattr(item, 'pk', id(item))) != item_id
+            item
+            for item in self.items
+            if getattr(item, "id", getattr(item, "pk", id(item))) != item_id
         ]
 
     def clear(self) -> None:
@@ -448,8 +451,9 @@ class LiveView(View):
         Returns:
             Stream object for chaining
         """
+
         def default_dom_id(x):
-            return getattr(x, 'id', None) or getattr(x, 'pk', None) or id(x)
+            return getattr(x, "id", None) or getattr(x, "pk", None) or id(x)
 
         if dom_id is None:
             dom_id = default_dom_id
@@ -457,27 +461,31 @@ class LiveView(View):
         if name not in self._streams or reset:
             self._streams[name] = Stream(name, dom_id)
             if reset:
-                self._stream_operations.append({
-                    'type': 'stream_reset',
-                    'stream': name,
-                })
+                self._stream_operations.append(
+                    {
+                        "type": "stream_reset",
+                        "stream": name,
+                    }
+                )
 
         stream_obj = self._streams[name]
 
         # Convert items to list if needed
-        if hasattr(items, '__iter__') and not isinstance(items, (str, bytes)):
+        if hasattr(items, "__iter__") and not isinstance(items, (str, bytes)):
             items_list = list(items)
         else:
             items_list = [items] if items is not None else []
 
         for item in items_list:
             stream_obj.insert(item, at=at)
-            self._stream_operations.append({
-                'type': 'stream_insert',
-                'stream': name,
-                'dom_id': f"{name}-{dom_id(item)}",
-                'at': at,
-            })
+            self._stream_operations.append(
+                {
+                    "type": "stream_insert",
+                    "stream": name,
+                    "dom_id": f"{name}-{dom_id(item)}",
+                    "at": at,
+                }
+            )
 
         return stream_obj
 
@@ -490,12 +498,14 @@ class LiveView(View):
         dom_id = stream_obj.dom_id_fn
 
         stream_obj.insert(item, at=at)
-        self._stream_operations.append({
-            'type': 'stream_insert',
-            'stream': name,
-            'dom_id': f"{name}-{dom_id(item)}",
-            'at': at,
-        })
+        self._stream_operations.append(
+            {
+                "type": "stream_insert",
+                "stream": name,
+                "dom_id": f"{name}-{dom_id(item)}",
+                "at": at,
+            }
+        )
 
     def stream_delete(self, name: str, item_or_id: Any) -> None:
         """Delete an item from a stream by item or id."""
@@ -505,29 +515,33 @@ class LiveView(View):
         stream_obj = self._streams[name]
 
         # Get the DOM id
-        if hasattr(item_or_id, 'id'):
+        if hasattr(item_or_id, "id"):
             dom_id_val = f"{name}-{item_or_id.id}"
-        elif hasattr(item_or_id, 'pk'):
+        elif hasattr(item_or_id, "pk"):
             dom_id_val = f"{name}-{item_or_id.pk}"
         else:
             dom_id_val = f"{name}-{item_or_id}"
 
         stream_obj.delete(item_or_id)
-        self._stream_operations.append({
-            'type': 'stream_delete',
-            'stream': name,
-            'dom_id': dom_id_val,
-        })
+        self._stream_operations.append(
+            {
+                "type": "stream_delete",
+                "stream": name,
+                "dom_id": dom_id_val,
+            }
+        )
 
     def stream_reset(self, name: str, items: Any = None) -> None:
         """Reset a stream, clearing all items and optionally adding new ones."""
         if name in self._streams:
             self._streams[name].clear()
 
-        self._stream_operations.append({
-            'type': 'stream_reset',
-            'stream': name,
-        })
+        self._stream_operations.append(
+            {
+                "type": "stream_reset",
+                "stream": name,
+            }
+        )
 
         if items is not None:
             self.stream(name, items, reset=False)
@@ -1107,7 +1121,22 @@ class LiveView(View):
             # Prefer WebSocket session_id for consistency across mount + events
             if hasattr(self, "_websocket_session_id") and self._websocket_session_id:
                 # WebSocket mode: use WebSocket session_id for consistent VDOM caching
-                view_key = "liveview_ws"
+                # Include view class name AND path to differentiate views/URLs with different structures
+                ws_path = getattr(self, "_websocket_path", "/")
+                ws_query = getattr(self, "_websocket_query_string", "")
+
+                # Hash query string for consistent cache keys (handles param ordering)
+                # Note: MD5 is used here for non-cryptographic cache key generation only
+                query_hash = ""
+                if ws_query:
+                    # Sort params for consistent hashing regardless of order
+                    params = parse_qs(ws_query)
+                    sorted_query = urlencode(sorted(params.items()), doseq=True)
+                    query_hash = hashlib.md5(sorted_query.encode()).hexdigest()[:8]
+
+                view_key = f"liveview_ws_{self.__class__.__name__}_{ws_path}"
+                if query_hash:
+                    view_key = f"{view_key}_{query_hash}"
                 session_key = self._websocket_session_id
 
                 from .state_backend import get_backend
@@ -1133,7 +1162,12 @@ class LiveView(View):
                     print("[LiveView] Cache MISS! Will create new RustLiveView", file=sys.stderr)
             elif request and hasattr(request, "session"):
                 # HTTP mode: use Django session
+                # Include query string hash for consistent caching of different URL params
+                # Note: MD5 is used here for non-cryptographic cache key generation only
                 view_key = f"liveview_{request.path}"
+                if request.GET:
+                    query_hash = hashlib.md5(request.GET.urlencode().encode()).hexdigest()[:8]
+                    view_key = f"{view_key}_{query_hash}"
                 session_key = request.session.session_key
                 if not session_key:
                     request.session.create()
@@ -2365,7 +2399,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     try:
                         # Try to serialize to JSON to get actual context size
                         serialized = json.dumps(attr, default=str)
-                        size_bytes = len(serialized.encode('utf-8'))
+                        size_bytes = len(serialized.encode("utf-8"))
                     except (TypeError, ValueError):
                         # Fallback to sys.getsizeof for non-serializable objects
                         size_bytes = sys.getsizeof(attr)
@@ -2508,19 +2542,19 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         try:
             # Try to use Django's static file handling (production/dev with collectstatic)
-            client_js_url = static('djust/client.js')
+            client_js_url = static("djust/client.js")
         except (ValueError, AttributeError):
             # Fall back to simple path (e.g., in test environment without collectstatic)
-            client_js_url = '/static/djust/client.js'
+            client_js_url = "/static/djust/client.js"
 
         script = f'<script src="{client_js_url}" defer></script>'
 
         # In DEBUG mode, also load development tools
         if settings.DEBUG:
             try:
-                client_dev_js_url = static('djust/client-dev.js')
+                client_dev_js_url = static("djust/client-dev.js")
             except (ValueError, AttributeError):
-                client_dev_js_url = '/static/djust/client-dev.js'
+                client_dev_js_url = "/static/djust/client-dev.js"
             script += f'\n        <script src="{client_dev_js_url}" defer></script>'
 
         # Inject config and script tags
