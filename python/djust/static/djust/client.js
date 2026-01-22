@@ -1671,6 +1671,16 @@ async function handleEvent(eventName, params = {}) {
 // === VDOM Patch Application ===
 
 /**
+ * Sanitize a djust ID for safe logging (defense-in-depth).
+ * @param {*} id - The ID to sanitize
+ * @returns {string} - Sanitized ID safe for logging
+ */
+function sanitizeIdForLog(id) {
+    if (!id) return 'none';
+    return String(id).slice(0, 20).replace(/[^\w-]/g, '');
+}
+
+/**
  * Resolve a DOM node using ID-based lookup (primary) or path traversal (fallback).
  *
  * Resolution strategy:
@@ -1690,9 +1700,7 @@ function getNodeByPath(path, djustId = null) {
         }
         // ID not found - fall through to path-based
         if (globalThis.djustDebug) {
-            // Sanitize for logging (defense-in-depth)
-            const safeId = String(djustId).slice(0, 20).replace(/[^\w-]/g, '');
-            console.log(`[LiveView] ID lookup failed for data-dj="${safeId}", trying path`);
+            console.log(`[LiveView] ID lookup failed for data-dj="${sanitizeIdForLog(djustId)}", trying path`);
         }
     }
 
@@ -2021,8 +2029,7 @@ function applySinglePatch(patch) {
     if (!node) {
         // Sanitize for logging (patches come from trusted server, but log defensively)
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
-        const safeId = patch.d ? String(patch.d).slice(0, 20).replace(/[^\w-]/g, '') : 'none';
-        console.warn(`[LiveView] Failed to find node: path=${safePath}, id=${safeId}`);
+        console.warn(`[LiveView] Failed to find node: path=${safePath}, id=${sanitizeIdForLog(patch.d)}`);
         return false;
     }
 
