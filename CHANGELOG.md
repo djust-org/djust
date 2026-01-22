@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-01-22
+
+### Fixed
+- **Multi-level template inheritance** - Templates extending a parent that also extends another parent now resolve blocks correctly. Previously, blocks in deeply nested templates were not being populated properly. (PR #23)
+
+### Changed
+- Moved regex pattern compilation to class-level constants for better performance
+- Improved test assertion specificity with regex word boundaries
+
 ## [0.1.3] - 2026-01-22
 
 ### Added
