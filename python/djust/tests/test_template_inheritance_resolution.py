@@ -12,9 +12,9 @@ These tests verify:
 5. Edge cases
 """
 
+import re
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -310,7 +310,6 @@ Default
 
             # Original defaults 'B' and 'C' (standalone) should not be present
             # Check there's no standalone 'B' (only B-MIDDLE should exist)
-            import re
             # Match standalone B or C (word boundary)
             assert not re.search(r'\bB\b(?!-)', resolved), f"Found standalone 'B' in: {resolved}"
             assert not re.search(r'\bC\b(?!-)', resolved), f"Found standalone 'C' in: {resolved}"
