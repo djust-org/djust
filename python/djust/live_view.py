@@ -810,7 +810,8 @@ class LiveView(View):
             # Prefer WebSocket session_id for consistency across mount + events
             if hasattr(self, "_websocket_session_id") and self._websocket_session_id:
                 # WebSocket mode: use WebSocket session_id for consistent VDOM caching
-                view_key = "liveview_ws"
+                # Include view class name to differentiate views with different template structures
+                view_key = f"liveview_ws_{self.__class__.__name__}"
                 session_key = self._websocket_session_id
 
                 from .state_backend import get_backend
