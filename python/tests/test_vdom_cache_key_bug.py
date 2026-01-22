@@ -264,11 +264,8 @@ def test_cache_key_should_include_template_identity():
     """
     Test that verifies the cache key includes template/view identity.
 
-    BUG: The current WebSocket cache key is just `{session_id}_liveview_ws`
-    which means different views/templates share the same cached VDOM.
-
-    EXPECTED: Cache key should include something that identifies the view or template,
-    such as the view class name or a hash of the template structure.
+    The cache key should include the view class name AND path to differentiate
+    views with different template structures.
     """
     factory = RequestFactory()
 
@@ -276,8 +273,10 @@ def test_cache_key_should_include_template_identity():
     request = factory.get("/emails/")
     request = add_session_to_request(request)
 
-    # Simulate WebSocket session
+    # Simulate WebSocket session with path info
     view._websocket_session_id = "test-session-123"
+    view._websocket_path = "/emails/"
+    view._websocket_query_string = ""
 
     # Initialize the Rust view
     view._rust_view = None
@@ -286,36 +285,112 @@ def test_cache_key_should_include_template_identity():
 
     print(f"\n[TEST] Cache key: {view._cache_key}")
 
-    # BUG: Current cache key is just "test-session-123_liveview_ws"
-    # EXPECTED: Should include view class name or template hash
-
-    # This test documents the expected behavior
-    # Currently this assertion will FAIL, demonstrating the bug
-    expected_patterns = [
-        "InboxView",  # Should include view class name
-        "inboxview",  # Or lowercase version
-        "/emails/",  # Or the path
-    ]
-
     cache_key = view._cache_key
 
-    # At least one of these should be in the cache key
-    has_view_identity = any(
-        pattern in cache_key.lower() for pattern in [p.lower() for p in expected_patterns]
+    # Cache key should include view class name AND path
+    assert "InboxView" in cache_key, f"Cache key should include class name: {cache_key}"
+    assert "/emails/" in cache_key, f"Cache key should include path: {cache_key}"
+
+
+@pytest.mark.django_db
+def test_cache_key_differs_for_different_query_params():
+    """
+    Test that URLs with different query params get different cache keys.
+
+    This ensures /emails/ and /emails/?sender=1 have separate VDOM caches,
+    preventing render corruption when switching between grouped and flat views.
+    """
+    factory = RequestFactory()
+
+    # View 1: No query params (grouped mode)
+    view1 = InboxView()
+    request1 = factory.get("/emails/")
+    request1 = add_session_to_request(request1)
+    view1._websocket_session_id = "test-session-123"
+    view1._websocket_path = "/emails/"
+    view1._websocket_query_string = ""
+    view1._rust_view = None
+    view1._cache_key = None
+    view1._initialize_rust_view(request1)
+    cache_key1 = view1._cache_key
+
+    # View 2: With sender query param (flat mode)
+    view2 = InboxView()
+    request2 = factory.get("/emails/?sender=1")
+    request2 = add_session_to_request(request2)
+    view2._websocket_session_id = "test-session-123"  # Same session!
+    view2._websocket_path = "/emails/"
+    view2._websocket_query_string = "sender=1"
+    view2._rust_view = None
+    view2._cache_key = None
+    view2._initialize_rust_view(request2)
+    cache_key2 = view2._cache_key
+
+    # View 3: With different sender query param
+    view3 = InboxView()
+    request3 = factory.get("/emails/?sender=2")
+    request3 = add_session_to_request(request3)
+    view3._websocket_session_id = "test-session-123"  # Same session!
+    view3._websocket_path = "/emails/"
+    view3._websocket_query_string = "sender=2"
+    view3._rust_view = None
+    view3._cache_key = None
+    view3._initialize_rust_view(request3)
+    cache_key3 = view3._cache_key
+
+    print(f"\n[TEST] Cache key 1 (no params): {cache_key1}")
+    print(f"[TEST] Cache key 2 (sender=1):  {cache_key2}")
+    print(f"[TEST] Cache key 3 (sender=2):  {cache_key3}")
+
+    # All three should have different cache keys
+    assert cache_key1 != cache_key2, (
+        f"Grouped and flat views should have different cache keys: " f"{cache_key1} vs {cache_key2}"
+    )
+    assert cache_key2 != cache_key3, (
+        f"Different sender filters should have different cache keys: "
+        f"{cache_key2} vs {cache_key3}"
     )
 
-    # This assertion currently fails - documenting the bug
-    if not has_view_identity:
-        print(f"[TEST] BUG: Cache key '{cache_key}' doesn't include view identity!")
-        print(
-            "[TEST] This causes VDOM corruption when switching between views with different structures"
-        )
-        # Mark test as expected failure for now
-        pytest.xfail("Cache key doesn't include view identity - this is the bug!")
 
-    assert has_view_identity, (
-        f"Cache key '{cache_key}' should include view identity "
-        f"(one of: {expected_patterns}) to prevent VDOM corruption"
+@pytest.mark.django_db
+def test_cache_key_query_param_order_independent():
+    """
+    Test that query param ordering doesn't affect cache key.
+
+    ?a=1&b=2 and ?b=2&a=1 should produce the same cache key.
+    """
+    factory = RequestFactory()
+
+    # View with params in one order
+    view1 = InboxView()
+    request1 = factory.get("/emails/?a=1&b=2")
+    request1 = add_session_to_request(request1)
+    view1._websocket_session_id = "test-session-123"
+    view1._websocket_path = "/emails/"
+    view1._websocket_query_string = "a=1&b=2"
+    view1._rust_view = None
+    view1._cache_key = None
+    view1._initialize_rust_view(request1)
+    cache_key1 = view1._cache_key
+
+    # View with params in reverse order
+    view2 = InboxView()
+    request2 = factory.get("/emails/?b=2&a=1")
+    request2 = add_session_to_request(request2)
+    view2._websocket_session_id = "test-session-123"
+    view2._websocket_path = "/emails/"
+    view2._websocket_query_string = "b=2&a=1"
+    view2._rust_view = None
+    view2._cache_key = None
+    view2._initialize_rust_view(request2)
+    cache_key2 = view2._cache_key
+
+    print(f"\n[TEST] Cache key 1 (a=1&b=2): {cache_key1}")
+    print(f"[TEST] Cache key 2 (b=2&a=1): {cache_key2}")
+
+    # Same params in different order should produce same cache key
+    assert cache_key1 == cache_key2, (
+        f"Query param order should not affect cache key: " f"{cache_key1} vs {cache_key2}"
     )
 
 

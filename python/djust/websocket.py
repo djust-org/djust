@@ -224,6 +224,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # Store WebSocket session_id in view for consistent VDOM caching
             # This ensures mount and all subsequent events use the same VDOM instance
             self.view_instance._websocket_session_id = self.session_id
+            # Store path and query string for path-aware cache keys
+            # This ensures /emails/ and /emails/?sender=1 get separate VDOM caches
+            self.view_instance._websocket_path = self.scope.get("path", "/")
+            self.view_instance._websocket_query_string = self.scope.get("query_string", b"").decode(
+                "utf-8"
+            )
 
             # Check if view uses actor-based state management
             self.use_actors = getattr(view_class, "use_actors", False)

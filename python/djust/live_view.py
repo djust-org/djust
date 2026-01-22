@@ -810,8 +810,24 @@ class LiveView(View):
             # Prefer WebSocket session_id for consistency across mount + events
             if hasattr(self, "_websocket_session_id") and self._websocket_session_id:
                 # WebSocket mode: use WebSocket session_id for consistent VDOM caching
-                # Include view class name to differentiate views with different template structures
-                view_key = f"liveview_ws_{self.__class__.__name__}"
+                # Include view class name AND path to differentiate views/URLs with different structures
+                ws_path = getattr(self, "_websocket_path", "/")
+                ws_query = getattr(self, "_websocket_query_string", "")
+
+                # Hash query string for consistent cache keys (handles param ordering)
+                query_hash = ""
+                if ws_query:
+                    import hashlib
+                    from urllib.parse import parse_qs, urlencode
+
+                    # Sort params for consistent hashing regardless of order
+                    params = parse_qs(ws_query)
+                    sorted_query = urlencode(sorted(params.items()), doseq=True)
+                    query_hash = hashlib.md5(sorted_query.encode()).hexdigest()[:8]
+
+                view_key = f"liveview_ws_{self.__class__.__name__}_{ws_path}"
+                if query_hash:
+                    view_key = f"{view_key}_{query_hash}"
                 session_key = self._websocket_session_id
 
                 from .state_backend import get_backend
@@ -837,7 +853,13 @@ class LiveView(View):
                     print("[LiveView] Cache MISS! Will create new RustLiveView", file=sys.stderr)
             elif request and hasattr(request, "session"):
                 # HTTP mode: use Django session
+                # Include query string hash for consistent caching of different URL params
                 view_key = f"liveview_{request.path}"
+                if request.GET:
+                    import hashlib
+
+                    query_hash = hashlib.md5(request.GET.urlencode().encode()).hexdigest()[:8]
+                    view_key = f"{view_key}_{query_hash}"
                 session_key = request.session.session_key
                 if not session_key:
                     request.session.create()
