@@ -267,8 +267,12 @@ mod tests {
 
     #[test]
     fn test_diff_attr_change() {
-        let old = VNode::element("div").with_attr("class", "old").with_djust_id("0");
-        let new = VNode::element("div").with_attr("class", "new").with_djust_id("0");
+        let old = VNode::element("div")
+            .with_attr("class", "old")
+            .with_djust_id("0");
+        let new = VNode::element("div")
+            .with_attr("class", "new")
+            .with_djust_id("0");
         let patches = diff_nodes(&old, &new, &[]);
 
         assert!(patches.iter().any(
@@ -279,7 +283,9 @@ mod tests {
     #[test]
     fn test_diff_children_insert() {
         let old = VNode::element("div").with_djust_id("0");
-        let new = VNode::element("div").with_djust_id("0").with_child(VNode::text("child"));
+        let new = VNode::element("div")
+            .with_djust_id("0")
+            .with_child(VNode::text("child"));
         let patches = diff_nodes(&old, &new, &[]);
 
         assert!(patches
@@ -303,37 +309,51 @@ mod tests {
         // Simulate what html5ever creates: element children interspersed with whitespace text nodes
         // This is the structure we see in the real bug: form has 11 children in Rust VDOM
         // (elements at even indices 0,2,4,6,8,10 and whitespace at odd indices 1,3,5,7,9)
-        let old = VNode::element("form").with_djust_id("0").with_children(vec![
-            VNode::element("div").with_attr("class", "mb-3").with_djust_id("1"),
-            VNode::text("\n            "),
-            VNode::element("div").with_attr("class", "mb-3").with_djust_id("2"),
-            VNode::text("\n            "),
-            VNode::element("div").with_attr("class", "mb-3").with_djust_id("3"),
-            VNode::text("\n            "),
-            VNode::element("button").with_djust_id("4"),
-            VNode::text("\n        "),
-        ]);
+        let old = VNode::element("form")
+            .with_djust_id("0")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_attr("class", "mb-3")
+                    .with_djust_id("1"),
+                VNode::text("\n            "),
+                VNode::element("div")
+                    .with_attr("class", "mb-3")
+                    .with_djust_id("2"),
+                VNode::text("\n            "),
+                VNode::element("div")
+                    .with_attr("class", "mb-3")
+                    .with_djust_id("3"),
+                VNode::text("\n            "),
+                VNode::element("button").with_djust_id("4"),
+                VNode::text("\n        "),
+            ]);
 
         // After removing some validation error divs, we have fewer element children
-        let new = VNode::element("form").with_djust_id("0").with_children(vec![
-            VNode::element("div").with_attr("class", "mb-3").with_djust_id("1"),
-            VNode::text("\n            "),
-            VNode::element("div").with_attr("class", "mb-3").with_djust_id("2"),
-            VNode::text("\n            "),
-            VNode::element("button").with_djust_id("4"),
-            VNode::text("\n        "),
-        ]);
+        let new = VNode::element("form")
+            .with_djust_id("0")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_attr("class", "mb-3")
+                    .with_djust_id("1"),
+                VNode::text("\n            "),
+                VNode::element("div")
+                    .with_attr("class", "mb-3")
+                    .with_djust_id("2"),
+                VNode::text("\n            "),
+                VNode::element("button").with_djust_id("4"),
+                VNode::text("\n        "),
+            ]);
 
         let patches = diff_nodes(&old, &new, &[0, 0, 0, 1, 2]);
 
         // Should generate RemoveChild patches for indices 6 and 7 (removed in reverse order)
         // Parent ID should be "0" (the form)
-        assert!(patches
-            .iter()
-            .any(|p| matches!(p, Patch::RemoveChild { index: 7, d, .. } if d == &Some("0".to_string()))));
-        assert!(patches
-            .iter()
-            .any(|p| matches!(p, Patch::RemoveChild { index: 6, d, .. } if d == &Some("0".to_string()))));
+        assert!(patches.iter().any(
+            |p| matches!(p, Patch::RemoveChild { index: 7, d, .. } if d == &Some("0".to_string()))
+        ));
+        assert!(patches.iter().any(
+            |p| matches!(p, Patch::RemoveChild { index: 6, d, .. } if d == &Some("0".to_string()))
+        ));
     }
 
     #[test]
@@ -354,7 +374,9 @@ mod tests {
             .with_attr("class", "mb-3")
             .with_djust_id("0")
             .with_children(vec![
-                VNode::element("input").with_attr("class", "form-control is-invalid").with_djust_id("1"),
+                VNode::element("input")
+                    .with_attr("class", "form-control is-invalid")
+                    .with_djust_id("1"),
                 VNode::text("\n                "),
                 VNode::element("div")
                     .with_attr("class", "invalid-feedback")
@@ -367,7 +389,9 @@ mod tests {
             .with_attr("class", "mb-3")
             .with_djust_id("0")
             .with_children(vec![
-                VNode::element("input").with_attr("class", "form-control").with_djust_id("1"),
+                VNode::element("input")
+                    .with_attr("class", "form-control")
+                    .with_djust_id("1"),
                 VNode::text("\n                "),
                 VNode::text("\n            "),
             ]);
@@ -383,54 +407,62 @@ mod tests {
 
         // Should remove the validation error div at index 3
         // Parent ID should be "0"
-        assert!(patches
-            .iter()
-            .any(|p| matches!(p, Patch::RemoveChild { index: 3, d, .. } if d == &Some("0".to_string()))));
+        assert!(patches.iter().any(
+            |p| matches!(p, Patch::RemoveChild { index: 3, d, .. } if d == &Some("0".to_string()))
+        ));
     }
 
     #[test]
     fn test_multiple_conditional_divs_removal() {
         // Test the scenario where multiple form fields have validation errors cleared
         // This creates patches targeting multiple child indices
-        let form_old = VNode::element("form").with_djust_id("form").with_children(vec![
-            // Field 1 WITH error
-            VNode::element("div")
-                .with_attr("class", "mb-3")
-                .with_djust_id("f1")
-                .with_children(vec![
-                    VNode::element("input").with_djust_id("i1"),
-                    VNode::element("div").with_attr("class", "invalid-feedback").with_djust_id("e1"),
-                ]),
-            VNode::text("\n            "),
-            // Field 2 WITH error
-            VNode::element("div")
-                .with_attr("class", "mb-3")
-                .with_djust_id("f2")
-                .with_children(vec![
-                    VNode::element("input").with_djust_id("i2"),
-                    VNode::element("div").with_attr("class", "invalid-feedback").with_djust_id("e2"),
-                ]),
-            VNode::text("\n            "),
-            // Submit button
-            VNode::element("button").with_djust_id("btn"),
-        ]);
+        let form_old = VNode::element("form")
+            .with_djust_id("form")
+            .with_children(vec![
+                // Field 1 WITH error
+                VNode::element("div")
+                    .with_attr("class", "mb-3")
+                    .with_djust_id("f1")
+                    .with_children(vec![
+                        VNode::element("input").with_djust_id("i1"),
+                        VNode::element("div")
+                            .with_attr("class", "invalid-feedback")
+                            .with_djust_id("e1"),
+                    ]),
+                VNode::text("\n            "),
+                // Field 2 WITH error
+                VNode::element("div")
+                    .with_attr("class", "mb-3")
+                    .with_djust_id("f2")
+                    .with_children(vec![
+                        VNode::element("input").with_djust_id("i2"),
+                        VNode::element("div")
+                            .with_attr("class", "invalid-feedback")
+                            .with_djust_id("e2"),
+                    ]),
+                VNode::text("\n            "),
+                // Submit button
+                VNode::element("button").with_djust_id("btn"),
+            ]);
 
-        let form_new = VNode::element("form").with_djust_id("form").with_children(vec![
-            // Field 1 WITHOUT error
-            VNode::element("div")
-                .with_attr("class", "mb-3")
-                .with_djust_id("f1")
-                .with_children(vec![VNode::element("input").with_djust_id("i1")]),
-            VNode::text("\n            "),
-            // Field 2 WITHOUT error
-            VNode::element("div")
-                .with_attr("class", "mb-3")
-                .with_djust_id("f2")
-                .with_children(vec![VNode::element("input").with_djust_id("i2")]),
-            VNode::text("\n            "),
-            // Submit button
-            VNode::element("button").with_djust_id("btn"),
-        ]);
+        let form_new = VNode::element("form")
+            .with_djust_id("form")
+            .with_children(vec![
+                // Field 1 WITHOUT error
+                VNode::element("div")
+                    .with_attr("class", "mb-3")
+                    .with_djust_id("f1")
+                    .with_children(vec![VNode::element("input").with_djust_id("i1")]),
+                VNode::text("\n            "),
+                // Field 2 WITHOUT error
+                VNode::element("div")
+                    .with_attr("class", "mb-3")
+                    .with_djust_id("f2")
+                    .with_children(vec![VNode::element("input").with_djust_id("i2")]),
+                VNode::text("\n            "),
+                // Submit button
+                VNode::element("button").with_djust_id("btn"),
+            ]);
 
         let patches = diff_nodes(&form_old, &form_new, &[0, 0, 0, 1, 2]);
 
@@ -448,8 +480,12 @@ mod tests {
         );
 
         // Verify parent IDs are included
-        assert!(remove_patches.iter().any(|p| matches!(p, Patch::RemoveChild { d, .. } if d == &Some("f1".to_string()))));
-        assert!(remove_patches.iter().any(|p| matches!(p, Patch::RemoveChild { d, .. } if d == &Some("f2".to_string()))));
+        assert!(remove_patches
+            .iter()
+            .any(|p| matches!(p, Patch::RemoveChild { d, .. } if d == &Some("f1".to_string()))));
+        assert!(remove_patches
+            .iter()
+            .any(|p| matches!(p, Patch::RemoveChild { d, .. } if d == &Some("f2".to_string()))));
     }
 
     #[test]
@@ -457,19 +493,31 @@ mod tests {
         // Ensure patches have correct paths when whitespace nodes are present
         // Path should account for ALL children including whitespace
         let old = VNode::element("div").with_djust_id("0").with_children(vec![
-            VNode::element("span").with_djust_id("1").with_child(VNode::text("A")),
+            VNode::element("span")
+                .with_djust_id("1")
+                .with_child(VNode::text("A")),
             VNode::text("\n    "), // whitespace at index 1
-            VNode::element("span").with_djust_id("2").with_child(VNode::text("B")),
+            VNode::element("span")
+                .with_djust_id("2")
+                .with_child(VNode::text("B")),
             VNode::text("\n    "), // whitespace at index 3
-            VNode::element("span").with_djust_id("3").with_child(VNode::text("C")),
+            VNode::element("span")
+                .with_djust_id("3")
+                .with_child(VNode::text("C")),
         ]);
 
         let new = VNode::element("div").with_djust_id("0").with_children(vec![
-            VNode::element("span").with_djust_id("1").with_child(VNode::text("A")),
+            VNode::element("span")
+                .with_djust_id("1")
+                .with_child(VNode::text("A")),
             VNode::text("\n    "), // whitespace at index 1
-            VNode::element("span").with_djust_id("2").with_child(VNode::text("B-modified")), // Changed
+            VNode::element("span")
+                .with_djust_id("2")
+                .with_child(VNode::text("B-modified")), // Changed
             VNode::text("\n    "), // whitespace at index 3
-            VNode::element("span").with_djust_id("3").with_child(VNode::text("C")),
+            VNode::element("span")
+                .with_djust_id("3")
+                .with_child(VNode::text("C")),
         ]);
 
         let patches = diff_nodes(&old, &new, &[5]);
@@ -521,6 +569,9 @@ mod tests {
         let patches = diff_nodes(&old, &new, &[]);
 
         // Should be empty - no attribute changes (data-dj is ignored)
-        assert!(patches.is_empty(), "data-dj changes should not generate patches");
+        assert!(
+            patches.is_empty(),
+            "data-dj changes should not generate patches"
+        );
     }
 }

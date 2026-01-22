@@ -381,7 +381,10 @@ fn test_patches_include_djust_id() {
     let patches = diff(&old_vdom, &new_vdom);
 
     // Should have at least one patch (SetAttr for class change)
-    assert!(!patches.is_empty(), "Should generate patches for attribute change");
+    assert!(
+        !patches.is_empty(),
+        "Should generate patches for attribute change"
+    );
 
     // SetAttr patches should have a `d` field (djust_id)
     let has_djust_id = patches.iter().any(|p| match p {

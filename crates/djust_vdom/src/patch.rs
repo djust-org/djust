@@ -23,7 +23,9 @@ pub fn apply_patch(root: &mut VNode, patch: &Patch) {
             }
         }
 
-        Patch::SetAttr { path, key, value, .. } => {
+        Patch::SetAttr {
+            path, key, value, ..
+        } => {
             if let Some(target) = get_node_mut(root, path) {
                 target.attrs.insert(key.clone(), value.clone());
             }
@@ -35,7 +37,9 @@ pub fn apply_patch(root: &mut VNode, patch: &Patch) {
             }
         }
 
-        Patch::InsertChild { path, index, node, .. } => {
+        Patch::InsertChild {
+            path, index, node, ..
+        } => {
             if let Some(target) = get_node_mut(root, path) {
                 if *index <= target.children.len() {
                     target.children.insert(*index, node.clone());
