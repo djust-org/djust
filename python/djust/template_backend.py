@@ -299,12 +299,24 @@ class DjustTemplate:
 
         This is a workaround until Rust template engine supports template loaders.
         Returns the fully resolved template string.
+
+        The algorithm works by:
+        1. Finding {% extends 'parent.html' %} at the start of the template
+        2. Loading the parent template
+        3. Extracting blocks from the child template
+        4. Replacing blocks in the parent with child blocks, PRESERVING block wrappers
+        5. Preserving child blocks that don't exist in immediate parent (for ancestors)
+        6. Repeating until no more {% extends %} tags are found
+        7. Stripping all block wrappers at the end
         """
         import re
 
         template_source = self.template_string
         max_depth = 10  # Prevent infinite loops
         depth = 0
+
+        # Accumulate all block overrides through the inheritance chain
+        accumulated_blocks = {}
 
         while depth < max_depth:
             # Check for {% extends 'parent.html' %} at start of template
@@ -321,23 +333,17 @@ class DjustTemplate:
                     with open(parent_path, "r", encoding="utf-8") as f:
                         parent_source = f.read()
 
-                    # Extract blocks from child template
-                    child_blocks = {}
-                    block_pattern = r"{%\s*block\s+(\w+)\s*%}(.*?){%\s*endblock\s*(?:\w+\s*)?%}"
-                    for block_match in re.finditer(block_pattern, template_source, re.DOTALL):
-                        block_name = block_match.group(1)
-                        block_content = block_match.group(2)
-                        child_blocks[block_name] = block_content
+                    # Extract blocks from current template
+                    current_blocks = self._extract_template_blocks(template_source)
 
-                    # Replace blocks in parent with child blocks
-                    def replace_block(match):
-                        block_name = match.group(1)
-                        if block_name in child_blocks:
-                            return child_blocks[block_name]
-                        return match.group(2)  # Keep parent block content
+                    # Merge current blocks into accumulated (current takes precedence)
+                    # This preserves overrides from descendants even if intermediate
+                    # templates don't have those blocks
+                    accumulated_blocks.update(current_blocks)
 
-                    template_source = re.sub(
-                        block_pattern, replace_block, parent_source, flags=re.DOTALL
+                    # Replace blocks in parent with accumulated blocks
+                    template_source = self._replace_blocks_in_template(
+                        parent_source, accumulated_blocks
                     )
                     depth += 1
                     break
@@ -345,7 +351,236 @@ class DjustTemplate:
                 # Parent template not found
                 raise TemplateDoesNotExist(f"Parent template '{parent_name}' not found")
 
+        # Strip all remaining block wrappers after inheritance is fully resolved
+        template_source = self._strip_block_wrappers(template_source)
+
         return template_source
+
+    def _replace_blocks_in_template(self, template_source: str, child_blocks: dict) -> str:
+        """
+        Replace blocks in template with child block content, preserving wrappers.
+
+        Handles nested blocks correctly by:
+        1. If child overrides a block, use child's content entirely
+        2. If child doesn't override a block, recursively process its content
+           to handle nested blocks that the child might override
+
+        Args:
+            template_source: The parent template to modify
+            child_blocks: Dict mapping block names to their content
+
+        Returns:
+            Template with blocks replaced
+        """
+        import re
+
+        block_start_pattern = re.compile(r'{%\s*block\s+(\w+)\s*%}')
+        block_end_pattern = re.compile(r'{%\s*endblock\s*(?:\w+\s*)?%}')
+
+        result = []
+        pos = 0
+
+        while pos < len(template_source):
+            # Find next block start
+            start_match = block_start_pattern.search(template_source, pos)
+            if not start_match:
+                # No more blocks, append rest of template
+                result.append(template_source[pos:])
+                break
+
+            # Append content before block
+            result.append(template_source[pos:start_match.start()])
+
+            block_name = start_match.group(1)
+            content_start = start_match.end()
+
+            # Find matching endblock by tracking nesting depth
+            depth = 1
+            search_pos = content_start
+            content_end = None
+            block_end_pos = None
+
+            while depth > 0 and search_pos < len(template_source):
+                next_start = block_start_pattern.search(template_source, search_pos)
+                next_end = block_end_pattern.search(template_source, search_pos)
+
+                if next_end is None:
+                    # No matching endblock - malformed template
+                    break
+
+                start_pos = next_start.start() if next_start else len(template_source)
+                end_pos = next_end.start()
+
+                if start_pos < end_pos:
+                    # Found nested block start
+                    depth += 1
+                    search_pos = next_start.end()
+                else:
+                    # Found endblock
+                    depth -= 1
+                    if depth == 0:
+                        content_end = end_pos
+                        block_end_pos = next_end.end()
+                    search_pos = next_end.end()
+
+            if block_end_pos is None:
+                # Malformed template, append as-is
+                result.append(template_source[start_match.start():])
+                break
+
+            # Determine block content
+            if block_name in child_blocks:
+                # Use child block content, preserve wrapper for further inheritance
+                result.append(f"{{% block {block_name} %}}")
+                result.append(child_blocks[block_name])
+                result.append("{% endblock %}")
+            else:
+                # Child doesn't override this block, but might override nested blocks
+                # Recursively process the block content to handle nested blocks
+                parent_block_content = template_source[content_start:content_end]
+                processed_content = self._replace_blocks_in_template(
+                    parent_block_content, child_blocks
+                )
+                result.append(f"{{% block {block_name} %}}")
+                result.append(processed_content)
+                result.append("{% endblock %}")
+
+            pos = block_end_pos
+
+        return "".join(result)
+
+    def _strip_block_wrappers(self, template_source: str) -> str:
+        """
+        Strip all {% block %}...{% endblock %} wrappers, keeping content.
+
+        Handles nested blocks correctly.
+
+        Args:
+            template_source: Template with block wrappers
+
+        Returns:
+            Template with block wrappers removed
+        """
+        import re
+
+        block_start_pattern = re.compile(r'{%\s*block\s+(\w+)\s*%}')
+        block_end_pattern = re.compile(r'{%\s*endblock\s*(?:\w+\s*)?%}')
+
+        result = []
+        pos = 0
+
+        while pos < len(template_source):
+            start_match = block_start_pattern.search(template_source, pos)
+            if not start_match:
+                result.append(template_source[pos:])
+                break
+
+            # Append content before block start tag
+            result.append(template_source[pos:start_match.start()])
+
+            content_start = start_match.end()
+
+            # Find matching endblock
+            depth = 1
+            search_pos = content_start
+            content_end = None
+            block_end_pos = None
+
+            while depth > 0 and search_pos < len(template_source):
+                next_start = block_start_pattern.search(template_source, search_pos)
+                next_end = block_end_pattern.search(template_source, search_pos)
+
+                if next_end is None:
+                    break
+
+                start_pos = next_start.start() if next_start else len(template_source)
+                end_pos = next_end.start()
+
+                if start_pos < end_pos:
+                    depth += 1
+                    search_pos = next_start.end()
+                else:
+                    depth -= 1
+                    if depth == 0:
+                        content_end = end_pos
+                        block_end_pos = next_end.end()
+                    search_pos = next_end.end()
+
+            if content_end is not None:
+                # Recursively strip nested blocks from content
+                block_content = template_source[content_start:content_end]
+                result.append(self._strip_block_wrappers(block_content))
+                pos = block_end_pos
+            else:
+                # Malformed, keep as-is
+                result.append(template_source[start_match.start():])
+                break
+
+        return "".join(result)
+
+    def _extract_template_blocks(self, template_source: str) -> dict:
+        """
+        Extract all top-level blocks from a template source.
+
+        Handles nested blocks correctly by tracking block depth.
+
+        Args:
+            template_source: The template string to extract blocks from
+
+        Returns:
+            Dict mapping block names to their content (without wrapper tags)
+        """
+        import re
+
+        blocks = {}
+        block_start_pattern = re.compile(r'{%\s*block\s+(\w+)\s*%}')
+        block_end_pattern = re.compile(r'{%\s*endblock\s*(?:\w+\s*)?%}')
+
+        pos = 0
+        while pos < len(template_source):
+            # Find next block start
+            start_match = block_start_pattern.search(template_source, pos)
+            if not start_match:
+                break
+
+            block_name = start_match.group(1)
+            content_start = start_match.end()
+
+            # Find matching endblock by tracking nesting depth
+            depth = 1
+            search_pos = content_start
+            content_end = None
+
+            while depth > 0 and search_pos < len(template_source):
+                next_start = block_start_pattern.search(template_source, search_pos)
+                next_end = block_end_pattern.search(template_source, search_pos)
+
+                if next_end is None:
+                    # No matching endblock - malformed template
+                    break
+
+                # Determine which comes first
+                start_pos = next_start.start() if next_start else len(template_source)
+                end_pos = next_end.start()
+
+                if start_pos < end_pos:
+                    # Found nested block start
+                    depth += 1
+                    search_pos = next_start.end()
+                else:
+                    # Found endblock
+                    depth -= 1
+                    if depth == 0:
+                        content_end = end_pos
+                    search_pos = next_end.end()
+
+            if content_end is not None:
+                blocks[block_name] = template_source[content_start:content_end]
+                pos = search_pos
+            else:
+                pos = content_start
+
+        return blocks
 
     def render(self, context=None, request=None) -> SafeString:
         """
