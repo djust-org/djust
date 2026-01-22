@@ -101,16 +101,22 @@ impl InheritanceChain {
 
     fn apply_override_to_node(&self, node: &Node) -> Node {
         match node {
-            Node::Block { name, nodes: _ } => {
-                // Replace block with merged content
+            Node::Block { name, nodes } => {
+                // Replace block with merged content if overridden
                 if let Some(merged_nodes) = self.merged_blocks.get(name) {
                     Node::Block {
                         name: name.clone(),
-                        nodes: merged_nodes.clone(),
+                        // Recursively apply overrides to merged content
+                        // (merged content might have nested blocks)
+                        nodes: self.apply_block_overrides(merged_nodes),
                     }
                 } else {
-                    // Keep original if no override
-                    node.clone()
+                    // Not overridden, but still recurse into nested nodes
+                    // to handle nested blocks that might be overridden
+                    Node::Block {
+                        name: name.clone(),
+                        nodes: self.apply_block_overrides(nodes),
+                    }
                 }
             }
             // Recursively process nested structures
@@ -312,11 +318,10 @@ fn node_to_template_string(node: &Node) -> String {
             result.push_str("}}");
             result
         }
-        Node::Block { name, nodes } => {
-            let mut result = format!("{{% block {name} %}}");
-            result.push_str(&nodes_to_template_string(nodes));
-            result.push_str("{% endblock %}");
-            result
+        Node::Block { name: _, nodes } => {
+            // After inheritance resolution, blocks are finalized
+            // Just output the content without the wrapper tags
+            nodes_to_template_string(nodes)
         }
         Node::If {
             condition,
@@ -502,6 +507,7 @@ mod tests {
 
     #[test]
     fn test_nodes_to_template_string_block_syntax() {
+        // After inheritance resolution, blocks are stripped - just content is output
         let nodes = vec![Node::Block {
             name: "content".to_string(),
             nodes: vec![
@@ -513,9 +519,12 @@ mod tests {
 
         let result = nodes_to_template_string(&nodes);
 
-        assert!(result.contains("{% block content %}"));
+        // Block wrappers are stripped, only content remains
+        assert!(!result.contains("{% block"));
+        assert!(!result.contains("{% endblock"));
+        assert!(result.contains("<p>"));
         assert!(result.contains("{{ message }}"));
-        assert!(result.contains("{% endblock %}"));
+        assert!(result.contains("</p>"));
     }
 
     #[test]
@@ -608,6 +617,7 @@ mod tests {
     #[test]
     fn test_nodes_to_template_string_complex_nested() {
         // Test a complex nested structure
+        // After inheritance resolution, blocks are stripped but other tags preserved
         let nodes = vec![Node::Block {
             name: "content".to_string(),
             nodes: vec![Node::If {
@@ -629,8 +639,10 @@ mod tests {
 
         let result = nodes_to_template_string(&nodes);
 
-        // Should preserve all nested structures
-        assert!(result.contains("{% block content %}"));
+        // Block wrappers are stripped after inheritance resolution
+        assert!(!result.contains("{% block"));
+        assert!(!result.contains("{% endblock"));
+        // But other Django template tags are preserved
         assert!(result.contains("{% if items %}"));
         assert!(result.contains("{% for item in items %}"));
         assert!(result.contains("{{ item.name |upper }}"));
@@ -638,7 +650,6 @@ mod tests {
         assert!(result.contains("<p>No items</p>"));
         assert!(result.contains("{% endfor %}"));
         assert!(result.contains("{% endif %}"));
-        assert!(result.contains("{% endblock %}"));
     }
 
     #[test]
