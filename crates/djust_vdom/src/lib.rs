@@ -126,6 +126,72 @@ impl VNode {
     pub fn is_text(&self) -> bool {
         self.tag == "#text"
     }
+
+    /// Serialize the VNode back to HTML string.
+    /// This includes data-dj attributes for reliable patch targeting.
+    pub fn to_html(&self) -> String {
+        if self.is_text() {
+            // Text nodes: escape HTML entities
+            return html_escape(&self.text.clone().unwrap_or_default());
+        }
+
+        let mut html = String::new();
+
+        // Void elements that don't have closing tags
+        let void_elements = [
+            "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+            "source", "track", "wbr",
+        ];
+        let is_void = void_elements.contains(&self.tag.as_str());
+
+        // Opening tag
+        html.push('<');
+        html.push_str(&self.tag);
+
+        // Attributes (sorted for deterministic output)
+        let mut attrs: Vec<_> = self.attrs.iter().collect();
+        attrs.sort_by_key(|(k, _)| *k);
+        for (key, value) in attrs {
+            html.push(' ');
+            html.push_str(key);
+            html.push_str("=\"");
+            html.push_str(&html_escape_attr(value));
+            html.push('"');
+        }
+
+        if is_void {
+            html.push_str(" />");
+        } else {
+            html.push('>');
+
+            // Children
+            for child in &self.children {
+                html.push_str(&child.to_html());
+            }
+
+            // Closing tag
+            html.push_str("</");
+            html.push_str(&self.tag);
+            html.push('>');
+        }
+
+        html
+    }
+}
+
+/// Escape HTML special characters in text content
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Escape HTML special characters in attribute values
+fn html_escape_attr(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// A patch operation to apply to the DOM

@@ -258,3 +258,274 @@ fn test_multiple_fields_with_errors_cleared() {
         "Should remove 4 error divs from 4 fields"
     );
 }
+
+// ============================================================================
+// Tests for data-dj attribute generation (compact ID-based patching)
+// ============================================================================
+
+#[test]
+fn test_parsed_vdom_has_djust_ids() {
+    // Verify that parsed VDOM nodes get djust_id assigned
+    use djust_vdom::reset_id_counter;
+
+    reset_id_counter();
+    let html = "<div><span>Hello</span><p>World</p></div>";
+    let vdom = parse_html(html).unwrap();
+
+    // Root element should have djust_id
+    assert!(
+        vdom.djust_id.is_some(),
+        "Root element should have djust_id assigned"
+    );
+
+    // Children should also have djust_ids
+    let span = &vdom.children[0];
+    assert!(
+        span.djust_id.is_some(),
+        "Span element should have djust_id assigned"
+    );
+
+    let p = &vdom.children[1];
+    assert!(
+        p.djust_id.is_some(),
+        "P element should have djust_id assigned"
+    );
+
+    // IDs should be unique
+    assert_ne!(
+        vdom.djust_id, span.djust_id,
+        "djust_ids should be unique between elements"
+    );
+    assert_ne!(
+        span.djust_id, p.djust_id,
+        "djust_ids should be unique between siblings"
+    );
+}
+
+#[test]
+fn test_to_html_includes_data_dj_attributes() {
+    // Verify that to_html() serializes data-dj attributes into HTML
+    use djust_vdom::reset_id_counter;
+
+    reset_id_counter();
+    let html = "<div><span>Hello</span><p>World</p></div>";
+    let vdom = parse_html(html).unwrap();
+
+    let output_html = vdom.to_html();
+
+    // Output should contain data-dj attributes
+    assert!(
+        output_html.contains("data-dj="),
+        "to_html() should include data-dj attributes in output"
+    );
+
+    // Should have multiple data-dj attributes for different elements
+    let data_dj_count = output_html.matches("data-dj=").count();
+    assert!(
+        data_dj_count >= 3,
+        "Should have at least 3 data-dj attributes (div, span, p), found {}",
+        data_dj_count
+    );
+}
+
+#[test]
+fn test_to_html_output_format() {
+    // Verify the exact format of to_html() output
+    use djust_vdom::reset_id_counter;
+
+    reset_id_counter();
+    let html = "<div class=\"container\"><span>Hello</span></div>";
+    let vdom = parse_html(html).unwrap();
+
+    let output_html = vdom.to_html();
+
+    // Should maintain structure with data-dj added
+    assert!(
+        output_html.contains("<div"),
+        "Output should contain div tag"
+    );
+    assert!(
+        output_html.contains("class=\"container\""),
+        "Output should preserve class attribute"
+    );
+    assert!(
+        output_html.contains("<span"),
+        "Output should contain span tag"
+    );
+    assert!(
+        output_html.contains("Hello"),
+        "Output should preserve text content"
+    );
+    assert!(
+        output_html.contains("</div>"),
+        "Output should have closing div tag"
+    );
+}
+
+#[test]
+fn test_patches_include_djust_id() {
+    // Verify that generated patches include the `d` field for ID-based lookup
+    // Note: Text node patches (SetText) don't have djust_ids since text nodes
+    // don't have data-dj attributes. Test with attribute changes instead.
+    use djust_vdom::reset_id_counter;
+
+    reset_id_counter();
+    let html_before = r#"<div class="old"><span>Hello</span></div>"#;
+
+    reset_id_counter();
+    let html_after = r#"<div class="new"><span>Hello</span></div>"#;
+
+    let old_vdom = parse_html(html_before).unwrap();
+    let new_vdom = parse_html(html_after).unwrap();
+
+    let patches = diff(&old_vdom, &new_vdom);
+
+    // Should have at least one patch (SetAttr for class change)
+    assert!(!patches.is_empty(), "Should generate patches for attribute change");
+
+    // SetAttr patches should have a `d` field (djust_id)
+    let has_djust_id = patches.iter().any(|p| match p {
+        djust_vdom::Patch::SetAttr { d, .. } => d.is_some(),
+        djust_vdom::Patch::RemoveAttr { d, .. } => d.is_some(),
+        djust_vdom::Patch::Replace { d, .. } => d.is_some(),
+        djust_vdom::Patch::InsertChild { d, .. } => d.is_some(),
+        djust_vdom::Patch::RemoveChild { d, .. } => d.is_some(),
+        djust_vdom::Patch::MoveChild { d, .. } => d.is_some(),
+        // Text nodes don't have djust_ids
+        djust_vdom::Patch::SetText { .. } => false,
+    });
+
+    assert!(
+        has_djust_id,
+        "SetAttr patch should include djust_id (d field) for ID-based lookup. Patches: {:?}",
+        patches
+    );
+}
+
+#[test]
+fn test_base62_id_generation() {
+    // Verify base62 encoding produces compact, unique IDs
+    use djust_vdom::to_base62;
+
+    // Test base62 conversion
+    assert_eq!(to_base62(0), "0");
+    assert_eq!(to_base62(9), "9");
+    assert_eq!(to_base62(10), "a");
+    assert_eq!(to_base62(35), "z");
+    assert_eq!(to_base62(36), "A");
+    assert_eq!(to_base62(61), "Z");
+    assert_eq!(to_base62(62), "10"); // Base62 rollover
+
+    // Large numbers should still produce compact IDs
+    let large_id = to_base62(1000);
+    assert!(
+        large_id.len() <= 3,
+        "ID for 1000 should be <= 3 chars, got: {}",
+        large_id
+    );
+}
+
+#[test]
+fn test_id_counter_produces_unique_ids() {
+    // Verify that consecutive parses produce different IDs when counter is NOT reset
+    // Note: We can't test reset behavior reliably due to test parallelism affecting
+    // the global counter. Instead, verify IDs are unique within a single parse.
+    use djust_vdom::reset_id_counter;
+
+    reset_id_counter();
+    let html = "<div><span>A</span><span>B</span><span>C</span></div>";
+    let vdom = parse_html(html).unwrap();
+
+    // Collect all IDs from the tree
+    let mut ids: Vec<String> = Vec::new();
+    if let Some(id) = &vdom.djust_id {
+        ids.push(id.clone());
+    }
+    for child in &vdom.children {
+        if let Some(id) = &child.djust_id {
+            ids.push(id.clone());
+        }
+    }
+
+    // All IDs should be unique
+    let unique_count = {
+        let mut unique = ids.clone();
+        unique.sort();
+        unique.dedup();
+        unique.len()
+    };
+
+    assert_eq!(
+        ids.len(),
+        unique_count,
+        "All djust_ids should be unique within a parse: {:?}",
+        ids
+    );
+
+    // Should have at least 4 IDs (div + 3 spans)
+    assert!(
+        ids.len() >= 4,
+        "Should have at least 4 IDs, got: {}",
+        ids.len()
+    );
+}
+
+#[test]
+fn test_void_elements_in_to_html() {
+    // Verify void elements (br, img, input) are handled correctly
+    use djust_vdom::reset_id_counter;
+
+    reset_id_counter();
+    let html = r#"<div><input type="text"><br><img src="test.png"></div>"#;
+    let vdom = parse_html(html).unwrap();
+
+    let output_html = vdom.to_html();
+
+    // Void elements should be self-closing
+    assert!(
+        output_html.contains("<input") && output_html.contains("/>"),
+        "Input should be self-closing"
+    );
+    assert!(
+        output_html.contains("<br") && output_html.contains("/>"),
+        "BR should be self-closing"
+    );
+    assert!(
+        output_html.contains("<img") && output_html.contains("/>"),
+        "IMG should be self-closing"
+    );
+
+    // Should NOT have closing tags for void elements
+    assert!(
+        !output_html.contains("</input>"),
+        "Input should not have closing tag"
+    );
+    assert!(
+        !output_html.contains("</br>"),
+        "BR should not have closing tag"
+    );
+}
+
+#[test]
+fn test_html_escaping_in_to_html() {
+    // Verify HTML special characters are escaped properly
+    use djust_vdom::VNode;
+
+    let node = VNode::element("div")
+        .with_attr("data-value", "1 < 2 && 3 > 2")
+        .with_child(VNode::text("Hello <script>alert('xss')</script>"));
+
+    let output_html = node.to_html();
+
+    // Text content should be escaped
+    assert!(
+        output_html.contains("&lt;script&gt;"),
+        "Script tags in text should be escaped"
+    );
+
+    // Attribute values should be escaped
+    assert!(
+        output_html.contains("&lt;") && output_html.contains("&gt;"),
+        "< and > in attributes should be escaped"
+    );
+}

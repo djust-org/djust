@@ -294,12 +294,18 @@ class LiveViewWebSocket {
                 }
 
                 // OPTIMIZATION: Skip HTML replacement if content was pre-rendered via HTTP GET
-                if (this.skipMountHtml) {
+                // BUT: Force hydration if server HTML has data-dj attributes for reliable patching
+                const hasDataDjAttrs = data.html && data.html.includes('data-dj=');
+                if (this.skipMountHtml && !hasDataDjAttrs) {
                     console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
                     this.skipMountHtml = false; // Reset flag
                     bindLiveViewEvents(); // Bind events to existing content
                 } else if (data.html) {
                     // Replace page content with server-rendered HTML
+                    // This is required when using ID-based patch targeting (data-dj attributes)
+                    if (hasDataDjAttrs) {
+                        console.log('[LiveView] Hydrating DOM with data-dj attributes for reliable patching');
+                    }
                     let container = document.querySelector('[data-live-view]');
                     if (!container) {
                         container = document.querySelector('[data-liveview-root]');
@@ -308,6 +314,7 @@ class LiveViewWebSocket {
                         container.innerHTML = data.html;
                         bindLiveViewEvents();
                     }
+                    this.skipMountHtml = false; // Reset flag
                 }
                 break;
 
@@ -424,7 +431,9 @@ class LiveViewWebSocket {
                 }
 
                 // Always send mount message to initialize server-side session
-                this.mount(viewPath);
+                // Pass URL query params so server mount can read filters (e.g., ?sender=80)
+                const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+                this.mount(viewPath, urlParams);
             } else {
                 console.warn('[LiveView] Container found but no view path specified');
             }

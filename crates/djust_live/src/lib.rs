@@ -167,10 +167,13 @@ impl RustLiveViewBackend {
                 None
             };
 
+        // Serialize VDOM back to HTML with data-dj attributes for reliable patch targeting
+        let hydrated_html = new_vdom.to_html();
+
         self.last_vdom = Some(new_vdom);
         self.version += 1;
 
-        Ok((html, patches, self.version))
+        Ok((hydrated_html, patches, self.version))
     }
 
     /// Render and return patches as MessagePack bytes
@@ -204,10 +207,13 @@ impl RustLiveViewBackend {
             None
         };
 
+        // Serialize VDOM back to HTML with data-dj attributes for reliable patch targeting
+        let hydrated_html = new_vdom.to_html();
+
         self.last_vdom = Some(new_vdom);
         self.version += 1;
 
-        Ok((html, patches_bytes, self.version))
+        Ok((hydrated_html, patches_bytes, self.version))
     }
 
     /// Reset the view state

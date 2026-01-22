@@ -11,11 +11,15 @@ use std::collections::HashMap;
 /// Each patch includes:
 /// - `path`: Index-based path (fallback)
 /// - `d`: Target element's djust_id for O(1) querySelector lookup
+///
+/// IMPORTANT: We use the OLD node's djust_id for targeting because that's what
+/// exists in the client DOM. The new node may have different IDs if the server
+/// re-parsed the HTML with a reset ID counter.
 pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
     let mut patches = Vec::new();
 
-    // Get the target element's djust_id for patch targeting
-    let target_id = new.djust_id.clone();
+    // Use OLD node's djust_id for targeting - that's what's in the client DOM
+    let target_id = old.djust_id.clone();
 
     // If tags differ, replace the whole node
     if old.tag != new.tag {
@@ -290,7 +294,8 @@ mod tests {
         let patches = diff_nodes(&old, &new, &[]);
 
         assert_eq!(patches.len(), 1);
-        assert!(matches!(&patches[0], Patch::Replace { d, .. } if d == &Some("1".to_string())));
+        // Use OLD node's ID for targeting - that's what's in the client DOM
+        assert!(matches!(&patches[0], Patch::Replace { d, .. } if d == &Some("0".to_string())));
     }
 
     #[test]
