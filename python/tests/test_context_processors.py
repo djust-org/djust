@@ -6,10 +6,9 @@ making variables like GOOGLE_ANALYTICS_ID, user, messages, etc. available.
 """
 
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 from djust import LiveView
 from django.test import RequestFactory, override_settings
-from django.contrib.sessions.middleware import SessionMiddleware
 
 
 class AnalyticsView(LiveView):
@@ -37,17 +36,13 @@ def dummy_user_processor(request):
 
 
 @pytest.fixture
-def request_factory():
-    return RequestFactory()
-
-
-@pytest.fixture
-def request_with_session(request_factory):
-    """Create a request with session support."""
-    request = request_factory.get('/')
-    middleware = SessionMiddleware(lambda r: None)
-    middleware.process_request(request)
-    request.session.save()
+def mock_request():
+    """Create a mock request without session (no DB required)."""
+    factory = RequestFactory()
+    request = factory.get('/')
+    # Add a mock session that doesn't need DB
+    request.session = Mock()
+    request.session.session_key = 'test-session-key'
     return request
 
 
@@ -58,8 +53,8 @@ TEMPLATES_WITH_CONTEXT_PROCESSORS = [
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
-                'tests.test_context_processors.dummy_analytics_processor',
-                'tests.test_context_processors.dummy_user_processor',
+                'python.tests.test_context_processors.dummy_analytics_processor',
+                'python.tests.test_context_processors.dummy_user_processor',
             ],
         },
     },
@@ -70,16 +65,16 @@ class TestContextProcessors:
     """Test context processor support in LiveView."""
 
     @override_settings(TEMPLATES=TEMPLATES_WITH_CONTEXT_PROCESSORS)
-    def test_context_processors_applied_in_get_context(self, request_with_session):
+    def test_context_processors_applied_in_get_context(self, mock_request):
         """Test that context processors are applied when building context."""
         view = AnalyticsView()
-        view.setup(request_with_session)
+        view.setup(mock_request)
         view._initialize_temporary_assigns()
-        view.mount(request_with_session)
+        view.mount(mock_request)
 
         # Get context and apply context processors
         context = view.get_context_data()
-        context = view._apply_context_processors(context, request_with_session)
+        context = view._apply_context_processors(context, mock_request)
 
         # Verify context processor variables are present
         assert 'GOOGLE_ANALYTICS_ID' in context
@@ -92,12 +87,12 @@ class TestContextProcessors:
         assert context['count'] == 0
 
     @override_settings(TEMPLATES=TEMPLATES_WITH_CONTEXT_PROCESSORS)
-    def test_context_processors_not_applied_without_request(self, request_with_session):
+    def test_context_processors_not_applied_without_request(self, mock_request):
         """Test that context processors are skipped when request is None."""
         view = AnalyticsView()
-        view.setup(request_with_session)
+        view.setup(mock_request)
         view._initialize_temporary_assigns()
-        view.mount(request_with_session)
+        view.mount(mock_request)
 
         context = view.get_context_data()
         # Apply with request=None
@@ -108,27 +103,27 @@ class TestContextProcessors:
         assert 'current_user_name' not in context
 
     @override_settings(TEMPLATES=[])
-    def test_context_processors_with_no_djust_backend(self, request_with_session):
+    def test_context_processors_with_no_djust_backend(self, mock_request):
         """Test graceful handling when DjustTemplateBackend is not configured."""
         view = AnalyticsView()
-        view.setup(request_with_session)
+        view.setup(mock_request)
         view._initialize_temporary_assigns()
-        view.mount(request_with_session)
+        view.mount(mock_request)
 
         context = view.get_context_data()
         # Should not raise, just return context unchanged
-        context = view._apply_context_processors(context, request_with_session)
+        context = view._apply_context_processors(context, mock_request)
 
         # Context processor variables should NOT be present
         assert 'GOOGLE_ANALYTICS_ID' not in context
 
     @override_settings(TEMPLATES=TEMPLATES_WITH_CONTEXT_PROCESSORS)
-    def test_context_processors_handle_processor_errors(self, request_with_session):
+    def test_context_processors_handle_processor_errors(self, mock_request):
         """Test that errors in context processors are handled gracefully."""
         view = AnalyticsView()
-        view.setup(request_with_session)
+        view.setup(mock_request)
         view._initialize_temporary_assigns()
-        view.mount(request_with_session)
+        view.mount(mock_request)
 
         # Mock import_string to raise an error for one processor
         with patch('djust.live_view.import_string') as mock_import:
@@ -141,7 +136,7 @@ class TestContextProcessors:
 
             context = view.get_context_data()
             # Should not raise, just log warning and continue
-            context = view._apply_context_processors(context, request_with_session)
+            context = view._apply_context_processors(context, mock_request)
 
             # The working processor should still be applied
             # (Note: depends on order, but at least shouldn't crash)
