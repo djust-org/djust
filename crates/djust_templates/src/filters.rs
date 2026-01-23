@@ -483,7 +483,32 @@ fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
                 result.push_str(&format!("{month}."));
             }
             // Time format codes
+            'G' => result.push_str(&dt.hour().to_string()), // 0-23 (24-hour, no leading zero)
             'H' => result.push_str(&format!("{:02}", dt.hour())), // 00-23
+            'g' => {
+                // 1-12 (12-hour, no leading zero)
+                let hour = dt.hour();
+                let display_hour = if hour == 0 {
+                    12
+                } else if hour > 12 {
+                    hour - 12
+                } else {
+                    hour
+                };
+                result.push_str(&display_hour.to_string());
+            }
+            'h' => {
+                // 01-12 (12-hour, with leading zero)
+                let hour = dt.hour();
+                let display_hour = if hour == 0 {
+                    12
+                } else if hour > 12 {
+                    hour - 12
+                } else {
+                    hour
+                };
+                result.push_str(&format!("{:02}", display_hour));
+            }
             'i' => result.push_str(&format!("{:02}", dt.minute())), // 00-59
             's' => result.push_str(&format!("{:02}", dt.second())), // 00-59
             'A' => {
@@ -824,6 +849,44 @@ mod tests {
         // Test with time
         let result = apply_filter("date", &value, Some("Y-m-d H:i")).unwrap();
         assert_eq!(result.to_string(), "2025-11-13 14:30");
+
+        // Test 12-hour format codes (g, h) - afternoon time (14:30 = 2:30 PM)
+        let result = apply_filter("date", &value, Some("g:i A")).unwrap();
+        assert_eq!(result.to_string(), "2:30 PM");
+
+        let result = apply_filter("date", &value, Some("h:i A")).unwrap();
+        assert_eq!(result.to_string(), "02:30 PM");
+
+        // Test 24-hour without leading zero (G)
+        let result = apply_filter("date", &value, Some("G:i")).unwrap();
+        assert_eq!(result.to_string(), "14:30");
+
+        // Test morning time for 12-hour formats
+        let morning = Utc.with_ymd_and_hms(2025, 11, 13, 9, 5, 0).unwrap();
+        let morning_str = morning.to_rfc3339();
+        let morning_value = Value::String(morning_str);
+
+        let result = apply_filter("date", &morning_value, Some("g:i A")).unwrap();
+        assert_eq!(result.to_string(), "9:05 AM");
+
+        let result = apply_filter("date", &morning_value, Some("h:i A")).unwrap();
+        assert_eq!(result.to_string(), "09:05 AM");
+
+        // Test midnight (00:00 should be 12:xx AM)
+        let midnight = Utc.with_ymd_and_hms(2025, 11, 13, 0, 30, 0).unwrap();
+        let midnight_str = midnight.to_rfc3339();
+        let midnight_value = Value::String(midnight_str);
+
+        let result = apply_filter("date", &midnight_value, Some("g:i A")).unwrap();
+        assert_eq!(result.to_string(), "12:30 AM");
+
+        // Test noon (12:00 should be 12:xx PM)
+        let noon = Utc.with_ymd_and_hms(2025, 11, 13, 12, 30, 0).unwrap();
+        let noon_str = noon.to_rfc3339();
+        let noon_value = Value::String(noon_str);
+
+        let result = apply_filter("date", &noon_value, Some("g:i A")).unwrap();
+        assert_eq!(result.to_string(), "12:30 PM");
     }
 
     #[test]
