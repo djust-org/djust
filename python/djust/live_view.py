@@ -49,6 +49,10 @@ try:
 except ImportError:
     JIT_AVAILABLE = False
 
+# Module-level cache for context processors, keyed by settings object id
+# This invalidates when Django settings are overridden (e.g., in tests)
+_context_processors_cache: Dict[int, list] = {}
+
 
 class DjangoJSONEncoder(json.JSONEncoder):
     """
@@ -1108,6 +1112,69 @@ class LiveView(View):
 
         return context
 
+    def _get_context_processors(self) -> list:
+        """
+        Get context processors from DjustTemplateBackend settings.
+
+        Results are cached in module-level dict keyed by settings hash.
+        Cache is invalidated when Django settings change (e.g., in tests).
+        """
+        from django.conf import settings
+
+        # Use id(settings._wrapped) as cache key - changes when settings are overridden
+        cache_key = id(getattr(settings, '_wrapped', settings))
+
+        if cache_key in _context_processors_cache:
+            return _context_processors_cache[cache_key]
+
+        # Find DjustTemplateBackend in TEMPLATES setting
+        for template_config in getattr(settings, 'TEMPLATES', []):
+            if template_config.get('BACKEND') == 'djust.template_backend.DjustTemplateBackend':
+                processors = template_config.get('OPTIONS', {}).get('context_processors', [])
+                _context_processors_cache[cache_key] = processors
+                return processors
+
+        _context_processors_cache[cache_key] = []
+        return []
+
+    def _apply_context_processors(self, context: Dict[str, Any], request) -> Dict[str, Any]:
+        """
+        Apply Django context processors to the context.
+
+        This ensures that variables provided by context processors (like GOOGLE_ANALYTICS_ID,
+        user, messages, etc.) are available in templates rendered by LiveView.
+
+        Note: Context processors are only applied during HTTP requests (GET/POST).
+        WebSocket updates via _sync_state_to_rust() don't have access to the request
+        object, so context processor values from the initial render are preserved.
+
+        Args:
+            context: The context dict from get_context_data()
+            request: The HTTP request object
+
+        Returns:
+            Updated context dict with context processor values
+        """
+        if request is None:
+            return context
+
+        from django.utils.module_loading import import_string
+
+        # Get cached context processors list
+        context_processors = self._get_context_processors()
+
+        # Apply each context processor
+        for processor_path in context_processors:
+            try:
+                processor = import_string(processor_path)
+                processor_context = processor(request)
+                if processor_context:
+                    context.update(processor_context)
+            except Exception as e:
+                logger.warning(f"Failed to apply context processor {processor_path}: {e}")
+
+        return context
+
     def _initialize_rust_view(self, request=None):
         """Initialize the Rust LiveView backend"""
 
@@ -1698,6 +1765,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 from .component import Component, LiveComponent
 
                 context = self.get_context_data()
+                # Apply context processors (for GOOGLE_ANALYTICS_ID, user, messages, etc.)
+                context = self._apply_context_processors(context, request)
 
                 rendered_context = {}
                 for key, value in context.items():
@@ -2022,6 +2091,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # Get context for rendering
         t0 = time.perf_counter()
         context = self.get_context_data()
+        # Apply context processors (for GOOGLE_ANALYTICS_ID, user, messages, etc.)
+        context = self._apply_context_processors(context, request)
         t_get_context = (time.perf_counter() - t0) * 1000
 
         # Serialize state for rendering (but don't store in session)
