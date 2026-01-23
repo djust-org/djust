@@ -49,6 +49,10 @@ try:
 except ImportError:
     JIT_AVAILABLE = False
 
+# Module-level cache for context processors, keyed by settings object id
+# This invalidates when Django settings are overridden (e.g., in tests)
+_context_processors_cache: Dict[int, list] = {}
+
 
 class DjangoJSONEncoder(json.JSONEncoder):
     """
@@ -1108,29 +1112,30 @@ class LiveView(View):
 
         return context
 
-    # Class-level cache for context processors (populated once per process)
-    _context_processors_cache: Optional[list] = None
-
-    @classmethod
-    def _get_context_processors(cls) -> list:
+    def _get_context_processors(self) -> list:
         """
         Get context processors from DjustTemplateBackend settings.
 
-        Results are cached at class level since TEMPLATES settings rarely change.
+        Results are cached in module-level dict keyed by settings hash.
+        Cache is invalidated when Django settings change (e.g., in tests).
         """
-        if cls._context_processors_cache is not None:
-            return cls._context_processors_cache
-
         from django.conf import settings
+
+        # Use id(settings._wrapped) as cache key - changes when settings are overridden
+        cache_key = id(getattr(settings, '_wrapped', settings))
+
+        if cache_key in _context_processors_cache:
+            return _context_processors_cache[cache_key]
 
         # Find DjustTemplateBackend in TEMPLATES setting
         for template_config in getattr(settings, 'TEMPLATES', []):
             if template_config.get('BACKEND') == 'djust.template_backend.DjustTemplateBackend':
-                cls._context_processors_cache = template_config.get('OPTIONS', {}).get('context_processors', [])
-                return cls._context_processors_cache
+                processors = template_config.get('OPTIONS', {}).get('context_processors', [])
+                _context_processors_cache[cache_key] = processors
+                return processors
 
-        cls._context_processors_cache = []
-        return cls._context_processors_cache
+        _context_processors_cache[cache_key] = []
+        return []
 
     def _apply_context_processors(self, context: Dict[str, Any], request) -> Dict[str, Any]:
         """
