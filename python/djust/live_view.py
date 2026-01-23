@@ -1108,12 +1108,40 @@ class LiveView(View):
 
         return context
 
+    # Class-level cache for context processors (populated once per process)
+    _context_processors_cache: Optional[list] = None
+
+    @classmethod
+    def _get_context_processors(cls) -> list:
+        """
+        Get context processors from DjustTemplateBackend settings.
+
+        Results are cached at class level since TEMPLATES settings rarely change.
+        """
+        if cls._context_processors_cache is not None:
+            return cls._context_processors_cache
+
+        from django.conf import settings
+
+        # Find DjustTemplateBackend in TEMPLATES setting
+        for template_config in getattr(settings, 'TEMPLATES', []):
+            if template_config.get('BACKEND') == 'djust.template_backend.DjustTemplateBackend':
+                cls._context_processors_cache = template_config.get('OPTIONS', {}).get('context_processors', [])
+                return cls._context_processors_cache
+
+        cls._context_processors_cache = []
+        return cls._context_processors_cache
+
     def _apply_context_processors(self, context: Dict[str, Any], request) -> Dict[str, Any]:
         """
         Apply Django context processors to the context.
 
         This ensures that variables provided by context processors (like GOOGLE_ANALYTICS_ID,
         user, messages, etc.) are available in templates rendered by LiveView.
+
+        Note: Context processors are only applied during HTTP requests (GET/POST).
+        WebSocket updates via _sync_state_to_rust() don't have access to the request
+        object, so context processor values from the initial render are preserved.
 
         Args:
             context: The context dict from get_context_data()
@@ -1125,16 +1153,10 @@ class LiveView(View):
         if request is None:
             return context
 
-        # Get context processors from DjustTemplateBackend settings
-        from django.conf import settings
         from django.utils.module_loading import import_string
 
-        # Find DjustTemplateBackend in TEMPLATES setting
-        context_processors = []
-        for template_config in getattr(settings, 'TEMPLATES', []):
-            if template_config.get('BACKEND') == 'djust.template_backend.DjustTemplateBackend':
-                context_processors = template_config.get('OPTIONS', {}).get('context_processors', [])
-                break
+        # Get cached context processors list
+        context_processors = self._get_context_processors()
 
         # Apply each context processor
         for processor_path in context_processors:
