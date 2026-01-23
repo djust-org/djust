@@ -64,6 +64,11 @@ TEMPLATES_WITH_CONTEXT_PROCESSORS = [
 class TestContextProcessors:
     """Test context processor support in LiveView."""
 
+    def setup_method(self):
+        """Clear context processor cache before each test."""
+        # Reset class-level cache to ensure test isolation
+        LiveView._context_processors_cache = None
+
     @override_settings(TEMPLATES=TEMPLATES_WITH_CONTEXT_PROCESSORS)
     def test_context_processors_applied_in_get_context(self, mock_request):
         """Test that context processors are applied when building context."""
