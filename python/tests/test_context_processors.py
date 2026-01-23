@@ -126,7 +126,8 @@ class TestContextProcessors:
         view.mount(mock_request)
 
         # Mock import_string to raise an error for one processor
-        with patch('djust.live_view.import_string') as mock_import:
+        # Patch at the source module where it's imported from
+        with patch('django.utils.module_loading.import_string') as mock_import:
             def side_effect(path):
                 if 'analytics' in path:
                     raise ImportError("Test error")
