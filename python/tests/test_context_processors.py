@@ -64,14 +64,12 @@ TEMPLATES_WITH_CONTEXT_PROCESSORS = [
 class TestContextProcessors:
     """Test context processor support in LiveView."""
 
-    def setup_method(self):
-        """Clear context processor cache before each test."""
-        # Reset class-level cache to ensure test isolation
-        LiveView._context_processors_cache = None
-
     @override_settings(TEMPLATES=TEMPLATES_WITH_CONTEXT_PROCESSORS)
     def test_context_processors_applied_in_get_context(self, mock_request):
         """Test that context processors are applied when building context."""
+        # Clear cache after settings override takes effect
+        LiveView._context_processors_cache = None
+
         view = AnalyticsView()
         view.setup(mock_request)
         view._initialize_temporary_assigns()
@@ -94,6 +92,9 @@ class TestContextProcessors:
     @override_settings(TEMPLATES=TEMPLATES_WITH_CONTEXT_PROCESSORS)
     def test_context_processors_not_applied_without_request(self, mock_request):
         """Test that context processors are skipped when request is None."""
+        # Clear cache after settings override takes effect
+        LiveView._context_processors_cache = None
+
         view = AnalyticsView()
         view.setup(mock_request)
         view._initialize_temporary_assigns()
@@ -110,6 +111,9 @@ class TestContextProcessors:
     @override_settings(TEMPLATES=[])
     def test_context_processors_with_no_djust_backend(self, mock_request):
         """Test graceful handling when DjustTemplateBackend is not configured."""
+        # Clear cache after settings override takes effect
+        LiveView._context_processors_cache = None
+
         view = AnalyticsView()
         view.setup(mock_request)
         view._initialize_temporary_assigns()
@@ -125,6 +129,9 @@ class TestContextProcessors:
     @override_settings(TEMPLATES=TEMPLATES_WITH_CONTEXT_PROCESSORS)
     def test_context_processors_handle_processor_errors(self, mock_request):
         """Test that errors in context processors are handled gracefully."""
+        # Clear cache after settings override takes effect
+        LiveView._context_processors_cache = None
+
         view = AnalyticsView()
         view.setup(mock_request)
         view._initialize_temporary_assigns()
