@@ -132,8 +132,9 @@ def my_view(request):
 
 ✅ **Django Template Syntax**
 - Variables: `{{ variable }}`
-- Filters: `{{ variable|filter }}`
-- Tags: `{% if %}`, `{% for %}`, `{% extends %}`, `{% block %}`
+- Filters: `{{ variable|filter }}` (including `urlencode`)
+- Tags: `{% if %}`, `{% for %}`, `{% extends %}`, `{% block %}`, `{% url %}`, `{% include %}`
+- Comparison operators: `>`, `<`, `>=`, `<=` in `{% if %}` tags
 - Comments: `{# comment #}`
 
 ✅ **Template Loading**
@@ -141,6 +142,12 @@ def my_view(request):
 - `APP_DIRS` support
 - Template inheritance (`{% extends %}`)
 - Template includes (`{% include %}`)
+
+✅ **Auto-serialization**
+- Django `datetime`, `date`, `time` objects
+- `Decimal` values
+- `UUID` objects
+- `FieldFile` objects (file URLs)
 
 ✅ **Context Processors**
 - Standard Django context processors
@@ -158,7 +165,6 @@ def my_view(request):
 ⚠️ **Not all Django features supported yet:**
 - Some custom template tags not implemented
 - Some template filters missing (see workarounds below)
-- `{% url %}` tag not supported (use `reverse()` in Python)
 
 See djust documentation for complete list of supported features.
 
@@ -262,29 +268,6 @@ class HomeView(TemplateView):
 ### Missing Template Tags/Filters
 
 If you encounter unsupported template tags/filters, use these workarounds:
-
-#### URL Resolution
-
-**❌ Not supported:**
-```django
-<a href="{% url 'myapp:view_name' %}">Link</a>
-```
-
-**✅ Workaround:**
-```python
-# views.py
-from django.urls import reverse
-
-class MyView(TemplateView):
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['my_url'] = reverse('myapp:view_name')
-        return context
-```
-
-```django
-<a href="{{ my_url }}">Link</a>
-```
 
 #### String Escaping for JavaScript
 
@@ -456,11 +439,12 @@ TEMPLATES = [
 
 Planned improvements:
 
-- [ ] Support for `{% url %}` tag
-- [ ] Additional Django template filters
+- [x] ~~Support for `{% url %}` tag~~ (Added in 0.1.6)
+- [x] ~~Additional Django template filters~~ (`urlencode` added in 0.1.6)
 - [ ] Custom template tag registration
 - [ ] Better error messages with line numbers
 - [ ] Template debugging tools
+- [ ] `escapejs` filter for JavaScript string escaping
 
 ## Contributing
 
@@ -472,6 +456,6 @@ MIT License - same as djust framework.
 
 ---
 
-**Last Updated:** 2025-11-19
+**Last Updated:** 2026-01-24
 **Status:** Production-ready
 **Minimum djust version:** 0.1.0 (with Rust extension compiled)
