@@ -62,6 +62,16 @@ repos:
         args: ["-ll", "-ii", "-x", "tests/,python/tests/,python/djust/tests/", "-s", "B703,B308,B324,B301,B102"]
         files: ^python/
 
+  # JavaScript - Test and lint
+  - repo: local
+    hooks:
+      - id: npm-test
+        name: npm test
+        entry: npm test
+        language: system
+        types: [javascript]
+        pass_filenames: false
+
   # Security - Secret detection
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
