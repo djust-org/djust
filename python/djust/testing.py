@@ -83,7 +83,7 @@ class LiveViewTestClient:
         self.patches: List[Any] = []
         self._mounted = False
 
-    def mount(self, **params: Any) -> 'LiveViewTestClient':
+    def mount(self, **params: Any) -> "LiveViewTestClient":
         """
         Initialize the view with optional params.
 
@@ -103,27 +103,30 @@ class LiveViewTestClient:
         self.view_instance = self.view_class()
 
         # Create a mock request
-        request = self.request_factory.get('/')
+        request = self.request_factory.get("/")
         if self.user:
             request.user = self.user
 
         # Initialize session
         from django.contrib.sessions.backends.db import SessionStore
+
         request.session = SessionStore()
 
         # Initialize temporary assigns if the method exists
-        if hasattr(self.view_instance, '_initialize_temporary_assigns'):
+        if hasattr(self.view_instance, "_initialize_temporary_assigns"):
             self.view_instance._initialize_temporary_assigns()
 
         # Call mount
         self.view_instance.mount(request, **params)
 
         self._mounted = True
-        self.events.append({
-            'type': 'mount',
-            'params': params,
-            'timestamp': time.time(),
-        })
+        self.events.append(
+            {
+                "type": "mount",
+                "params": params,
+                "timestamp": time.time(),
+            }
+        )
 
         return self
 
@@ -163,26 +166,27 @@ class LiveViewTestClient:
         handler = getattr(self.view_instance, event_name, None)
         if not handler or not callable(handler):
             return {
-                'success': False,
-                'error': f"No handler found for event: {event_name}",
-                'state_before': state_before,
-                'state_after': state_before,
-                'duration_ms': 0,
+                "success": False,
+                "error": f"No handler found for event: {event_name}",
+                "state_before": state_before,
+                "state_after": state_before,
+                "duration_ms": 0,
             }
 
         # Apply type coercion if available
         from .validation import validate_handler_params
+
         validation = validate_handler_params(handler, params, event_name)
-        if not validation['valid']:
+        if not validation["valid"]:
             return {
-                'success': False,
-                'error': validation['error'],
-                'state_before': state_before,
-                'state_after': state_before,
-                'duration_ms': 0,
+                "success": False,
+                "error": validation["error"],
+                "state_before": state_before,
+                "state_after": state_before,
+                "duration_ms": 0,
             }
 
-        coerced_params = validation['coerced_params']
+        coerced_params = validation["coerced_params"]
 
         # Execute handler
         start_time = time.perf_counter()
@@ -202,22 +206,22 @@ class LiveViewTestClient:
 
         # Record event
         event_record = {
-            'type': 'event',
-            'name': event_name,
-            'params': params,
-            'coerced_params': coerced_params,
-            'timestamp': time.time(),
-            'duration_ms': duration_ms,
-            'error': error,
+            "type": "event",
+            "name": event_name,
+            "params": params,
+            "coerced_params": coerced_params,
+            "timestamp": time.time(),
+            "duration_ms": duration_ms,
+            "error": error,
         }
         self.events.append(event_record)
 
         return {
-            'success': error is None,
-            'error': error,
-            'state_before': state_before,
-            'state_after': state_after,
-            'duration_ms': duration_ms,
+            "success": error is None,
+            "error": error,
+            "state_before": state_before,
+            "state_after": state_after,
+            "duration_ms": duration_ms,
         }
 
     def get_state(self) -> Dict[str, Any]:
@@ -236,7 +240,7 @@ class LiveViewTestClient:
         state = {}
         for name in dir(self.view_instance):
             # Skip private/magic attributes
-            if name.startswith('_'):
+            if name.startswith("_"):
                 continue
 
             # Skip methods and properties from the class
@@ -275,7 +279,7 @@ class LiveViewTestClient:
         # Get template
         from django.template.loader import get_template
 
-        template_name = getattr(self.view_instance, 'template_name', None)
+        template_name = getattr(self.view_instance, "template_name", None)
         if not template_name:
             raise RuntimeError(f"View {self.view_class.__name__} has no template_name")
 
@@ -300,8 +304,7 @@ class LiveViewTestClient:
         for name, expected_value in expected.items():
             if name not in actual_state:
                 raise AssertionError(
-                    f"State variable '{name}' not found. "
-                    f"Available: {list(actual_state.keys())}"
+                    f"State variable '{name}' not found. " f"Available: {list(actual_state.keys())}"
                 )
 
             actual_value = actual_state[name]
@@ -329,8 +332,7 @@ class LiveViewTestClient:
         for name, expected_value in expected.items():
             if name not in actual_state:
                 raise AssertionError(
-                    f"State variable '{name}' not found. "
-                    f"Available: {list(actual_state.keys())}"
+                    f"State variable '{name}' not found. " f"Available: {list(actual_state.keys())}"
                 )
 
             actual_value = actual_state[name]
@@ -367,7 +369,7 @@ class SnapshotTestMixin:
                 self.assert_html_snapshot('my_view_default', html)
     """
 
-    snapshot_dir: str = 'snapshots'
+    snapshot_dir: str = "snapshots"
     update_snapshots: bool = False
 
     def _get_snapshot_path(self, name: str) -> Path:
@@ -396,17 +398,20 @@ class SnapshotTestMixin:
         snapshot_path = self._get_snapshot_path(name)
 
         # Check if we should update
-        should_update = self.update_snapshots or os.environ.get('UPDATE_SNAPSHOTS', '').lower() in ('1', 'true')
+        should_update = self.update_snapshots or os.environ.get("UPDATE_SNAPSHOTS", "").lower() in (
+            "1",
+            "true",
+        )
 
         if should_update or not snapshot_path.exists():
             # Write new snapshot
-            snapshot_path.write_text(content, encoding='utf-8')
+            snapshot_path.write_text(content, encoding="utf-8")
             if not should_update:
                 # First time creating - just pass
                 return
         else:
             # Compare with existing
-            expected = snapshot_path.read_text(encoding='utf-8')
+            expected = snapshot_path.read_text(encoding="utf-8")
             if content != expected:
                 # Generate diff-like output
                 raise AssertionError(
@@ -435,17 +440,17 @@ class SnapshotTestMixin:
     def _normalize_html(self, html: str) -> str:
         """Normalize HTML for consistent comparison."""
         # Remove HTML comments
-        html = re.sub(r'<!--.*?-->', '', html, flags=re.DOTALL)
+        html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
 
         # Collapse whitespace
-        html = re.sub(r'\s+', ' ', html)
+        html = re.sub(r"\s+", " ", html)
 
         # Clean up around tags
-        html = re.sub(r'>\s+<', '>\n<', html)
+        html = re.sub(r">\s+<", ">\n<", html)
 
         # Strip lines
-        lines = [line.strip() for line in html.split('\n')]
-        return '\n'.join(line for line in lines if line)
+        lines = [line.strip() for line in html.split("\n")]
+        return "\n".join(line for line in lines if line)
 
 
 def performance_test(
@@ -477,6 +482,7 @@ def performance_test(
         Query tracking requires Django's database connection to be configured.
         Memory tracking requires the `tracemalloc` module.
     """
+
     def decorator(test_func: Callable) -> Callable:
         @functools.wraps(test_func)
         def wrapper(*args, **kwargs):
@@ -492,6 +498,7 @@ def performance_test(
             memory_before = None
             if track_memory:
                 import tracemalloc
+
                 tracemalloc.start()
                 memory_before = tracemalloc.get_traced_memory()[0]
 
@@ -507,6 +514,7 @@ def performance_test(
                 memory_used = None
                 if track_memory:
                     import tracemalloc
+
                     memory_after = tracemalloc.get_traced_memory()[0]
                     memory_used = memory_after - memory_before
                     tracemalloc.stop()
@@ -518,20 +526,17 @@ def performance_test(
             errors = []
 
             if elapsed_ms > max_time_ms:
-                errors.append(
-                    f"Execution time {elapsed_ms:.2f}ms exceeded max {max_time_ms}ms"
-                )
+                errors.append(f"Execution time {elapsed_ms:.2f}ms exceeded max {max_time_ms}ms")
 
             if query_count > max_queries:
                 # Include query details for debugging
                 query_summary = []
                 for q in connection.queries[:5]:
-                    sql = q.get('sql', '')[:80]
+                    sql = q.get("sql", "")[:80]
                     query_summary.append(f"  - {sql}...")
                 errors.append(
                     f"Query count {query_count} exceeded max {max_queries}.\n"
-                    f"First {min(5, query_count)} queries:\n" +
-                    '\n'.join(query_summary)
+                    f"First {min(5, query_count)} queries:\n" + "\n".join(query_summary)
                 )
 
             if max_memory_bytes is not None and memory_used is not None:
@@ -541,13 +546,12 @@ def performance_test(
                     )
 
             if errors:
-                raise AssertionError(
-                    "Performance test failed:\n" + '\n'.join(errors)
-                )
+                raise AssertionError("Performance test failed:\n" + "\n".join(errors))
 
             return result
 
         return wrapper
+
     return decorator
 
 
@@ -568,7 +572,7 @@ class MockRequest:
         session: Optional[Dict] = None,
         get_params: Optional[Dict] = None,
         post_params: Optional[Dict] = None,
-        path: str = '/',
+        path: str = "/",
     ):
         from django.contrib.auth.models import AnonymousUser
 
@@ -577,14 +581,10 @@ class MockRequest:
         self.GET = get_params or {}
         self.POST = post_params or {}
         self.path = path
-        self.method = 'GET'
+        self.method = "GET"
 
 
-def create_test_view(
-    view_class: Type,
-    user: Optional[Any] = None,
-    **mount_params: Any
-) -> Any:
+def create_test_view(view_class: Type, user: Optional[Any] = None, **mount_params: Any) -> Any:
     """
     Helper to quickly create and mount a view for testing.
 

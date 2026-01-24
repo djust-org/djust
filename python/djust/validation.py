@@ -15,9 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Union, get_type_hints, g
 from uuid import UUID
 
 
-def coerce_parameter_types(
-    handler: Callable, params: Dict[str, Any]
-) -> Dict[str, Any]:
+def coerce_parameter_types(handler: Callable, params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Coerce parameter values to match handler type hints.
 
@@ -258,18 +256,18 @@ def validate_handler_params(
         error_msg = f"Handler '{event_name}' received wrong parameter types:\n"
         for err in type_errors:
             # Truncate repr safely to avoid cutting mid-escape sequence
-            val_repr = repr(err.get('value', '?'))
+            val_repr = repr(err.get("value", "?"))
             if len(val_repr) > 50:
-                val_repr = val_repr[:47] + '...'
+                val_repr = val_repr[:47] + "..."
 
             error_msg += f"  - {err['param']}: expected {err['expected']}, got {err['actual']} ({val_repr})\n"
 
             # Add detailed hint with actionable fix suggestions
             hint = format_type_error_hint(
-                param=err['param'],
-                expected=err['expected'],
-                actual=err['actual'],
-                value=err.get('value'),
+                param=err["param"],
+                expected=err["expected"],
+                actual=err["actual"],
+                value=err.get("value"),
                 coercion_attempted=coerce,
             )
             error_msg += hint + "\n\n"

@@ -110,7 +110,7 @@ class Accordion(Component):
             if not self.always_open:
                 collapse_attrs.append(f'data-bs-parent="#{self.accordion_id}"')
 
-            item_html = f'''    <div class="accordion-item">
+            item_html = f"""    <div class="accordion-item">
         <h2 class="accordion-header" id="{self.accordion_id}-heading-{i}">
             <button class="{button_class}" {" ".join(button_attrs)}>
                 {item["title"]}
@@ -124,10 +124,10 @@ class Accordion(Component):
                 {item["content"]}
             </div>
         </div>
-    </div>'''
+    </div>"""
 
             accordion_items.append(item_html)
 
-        return f'''<div class="{accordion_class}" id="{self.accordion_id}">
+        return f"""<div class="{accordion_class}" id="{self.accordion_id}">
 {chr(10).join(accordion_items)}
-</div>'''
+</div>"""

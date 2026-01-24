@@ -11,8 +11,10 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from .live_view import DjangoJSONEncoder
 from .validation import validate_handler_params
 from .profiler import profiler
+from .security import handle_exception, sanitize_for_log
 
 logger = logging.getLogger(__name__)
+hotreload_logger = logging.getLogger("djust.hotreload")
 
 try:
     from ._rust import create_session_actor, SessionActorHandle
@@ -85,9 +87,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 await self.actor_handle.shutdown()
             except Exception as e:
-                import logging
-
-                logging.getLogger(__name__).warning(f"Error shutting down actor: {e}")
+                logger.warning(f"Error shutting down actor: {e}")
 
         # Clean up session state
         self.view_instance = None
@@ -95,11 +95,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def receive(self, text_data=None, bytes_data=None):
         """Handle incoming WebSocket messages"""
-        import logging
-        import traceback
-
-        logger = logging.getLogger(__name__)
-
         print(
             f"[WebSocket] receive called: text_data={text_data[:100] if text_data else None}, bytes_data={bytes_data is not None}",
             file=sys.stderr,
@@ -140,27 +135,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 }
             )
         except Exception as e:
-            error_msg = f"Error in WebSocket receive: {type(e).__name__}: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-
-            # In debug mode, include traceback
-            from django.conf import settings
-
-            if settings.DEBUG:
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "error": error_msg,
-                        "traceback": traceback.format_exc(),
-                    }
-                )
-            else:
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "error": "An error occurred. Please check server logs.",
-                    }
-                )
+            # Handle exception: logs (with stack trace only in DEBUG) and returns safe response
+            response = handle_exception(
+                e,
+                error_type="default",
+                logger=logger,
+                log_message="Error in WebSocket receive",
+            )
+            await self.send_json(response)
 
     async def handle_mount(self, data: Dict[str, Any]):
         """
@@ -169,8 +151,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         Dynamically imports and instantiates a LiveView class, creates a request
         context, mounts the view, and returns the initial HTML.
         """
-        import logging
-        import traceback
         from django.test import RequestFactory
         from django.conf import settings
 
@@ -267,14 +247,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 logger.info(f"SessionActor created: {self.actor_handle.session_id}")
 
         except Exception as e:
-            error_msg = f"Failed to instantiate {view_path}: {type(e).__name__}: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            await self.send_json(
-                {
-                    "type": "error",
-                    "error": error_msg,
-                }
+            response = handle_exception(
+                e,
+                error_type="mount",
+                view_class=view_path,
+                logger=logger,
+                log_message=f"Failed to instantiate {view_path}",
             )
+            await self.send_json(response)
             return
 
         # Create request with session
@@ -301,14 +281,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 request.user = self.scope["user"]
 
         except Exception as e:
-            error_msg = f"Failed to create request context: {type(e).__name__}: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            await self.send_json(
-                {
-                    "type": "error",
-                    "error": error_msg,
-                }
+            response = handle_exception(
+                e,
+                error_type="mount",
+                logger=logger,
+                log_message="Failed to create request context",
             )
+            await self.send_json(response)
             return
 
         # Mount the view (needs sync_to_async for database operations)
@@ -321,24 +300,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # Run synchronous view operations in a thread pool
             await sync_to_async(self.view_instance.mount)(request, **params)
         except Exception as e:
-            error_msg = f"Error in {view_path}.mount(): {type(e).__name__}: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-
-            if settings.DEBUG:
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "error": error_msg,
-                        "traceback": traceback.format_exc(),
-                    }
-                )
-            else:
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "error": "Failed to mount view",
-                    }
-                )
+            response = handle_exception(
+                e,
+                error_type="mount",
+                view_class=view_path,
+                logger=logger,
+                log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
+            )
+            await self.send_json(response)
             return
 
         # Get initial HTML (skip if client already has pre-rendered content)
@@ -414,24 +383,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
 
         except Exception as e:
-            error_msg = f"Error rendering {view_path}: {type(e).__name__}: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-
-            if settings.DEBUG:
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "error": error_msg,
-                        "traceback": traceback.format_exc(),
-                    }
-                )
-            else:
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "error": "Failed to render view",
-                    }
-                )
+            response = handle_exception(
+                e,
+                error_type="render",
+                view_class=view_path,
+                logger=logger,
+                log_message=f"Error rendering {sanitize_for_log(view_path)}",
+            )
+            await self.send_json(response)
             return
 
         # Send success response (HTML only if generated)
@@ -458,12 +417,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def handle_event(self, data: Dict[str, Any]):
         """Handle client events"""
-        import logging
-        import traceback
         import time
         from djust.performance import PerformanceTracker
-
-        logger = logging.getLogger(__name__)
 
         # Start comprehensive performance tracking
         tracker = PerformanceTracker()
@@ -544,32 +499,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self.send_json(response)
 
             except Exception as e:
-                view_class = (
+                view_class_name = (
                     self.view_instance.__class__.__name__ if self.view_instance else "Unknown"
                 )
-                error_msg = f"Error in actor event handling for {view_class}.{event_name}(): {type(e).__name__}: {str(e)}"
-                logger.error(error_msg, exc_info=True)
-
-                # In debug mode, send detailed error
-                from django.conf import settings
-
-                if settings.DEBUG:
-                    await self.send_json(
-                        {
-                            "type": "error",
-                            "error": error_msg,
-                            "traceback": traceback.format_exc(),
-                            "event": event_name,
-                            "params": params,
-                        }
-                    )
-                else:
-                    await self.send_json(
-                        {
-                            "type": "error",
-                            "error": "An error occurred processing your request.",
-                        }
-                    )
+                response = handle_exception(
+                    e,
+                    error_type="event",
+                    event_name=event_name,
+                    view_class=view_class_name,
+                    logger=logger,
+                    log_message=f"Error in actor event handling for {view_class_name}.{sanitize_for_log(event_name)}()",
+                )
+                await self.send_json(response)
 
         else:
             # Non-actor mode: Use traditional flow
@@ -802,33 +743,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self.send_json(response)
 
             except Exception as e:
-                view_class = (
+                view_class_name = (
                     self.view_instance.__class__.__name__ if self.view_instance else "Unknown"
                 )
                 event_type = "component event" if component_id else "event"
-                error_msg = f"Error in {view_class}.{event_name}() ({event_type}): {type(e).__name__}: {str(e)}"
-                logger.error(error_msg, exc_info=True)
-
-                # In debug mode, send detailed error
-                from django.conf import settings
-
-                if settings.DEBUG:
-                    await self.send_json(
-                        {
-                            "type": "error",
-                            "error": error_msg,
-                            "traceback": traceback.format_exc(),
-                            "event": event_name,
-                            "params": params,
-                        }
-                    )
-                else:
-                    await self.send_json(
-                        {
-                            "type": "error",
-                            "error": "An error occurred processing your request.",
-                        }
-                    )
+                response = handle_exception(
+                    e,
+                    error_type="event",
+                    event_name=event_name,
+                    view_class=view_class_name,
+                    logger=logger,
+                    log_message=f"Error in {view_class_name}.{sanitize_for_log(event_name)}() ({event_type})",
+                )
+                await self.send_json(response)
 
     def _extract_cache_config(self) -> Dict[str, Any]:
         """
@@ -840,10 +767,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             "get_stats": {"ttl": 60, "key_params": []}
         }
         """
-        import logging
-
-        logger = logging.getLogger(__name__)
-
         if not self.view_instance:
             return {}
 
@@ -890,10 +813,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         Returns:
             int: Number of caches cleared successfully
         """
-        import logging
-
-        logger = logging.getLogger("djust.hotreload")
-
         from django.template import engines
 
         caches_cleared = 0
@@ -908,9 +827,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 loader.reset()
                                 caches_cleared += 1
                 except Exception as e:
-                    logger.warning(f"Could not clear template cache for {engine.name}: {e}")
+                    hotreload_logger.warning(
+                        f"Could not clear template cache for {engine.name}: {e}"
+                    )
 
-        logger.debug(f"Cleared {caches_cleared} template caches")
+        hotreload_logger.debug(f"Cleared {caches_cleared} template caches")
         return caches_cleared
 
     async def hotreload_message(self, event):
@@ -928,13 +849,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         Raises:
             None - All exceptions are caught and trigger full reload fallback
         """
-        import logging
         import time
         from channels.db import database_sync_to_async
         from django.template import TemplateDoesNotExist
         from json import JSONDecodeError
 
-        logger = logging.getLogger("djust.hotreload")
         file_path = event.get("file", "unknown")
 
         # If we have an active view, re-render and send patch
@@ -953,7 +872,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 try:
                     new_template = await database_sync_to_async(self.view_instance.get_template)()
                 except TemplateDoesNotExist as e:
-                    logger.error(f"Template not found for hot reload: {e}")
+                    hotreload_logger.error(f"Template not found for hot reload: {e}")
                     await self.send_json(
                         {
                             "type": "reload",
@@ -964,7 +883,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 # Update the RustLiveView with the new template (keeps old VDOM for diffing!)
                 if hasattr(self.view_instance, "_rust_view") and self.view_instance._rust_view:
-                    logger.debug("Updating template in existing RustLiveView")
+                    hotreload_logger.debug("Updating template in existing RustLiveView")
                     await database_sync_to_async(self.view_instance._rust_view.update_template)(
                         new_template
                     )
@@ -977,17 +896,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 render_time = (time.time() - render_start) * 1000  # Convert to ms
 
                 patch_count = len(patches) if patches else 0
-                logger.info(
+                hotreload_logger.info(
                     f"Generated {patch_count} patches in {render_time:.2f}ms, version={version}"
                 )
 
                 # Warn if patch generation is slow
                 if render_time > 100:
-                    logger.warning(f"Slow patch generation: {render_time:.2f}ms for {file_path}")
+                    hotreload_logger.warning(
+                        f"Slow patch generation: {render_time:.2f}ms for {file_path}"
+                    )
 
                 # Handle case where no patches are generated
                 if not patches:
-                    logger.info("No patches generated, sending full reload")
+                    hotreload_logger.info("No patches generated, sending full reload")
                     await self.send_json(
                         {
                             "type": "reload",
@@ -1003,7 +924,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     if isinstance(patches, str):
                         patches = json_module.loads(patches)
                 except (JSONDecodeError, ValueError) as e:
-                    logger.error(f"Failed to parse patches JSON: {e}")
+                    hotreload_logger.error(f"Failed to parse patches JSON: {e}")
                     await self.send_json(
                         {
                             "type": "reload",
@@ -1024,13 +945,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
 
                 total_time = (time.time() - start_time) * 1000
-                logger.info(
-                    f"✅ Sent {patch_count} patches for {file_path} (total: {total_time:.2f}ms)"
+                hotreload_logger.info(
+                    f"Sent {patch_count} patches for {file_path} (total: {total_time:.2f}ms)"
                 )
 
             except Exception as e:
                 # Catch-all for unexpected errors
-                logger.exception(f"Error generating patches for {file_path}: {e}")
+                hotreload_logger.exception(f"Error generating patches for {file_path}: {e}")
                 # Fallback to full reload on error
                 await self.send_json(
                     {
@@ -1040,7 +961,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
         else:
             # No active view, just reload the page
-            logger.debug(f"No active view, sending full reload for {file_path}")
+            hotreload_logger.debug(f"No active view, sending full reload for {file_path}")
             await self.send_json(
                 {
                     "type": "reload",

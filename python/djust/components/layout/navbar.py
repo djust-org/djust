@@ -153,16 +153,16 @@ class NavbarComponent(LiveComponent):
             if item.external:
                 link_style = ' style="color: #667eea !important; font-weight: 600;"'
 
-            nav_items_html += f'''
+            nav_items_html += f"""
                 <li class="nav-item">
                     <a class="nav-link {active_class}" href="{item.href}"{target_attr}{link_style}>{icon_html}{item.label}{badge_html}</a>
                 </li>
-            '''
+            """
 
         # Brand name HTML (only if not None)
         brand_name_html = f"<strong>{self.brand_name}</strong>" if self.brand_name else ""
 
-        return f'''
+        return f"""
         <nav class="navbar navbar-expand-lg navbar-custom {position_class} {self.custom_classes}" id="{self.component_id}">
             <div class="{container_class}">
                 <a class="navbar-brand d-flex align-items-center" href="{self.brand_href}">
@@ -176,7 +176,7 @@ class NavbarComponent(LiveComponent):
                 </div>
             </div>
         </nav>
-        '''
+        """
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS navbar"""
@@ -211,14 +211,14 @@ class NavbarComponent(LiveComponent):
             if item.external:
                 active_class = "text-purple-600 font-semibold hover:text-purple-700"
 
-            nav_items_html += f'''
+            nav_items_html += f"""
                 <a href="{item.href}"{target_attr}
                    class="px-3 py-2 rounded-md text-sm font-medium transition-colors {active_class}">
                     {icon_html}{item.label}
                 </a>
-            '''
+            """
 
-        return f'''
+        return f"""
         <nav class="bg-white border-b border-gray-200 shadow-sm {position_classes} {self.custom_classes}" id="{self.component_id}">
             <div class="{container_class} px-4">
                 <div class="flex items-center justify-between h-16">
@@ -232,7 +232,7 @@ class NavbarComponent(LiveComponent):
                 </div>
             </div>
         </nav>
-        '''
+        """
 
     def _render_plain(self) -> str:
         """Render plain HTML navbar with semantic classes for custom CSS"""
@@ -257,13 +257,13 @@ class NavbarComponent(LiveComponent):
             external_class = "external" if item.external else ""
             icon_html = f'<span class="nav-icon">{item.icon}</span>' if item.icon else ""
 
-            nav_items_html += f'''
+            nav_items_html += f"""
                 <li class="nav-item {active_class} {external_class}">
                     <a href="{item.href}"{target_attr}>{icon_html}{item.label}</a>
                 </li>
-            '''
+            """
 
-        return f'''
+        return f"""
         <nav class="navbar {position_class} {self.custom_classes}" id="{self.component_id}">
             <div class="navbar-container">
                 <a href="{self.brand_href}" class="navbar-brand">
@@ -275,4 +275,4 @@ class NavbarComponent(LiveComponent):
                 </ul>
             </div>
         </nav>
-        '''
+        """

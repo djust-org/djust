@@ -141,10 +141,10 @@ class TabsComponent(LiveComponent):
 
             badge_html = f' <span class="badge bg-secondary">{badge}</span>' if badge else ""
 
-            html += f'''<li class="nav-item" role="presentation">
+            html += f"""<li class="nav-item" role="presentation">
                 <button class="nav-link{active_class}{disabled_class}" @click="{self.action}" data-tab="{tab_id}"
                         type="button" role="tab">{label}{badge_html}</button>
-            </li>'''
+            </li>"""
 
         html += "</ul>"
 

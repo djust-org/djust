@@ -48,3 +48,45 @@ repos:
       - id: check-merge-conflict
       - id: check-toml
       - id: mixed-line-ending
+
+  # Security - Python security linter
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.10
+    hooks:
+      - id: bandit
+        # Skip expected patterns in this codebase:
+        # B703/B308: mark_safe - expected in templates
+        # B324: MD5 - used for non-security cache keys
+        # B301: pickle - used for JIT function caching
+        # B102: exec - used for JIT code generation
+        args: ["-ll", "-ii", "-x", "tests/,python/tests/,python/djust/tests/", "-s", "B703,B308,B324,B301,B102"]
+        files: ^python/
+
+  # JavaScript - Test and lint
+  - repo: local
+    hooks:
+      - id: npm-test
+        name: npm test
+        entry: npm test
+        language: system
+        types: [javascript]
+        pass_filenames: false
+
+  # Security - Secret detection
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: package-lock\.json
+
+  # Security - Rust dependency audit
+  - repo: local
+    hooks:
+      - id: cargo-audit
+        name: cargo audit
+        entry: cargo audit
+        language: system
+        types: [rust]
+        pass_filenames: false
+        stages: [pre-push]  # Only run on push (slower check)

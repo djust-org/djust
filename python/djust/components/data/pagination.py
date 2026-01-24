@@ -233,11 +233,11 @@ class PaginationComponent(LiveComponent):
                 "opacity-50 cursor-not-allowed" if self.current_page == 1 else "hover:bg-gray-100"
             )
             click_attr = ' @click="first_page"' if self.current_page != 1 else ""
-            html += f'''<li>
+            html += f"""<li>
                 <a href="#" class="{size_class} ml-0 leading-tight text-gray-500 bg-white border border-gray-300 rounded-l-lg {disabled_class}"{click_attr}>
                     &laquo;&laquo;
                 </a>
-            </li>'''
+            </li>"""
 
         # Previous page button
         if self.show_prev_next:
@@ -246,11 +246,11 @@ class PaginationComponent(LiveComponent):
             )
             click_attr = ' @click="previous_page"' if self.current_page != 1 else ""
             first_class = "rounded-l-lg" if not self.show_first_last else ""
-            html += f'''<li>
+            html += f"""<li>
                 <a href="#" class="{size_class} leading-tight text-gray-500 bg-white border border-gray-300 {first_class} {disabled_class}"{click_attr}>
                     &laquo;
                 </a>
-            </li>'''
+            </li>"""
 
         # Page numbers
         visible_pages = self._get_visible_pages()
@@ -285,11 +285,11 @@ class PaginationComponent(LiveComponent):
             )
             click_attr = ' @click="next_page"' if self.current_page != self.total_pages else ""
             last_class = "rounded-r-lg" if not self.show_first_last else ""
-            html += f'''<li>
+            html += f"""<li>
                 <a href="#" class="{size_class} leading-tight text-gray-500 bg-white border border-gray-300 {last_class} {disabled_class}"{click_attr}>
                     &raquo;
                 </a>
-            </li>'''
+            </li>"""
 
         # Last page button
         if self.show_first_last:
@@ -299,11 +299,11 @@ class PaginationComponent(LiveComponent):
                 else "hover:bg-gray-100"
             )
             click_attr = ' @click="last_page"' if self.current_page != self.total_pages else ""
-            html += f'''<li>
+            html += f"""<li>
                 <a href="#" class="{size_class} leading-tight text-gray-500 bg-white border border-gray-300 rounded-r-lg {disabled_class}"{click_attr}>
                     &raquo;&raquo;
                 </a>
-            </li>'''
+            </li>"""
 
         html += "</ul></nav></div>"
         return html

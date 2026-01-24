@@ -266,9 +266,7 @@ class IncrementalStateSync:
         self._last_state: Dict[str, Any] = {}
 
     def compute_delta(
-        self,
-        new_state: Dict[str, Any],
-        force_keys: Optional[Set[str]] = None
+        self, new_state: Dict[str, Any], force_keys: Optional[Set[str]] = None
     ) -> Tuple[Dict[str, Any], Set[str]]:
         """
         Compute state delta - only values that have changed.
@@ -321,6 +319,7 @@ def fingerprint(*keys: str, hash_fn: Optional[Callable[[Any], str]] = None):
         *keys: State keys that affect the method's output
         hash_fn: Optional custom hash function
     """
+
     def decorator(method: Callable) -> Callable:
         cache_attr = f"_fp_cache_{method.__name__}"
         hash_attr = f"_fp_hash_{method.__name__}"
@@ -346,6 +345,7 @@ def fingerprint(*keys: str, hash_fn: Optional[Callable[[Any], str]] = None):
             return result
 
         return wrapper
+
     return decorator
 
 

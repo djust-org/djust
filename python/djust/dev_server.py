@@ -13,6 +13,7 @@ from typing import Set, Callable, Optional
 try:
     from watchdog.observers import Observer
     from watchdog.events import FileSystemEventHandler, FileSystemEvent
+
     WATCHDOG_AVAILABLE = True
 except ImportError:
     WATCHDOG_AVAILABLE = False
@@ -29,7 +30,7 @@ class DjustFileChangeHandler(FileSystemEventHandler):
     rapid changes to avoid excessive reloads.
     """
 
-    WATCHED_EXTENSIONS = {'.py', '.html', '.css', '.js'}
+    WATCHED_EXTENSIONS = {".py", ".html", ".css", ".js"}
     DEBOUNCE_SECONDS = 0.5  # Wait 500ms after last change before reloading
 
     def __init__(self, on_change_callback: Callable[[str], None]):
@@ -49,7 +50,7 @@ class DjustFileChangeHandler(FileSystemEventHandler):
     def should_reload_for_path(self, path: str) -> bool:
         """Check if file should trigger a reload."""
         # Ignore hidden files, __pycache__, .pyc files
-        if '/__pycache__/' in path or path.endswith('.pyc') or '/.git/' in path:
+        if "/__pycache__/" in path or path.endswith(".pyc") or "/.git/" in path:
             return False
 
         # Check if file has a watched extension
@@ -67,9 +68,7 @@ class DjustFileChangeHandler(FileSystemEventHandler):
 
             # Start new debounce thread
             self._debounce_thread = threading.Thread(
-                target=self._debounced_reload,
-                args=(path,),
-                daemon=True
+                target=self._debounced_reload, args=(path,), daemon=True
             )
             self._debounce_thread.start()
 
@@ -124,7 +123,7 @@ class HotReloadServer:
         self,
         watch_dirs: list,
         on_change: Callable[[str], None],
-        exclude_dirs: Optional[Set[str]] = None
+        exclude_dirs: Optional[Set[str]] = None,
     ):
         """
         Start watching for file changes.
@@ -136,8 +135,7 @@ class HotReloadServer:
         """
         if not WATCHDOG_AVAILABLE:
             logger.warning(
-                "[HotReload] watchdog not installed. "
-                "Install with: pip install watchdog"
+                "[HotReload] watchdog not installed. " "Install with: pip install watchdog"
             )
             return
 
@@ -151,8 +149,15 @@ class HotReloadServer:
         # Default excludes
         if exclude_dirs is None:
             exclude_dirs = {
-                'node_modules', '.git', '__pycache__', '.venv', 'venv',
-                'staticfiles', 'media', '.pytest_cache', '.mypy_cache'
+                "node_modules",
+                ".git",
+                "__pycache__",
+                ".venv",
+                "venv",
+                "staticfiles",
+                "media",
+                ".pytest_cache",
+                ".mypy_cache",
             }
 
         # Set up file change handler
@@ -167,11 +172,7 @@ class HotReloadServer:
                 continue
 
             self.watch_dirs.add(watch_path)
-            self.observer.schedule(
-                event_handler,
-                str(watch_path),
-                recursive=True
-            )
+            self.observer.schedule(event_handler, str(watch_path), recursive=True)
             logger.info(f"[HotReload] Watching: {watch_path}")
 
         # Start the observer

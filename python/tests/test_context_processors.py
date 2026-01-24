@@ -27,34 +27,34 @@ class AnalyticsView(LiveView):
 
 def dummy_analytics_processor(request):
     """Test context processor that provides GOOGLE_ANALYTICS_ID."""
-    return {'GOOGLE_ANALYTICS_ID': 'G-TEST12345'}
+    return {"GOOGLE_ANALYTICS_ID": "G-TEST12345"}
 
 
 def dummy_user_processor(request):
     """Test context processor that provides user info."""
-    return {'current_user_name': 'TestUser'}
+    return {"current_user_name": "TestUser"}
 
 
 @pytest.fixture
 def mock_request():
     """Create a mock request without session (no DB required)."""
     factory = RequestFactory()
-    request = factory.get('/')
+    request = factory.get("/")
     # Add a mock session that doesn't need DB
     request.session = Mock()
-    request.session.session_key = 'test-session-key'
+    request.session.session_key = "test-session-key"
     return request
 
 
 TEMPLATES_WITH_CONTEXT_PROCESSORS = [
     {
-        'BACKEND': 'djust.template_backend.DjustTemplateBackend',
-        'DIRS': [],
-        'APP_DIRS': True,
-        'OPTIONS': {
-            'context_processors': [
-                'python.tests.test_context_processors.dummy_analytics_processor',
-                'python.tests.test_context_processors.dummy_user_processor',
+        "BACKEND": "djust.template_backend.DjustTemplateBackend",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "python.tests.test_context_processors.dummy_analytics_processor",
+                "python.tests.test_context_processors.dummy_user_processor",
             ],
         },
     },
@@ -77,14 +77,14 @@ class TestContextProcessors:
         context = view._apply_context_processors(context, mock_request)
 
         # Verify context processor variables are present
-        assert 'GOOGLE_ANALYTICS_ID' in context
-        assert context['GOOGLE_ANALYTICS_ID'] == 'G-TEST12345'
-        assert 'current_user_name' in context
-        assert context['current_user_name'] == 'TestUser'
+        assert "GOOGLE_ANALYTICS_ID" in context
+        assert context["GOOGLE_ANALYTICS_ID"] == "G-TEST12345"
+        assert "current_user_name" in context
+        assert context["current_user_name"] == "TestUser"
 
         # Verify view's own context is still present
-        assert 'count' in context
-        assert context['count'] == 0
+        assert "count" in context
+        assert context["count"] == 0
 
     @override_settings(TEMPLATES=TEMPLATES_WITH_CONTEXT_PROCESSORS)
     def test_context_processors_not_applied_without_request(self, mock_request):
@@ -99,8 +99,8 @@ class TestContextProcessors:
         context = view._apply_context_processors(context, None)
 
         # Context processor variables should NOT be present
-        assert 'GOOGLE_ANALYTICS_ID' not in context
-        assert 'current_user_name' not in context
+        assert "GOOGLE_ANALYTICS_ID" not in context
+        assert "current_user_name" not in context
 
     @override_settings(TEMPLATES=[])
     def test_context_processors_with_no_djust_backend(self, mock_request):
@@ -115,7 +115,7 @@ class TestContextProcessors:
         context = view._apply_context_processors(context, mock_request)
 
         # Context processor variables should NOT be present
-        assert 'GOOGLE_ANALYTICS_ID' not in context
+        assert "GOOGLE_ANALYTICS_ID" not in context
 
     @override_settings(TEMPLATES=TEMPLATES_WITH_CONTEXT_PROCESSORS)
     def test_context_processors_handle_processor_errors(self, mock_request):
@@ -127,9 +127,10 @@ class TestContextProcessors:
 
         # Mock import_string to raise an error for one processor
         # Patch at the source module where it's imported from
-        with patch('django.utils.module_loading.import_string') as mock_import:
+        with patch("django.utils.module_loading.import_string") as mock_import:
+
             def side_effect(path):
-                if 'analytics' in path:
+                if "analytics" in path:
                     raise ImportError("Test error")
                 return dummy_user_processor
 
@@ -141,4 +142,4 @@ class TestContextProcessors:
 
             # The working processor should still be applied
             # (Note: depends on order, but at least shouldn't crash)
-            assert 'count' in context  # View's own context preserved
+            assert "count" in context  # View's own context preserved

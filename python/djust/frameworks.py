@@ -235,14 +235,14 @@ class Bootstrap5Adapter(FrameworkAdapter):
 
         label_text = kwargs.get("label", field.label or field_name.replace("_", " ").title())
 
-        return f'''
+        return f"""
             <div class="{wrapper_class}">
                 {self._build_tag("input", attrs)}
                 <label class="{label_class}" for="id_{field_name}">
                     {escape(label_text)}
                 </label>
             </div>
-        '''
+        """
 
     def _render_radio(
         self, field: forms.Field, field_name: str, value: Any, has_errors: bool, **kwargs
@@ -274,14 +274,14 @@ class Bootstrap5Adapter(FrameworkAdapter):
             if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
                 attrs["@change"] = "validate_field"
 
-            html += f'''
+            html += f"""
             <div class="{wrapper_class}">
                 {self._build_tag("input", attrs)}
                 <label class="form-check-label" for="{radio_id}">
                     {escape(choice_label)}
                 </label>
             </div>
-            '''
+            """
 
         return html
 
@@ -437,14 +437,14 @@ class TailwindAdapter(FrameworkAdapter):
 
         label_text = kwargs.get("label", field.label or field_name.replace("_", " ").title())
 
-        return f'''
+        return f"""
             <div class="{wrapper_class}">
                 {self._build_tag("input", attrs)}
                 <label class="{label_class}" for="id_{field_name}">
                     {escape(label_text)}
                 </label>
             </div>
-        '''
+        """
 
     def _build_tag(self, tag: str, attrs: Dict[str, str], content: str = None) -> str:
         """Build an HTML tag with attributes"""
