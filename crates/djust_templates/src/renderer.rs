@@ -159,29 +159,21 @@ fn render_node_with_loader<L: TemplateLoader>(
             let included_nodes = template_loader.load_template(path)?;
 
             // Build the context for the included template
-            let include_context = if *only {
-                // "only" keyword: start with empty context, add only the with_vars
-                let mut new_context = Context::new();
-                for (var_name, expression) in with_vars {
-                    let value = context
-                        .get(expression)
-                        .cloned()
-                        .unwrap_or_else(|| Value::String(expression.clone()));
-                    new_context.set(var_name.clone(), value);
-                }
-                new_context
+            // "only" keyword: start with empty context; otherwise inherit parent context
+            let mut include_context = if *only {
+                Context::new()
             } else {
-                // Normal include: inherit parent context and add with_vars
-                let mut new_context = context.clone();
-                for (var_name, expression) in with_vars {
-                    let value = context
-                        .get(expression)
-                        .cloned()
-                        .unwrap_or_else(|| Value::String(expression.clone()));
-                    new_context.set(var_name.clone(), value);
-                }
-                new_context
+                context.clone()
             };
+
+            // Apply with_vars to the context
+            for (var_name, expression) in with_vars {
+                let value = context
+                    .get(expression)
+                    .cloned()
+                    .unwrap_or_else(|| Value::String(expression.clone()));
+                include_context.set(var_name.clone(), value);
+            }
 
             // Render the included template with the new context
             render_nodes_with_loader(&included_nodes, &include_context, loader)
