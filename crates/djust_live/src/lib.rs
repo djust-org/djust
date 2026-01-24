@@ -11,6 +11,9 @@
 // Actor system module
 pub mod actors;
 
+// Fast model serialization for N+1 query prevention
+pub mod model_serializer;
+
 use actors::{ActorSupervisor, SessionActorHandle};
 use dashmap::DashMap;
 use djust_core::{Context, Value};
@@ -1515,6 +1518,16 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_template_variables_py, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_queryset_py, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_context_py, m)?)?;
+
+    // Fast model serialization (N+1 prevention)
+    m.add_function(wrap_pyfunction!(
+        model_serializer::serialize_models_fast,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        model_serializer::serialize_models_to_list,
+        m
+    )?)?;
 
     Ok(())
 }
