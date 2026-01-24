@@ -438,11 +438,12 @@ class ManyToManySelect(LiveComponent):
 
     def toggle(self, value: Any):
         """Toggle selection of a value."""
-        # Convert to int if possible
+        # Try to convert to int for consistency with model PKs.
+        # If conversion fails, use the original value (e.g., UUID, string PK).
         try:
             value = int(value)
         except (ValueError, TypeError):
-            pass
+            pass  # Keep original value if not convertible to int
 
         if value in self.values:
             self.values = [v for v in self.values if v != value]
