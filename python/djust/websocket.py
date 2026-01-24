@@ -14,6 +14,7 @@ from .profiler import profiler
 from .security import handle_exception, sanitize_for_log
 
 logger = logging.getLogger(__name__)
+hotreload_logger = logging.getLogger("djust.hotreload")
 
 try:
     from ._rust import create_session_actor, SessionActorHandle
@@ -86,9 +87,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 await self.actor_handle.shutdown()
             except Exception as e:
-                import logging
-
-                logging.getLogger(__name__).warning(f"Error shutting down actor: {e}")
+                logger.warning(f"Error shutting down actor: {e}")
 
         # Clean up session state
         self.view_instance = None
@@ -96,10 +95,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def receive(self, text_data=None, bytes_data=None):
         """Handle incoming WebSocket messages"""
-        import logging
-
-        logger = logging.getLogger(__name__)
-
         print(
             f"[WebSocket] receive called: text_data={text_data[:100] if text_data else None}, bytes_data={bytes_data is not None}",
             file=sys.stderr,
@@ -422,11 +417,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def handle_event(self, data: Dict[str, Any]):
         """Handle client events"""
-        import logging
         import time
         from djust.performance import PerformanceTracker
-
-        logger = logging.getLogger(__name__)
 
         # Start comprehensive performance tracking
         tracker = PerformanceTracker()
@@ -775,10 +767,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             "get_stats": {"ttl": 60, "key_params": []}
         }
         """
-        import logging
-
-        logger = logging.getLogger(__name__)
-
         if not self.view_instance:
             return {}
 
@@ -825,10 +813,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         Returns:
             int: Number of caches cleared successfully
         """
-        import logging
-
-        logger = logging.getLogger("djust.hotreload")
-
         from django.template import engines
 
         caches_cleared = 0
@@ -843,9 +827,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 loader.reset()
                                 caches_cleared += 1
                 except Exception as e:
-                    logger.warning(f"Could not clear template cache for {engine.name}: {e}")
+                    hotreload_logger.warning(f"Could not clear template cache for {engine.name}: {e}")
 
-        logger.debug(f"Cleared {caches_cleared} template caches")
+        hotreload_logger.debug(f"Cleared {caches_cleared} template caches")
         return caches_cleared
 
     async def hotreload_message(self, event):
@@ -863,13 +847,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         Raises:
             None - All exceptions are caught and trigger full reload fallback
         """
-        import logging
         import time
         from channels.db import database_sync_to_async
         from django.template import TemplateDoesNotExist
         from json import JSONDecodeError
 
-        logger = logging.getLogger("djust.hotreload")
         file_path = event.get("file", "unknown")
 
         # If we have an active view, re-render and send patch
@@ -888,7 +870,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 try:
                     new_template = await database_sync_to_async(self.view_instance.get_template)()
                 except TemplateDoesNotExist as e:
-                    logger.error(f"Template not found for hot reload: {e}")
+                    hotreload_logger.error(f"Template not found for hot reload: {e}")
                     await self.send_json(
                         {
                             "type": "reload",
@@ -899,7 +881,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 # Update the RustLiveView with the new template (keeps old VDOM for diffing!)
                 if hasattr(self.view_instance, "_rust_view") and self.view_instance._rust_view:
-                    logger.debug("Updating template in existing RustLiveView")
+                    hotreload_logger.debug("Updating template in existing RustLiveView")
                     await database_sync_to_async(self.view_instance._rust_view.update_template)(
                         new_template
                     )
@@ -912,17 +894,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 render_time = (time.time() - render_start) * 1000  # Convert to ms
 
                 patch_count = len(patches) if patches else 0
-                logger.info(
+                hotreload_logger.info(
                     f"Generated {patch_count} patches in {render_time:.2f}ms, version={version}"
                 )
 
                 # Warn if patch generation is slow
                 if render_time > 100:
-                    logger.warning(f"Slow patch generation: {render_time:.2f}ms for {file_path}")
+                    hotreload_logger.warning(f"Slow patch generation: {render_time:.2f}ms for {file_path}")
 
                 # Handle case where no patches are generated
                 if not patches:
-                    logger.info("No patches generated, sending full reload")
+                    hotreload_logger.info("No patches generated, sending full reload")
                     await self.send_json(
                         {
                             "type": "reload",
@@ -938,7 +920,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     if isinstance(patches, str):
                         patches = json_module.loads(patches)
                 except (JSONDecodeError, ValueError) as e:
-                    logger.error(f"Failed to parse patches JSON: {e}")
+                    hotreload_logger.error(f"Failed to parse patches JSON: {e}")
                     await self.send_json(
                         {
                             "type": "reload",
@@ -959,13 +941,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
 
                 total_time = (time.time() - start_time) * 1000
-                logger.info(
-                    f"✅ Sent {patch_count} patches for {file_path} (total: {total_time:.2f}ms)"
+                hotreload_logger.info(
+                    f"Sent {patch_count} patches for {file_path} (total: {total_time:.2f}ms)"
                 )
 
             except Exception as e:
                 # Catch-all for unexpected errors
-                logger.exception(f"Error generating patches for {file_path}: {e}")
+                hotreload_logger.exception(f"Error generating patches for {file_path}: {e}")
                 # Fallback to full reload on error
                 await self.send_json(
                     {
@@ -975,7 +957,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
         else:
             # No active view, just reload the page
-            logger.debug(f"No active view, sending full reload for {file_path}")
+            hotreload_logger.debug(f"No active view, sending full reload for {file_path}")
             await self.send_json(
                 {
                     "type": "reload",

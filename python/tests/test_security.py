@@ -8,7 +8,6 @@ These tests verify the security utilities work correctly to prevent:
 """
 
 import pytest
-import logging
 
 
 class TestAttributeGuard:

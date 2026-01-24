@@ -120,9 +120,14 @@ const djustSecurity = (function() {
                     if (attr.name.toLowerCase().startsWith('on')) {
                         el.removeAttribute(attr.name);
                     }
-                    // Remove javascript: URLs
-                    if (attr.value && attr.value.toLowerCase().trim().startsWith('javascript:')) {
-                        el.removeAttribute(attr.name);
+                    // Remove dangerous URL schemes (javascript:, data:, vbscript:)
+                    if (attr.value) {
+                        const val = attr.value.toLowerCase().trim();
+                        if (val.startsWith('javascript:') ||
+                            val.startsWith('data:') ||
+                            val.startsWith('vbscript:')) {
+                            el.removeAttribute(attr.name);
+                        }
                     }
                 });
             });

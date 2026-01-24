@@ -123,3 +123,14 @@ python_version = "3.8"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+
+[tool.bandit]
+# Skip mark_safe warnings in components - this is a templating framework
+# where mark_safe is expected and safe (content comes from trusted templates)
+exclude_dirs = ["tests", "python/tests", "python/djust/tests"]
+skips = ["B703", "B308"]  # mark_safe is expected in templates
+
+[tool.bandit.per_file_ignores]
+# In components, mark_safe is used for trusted template output
+"python/djust/components/*" = ["B703", "B308"]
+"python/djust/live_view.py" = ["B703", "B308"]
