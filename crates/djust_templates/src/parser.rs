@@ -24,7 +24,11 @@ pub enum Node {
         nodes: Vec<Node>,
     },
     Extends(String), // Parent template path
-    Include(String),
+    Include {
+        path: String,
+        with_vars: Vec<(String, String)>, // var_name, expression
+        only: bool,                       // If true, use only the provided vars
+    },
     Comment,
     CsrfToken,
     Static(String), // Path to static file
@@ -208,7 +212,35 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             "Include tag requires a template name".to_string(),
                         ));
                     }
-                    Ok(Some(Node::Include(args[0].clone())))
+                    // Remove quotes from template path
+                    let path = args[0].trim_matches(|c| c == '"' || c == '\'').to_string();
+
+                    // Parse "with" variables and "only" keyword
+                    // Syntax: {% include "template.html" with var=value var2=value2 only %}
+                    let mut with_vars = Vec::new();
+                    let mut only = false;
+                    let mut in_with_section = false;
+
+                    for arg in args.iter().skip(1) {
+                        if arg == "with" {
+                            in_with_section = true;
+                        } else if arg == "only" {
+                            only = true;
+                        } else if in_with_section {
+                            // Parse var=value assignment
+                            if let Some(eq_pos) = arg.find('=') {
+                                let var_name = arg[..eq_pos].trim().to_string();
+                                let expression = arg[eq_pos + 1..].trim().to_string();
+                                with_vars.push((var_name, expression));
+                            }
+                        }
+                    }
+
+                    Ok(Some(Node::Include {
+                        path,
+                        with_vars,
+                        only,
+                    }))
                 }
 
                 "csrf_token" => {
