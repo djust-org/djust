@@ -5,7 +5,7 @@ This package provides a Phoenix LiveView-style reactive framework for Django,
 powered by Rust for maximum performance.
 """
 
-from .live_view import LiveView, live_view
+from .live_view import LiveView, live_view, clear_jit_cache
 from .component import Component, LiveComponent
 from .decorators import (
     reactive,
@@ -178,6 +178,7 @@ def enable_hot_reload():
 __all__ = [
     "LiveView",
     "live_view",
+    "clear_jit_cache",
     "Component",
     "LiveComponent",
     "reactive",
