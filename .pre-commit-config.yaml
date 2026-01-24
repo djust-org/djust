@@ -80,13 +80,32 @@ repos:
         args: ['--baseline', '.secrets.baseline']
         exclude: package-lock\.json
 
-  # Security - Rust dependency audit
+  # Pre-push hooks (slower checks that run before git push)
   - repo: local
     hooks:
+      # Python tests
+      - id: pytest
+        name: pytest
+        entry: bash -c 'PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ -q'
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-push]
+
+      # Rust tests
+      - id: cargo-test
+        name: cargo test
+        entry: bash -c 'PYO3_PYTHON=$(pwd)/.venv/bin/python cargo test --workspace --exclude djust_live --release -q'
+        language: system
+        types: [rust]
+        pass_filenames: false
+        stages: [pre-push]
+
+      # Rust dependency audit
       - id: cargo-audit
         name: cargo audit
         entry: cargo audit
         language: system
         types: [rust]
         pass_filenames: false
-        stages: [pre-push]  # Only run on push (slower check)
+        stages: [pre-push]
