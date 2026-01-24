@@ -40,14 +40,17 @@ logger = logging.getLogger(__name__)
 try:
     from djust._rust import extract_template_variables, serialize_queryset
     from djust.optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
-    from djust.live_view import DjangoJSONEncoder
+    from djust.live_view import DjangoJSONEncoder, _get_model_hash, clear_jit_cache
 
     JIT_AVAILABLE = True
 except ImportError:
     JIT_AVAILABLE = False
     DjangoJSONEncoder = None
+    _get_model_hash = None
+    clear_jit_cache = None
 
 # Cache for JIT-compiled serializers (shared across all DjustTemplate instances)
+# Key: (template_hash, variable_name, model_hash) for automatic invalidation on model changes
 _jit_serializer_cache = {}
 
 
@@ -236,11 +239,13 @@ class DjustTemplate:
                 logger.debug(f"[JIT] No paths found for '{variable_name}', using DjangoJSONEncoder")
                 return [json.loads(json.dumps(obj, cls=DjangoJSONEncoder)) for obj in queryset]
 
-            # Generate cache key
+            # Generate cache key (includes model hash for invalidation on model changes)
             import hashlib
 
+            model_class = queryset.model
             template_hash = hashlib.sha256(self.template_string.encode()).hexdigest()[:8]
-            cache_key = (template_hash, variable_name)
+            model_hash = _get_model_hash(model_class) if _get_model_hash else ""
+            cache_key = (template_hash, variable_name, model_hash)
 
             # Check cache
             if cache_key in _jit_serializer_cache:
@@ -248,7 +253,6 @@ class DjustTemplate:
                 logger.debug(f"[JIT] Cache HIT for '{variable_name}' - paths: {paths_for_var}")
             else:
                 # Analyze and cache optimization
-                model_class = queryset.model
                 optimization = analyze_queryset_optimization(model_class, paths_for_var)
 
                 logger.debug(
