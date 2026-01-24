@@ -24,7 +24,8 @@
  */
 
 // Expose as global for non-module usage (inline scripts)
-const djustSecurity = (function() {
+// Using var + window assignment to ensure it's accessible as window.djustSecurity
+var djustSecurity = (function() {
     'use strict';
 
     /**
@@ -240,7 +241,14 @@ const djustSecurity = (function() {
 
         let str;
         try {
-            str = typeof value === 'string' ? value : String(value);
+            if (typeof value === 'string') {
+                str = value;
+            } else if (typeof value === 'object') {
+                // Use JSON.stringify for objects to get meaningful output
+                str = JSON.stringify(value);
+            } else {
+                str = String(value);
+            }
         } catch {
             return '[unstringifiable]';
         }
@@ -335,6 +343,11 @@ const djustSecurity = (function() {
         sanitizeObjectForLog,
     };
 })();
+
+// Attach to window for browser usage (including JSDOM)
+if (typeof window !== 'undefined') {
+    window.djustSecurity = djustSecurity;
+}
 
 // Export for module systems (ES modules, CommonJS)
 if (typeof module !== 'undefined' && module.exports) {
