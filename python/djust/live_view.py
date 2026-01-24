@@ -303,10 +303,10 @@ _jit_serializer_cache: Dict[tuple, tuple] = {}
 
 def _get_model_hash(model_class: type) -> str:
     """
-    Generate a hash of a model's field structure.
+    Generate a hash of a model's field structure and serializable methods.
 
-    This hash changes when the model's fields are modified (added, removed, renamed),
-    ensuring the JIT serializer cache is invalidated when models change.
+    This hash changes when the model's fields or get_*/is_*/has_*/can_* methods
+    are modified, ensuring the JIT serializer cache is invalidated.
 
     Args:
         model_class: The Django model class to hash
@@ -324,6 +324,27 @@ def _get_model_hash(model_class: type) -> str:
             if hasattr(field, 'related_model') and field.related_model:
                 related = f':{field.related_model.__name__}'
             field_info.append(f"{field.name}:{field_type}{related}")
+
+    # Include serializable methods (get_*, is_*, has_*, can_*)
+    # These are included in JIT serialization, so changes should invalidate cache
+    method_prefixes = ('get_', 'is_', 'has_', 'can_')
+    skip_prefixes = ('get_next_by_', 'get_previous_by_')
+    for attr_name in sorted(dir(model_class)):
+        if attr_name.startswith('_'):
+            continue
+        if not any(attr_name.startswith(p) for p in method_prefixes):
+            continue
+        if any(attr_name.startswith(p) for p in skip_prefixes):
+            continue
+        # Only include methods explicitly defined on the model (not inherited from Model)
+        for cls in model_class.__mro__:
+            if cls.__name__ == 'Model':
+                break
+            if attr_name in cls.__dict__:
+                attr = getattr(model_class, attr_name, None)
+                if callable(attr):
+                    field_info.append(f"method:{attr_name}")
+                break
 
     structure = f"{model_class.__name__}|{'|'.join(field_info)}"
     return hashlib.sha256(structure.encode()).hexdigest()[:8]
@@ -349,21 +370,23 @@ def clear_jit_cache() -> int:
 
 # Auto-clear cache on Django's autoreload in development
 def _setup_autoreload_cache_clear():
-    """Register a callback to clear JIT cache when files change."""
+    """Register a callback to clear JIT cache when Python files change."""
     try:
         from django.conf import settings
         if not settings.DEBUG:
             return
 
-        from django.utils.autoreload import autoreload_started
-        from functools import partial
+        from django.utils.autoreload import file_changed
 
-        def clear_cache_on_reload(sender, **kwargs):
-            clear_jit_cache()
-            logger.debug("[JIT] Cache cleared due to autoreload")
+        def clear_cache_on_file_change(sender, file_path, **kwargs):
+            # Only clear cache when Python files change (models, views, etc.)
+            if file_path.suffix == '.py':
+                count = clear_jit_cache()
+                if count > 0:
+                    logger.debug(f"[JIT] Cache cleared ({count} entries) due to file change: {file_path.name}")
 
-        autoreload_started.connect(clear_cache_on_reload, weak=False)
-        logger.debug("[JIT] Registered autoreload cache clear hook")
+        file_changed.connect(clear_cache_on_file_change, weak=False)
+        logger.debug("[JIT] Registered file_changed cache clear hook")
     except Exception:
         # Autoreload signal not available (e.g., older Django or production)
         pass

@@ -21,6 +21,7 @@ Then use standard Django views:
         template_name = 'my_template.html'  # Rendered with Rust!
 """
 
+import hashlib
 import json
 import logging
 import re
@@ -40,7 +41,12 @@ logger = logging.getLogger(__name__)
 try:
     from djust._rust import extract_template_variables, serialize_queryset
     from djust.optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
-    from djust.live_view import DjangoJSONEncoder, _get_model_hash, clear_jit_cache
+    from djust.live_view import (
+        DjangoJSONEncoder,
+        _get_model_hash,
+        clear_jit_cache,
+        _jit_serializer_cache,  # Shared cache - cleared by clear_jit_cache()
+    )
 
     JIT_AVAILABLE = True
 except ImportError:
@@ -48,10 +54,7 @@ except ImportError:
     DjangoJSONEncoder = None
     _get_model_hash = None
     clear_jit_cache = None
-
-# Cache for JIT-compiled serializers (shared across all DjustTemplate instances)
-# Key: (template_hash, variable_name, model_hash) for automatic invalidation on model changes
-_jit_serializer_cache = {}
+    _jit_serializer_cache = {}  # Fallback empty cache when JIT not available
 
 
 class DjustTemplateBackend(BaseEngine):
@@ -240,8 +243,6 @@ class DjustTemplate:
                 return [json.loads(json.dumps(obj, cls=DjangoJSONEncoder)) for obj in queryset]
 
             # Generate cache key (includes model hash for invalidation on model changes)
-            import hashlib
-
             model_class = queryset.model
             template_hash = hashlib.sha256(self.template_string.encode()).hexdigest()[:8]
             model_hash = _get_model_hash(model_class) if _get_model_hash else ""
