@@ -7,6 +7,9 @@
 #![allow(clippy::useless_conversion)]
 // Parameter only used in recursion for Python value conversion
 #![allow(clippy::only_used_in_recursion)]
+// TODO: Migrate to IntoPyObject when pyo3 stabilizes the new API
+// See: https://pyo3.rs/v0.23.0/migration
+#![allow(deprecated)]
 
 // Actor system module
 pub mod actors;
@@ -352,6 +355,46 @@ fn render_template(template_source: String, context: HashMap<String, Value>) -> 
 
     let ctx = Context::from_dict(context);
     Ok(template_arc.render(&ctx)?)
+}
+
+/// Fast template rendering with template directories for {% include %} support
+///
+/// This function extends render_template to support {% include %} tags by
+/// providing template directories for the Rust renderer to load included templates.
+///
+/// # Arguments
+/// * `template_source` - The template source string to render
+/// * `context` - Template context variables
+/// * `template_dirs` - List of directories to search for included templates
+///
+/// # Returns
+/// The rendered HTML string
+#[pyfunction]
+fn render_template_with_dirs(
+    template_source: String,
+    context: HashMap<String, Value>,
+    template_dirs: Vec<String>,
+) -> PyResult<String> {
+    use djust_templates::inheritance::FilesystemTemplateLoader;
+
+    // Get template from cache or parse and cache it
+    let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&template_source) {
+        cached.clone()
+    } else {
+        let template = Template::new(&template_source)?;
+        let arc = Arc::new(template);
+        TEMPLATE_CACHE.insert(template_source.clone(), arc.clone());
+        arc
+    };
+
+    let ctx = Context::from_dict(context);
+
+    // Create filesystem template loader with the provided directories
+    let dirs: Vec<PathBuf> = template_dirs.iter().map(PathBuf::from).collect();
+    let loader = FilesystemTemplateLoader::new(dirs);
+
+    // Render with the loader to support {% include %} tags
+    Ok(template_arc.render_with_loader(&ctx, &loader)?)
 }
 
 /// Compute diff between two HTML strings
@@ -1487,6 +1530,7 @@ fn extract_template_variables_py(py: Python, template: String) -> PyResult<PyObj
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustLiveViewBackend>()?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
+    m.add_function(wrap_pyfunction!(render_template_with_dirs, m)?)?;
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;

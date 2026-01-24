@@ -79,8 +79,12 @@ impl<'py> FromPyObject<'py> for Value {
     }
 }
 
+// TODO: Migrate to IntoPyObject when pyo3 stabilizes the new API
+// See: https://pyo3.rs/v0.23.0/migration
+#[allow(deprecated)]
 impl ToPyObject for Value {
     fn to_object(&self, py: Python) -> PyObject {
+        #[allow(deprecated)]
         match self {
             Value::Null => py.None(),
             Value::Bool(b) => b.to_object(py),

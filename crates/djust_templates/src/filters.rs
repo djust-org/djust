@@ -255,6 +255,11 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
                 _ => Ok(value.clone()),
             }
         }
+        "urlencode" => {
+            // urlencode filter: URL-encodes the string
+            // Matches Django behavior: spaces become %20, safe chars are preserved
+            Ok(Value::String(urlencode(&value.to_string())))
+        }
         _ => Err(DjangoRustError::TemplateError(format!(
             "Unknown filter: {filter_name}"
         ))),
@@ -634,6 +639,30 @@ fn linebreaksbr(s: &str) -> String {
     s.replace('\n', "<br>")
 }
 
+fn urlencode(s: &str) -> String {
+    // URL-encode a string, matching Django's urlencode behavior
+    // Safe characters (not encoded): alphanumeric, -, _, ., ~
+    // Everything else is percent-encoded
+    // Spaces become %20 (not +)
+    let mut result = String::with_capacity(s.len() * 3); // Worst case: every char becomes %XX
+
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
+            result.push(c);
+        } else {
+            // Percent-encode the character
+            // For multi-byte UTF-8 characters, encode each byte separately
+            let mut buf = [0u8; 4];
+            let encoded = c.encode_utf8(&mut buf);
+            for byte in encoded.bytes() {
+                result.push_str(&format!("%{:02X}", byte));
+            }
+        }
+    }
+
+    result
+}
+
 pub mod tags {
     // Placeholder for custom tags
 }
@@ -974,5 +1003,38 @@ mod tests {
                 assert_eq!(first.get("name").unwrap().to_string(), "Bob");
             }
         }
+    }
+
+    #[test]
+    fn test_urlencode_filter() {
+        // Basic text with spaces
+        let value = Value::String("Hello World".to_string());
+        let result = apply_filter("urlencode", &value, None).unwrap();
+        assert_eq!(result.to_string(), "Hello%20World");
+
+        // Text with special characters
+        let value = Value::String("Hello World & Friends".to_string());
+        let result = apply_filter("urlencode", &value, None).unwrap();
+        assert_eq!(result.to_string(), "Hello%20World%20%26%20Friends");
+
+        // Text with query string characters
+        let value = Value::String("foo=bar&baz=qux".to_string());
+        let result = apply_filter("urlencode", &value, None).unwrap();
+        assert_eq!(result.to_string(), "foo%3Dbar%26baz%3Dqux");
+
+        // Safe characters should NOT be encoded
+        let value = Value::String("hello-world_test.file~name".to_string());
+        let result = apply_filter("urlencode", &value, None).unwrap();
+        assert_eq!(result.to_string(), "hello-world_test.file~name");
+
+        // Empty string
+        let value = Value::String("".to_string());
+        let result = apply_filter("urlencode", &value, None).unwrap();
+        assert_eq!(result.to_string(), "");
+
+        // Question mark and slash should be encoded
+        let value = Value::String("path/to/file?query=1".to_string());
+        let result = apply_filter("urlencode", &value, None).unwrap();
+        assert_eq!(result.to_string(), "path%2Fto%2Ffile%3Fquery%3D1");
     }
 }
