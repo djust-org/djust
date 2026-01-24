@@ -32,9 +32,7 @@ ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07")
 
 # Control characters (ASCII 0-31 except tab, newline, carriage return)
 # and DEL (127)
-CONTROL_CHARS_PATTERN = re.compile(
-    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]"
-)
+CONTROL_CHARS_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 def sanitize_for_log(
@@ -193,8 +191,7 @@ def sanitize_dict_for_log(
             # Limit list length and sanitize items
             items = list(value)[:10]  # Max 10 items
             result[safe_key] = [
-                sanitize_for_log(str(v), max_length=max_value_length)
-                for v in items
+                sanitize_for_log(str(v), max_length=max_value_length) for v in items
             ]
             if len(value) > 10:
                 result[safe_key].append(f"...and {len(value) - 10} more")

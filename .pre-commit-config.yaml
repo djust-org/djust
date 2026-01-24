@@ -54,7 +54,12 @@ repos:
     rev: 1.7.10
     hooks:
       - id: bandit
-        args: ["-ll", "-ii", "-x", "tests/,python/tests/,python/djust/tests/"]
+        # Skip expected patterns in this codebase:
+        # B703/B308: mark_safe - expected in templates
+        # B324: MD5 - used for non-security cache keys
+        # B301: pickle - used for JIT function caching
+        # B102: exec - used for JIT code generation
+        args: ["-ll", "-ii", "-x", "tests/,python/tests/,python/djust/tests/", "-s", "B703,B308,B324,B301,B102"]
         files: ^python/
 
   # Security - Secret detection

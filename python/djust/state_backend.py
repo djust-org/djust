@@ -31,12 +31,13 @@ DEFAULT_STATE_SIZE_WARNING_KB = 100
 
 # Compression settings
 DEFAULT_COMPRESSION_THRESHOLD_KB = 10  # Compress states larger than this
-COMPRESSION_MARKER = b'\x01'  # Prefix byte to indicate compressed data
-NO_COMPRESSION_MARKER = b'\x00'  # Prefix byte for uncompressed data
+COMPRESSION_MARKER = b"\x01"  # Prefix byte to indicate compressed data
+NO_COMPRESSION_MARKER = b"\x00"  # Prefix byte for uncompressed data
 
 # Try to import zstd for compression (optional dependency)
 try:
     import zstandard as zstd
+
     ZSTD_AVAILABLE = True
     logger.debug("zstd compression available")
 except ImportError:
@@ -46,6 +47,7 @@ except ImportError:
 
 class DjustPerformanceWarning(UserWarning):
     """Warning for potential performance issues in djust LiveViews."""
+
     pass
 
 
@@ -237,9 +239,9 @@ class InMemoryStateBackend(StateBackend):
         # Estimate state size if the view supports it
         state_size = 0
         try:
-            if hasattr(view, 'get_state_size'):
+            if hasattr(view, "get_state_size"):
                 state_size = view.get_state_size()
-            elif hasattr(view, 'serialize_msgpack'):
+            elif hasattr(view, "serialize_msgpack"):
                 # Fallback: serialize to get size (more expensive)
                 state_size = len(view.serialize_msgpack())
         except Exception:
@@ -318,8 +320,7 @@ class InMemoryStateBackend(StateBackend):
 
         with self._lock:
             expired_keys = [
-                key for key, (_, timestamp) in self._cache.items()
-                if timestamp < cutoff
+                key for key, (_, timestamp) in self._cache.items() if timestamp < cutoff
             ]
 
             for key in expired_keys:
@@ -378,11 +379,9 @@ class InMemoryStateBackend(StateBackend):
             avg_bytes = total_bytes / len(self._state_sizes) if self._state_sizes else 0
 
             # Get top 10 largest sessions
-            sorted_sessions = sorted(
-                self._state_sizes.items(),
-                key=lambda x: x[1],
-                reverse=True
-            )[:10]
+            sorted_sessions = sorted(self._state_sizes.items(), key=lambda x: x[1], reverse=True)[
+                :10
+            ]
 
             return {
                 "backend": "memory",
@@ -863,10 +862,9 @@ class RedisStateBackend(StateBackend):
                     try:
                         data = self._client.get(key)
                         if data:
-                            sizes.append((
-                                key.decode() if isinstance(key, bytes) else key,
-                                len(data)
-                            ))
+                            sizes.append(
+                                (key.decode() if isinstance(key, bytes) else key, len(data))
+                            )
                     except Exception:
                         pass
 
@@ -918,7 +916,9 @@ class RedisStateBackend(StateBackend):
                 ],
                 "sessions_sampled": len(sizes),
                 "total_sessions_estimated": total_keys,
-                "note": "Values are estimates based on sampling" if total_keys > max_sample else None,
+                "note": "Values are estimates based on sampling"
+                if total_keys > max_sample
+                else None,
             }
 
         except Exception as e:
@@ -947,10 +947,7 @@ class RedisStateBackend(StateBackend):
             }
 
         total_ops = self._stats["compressed_count"] + self._stats["uncompressed_count"]
-        compression_rate = (
-            self._stats["compressed_count"] / total_ops * 100
-            if total_ops > 0 else 0
-        )
+        compression_rate = self._stats["compressed_count"] / total_ops * 100 if total_ops > 0 else 0
 
         return {
             "enabled": True,
@@ -1012,7 +1009,9 @@ def get_backend() -> StateBackend:
         key_prefix = config.get("REDIS_KEY_PREFIX", "djust:")
         # Compression settings
         compression_enabled = config.get("COMPRESSION_ENABLED", True)
-        compression_threshold_kb = config.get("COMPRESSION_THRESHOLD_KB", DEFAULT_COMPRESSION_THRESHOLD_KB)
+        compression_threshold_kb = config.get(
+            "COMPRESSION_THRESHOLD_KB", DEFAULT_COMPRESSION_THRESHOLD_KB
+        )
         compression_level = config.get("COMPRESSION_LEVEL", 3)
 
         _backend = RedisStateBackend(

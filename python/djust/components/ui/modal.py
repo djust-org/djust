@@ -103,7 +103,7 @@ class ModalComponent(LiveComponent):
         size_map = {"sm": "modal-sm", "md": "", "lg": "modal-lg", "xl": "modal-xl"}
         size_class = size_map.get(self.size, "")
 
-        html = f'''
+        html = f"""
         <div class="modal fade show" id="{self.component_id}" style="display: block;" tabindex="-1">
             <div class="modal-dialog {size_class}">
                 <div class="modal-content">
@@ -121,7 +121,7 @@ class ModalComponent(LiveComponent):
             </div>
         </div>
         <div class="modal-backdrop fade show"></div>
-        '''
+        """
         return html
 
     def _render_tailwind(self) -> str:
@@ -134,7 +134,7 @@ class ModalComponent(LiveComponent):
         }
         size_class = size_map.get(self.size, "max-w-md")
 
-        html = f'''
+        html = f"""
         <div class="fixed inset-0 z-10 overflow-y-auto" id="{self.component_id}">
             <div class="flex min-h-screen items-end justify-center px-4 pt-4 pb-20 text-center sm:block sm:p-0">
                 <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" @click="dismiss" data-component-id="{self.component_id}"></div>
@@ -158,12 +158,12 @@ class ModalComponent(LiveComponent):
                 </div>
             </div>
         </div>
-        '''
+        """
         return html
 
     def _render_plain(self) -> str:
         """Render plain HTML modal"""
-        html = f'''
+        html = f"""
         <div class="modal" id="{self.component_id}" style="display: block;">
             <div class="modal-dialog">
                 <div class="modal-content">
@@ -181,5 +181,5 @@ class ModalComponent(LiveComponent):
             </div>
         </div>
         <div class="modal-backdrop"></div>
-        '''
+        """
         return html

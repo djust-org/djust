@@ -25,99 +25,101 @@ import re
 from typing import Any, Set, Optional
 
 # Attributes that should never be settable from untrusted input
-DANGEROUS_ATTRIBUTES: Set[str] = frozenset({
-    # Python special attributes
-    "__class__",
-    "__bases__",
-    "__mro__",
-    "__subclasses__",
-    "__init__",
-    "__new__",
-    "__del__",
-    "__dict__",
-    "__slots__",
-    "__module__",
-    "__name__",
-    "__qualname__",
-    "__doc__",
-    "__annotations__",
-    "__wrapped__",
-    "__getattr__",
-    "__setattr__",
-    "__delattr__",
-    "__getattribute__",
-    "__reduce__",
-    "__reduce_ex__",
-    "__getstate__",
-    "__setstate__",
-    "__getnewargs__",
-    "__getnewargs_ex__",
-    # Prototype pollution vectors (from JavaScript, but block anyway)
-    "__proto__",
-    "prototype",
-    "constructor",
-    # Code execution vectors
-    "__call__",
-    "__code__",
-    "__globals__",
-    "__builtins__",
-    "__import__",
-    "__loader__",
-    "__spec__",
-    # Descriptor protocol
-    "__get__",
-    "__set__",
-    "__delete__",
-    "__set_name__",
-    # Context managers
-    "__enter__",
-    "__exit__",
-    "__aenter__",
-    "__aexit__",
-    # Iterator protocol
-    "__iter__",
-    "__next__",
-    "__aiter__",
-    "__anext__",
-    # Comparison and hashing
-    "__eq__",
-    "__ne__",
-    "__lt__",
-    "__le__",
-    "__gt__",
-    "__ge__",
-    "__hash__",
-    "__bool__",
-    # Numeric operations
-    "__add__",
-    "__sub__",
-    "__mul__",
-    "__truediv__",
-    "__floordiv__",
-    "__mod__",
-    "__pow__",
-    "__and__",
-    "__or__",
-    "__xor__",
-    "__neg__",
-    "__pos__",
-    "__abs__",
-    "__invert__",
-    # Container operations
-    "__len__",
-    "__getitem__",
-    "__setitem__",
-    "__delitem__",
-    "__contains__",
-    # String representation
-    "__repr__",
-    "__str__",
-    "__format__",
-    "__bytes__",
-    # Pickle support
-    "__copy__",
-    "__deepcopy__",
-})
+DANGEROUS_ATTRIBUTES: Set[str] = frozenset(
+    {
+        # Python special attributes
+        "__class__",
+        "__bases__",
+        "__mro__",
+        "__subclasses__",
+        "__init__",
+        "__new__",
+        "__del__",
+        "__dict__",
+        "__slots__",
+        "__module__",
+        "__name__",
+        "__qualname__",
+        "__doc__",
+        "__annotations__",
+        "__wrapped__",
+        "__getattr__",
+        "__setattr__",
+        "__delattr__",
+        "__getattribute__",
+        "__reduce__",
+        "__reduce_ex__",
+        "__getstate__",
+        "__setstate__",
+        "__getnewargs__",
+        "__getnewargs_ex__",
+        # Prototype pollution vectors (from JavaScript, but block anyway)
+        "__proto__",
+        "prototype",
+        "constructor",
+        # Code execution vectors
+        "__call__",
+        "__code__",
+        "__globals__",
+        "__builtins__",
+        "__import__",
+        "__loader__",
+        "__spec__",
+        # Descriptor protocol
+        "__get__",
+        "__set__",
+        "__delete__",
+        "__set_name__",
+        # Context managers
+        "__enter__",
+        "__exit__",
+        "__aenter__",
+        "__aexit__",
+        # Iterator protocol
+        "__iter__",
+        "__next__",
+        "__aiter__",
+        "__anext__",
+        # Comparison and hashing
+        "__eq__",
+        "__ne__",
+        "__lt__",
+        "__le__",
+        "__gt__",
+        "__ge__",
+        "__hash__",
+        "__bool__",
+        # Numeric operations
+        "__add__",
+        "__sub__",
+        "__mul__",
+        "__truediv__",
+        "__floordiv__",
+        "__mod__",
+        "__pow__",
+        "__and__",
+        "__or__",
+        "__xor__",
+        "__neg__",
+        "__pos__",
+        "__abs__",
+        "__invert__",
+        # Container operations
+        "__len__",
+        "__getitem__",
+        "__setitem__",
+        "__delitem__",
+        "__contains__",
+        # String representation
+        "__repr__",
+        "__str__",
+        "__format__",
+        "__bytes__",
+        # Pickle support
+        "__copy__",
+        "__deepcopy__",
+    }
+)
 
 # Regex for valid attribute names (alphanumeric + underscore, not starting with digit)
 SAFE_ATTRIBUTE_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -125,6 +127,7 @@ SAFE_ATTRIBUTE_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 class AttributeSecurityError(Exception):
     """Raised when an unsafe attribute name is detected."""
+
     pass
 
 

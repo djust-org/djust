@@ -322,21 +322,23 @@ def _get_model_hash(model_class: type) -> str:
     """
     # Build a string representation of the model's field structure
     field_info = []
-    for field in sorted(model_class._meta.get_fields(), key=lambda f: f.name if hasattr(f, 'name') else ''):
-        if hasattr(field, 'name'):
+    for field in sorted(
+        model_class._meta.get_fields(), key=lambda f: f.name if hasattr(f, "name") else ""
+    ):
+        if hasattr(field, "name"):
             field_type = type(field).__name__
             # Include related model name for FK/O2O fields
-            related = ''
-            if hasattr(field, 'related_model') and field.related_model:
-                related = f':{field.related_model.__name__}'
+            related = ""
+            if hasattr(field, "related_model") and field.related_model:
+                related = f":{field.related_model.__name__}"
             field_info.append(f"{field.name}:{field_type}{related}")
 
     # Include serializable methods (get_*, is_*, has_*, can_*)
     # These are included in JIT serialization, so changes should invalidate cache
-    method_prefixes = ('get_', 'is_', 'has_', 'can_')
-    skip_prefixes = ('get_next_by_', 'get_previous_by_')
+    method_prefixes = ("get_", "is_", "has_", "can_")
+    skip_prefixes = ("get_next_by_", "get_previous_by_")
     for attr_name in sorted(dir(model_class)):
-        if attr_name.startswith('_'):
+        if attr_name.startswith("_"):
             continue
         if not any(attr_name.startswith(p) for p in method_prefixes):
             continue
@@ -344,7 +346,7 @@ def _get_model_hash(model_class: type) -> str:
             continue
         # Only include methods explicitly defined on the model (not inherited from Model)
         for cls in model_class.__mro__:
-            if cls.__name__ == 'Model':
+            if cls.__name__ == "Model":
                 break
             if attr_name in cls.__dict__:
                 attr = getattr(model_class, attr_name, None)
@@ -381,6 +383,7 @@ def _setup_autoreload_cache_clear():
     """Register a callback to clear JIT cache when Python files change."""
     try:
         from django.conf import settings
+
         if not settings.DEBUG:
             return
 
@@ -388,10 +391,12 @@ def _setup_autoreload_cache_clear():
 
         def clear_cache_on_file_change(sender, file_path, **kwargs):
             # Only clear cache when Python files change (models, views, etc.)
-            if file_path.suffix == '.py':
+            if file_path.suffix == ".py":
                 count = clear_jit_cache()
                 if count > 0:
-                    logger.debug(f"[JIT] Cache cleared ({count} entries) due to file change: {file_path.name}")
+                    logger.debug(
+                        f"[JIT] Cache cleared ({count} entries) due to file change: {file_path.name}"
+                    )
 
         file_changed.connect(clear_cache_on_file_change, weak=False)
         logger.debug("[JIT] Registered file_changed cache clear hook")
@@ -1302,15 +1307,15 @@ class LiveView(View):
         from django.conf import settings
 
         # Use id(settings._wrapped) as cache key - changes when settings are overridden
-        cache_key = id(getattr(settings, '_wrapped', settings))
+        cache_key = id(getattr(settings, "_wrapped", settings))
 
         if cache_key in _context_processors_cache:
             return _context_processors_cache[cache_key]
 
         # Find DjustTemplateBackend in TEMPLATES setting
-        for template_config in getattr(settings, 'TEMPLATES', []):
-            if template_config.get('BACKEND') == 'djust.template_backend.DjustTemplateBackend':
-                processors = template_config.get('OPTIONS', {}).get('context_processors', [])
+        for template_config in getattr(settings, "TEMPLATES", []):
+            if template_config.get("BACKEND") == "djust.template_backend.DjustTemplateBackend":
+                processors = template_config.get("OPTIONS", {}).get("context_processors", [])
                 _context_processors_cache[cache_key] = processors
                 return processors
 

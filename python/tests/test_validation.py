@@ -630,9 +630,7 @@ class TestCoercionIntegration:
         def handler(self, count: int):
             pass
 
-        result = validate_handler_params(
-            handler, {"count": "42"}, "test_event", coerce=False
-        )
+        result = validate_handler_params(handler, {"count": "42"}, "test_event", coerce=False)
         assert result["valid"] is False  # String "42" doesn't match int
 
     def test_real_world_toggle_sender_scenario(self):
@@ -646,9 +644,7 @@ class TestCoercionIntegration:
         view = InboxView()
 
         # This is exactly what the template sends: string from data-sender-id
-        result = validate_handler_params(
-            view.toggle_sender, {"sender_id": "123"}, "toggle_sender"
-        )
+        result = validate_handler_params(view.toggle_sender, {"sender_id": "123"}, "toggle_sender")
 
         assert result["valid"] is True
         assert result["coerced_params"]["sender_id"] == 123

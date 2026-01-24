@@ -38,7 +38,7 @@ class TestClearTemplateCaches:
         """Test clearing Django template engine caches."""
         from djust.websocket import LiveViewConsumer
 
-        with patch('django.template.engines') as mock_engines:
+        with patch("django.template.engines") as mock_engines:
             # Mock Django template engine
             mock_loader = Mock()
             mock_loader.reset = Mock()
@@ -61,7 +61,7 @@ class TestClearTemplateCaches:
         """Test clearing caches when no loaders have reset()."""
         from djust.websocket import LiveViewConsumer
 
-        with patch('django.template.engines') as mock_engines:
+        with patch("django.template.engines") as mock_engines:
             # Mock engine without template_loaders
             mock_engine = Mock()
             mock_engine.name = "django"
@@ -79,7 +79,7 @@ class TestClearTemplateCaches:
         """Test that cache clearing handles exceptions gracefully."""
         from djust.websocket import LiveViewConsumer
 
-        with patch('django.template.engines') as mock_engines:
+        with patch("django.template.engines") as mock_engines:
             # Mock loader that raises exception
             mock_loader = Mock()
             mock_loader.reset = Mock(side_effect=Exception("Test error"))
@@ -101,7 +101,7 @@ class TestClearTemplateCaches:
         """Test clearing caches across multiple template engines."""
         from djust.websocket import LiveViewConsumer
 
-        with patch('django.template.engines') as mock_engines:
+        with patch("django.template.engines") as mock_engines:
             # Mock multiple engines with loaders
             loaders = []
             engines = []
@@ -137,16 +137,17 @@ class TestHotReloadMessage:
         mock_consumer.view_instance = mock_view_instance
 
         # Mock template and patches
-        patches = [
-            {"op": "replace", "path": [0, 0], "value": "Updated text"}
-        ]
+        patches = [{"op": "replace", "path": [0, 0], "value": "Updated text"}]
         patches_json = json.dumps(patches)
         mock_view_instance.render_with_diff = Mock(
             return_value=("<html>new</html>", patches_json, 2)
         )
 
-        with patch.object(mock_consumer, '_clear_template_caches', return_value=1):
-            with patch('channels.db.database_sync_to_async', side_effect=lambda f: AsyncMock(return_value=f())):
+        with patch.object(mock_consumer, "_clear_template_caches", return_value=1):
+            with patch(
+                "channels.db.database_sync_to_async",
+                side_effect=lambda f: AsyncMock(return_value=f()),
+            ):
                 # Call hotreload_message
                 await mock_consumer.hotreload_message({"file": "test.html"})
 
@@ -168,8 +169,11 @@ class TestHotReloadMessage:
         # Mock template not found
         mock_view_instance.get_template = Mock(side_effect=TemplateDoesNotExist("test.html"))
 
-        with patch.object(mock_consumer, '_clear_template_caches', return_value=1):
-            with patch('channels.db.database_sync_to_async', side_effect=lambda f: AsyncMock(return_value=f())):
+        with patch.object(mock_consumer, "_clear_template_caches", return_value=1):
+            with patch(
+                "channels.db.database_sync_to_async",
+                side_effect=lambda f: AsyncMock(return_value=f()),
+            ):
                 # Call hotreload_message
                 await mock_consumer.hotreload_message({"file": "test.html"})
 
@@ -190,8 +194,11 @@ class TestHotReloadMessage:
             return_value=("<html>new</html>", "invalid json", 2)
         )
 
-        with patch.object(mock_consumer, '_clear_template_caches', return_value=1):
-            with patch('channels.db.database_sync_to_async', side_effect=lambda f: AsyncMock(return_value=f())):
+        with patch.object(mock_consumer, "_clear_template_caches", return_value=1):
+            with patch(
+                "channels.db.database_sync_to_async",
+                side_effect=lambda f: AsyncMock(return_value=f()),
+            ):
                 # Call hotreload_message
                 await mock_consumer.hotreload_message({"file": "test.html"})
 
@@ -208,12 +215,13 @@ class TestHotReloadMessage:
         mock_consumer.view_instance = mock_view_instance
 
         # Mock empty patches
-        mock_view_instance.render_with_diff = Mock(
-            return_value=("<html>same</html>", None, 1)
-        )
+        mock_view_instance.render_with_diff = Mock(return_value=("<html>same</html>", None, 1))
 
-        with patch.object(mock_consumer, '_clear_template_caches', return_value=1):
-            with patch('channels.db.database_sync_to_async', side_effect=lambda f: AsyncMock(return_value=f())):
+        with patch.object(mock_consumer, "_clear_template_caches", return_value=1):
+            with patch(
+                "channels.db.database_sync_to_async",
+                side_effect=lambda f: AsyncMock(return_value=f()),
+            ):
                 # Call hotreload_message
                 await mock_consumer.hotreload_message({"file": "test.html"})
 
@@ -230,12 +238,13 @@ class TestHotReloadMessage:
         mock_consumer.view_instance = mock_view_instance
 
         # Mock empty patches array (gets parsed but still sent as patch)
-        mock_view_instance.render_with_diff = Mock(
-            return_value=("<html>same</html>", "[]", 1)
-        )
+        mock_view_instance.render_with_diff = Mock(return_value=("<html>same</html>", "[]", 1))
 
-        with patch.object(mock_consumer, '_clear_template_caches', return_value=1):
-            with patch('channels.db.database_sync_to_async', side_effect=lambda f: AsyncMock(return_value=f())):
+        with patch.object(mock_consumer, "_clear_template_caches", return_value=1):
+            with patch(
+                "channels.db.database_sync_to_async",
+                side_effect=lambda f: AsyncMock(return_value=f()),
+            ):
                 # Call hotreload_message
                 await mock_consumer.hotreload_message({"file": "test.html"})
 
@@ -253,12 +262,13 @@ class TestHotReloadMessage:
         mock_consumer.view_instance = mock_view_instance
 
         # Mock general exception during render
-        mock_view_instance.render_with_diff = Mock(
-            side_effect=Exception("Unexpected error")
-        )
+        mock_view_instance.render_with_diff = Mock(side_effect=Exception("Unexpected error"))
 
-        with patch.object(mock_consumer, '_clear_template_caches', return_value=1):
-            with patch('channels.db.database_sync_to_async', side_effect=lambda f: AsyncMock(return_value=f())):
+        with patch.object(mock_consumer, "_clear_template_caches", return_value=1):
+            with patch(
+                "channels.db.database_sync_to_async",
+                side_effect=lambda f: AsyncMock(return_value=f()),
+            ):
                 # Call hotreload_message
                 await mock_consumer.hotreload_message({"file": "test.html"})
 
@@ -294,9 +304,12 @@ class TestHotReloadMessage:
             return_value=("<html>new</html>", json.dumps(patches), 2)
         )
 
-        with patch.object(mock_consumer, '_clear_template_caches', return_value=1):
-            with patch('channels.db.database_sync_to_async', side_effect=lambda f: AsyncMock(return_value=f())):
-                with patch('logging.getLogger') as mock_logger:
+        with patch.object(mock_consumer, "_clear_template_caches", return_value=1):
+            with patch(
+                "channels.db.database_sync_to_async",
+                side_effect=lambda f: AsyncMock(return_value=f()),
+            ):
+                with patch("logging.getLogger") as mock_logger:
                     mock_log = Mock()
                     mock_logger.return_value = mock_log
 
@@ -320,14 +333,17 @@ class TestHotReloadMessage:
             return_value=("<html>new</html>", json.dumps(patches), 2)
         )
 
-        with patch.object(mock_consumer, '_clear_template_caches', return_value=1):
-            with patch('channels.db.database_sync_to_async', side_effect=lambda f: AsyncMock(return_value=f())):
-                with patch('time.time') as mock_time:
+        with patch.object(mock_consumer, "_clear_template_caches", return_value=1):
+            with patch(
+                "channels.db.database_sync_to_async",
+                side_effect=lambda f: AsyncMock(return_value=f()),
+            ):
+                with patch("time.time") as mock_time:
                     # Simulate >100ms render time
                     # Calls: start_time, render_start, render_end, total_end
                     mock_time.side_effect = [0.0, 0.0, 0.15, 0.15]
 
-                    with patch('logging.getLogger') as mock_logger:
+                    with patch("logging.getLogger") as mock_logger:
                         mock_log = Mock()
                         mock_logger.return_value = mock_log
 
@@ -354,18 +370,21 @@ class TestHotReloadIntegration:
 
         patches = [
             {"op": "replace", "path": [0, 1, 0], "value": "Updated heading"},
-            {"op": "replace", "path": [0, 2, 1], "value": "New paragraph"}
+            {"op": "replace", "path": [0, 2, 1], "value": "New paragraph"},
         ]
         mock_view_instance.render_with_diff = Mock(
             return_value=(
                 "<html><body><h1>Updated heading</h1><p>New paragraph</p></body></html>",
                 json.dumps(patches),
-                3
+                3,
             )
         )
 
-        with patch.object(mock_consumer, '_clear_template_caches', return_value=2):
-            with patch('channels.db.database_sync_to_async', side_effect=lambda f: AsyncMock(return_value=f())):
+        with patch.object(mock_consumer, "_clear_template_caches", return_value=2):
+            with patch(
+                "channels.db.database_sync_to_async",
+                side_effect=lambda f: AsyncMock(return_value=f()),
+            ):
                 # Simulate file change event
                 event = {"file": "templates/index.html"}
 
@@ -391,7 +410,9 @@ class TestHotReloadIntegration:
         assert call_args["file"] == "templates/index.html"
 
     @pytest.mark.asyncio
-    async def test_hotreload_with_cached_template_attribute(self, mock_consumer, mock_view_instance):
+    async def test_hotreload_with_cached_template_attribute(
+        self, mock_consumer, mock_view_instance
+    ):
         """Test that cached _template attribute is cleared."""
         mock_consumer.view_instance = mock_view_instance
 
@@ -403,13 +424,16 @@ class TestHotReloadIntegration:
             return_value=("<html>new</html>", json.dumps(patches), 2)
         )
 
-        with patch.object(mock_consumer, '_clear_template_caches', return_value=1):
-            with patch('channels.db.database_sync_to_async', side_effect=lambda f: AsyncMock(return_value=f())):
+        with patch.object(mock_consumer, "_clear_template_caches", return_value=1):
+            with patch(
+                "channels.db.database_sync_to_async",
+                side_effect=lambda f: AsyncMock(return_value=f()),
+            ):
                 # Call hotreload_message
                 await mock_consumer.hotreload_message({"file": "test.html"})
 
         # Verify _template was cleared
-        assert not hasattr(mock_view_instance, '_template')
+        assert not hasattr(mock_view_instance, "_template")
 
         # Verify patches sent
         mock_consumer.send_json.assert_called_once()
@@ -430,8 +454,11 @@ class TestHotReloadEdgeCases:
             return_value=("<html>new</html>", json.dumps(patches), 2)
         )
 
-        with patch.object(mock_consumer, '_clear_template_caches', return_value=1):
-            with patch('channels.db.database_sync_to_async', side_effect=lambda f: AsyncMock(return_value=f())):
+        with patch.object(mock_consumer, "_clear_template_caches", return_value=1):
+            with patch(
+                "channels.db.database_sync_to_async",
+                side_effect=lambda f: AsyncMock(return_value=f()),
+            ):
                 # Call with empty event
                 await mock_consumer.hotreload_message({})
 
@@ -451,8 +478,11 @@ class TestHotReloadEdgeCases:
             return_value=("<html>new</html>", patches, 2)  # Array, not JSON
         )
 
-        with patch.object(mock_consumer, '_clear_template_caches', return_value=1):
-            with patch('channels.db.database_sync_to_async', side_effect=lambda f: AsyncMock(return_value=f())):
+        with patch.object(mock_consumer, "_clear_template_caches", return_value=1):
+            with patch(
+                "channels.db.database_sync_to_async",
+                side_effect=lambda f: AsyncMock(return_value=f()),
+            ):
                 # Call hotreload_message
                 await mock_consumer.hotreload_message({"file": "test.html"})
 
@@ -472,8 +502,11 @@ class TestHotReloadEdgeCases:
             return_value=("<html>new</html>", json.dumps(patches), 2)
         )
 
-        with patch.object(mock_consumer, '_clear_template_caches', return_value=1):
-            with patch('channels.db.database_sync_to_async', side_effect=lambda f: AsyncMock(return_value=f())):
+        with patch.object(mock_consumer, "_clear_template_caches", return_value=1):
+            with patch(
+                "channels.db.database_sync_to_async",
+                side_effect=lambda f: AsyncMock(return_value=f()),
+            ):
                 # Call with unicode file path
                 await mock_consumer.hotreload_message({"file": "templates/编辑.html"})
 

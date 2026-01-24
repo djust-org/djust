@@ -44,10 +44,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ProfileMetric:
     """A single profiling metric with timing statistics."""
+
     name: str
     count: int = 0
     total_ms: float = 0.0
-    min_ms: float = float('inf')
+    min_ms: float = float("inf")
     max_ms: float = 0.0
     last_ms: float = 0.0
     samples: List[float] = field(default_factory=list)
@@ -124,7 +125,7 @@ class ProfileMetric:
         """Reset all metrics."""
         self.count = 0
         self.total_ms = 0.0
-        self.min_ms = float('inf')
+        self.min_ms = float("inf")
         self.max_ms = 0.0
         self.last_ms = 0.0
         self.samples.clear()
@@ -237,7 +238,7 @@ class DjustProfiler:
         if not self._enabled:
             return None
 
-        timings = getattr(self._request_timings, 'timings', None)
+        timings = getattr(self._request_timings, "timings", None)
         if not timings:
             return None
 
@@ -319,31 +320,17 @@ class DjustProfiler:
         total_time_ms = sum(m.total_ms for m in self._metrics.values())
 
         # Find slowest operations
-        slowest = sorted(
-            self._metrics.values(),
-            key=lambda m: m.avg_ms,
-            reverse=True
-        )[:5]
+        slowest = sorted(self._metrics.values(), key=lambda m: m.avg_ms, reverse=True)[:5]
 
         # Find most frequent operations
-        most_frequent = sorted(
-            self._metrics.values(),
-            key=lambda m: m.count,
-            reverse=True
-        )[:5]
+        most_frequent = sorted(self._metrics.values(), key=lambda m: m.count, reverse=True)[:5]
 
         return {
             "total_operations": total_calls,
             "total_time_ms": round(total_time_ms, 3),
             "unique_operations": len(self._metrics),
-            "slowest_operations": [
-                {"name": m.name, "avg_ms": round(m.avg_ms, 3)}
-                for m in slowest
-            ],
-            "most_frequent": [
-                {"name": m.name, "count": m.count}
-                for m in most_frequent
-            ],
+            "slowest_operations": [{"name": m.name, "avg_ms": round(m.avg_ms, 3)} for m in slowest],
+            "most_frequent": [{"name": m.name, "count": m.count} for m in most_frequent],
         }
 
     def get_metric(self, operation: str) -> Optional[Dict[str, Any]]:
@@ -386,6 +373,7 @@ def profile(operation: str):
             def handle_click(self, event):
                 ...
     """
+
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -400,6 +388,7 @@ def profile(operation: str):
                 profiler.record(operation, duration_ms)
 
         return wrapper
+
     return decorator
 
 
@@ -429,7 +418,7 @@ class ProfilerMiddleware:
         request_timing = profiler.end_request()
         if request_timing:
             # Add timing info to response header (useful for debugging)
-            response['X-Djust-Profiler-Time'] = str(request_timing.get('total_ms', 0))
+            response["X-Djust-Profiler-Time"] = str(request_timing.get("total_ms", 0))
 
         return response
 
@@ -439,9 +428,11 @@ def auto_configure():
     """Auto-configure profiler based on Django settings."""
     try:
         from django.conf import settings
-        if getattr(settings, 'DEBUG', False):
+
+        if getattr(settings, "DEBUG", False):
             from djust.config import config
-            if config.get('profiler_enabled', False):
+
+            if config.get("profiler_enabled", False):
                 profiler.enable()
                 logger.info("[Profiler] Auto-enabled in DEBUG mode")
     except Exception:

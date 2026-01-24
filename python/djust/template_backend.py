@@ -185,8 +185,8 @@ class DjustTemplate:
     """
 
     # Pre-compiled regex patterns for template inheritance processing
-    _BLOCK_START_RE = re.compile(r'{%\s*block\s+(\w+)\s*%}')
-    _BLOCK_END_RE = re.compile(r'{%\s*endblock\s*(?:\w+\s*)?%}')
+    _BLOCK_START_RE = re.compile(r"{%\s*block\s+(\w+)\s*%}")
+    _BLOCK_END_RE = re.compile(r"{%\s*endblock\s*(?:\w+\s*)?%}")
     _EXTENDS_RE = re.compile(r'{%\s*extends\s+["\']([^"\']+)["\']\s*%}')
 
     def __init__(
@@ -393,7 +393,7 @@ class DjustTemplate:
                 break
 
             # Append content before block
-            result.append(template_source[pos:start_match.start()])
+            result.append(template_source[pos : start_match.start()])
 
             block_name = start_match.group(1)
             content_start = start_match.end()
@@ -429,7 +429,7 @@ class DjustTemplate:
 
             if block_end_pos is None:
                 # Malformed template, append as-is
-                result.append(template_source[start_match.start():])
+                result.append(template_source[start_match.start() :])
                 break
 
             # Determine block content
@@ -475,7 +475,7 @@ class DjustTemplate:
                 break
 
             # Append content before block start tag
-            result.append(template_source[pos:start_match.start()])
+            result.append(template_source[pos : start_match.start()])
 
             content_start = start_match.end()
 
@@ -512,7 +512,7 @@ class DjustTemplate:
                 pos = block_end_pos
             else:
                 # Malformed, keep as-is
-                result.append(template_source[start_match.start():])
+                result.append(template_source[start_match.start() :])
                 break
 
         return "".join(result)

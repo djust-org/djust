@@ -827,7 +827,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 loader.reset()
                                 caches_cleared += 1
                 except Exception as e:
-                    hotreload_logger.warning(f"Could not clear template cache for {engine.name}: {e}")
+                    hotreload_logger.warning(
+                        f"Could not clear template cache for {engine.name}: {e}"
+                    )
 
         hotreload_logger.debug(f"Cleared {caches_cleared} template caches")
         return caches_cleared
@@ -900,7 +902,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 # Warn if patch generation is slow
                 if render_time > 100:
-                    hotreload_logger.warning(f"Slow patch generation: {render_time:.2f}ms for {file_path}")
+                    hotreload_logger.warning(
+                        f"Slow patch generation: {render_time:.2f}ms for {file_path}"
+                    )
 
                 # Handle case where no patches are generated
                 if not patches:

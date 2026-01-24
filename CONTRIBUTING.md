@@ -27,16 +27,14 @@ Thank you for your interest in contributing! We welcome contributions from every
 # Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Install uv (fast Python package manager)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install dependencies
-pip install -r requirements-dev.txt
-pip install maturin
+# Install dependencies and build Rust extension
+uv sync --extra dev
 
-# Build the Rust extension
-maturin develop
+# Install pre-commit hooks (required for contributions)
+uvx pre-commit install
 ```
 
 ## Code Style

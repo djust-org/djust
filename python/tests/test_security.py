@@ -319,14 +319,10 @@ class TestErrorHandling:
 
         exc = ValueError("test")
 
-        mount_response = create_safe_error_response(
-            exc, error_type="mount", debug_mode=False
-        )
+        mount_response = create_safe_error_response(exc, error_type="mount", debug_mode=False)
         assert "refresh" in mount_response["error"].lower()
 
-        event_response = create_safe_error_response(
-            exc, error_type="event", debug_mode=False
-        )
+        event_response = create_safe_error_response(exc, error_type="event", debug_mode=False)
         assert "error occurred" in event_response["error"].lower()
 
     def test_safe_error_message_debug_mode(self):

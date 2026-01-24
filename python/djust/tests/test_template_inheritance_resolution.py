@@ -266,6 +266,7 @@ Default
             template = self.create_template(child_source, [tmpdir])
 
             from djust.template_backend import TemplateDoesNotExist
+
             with pytest.raises(TemplateDoesNotExist):
                 template._resolve_template_inheritance()
 
@@ -311,8 +312,8 @@ Default
             # Original defaults 'B' and 'C' (standalone) should not be present
             # Check there's no standalone 'B' (only B-MIDDLE should exist)
             # Match standalone B or C (word boundary)
-            assert not re.search(r'\bB\b(?!-)', resolved), f"Found standalone 'B' in: {resolved}"
-            assert not re.search(r'\bC\b(?!-)', resolved), f"Found standalone 'C' in: {resolved}"
+            assert not re.search(r"\bB\b(?!-)", resolved), f"Found standalone 'B' in: {resolved}"
+            assert not re.search(r"\bC\b(?!-)", resolved), f"Found standalone 'C' in: {resolved}"
 
 
 class TestDjustOrgDocsInheritance:

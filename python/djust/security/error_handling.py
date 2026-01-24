@@ -70,10 +70,7 @@ def safe_error_message(
     if debug_mode:
         return f"{type(exception).__name__}: {str(exception)}"
     else:
-        return GENERIC_ERROR_MESSAGES.get(
-            error_type,
-            GENERIC_ERROR_MESSAGES["default"]
-        )
+        return GENERIC_ERROR_MESSAGES.get(error_type, GENERIC_ERROR_MESSAGES["default"])
 
 
 def create_safe_error_response(
@@ -125,6 +122,7 @@ def create_safe_error_response(
     if debug_mode is None:
         try:
             from django.conf import settings
+
             debug_mode = getattr(settings, "DEBUG", False)
         except Exception:
             # Django not configured, default to safe mode
@@ -166,8 +164,7 @@ def create_safe_error_response(
     else:
         # Production mode: generic message only
         response["error"] = GENERIC_ERROR_MESSAGES.get(
-            error_type,
-            GENERIC_ERROR_MESSAGES["default"]
+            error_type, GENERIC_ERROR_MESSAGES["default"]
         )
 
     return response
@@ -223,6 +220,7 @@ def handle_exception(
     # Determine DEBUG mode once
     try:
         from django.conf import settings
+
         debug_mode = getattr(settings, "DEBUG", False)
     except Exception:
         debug_mode = False
@@ -247,6 +245,7 @@ def handle_exception(
         # Full stack trace in development
         if extra:
             from .log_sanitizer import sanitize_dict_for_log
+
             safe_extra = sanitize_dict_for_log(extra)
             logger.error(
                 f"{msg}{context}: {type(exception).__name__}: {exception}",
