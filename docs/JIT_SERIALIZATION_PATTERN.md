@@ -368,6 +368,171 @@ You should see logs like:
 [JIT] Auto-applied select_related: ['property', 'tenant__user']
 ```
 
+## JIT Serialization Behavior
+
+This section documents exactly what gets serialized and common gotchas.
+
+### What Gets Serialized
+
+When a Django model is passed to a template, djust automatically serializes:
+
+#### 1. All Model Fields
+All concrete fields on the model are serialized:
+- CharField, TextField, IntegerField, etc. → their values
+- DateTimeField, DateField, TimeField → ISO 8601 strings (see [Datetime Gotcha](#datetime-fields-become-iso-strings))
+- ForeignKey → `{id: ..., __str__: ...}` (if not prefetched)
+- ForeignKey (prefetched) → full nested serialization
+
+#### 2. Methods Starting with `get_`
+Methods following Django's convention are auto-called:
+
+```python
+class MyModel(models.Model):
+    status = models.CharField(choices=STATUS_CHOICES)
+
+    def get_status_display(self):   # ✅ Auto-called (Django convention)
+        return dict(STATUS_CHOICES).get(self.status)
+
+    def get_full_name(self):        # ✅ Auto-called (returns string)
+        return f"{self.first_name} {self.last_name}"
+
+    def get_related_items(self):    # ❌ NOT included (returns list)
+        return list(self.items.all())
+```
+
+**Rules for `get_*` methods:**
+- Must take no arguments (other than `self`)
+- Must return simple types: `str`, `int`, `float`, `bool`, or `None`
+- Complex return types (list, dict, queryset) are silently ignored
+
+#### 3. Skipped Methods (For Performance)
+These methods are intentionally skipped:
+- `get_next_by_*` / `get_previous_by_*` (Django auto-generated, trigger cursor queries)
+- `get_all_permissions` / `get_user_permissions` / `get_group_permissions` (auth methods)
+- `get_session_auth_hash` (auth method)
+- `get_deferred_fields` (Django internal)
+
+### Common Gotchas
+
+#### Datetime Fields Become ISO Strings
+
+**Problem:** Django template filters like `|date` don't work with ISO strings.
+
+```python
+# Model
+class Event(models.Model):
+    start_time = models.DateTimeField()
+```
+
+```html
+<!-- ❌ This WON'T work as expected -->
+{{ event.start_time|date:"M d, Y" }}
+<!-- Outputs: "2024-01-15T09:30:00" (the raw string) -->
+```
+
+**Solution:** Use a `get_*` method to format dates:
+
+```python
+class Event(models.Model):
+    start_time = models.DateTimeField()
+
+    def get_start_time_formatted(self):
+        """Return formatted date string for templates."""
+        if self.start_time:
+            return self.start_time.strftime("%b %d, %Y")
+        return ""
+```
+
+```html
+<!-- ✅ This works -->
+{{ event.get_start_time_formatted }}
+<!-- Outputs: "Jan 15, 2024" -->
+```
+
+#### Related Objects Without Prefetching
+
+**Problem:** Accessing unprefetched relations only returns `{id, __str__}`.
+
+```html
+<!-- ❌ Without prefetching -->
+{{ order.customer.email }}
+<!-- May return empty or error - customer is only {id, __str__} -->
+```
+
+**Solution:** JIT automatically adds `select_related` based on template analysis, or explicitly prefetch:
+
+```python
+def _refresh_orders(self):
+    self._orders = Order.objects.select_related('customer').all()
+```
+
+#### Complex Method Return Types Ignored
+
+**Problem:** Methods returning lists or dicts are silently skipped.
+
+```python
+class Product(models.Model):
+    def get_all_tags(self):
+        return list(self.tags.all())  # ❌ Returns list - will be ignored
+
+    def get_metadata(self):
+        return {"weight": 100, "color": "red"}  # ❌ Returns dict - will be ignored
+```
+
+**Solution:** Return simple types or serialize in template:
+
+```python
+class Product(models.Model):
+    def get_tags_display(self):
+        return ", ".join(tag.name for tag in self.tags.all())  # ✅ Returns string
+
+    def get_weight(self):
+        return 100  # ✅ Returns int
+```
+
+### Debugging Serialization Issues
+
+If data isn't appearing in your template, check:
+
+1. **Enable JIT debug mode:**
+   ```python
+   # settings.py
+   LIVEVIEW_CONFIG = {
+       'jit_debug': True,  # Shows detailed serialization info
+   }
+   ```
+
+2. **Check server logs for:**
+   ```
+   [JIT] Serialized 10 MyModel objects for 'items'
+   [JIT] Extracted paths: ['name', 'status', 'get_status_display']
+   ```
+
+3. **Verify your method:**
+   - Starts with `get_`
+   - Takes no arguments
+   - Returns str/int/float/bool/None
+
+4. **For datetime issues:**
+   - Create a `get_*_formatted()` method
+   - Or use JavaScript to format in the client
+
+### Cache Invalidation
+
+JIT serializers are cached for performance. The cache key includes:
+- Template hash (changes when template changes)
+- Variable name
+- Model structure hash (changes when model fields change)
+
+**In development**, the cache auto-clears when Django's autoreloader runs.
+
+**To manually clear the cache:**
+```python
+from djust import clear_jit_cache
+
+clear_jit_cache()  # Returns number of entries cleared
+```
+
 ## References
 
 - **Implementation Examples**:
