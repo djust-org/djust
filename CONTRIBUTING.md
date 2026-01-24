@@ -33,8 +33,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # Install dependencies and build Rust extension
 uv sync --extra dev
 
-# Install pre-commit hooks (required for contributions)
+# Install pre-commit and pre-push hooks (required for contributions)
 uvx pre-commit install
+uvx pre-commit install --hook-type pre-push
 ```
 
 ## Code Style
