@@ -28,7 +28,7 @@ import re
 from datetime import date, datetime, time
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from uuid import UUID
 
 from django.db import models
@@ -61,7 +61,9 @@ except ImportError:
     _jit_serializer_cache = {}  # Fallback empty cache when JIT not available
 
 
-def serialize_value(value: Any) -> Any:
+def serialize_value(
+    value: Any,
+) -> Union[str, int, float, bool, None, List[Any], Dict[str, Any]]:
     """
     Serialize a single value to a JSON-compatible type.
 
@@ -835,6 +837,10 @@ class DjustTemplate:
                 # Leave the original tag in place - it references variables
                 # that don't exist in the context yet (e.g., loop variables)
                 # The Rust engine will treat this as an unknown tag (empty output)
+                logger.debug(
+                    "URL tag with unresolved variables (likely loop variable): %s",
+                    match.group(0),
+                )
                 return match.group(0)
 
             # Resolve the URL

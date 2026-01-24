@@ -32,6 +32,14 @@ def user_profile_view(request, username):
     return None
 
 
+def post_comment_view(request, post_id, comment_id):
+    return None
+
+
+def search_view(request, category, query):
+    return None
+
+
 # URL patterns for testing
 urlpatterns = [
     path("", home_view, name="home"),
@@ -39,6 +47,8 @@ urlpatterns = [
     path("post/<slug:slug>/", post_detail_view, name="post_detail"),
     path("post/<int:pk>/", post_by_id_view, name="post_by_id"),
     path("user/<str:username>/", user_profile_view, name="user_profile"),
+    path("post/<int:post_id>/comment/<int:comment_id>/", post_comment_view, name="post_comment"),
+    path("search/<str:category>/<str:query>/", search_view, name="search"),
 ]
 
 # Namespaced URL patterns
@@ -458,6 +468,120 @@ class TestUrlTagWithQuoteVariations:
         result = template.render({}, request)
 
         assert result.strip() == "/", f"Expected / but got: {result}"
+
+
+class TestUrlTagEdgeCases:
+    """Edge case tests for {% url %} tag regex parsing."""
+
+    @override_settings(ROOT_URLCONF=__name__)
+    def test_url_with_multiple_kwargs(self):
+        """Test URL with multiple keyword arguments: {% url 'name' key1=val1 key2=val2 %}"""
+        from djust.template_backend import DjustTemplateBackend
+
+        backend = DjustTemplateBackend(
+            {
+                "NAME": "djust",
+                "DIRS": [],
+                "APP_DIRS": False,
+                "OPTIONS": {},
+            }
+        )
+
+        template = backend.from_string("{% url 'post_comment' post_id=42 comment_id=7 %}")
+        request = RequestFactory().get("/")
+        result = template.render({}, request)
+
+        assert (
+            result.strip() == "/post/42/comment/7/"
+        ), f"Expected /post/42/comment/7/ but got: {result}"
+
+    @override_settings(ROOT_URLCONF=__name__)
+    def test_url_with_multiple_positional_args(self):
+        """Test URL with multiple positional arguments."""
+        from djust.template_backend import DjustTemplateBackend
+
+        backend = DjustTemplateBackend(
+            {
+                "NAME": "djust",
+                "DIRS": [],
+                "APP_DIRS": False,
+                "OPTIONS": {},
+            }
+        )
+
+        # Using positional args for both post_id and comment_id
+        template = backend.from_string("{% url 'post_comment' 42 7 %}")
+        request = RequestFactory().get("/")
+        result = template.render({}, request)
+
+        assert (
+            result.strip() == "/post/42/comment/7/"
+        ), f"Expected /post/42/comment/7/ but got: {result}"
+
+    @override_settings(ROOT_URLCONF=__name__)
+    def test_url_with_string_containing_spaces_in_context(self):
+        """Test URL with context variable containing spaces."""
+        from djust.template_backend import DjustTemplateBackend
+
+        backend = DjustTemplateBackend(
+            {
+                "NAME": "djust",
+                "DIRS": [],
+                "APP_DIRS": False,
+                "OPTIONS": {},
+            }
+        )
+
+        template = backend.from_string("{% url 'search' category=cat query=q %}")
+        request = RequestFactory().get("/")
+        # Note: Django URL patterns with str type will accept spaces
+        result = template.render({"cat": "books", "q": "python"}, request)
+
+        assert (
+            "/search/books/python/" in result
+        ), f"Expected /search/books/python/ but got: {result}"
+
+    @override_settings(ROOT_URLCONF=__name__)
+    def test_url_with_quoted_string_literal(self):
+        """Test URL with quoted string literal containing special chars."""
+        from djust.template_backend import DjustTemplateBackend
+
+        backend = DjustTemplateBackend(
+            {
+                "NAME": "djust",
+                "DIRS": [],
+                "APP_DIRS": False,
+                "OPTIONS": {},
+            }
+        )
+
+        template = backend.from_string("{% url 'post_detail' 'my-awesome-post' %}")
+        request = RequestFactory().get("/")
+        result = template.render({}, request)
+
+        assert (
+            "/post/my-awesome-post/" in result
+        ), f"Expected /post/my-awesome-post/ but got: {result}"
+
+    @override_settings(ROOT_URLCONF=__name__)
+    def test_url_preserves_surrounding_whitespace(self):
+        """Test that URL resolution preserves surrounding template content."""
+        from djust.template_backend import DjustTemplateBackend
+
+        backend = DjustTemplateBackend(
+            {
+                "NAME": "djust",
+                "DIRS": [],
+                "APP_DIRS": False,
+                "OPTIONS": {},
+            }
+        )
+
+        template = backend.from_string("Link: {% url 'home' %} end")
+        request = RequestFactory().get("/")
+        result = template.render({}, request)
+
+        assert "Link: / end" in result, f"Expected 'Link: / end' but got: {result}"
 
 
 if __name__ == "__main__":
