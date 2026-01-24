@@ -108,71 +108,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
         # Handle Django model instances
         if isinstance(obj, models.Model):
-            result = {
-                "id": str(obj.pk) if obj.pk else None,
-                "__str__": str(obj),
-                "__model__": obj.__class__.__name__,
-            }
-
-            # Serialize all model fields (excluding relations to avoid circular refs)
-            for field in obj._meta.get_fields():
-                # Skip reverse relations and many-to-many
-                if field.is_relation and (field.one_to_many or field.many_to_many):
-                    continue
-
-                try:
-                    field_name = field.name
-                    value = getattr(obj, field_name, None)
-
-                    # Skip None values
-                    if value is None:
-                        result[field_name] = None
-                    elif isinstance(value, models.Model):
-                        # For ForeignKey/OneToOne, recursively serialize if under depth limit
-                        if DjangoJSONEncoder._depth < DjangoJSONEncoder._get_max_depth():
-                            # Recursively serialize the related object with full fields and methods
-                            result[field_name] = json.loads(
-                                json.dumps(value, cls=DjangoJSONEncoder)
-                            )
-                        else:
-                            # At max depth, just include id and __str__ to prevent infinite recursion
-                            result[field_name] = {
-                                "id": str(value.pk) if value.pk else None,
-                                "__str__": str(value),
-                            }
-                    else:
-                        result[field_name] = value
-                except (AttributeError, ValueError):
-                    pass
-
-            # Include custom methods that don't start with _ and are callable
-            # This allows model methods like get_status_display(), get_full_name(), etc.
-            # PERFORMANCE: Exclude auth-related methods that trigger database queries
-            excluded_methods = {
-                "get_all_permissions",
-                "get_user_permissions",
-                "get_group_permissions",
-                "get_session_auth_hash",
-            }
-            for attr_name in dir(obj):
-                if not attr_name.startswith("_") and attr_name not in result:
-                    attr = getattr(obj, attr_name, None)
-                    # Include callable methods with no required parameters
-                    if callable(attr) and attr_name.startswith("get_"):
-                        # Skip auth-related methods that cause N+1 queries
-                        if attr_name in excluded_methods:
-                            continue
-                        try:
-                            # Try calling with no args
-                            value = attr()
-                            # Only include simple return types
-                            if isinstance(value, (str, int, float, bool, type(None))):
-                                result[attr_name] = value
-                        except Exception:
-                            # Silently skip methods that fail (like get_next_by_*, DoesNotExist, etc.)
-                            pass
-
-            return result
+            return self._serialize_model_safely(obj)
 
         # Handle QuerySets
         if hasattr(obj, "model") and hasattr(obj, "__iter__"):
@@ -180,6 +116,150 @@ class DjangoJSONEncoder(json.JSONEncoder):
             return list(obj)
 
         return super().default(obj)
+
+    def _serialize_model_safely(self, obj):
+        """Cache-aware model serialization that prevents N+1 queries.
+
+        Only accesses related objects if they were prefetched via
+        select_related() or prefetch_related(). Otherwise, only includes
+        the FK ID without triggering a database query.
+        """
+        result = {
+            "id": str(obj.pk) if obj.pk else None,
+            "__str__": str(obj),
+            "__model__": obj.__class__.__name__,
+        }
+
+        for field in obj._meta.get_fields():
+            if not hasattr(field, "name"):
+                continue
+
+            field_name = field.name
+
+            # Skip all reverse relations (ManyToOneRel, OneToOneRel, ManyToManyRel)
+            # and many-to-many fields (forward or backward)
+            # concrete=False means it's a reverse relation, not a forward FK/O2O
+            if field.is_relation:
+                is_concrete = getattr(field, "concrete", True)
+                is_m2m = getattr(field, "many_to_many", False)
+                if not is_concrete or is_m2m:
+                    continue
+
+            # Handle ForeignKey/OneToOne (forward relations only now)
+            if field.is_relation and hasattr(field, "related_model"):
+                if self._is_relation_prefetched(obj, field_name):
+                    # Relation is cached, safe to access without N+1
+                    try:
+                        related = getattr(obj, field_name, None)
+                    except Exception:
+                        # Handle deferred fields or descriptor errors gracefully
+                        related = None
+
+                    if related and DjangoJSONEncoder._depth < self._get_max_depth():
+                        result[field_name] = self._serialize_model_safely(related)
+                    elif related:
+                        result[field_name] = {
+                            "id": str(related.pk) if related.pk else None,
+                            "__str__": str(related),
+                        }
+                    else:
+                        result[field_name] = None
+                else:
+                    # Include FK ID without fetching the related object (no N+1!)
+                    fk_id = getattr(obj, f"{field_name}_id", None)
+                    if fk_id is not None:
+                        result[f"{field_name}_id"] = fk_id
+            else:
+                # Regular field - safe to access
+                try:
+                    result[field_name] = getattr(obj, field_name, None)
+                except (AttributeError, ValueError):
+                    # Skip fields that can't be accessed (deferred, property errors, etc.)
+                    pass
+
+        # Only include explicitly defined get_* methods (skip auto-generated ones)
+        self._add_safe_model_methods(obj, result)
+        return result
+
+    def _is_relation_prefetched(self, obj, field_name):
+        """Check if a relation was loaded via select_related/prefetch_related.
+
+        This prevents N+1 queries by only accessing relations that are
+        already cached in memory.
+        """
+        # Check Django's fields_cache (populated by select_related)
+        state = getattr(obj, "_state", None)
+        if state:
+            fields_cache = getattr(state, "fields_cache", {})
+            if field_name in fields_cache:
+                return True
+
+        # Check prefetch cache (populated by prefetch_related)
+        prefetch_cache = getattr(obj, "_prefetched_objects_cache", {})
+        if field_name in prefetch_cache:
+            return True
+
+        return False
+
+    def _add_safe_model_methods(self, obj, result):
+        """Add only explicitly defined model methods, skip auto-generated ones.
+
+        Django auto-generates methods like get_next_by_created_at(),
+        get_previous_by_updated_at() which execute expensive cursor queries.
+        We only want explicitly defined methods like get_full_name().
+        """
+        # Skip Django's auto-generated methods that cause N+1 queries
+        SKIP_PREFIXES = ("get_next_by_", "get_previous_by_")
+
+        # Known problematic methods
+        SKIP_METHODS = {
+            "get_all_permissions",
+            "get_user_permissions",
+            "get_group_permissions",
+            "get_session_auth_hash",
+            "get_deferred_fields",
+        }
+
+        model_class = obj.__class__
+
+        for attr_name in dir(obj):
+            if attr_name.startswith("_") or attr_name in result:
+                continue
+            if not attr_name.startswith("get_"):
+                continue
+            if any(attr_name.startswith(p) for p in SKIP_PREFIXES):
+                continue
+            if attr_name in SKIP_METHODS:
+                continue
+
+            # Only include methods explicitly defined on the model class
+            if not self._is_method_explicit(model_class, attr_name):
+                continue
+
+            try:
+                attr = getattr(obj, attr_name)
+                if callable(attr):
+                    value = attr()
+                    if isinstance(value, (str, int, float, bool, type(None))):
+                        result[attr_name] = value
+            except Exception:
+                # Silently skip methods that fail - they may require arguments,
+                # access missing related objects, or have other runtime errors.
+                # This is expected behavior for introspection-based serialization.
+                pass
+
+    def _is_method_explicit(self, model_class, method_name):
+        """Check if method is explicitly defined, not auto-generated by Django.
+
+        Auto-generated methods like get_next_by_* are not in the class __dict__
+        of any user-defined model class, only in Django's base Model class.
+        """
+        for cls in model_class.__mro__:
+            if cls is models.Model:
+                break
+            if method_name in cls.__dict__:
+                return True
+        return False
 
 
 # Default TTL for sessions (1 hour)
@@ -853,12 +933,10 @@ class LiveView(View):
         - Subsequent calls: <1ms (cache hit)
         - Query optimization: 80%+ reduction in database queries
 
-        Known Limitations (Phase 4):
-        - Loop variables: Template variable extraction currently tracks loop variables
-          (e.g., "lease" in "{% for lease in leases %}") separately from the iterable.
-          This means paths accessed via loop variables won't be detected for the QuerySet.
-          Workaround: Access the variable directly (e.g., {{ leases.0.property.name }})
-          or this will be fixed in a future enhancement.
+        Loop Variable Support:
+        - Paths accessed via loop variables are automatically transferred to the iterable.
+          Example: {% for email in emails %}{{ email.sender.name }}{% endfor %}
+          will correctly add select_related('sender') to the emails QuerySet.
         """
         if not JIT_AVAILABLE or not extract_template_variables:
             # Fallback to default DjangoJSONEncoder
