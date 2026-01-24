@@ -22,7 +22,7 @@ pub mod tags;
 
 use inheritance::{build_inheritance_chain, TemplateLoader};
 use parser::Node;
-use renderer::render_nodes;
+use renderer::render_nodes_with_loader;
 
 // Re-export for JIT auto-serialization
 pub use parser::extract_template_variables;
@@ -56,7 +56,7 @@ impl Template {
         self.render_with_loader(context, &NoOpTemplateLoader)
     }
 
-    /// Render with a custom template loader for inheritance
+    /// Render with a custom template loader for inheritance and includes
     pub fn render_with_loader<L: TemplateLoader>(
         &self,
         context: &Context,
@@ -76,11 +76,11 @@ impl Template {
             let root_nodes = chain.get_root_nodes();
             let final_nodes = chain.apply_block_overrides(root_nodes);
 
-            // Render the merged template
-            render_nodes(&final_nodes, context)
+            // Render the merged template with loader for includes
+            render_nodes_with_loader(&final_nodes, context, Some(loader))
         } else {
-            // No inheritance, render normally
-            render_nodes(&self.nodes, context)
+            // No inheritance, render normally with loader for includes
+            render_nodes_with_loader(&self.nodes, context, Some(loader))
         }
     }
 }
@@ -353,5 +353,197 @@ mod tests {
         assert!(result.contains("<li>B</li>"));
         assert!(result.contains("<li>C</li>"));
         assert!(result.contains("</ul>"));
+    }
+
+    // Tests for {% include %} tag with variables (Issue #35)
+    #[test]
+    fn test_include_basic() {
+        let mut loader = TestTemplateLoader::new();
+
+        // Partial template to include
+        loader.add("_header.html", "<header>{{ title }}</header>");
+
+        // Main template
+        let main_source = "{% include \"_header.html\" %}<main>Content</main>";
+        let main_template = Template::new(main_source).unwrap();
+
+        let mut context = Context::new();
+        context.set("title".to_string(), Value::String("Welcome".to_string()));
+
+        let result = main_template.render_with_loader(&context, &loader).unwrap();
+
+        assert!(result.contains("<header>Welcome</header>"));
+        assert!(result.contains("<main>Content</main>"));
+    }
+
+    #[test]
+    fn test_include_with_vars() {
+        let mut loader = TestTemplateLoader::new();
+
+        // Post card partial that uses the `post` variable
+        loader.add(
+            "_post_card.html",
+            "<article><h3>{{ post.title }}</h3><p>{{ post.excerpt }}</p></article>",
+        );
+
+        // Main template that passes variables with the `with` keyword
+        let main_source =
+            "{% for item in posts %}{% include \"_post_card.html\" with post=item %}{% endfor %}";
+        let main_template = Template::new(main_source).unwrap();
+
+        // Create posts data
+        let mut post1 = std::collections::HashMap::new();
+        post1.insert("title".to_string(), Value::String("First Post".to_string()));
+        post1.insert(
+            "excerpt".to_string(),
+            Value::String("First excerpt".to_string()),
+        );
+
+        let mut post2 = std::collections::HashMap::new();
+        post2.insert(
+            "title".to_string(),
+            Value::String("Second Post".to_string()),
+        );
+        post2.insert(
+            "excerpt".to_string(),
+            Value::String("Second excerpt".to_string()),
+        );
+
+        let mut context = Context::new();
+        context.set(
+            "posts".to_string(),
+            Value::List(vec![Value::Object(post1), Value::Object(post2)]),
+        );
+
+        let result = main_template.render_with_loader(&context, &loader).unwrap();
+
+        // Verify the included template rendered correctly with passed variables
+        assert!(result.contains("<h3>First Post</h3>"));
+        assert!(result.contains("<p>First excerpt</p>"));
+        assert!(result.contains("<h3>Second Post</h3>"));
+        assert!(result.contains("<p>Second excerpt</p>"));
+    }
+
+    #[test]
+    fn test_include_with_multiple_vars() {
+        let mut loader = TestTemplateLoader::new();
+
+        // Partial that uses multiple passed variables
+        loader.add(
+            "_item.html",
+            "<div class=\"{{ class }}\"><span>{{ label }}</span>: {{ value }}</div>",
+        );
+
+        // Main template passing multiple variables
+        let main_source =
+            "{% include \"_item.html\" with label=item_label value=item_value class=item_class %}";
+        let main_template = Template::new(main_source).unwrap();
+
+        let mut context = Context::new();
+        context.set("item_label".to_string(), Value::String("Name".to_string()));
+        context.set(
+            "item_value".to_string(),
+            Value::String("John Doe".to_string()),
+        );
+        context.set(
+            "item_class".to_string(),
+            Value::String("highlighted".to_string()),
+        );
+
+        let result = main_template.render_with_loader(&context, &loader).unwrap();
+
+        assert!(result.contains("<div class=\"highlighted\">"));
+        assert!(result.contains("<span>Name</span>"));
+        assert!(result.contains("John Doe"));
+    }
+
+    #[test]
+    fn test_include_with_only() {
+        let mut loader = TestTemplateLoader::new();
+
+        // Partial that tries to use both passed and parent context variables
+        loader.add("_limited.html", "{{ passed_var }} - {{ parent_var }}");
+
+        // Main template with "only" keyword
+        let main_source = "{% include \"_limited.html\" with passed_var=value only %}";
+        let main_template = Template::new(main_source).unwrap();
+
+        let mut context = Context::new();
+        context.set("value".to_string(), Value::String("Passed".to_string()));
+        context.set(
+            "parent_var".to_string(),
+            Value::String("Should Not Appear".to_string()),
+        );
+
+        let result = main_template.render_with_loader(&context, &loader).unwrap();
+
+        // The passed variable should render, but parent_var should be empty
+        // because "only" restricts the context
+        assert!(result.contains("Passed"));
+        assert!(!result.contains("Should Not Appear"));
+    }
+
+    #[test]
+    fn test_include_inherits_parent_context() {
+        let mut loader = TestTemplateLoader::new();
+
+        // Partial that uses both parent context and passed variable
+        loader.add(
+            "_greeting.html",
+            "Hello {{ name }}, welcome to {{ site_name }}!",
+        );
+
+        // Main template without "only" - should inherit parent context
+        let main_source = "{% include \"_greeting.html\" with name=user_name %}";
+        let main_template = Template::new(main_source).unwrap();
+
+        let mut context = Context::new();
+        context.set("user_name".to_string(), Value::String("Alice".to_string()));
+        context.set("site_name".to_string(), Value::String("MyApp".to_string()));
+
+        let result = main_template.render_with_loader(&context, &loader).unwrap();
+
+        // Both the passed variable and the parent context variable should render
+        assert!(result.contains("Hello Alice"));
+        assert!(result.contains("welcome to MyApp"));
+    }
+
+    #[test]
+    fn test_include_in_nested_for_loop() {
+        let mut loader = TestTemplateLoader::new();
+
+        // Blog post partial - this is the exact case from Issue #35
+        loader.add(
+            "blog/_post_card.html",
+            "<article><h3>{{ post.title }}</h3><p>{{ post.excerpt }}</p></article>",
+        );
+
+        // Main template from the issue
+        let main_source = r#"{% for post in posts %}
+    {% include "blog/_post_card.html" with post=post %}
+{% endfor %}"#;
+        let main_template = Template::new(main_source).unwrap();
+
+        // Create test posts
+        let mut post1 = std::collections::HashMap::new();
+        post1.insert(
+            "title".to_string(),
+            Value::String("My Post Title".to_string()),
+        );
+        post1.insert(
+            "excerpt".to_string(),
+            Value::String("Post excerpt here...".to_string()),
+        );
+
+        let mut context = Context::new();
+        context.set("posts".to_string(), Value::List(vec![Value::Object(post1)]));
+
+        let result = main_template.render_with_loader(&context, &loader).unwrap();
+
+        // Verify the exact expected output from Issue #35
+        assert!(result.contains("<article>"));
+        assert!(result.contains("<h3>My Post Title</h3>"));
+        assert!(result.contains("<p>Post excerpt here...</p>"));
+        assert!(result.contains("</article>"));
     }
 }

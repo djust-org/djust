@@ -1,21 +1,47 @@
 //! Template renderer that converts AST nodes to output strings
 
 use crate::filters;
+use crate::inheritance::TemplateLoader;
 use crate::parser::Node;
 use djust_components::Component;
 use djust_core::{Context, DjangoRustError, Result, Value};
 
+/// Render nodes without include support (for backwards compatibility)
 pub fn render_nodes(nodes: &[Node], context: &Context) -> Result<String> {
+    render_nodes_with_loader::<NoOpIncludeLoader>(nodes, context, None)
+}
+
+/// Render nodes with template loader support for includes
+pub fn render_nodes_with_loader<L: TemplateLoader>(
+    nodes: &[Node],
+    context: &Context,
+    loader: Option<&L>,
+) -> Result<String> {
     let mut output = String::new();
 
     for node in nodes {
-        output.push_str(&render_node(node, context)?);
+        output.push_str(&render_node_with_loader(node, context, loader)?);
     }
 
     Ok(output)
 }
 
-fn render_node(node: &Node, context: &Context) -> Result<String> {
+/// No-op template loader that returns an error when include is attempted
+struct NoOpIncludeLoader;
+
+impl TemplateLoader for NoOpIncludeLoader {
+    fn load_template(&self, name: &str) -> Result<Vec<Node>> {
+        Err(DjangoRustError::TemplateError(format!(
+            "Template loader not configured. Cannot include template: {name}"
+        )))
+    }
+}
+
+fn render_node_with_loader<L: TemplateLoader>(
+    node: &Node,
+    context: &Context,
+    loader: Option<&L>,
+) -> Result<String> {
     match node {
         Node::Text(text) => Ok(text.clone()),
 
@@ -38,9 +64,9 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
             let condition_result = evaluate_condition(condition, context)?;
 
             if condition_result {
-                render_nodes(true_nodes, context)
+                render_nodes_with_loader(true_nodes, context, loader)
             } else {
-                render_nodes(false_nodes, context)
+                render_nodes_with_loader(false_nodes, context, loader)
             }
         }
 
@@ -57,7 +83,7 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
                 Value::List(items) => {
                     // If list is empty, render the {% empty %} block
                     if items.is_empty() {
-                        return render_nodes(empty_nodes, context);
+                        return render_nodes_with_loader(empty_nodes, context, loader);
                     }
 
                     let mut output = String::new();
@@ -99,14 +125,14 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
                                 }
                             }
                         }
-                        output.push_str(&render_nodes(nodes, &ctx)?);
+                        output.push_str(&render_nodes_with_loader(nodes, &ctx, loader)?);
                     }
 
                     Ok(output)
                 }
                 _ => {
                     // If not a list (null, etc.), render the empty block
-                    render_nodes(empty_nodes, context)
+                    render_nodes_with_loader(empty_nodes, context, loader)
                 }
             }
         }
@@ -114,13 +140,51 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
         Node::Block { name: _, nodes } => {
             // For now, just render the block content
             // In a full implementation, this would handle template inheritance
-            render_nodes(nodes, context)
+            render_nodes_with_loader(nodes, context, loader)
         }
 
-        Node::Include(_template_name) => {
-            // For now, just skip includes
-            // In a full implementation, this would load and render the included template
-            Ok(String::new())
+        Node::Include {
+            path,
+            with_vars,
+            only,
+        } => {
+            // Load and render the included template
+            let Some(template_loader) = loader else {
+                return Err(DjangoRustError::TemplateError(format!(
+                    "Template loader not configured. Cannot include template: {path}"
+                )));
+            };
+
+            // Load the included template
+            let included_nodes = template_loader.load_template(path)?;
+
+            // Build the context for the included template
+            let include_context = if *only {
+                // "only" keyword: start with empty context, add only the with_vars
+                let mut new_context = Context::new();
+                for (var_name, expression) in with_vars {
+                    let value = context
+                        .get(expression)
+                        .cloned()
+                        .unwrap_or_else(|| Value::String(expression.clone()));
+                    new_context.set(var_name.clone(), value);
+                }
+                new_context
+            } else {
+                // Normal include: inherit parent context and add with_vars
+                let mut new_context = context.clone();
+                for (var_name, expression) in with_vars {
+                    let value = context
+                        .get(expression)
+                        .cloned()
+                        .unwrap_or_else(|| Value::String(expression.clone()));
+                    new_context.set(var_name.clone(), value);
+                }
+                new_context
+            };
+
+            // Render the included template with the new context
+            render_nodes_with_loader(&included_nodes, &include_context, loader)
         }
 
         Node::ReactComponent {
@@ -167,7 +231,7 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
 
             // Render children
             for child in children {
-                output.push_str(&render_node(child, context)?);
+                output.push_str(&render_node_with_loader(child, context, loader)?);
             }
 
             output.push_str("</div>");
@@ -220,7 +284,7 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
             }
 
             // Render children with new context
-            render_nodes(nodes, &new_context)
+            render_nodes_with_loader(nodes, &new_context, loader)
         }
 
         Node::Extends(_) => {

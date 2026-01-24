@@ -101,22 +101,16 @@ impl InheritanceChain {
 
     fn apply_override_to_node(&self, node: &Node) -> Node {
         match node {
-            Node::Block { name, nodes } => {
-                // Replace block with merged content if overridden
+            Node::Block { name, nodes: _ } => {
+                // Replace block with merged content
                 if let Some(merged_nodes) = self.merged_blocks.get(name) {
                     Node::Block {
                         name: name.clone(),
-                        // Recursively apply overrides to merged content
-                        // (merged content might have nested blocks)
-                        nodes: self.apply_block_overrides(merged_nodes),
+                        nodes: merged_nodes.clone(),
                     }
                 } else {
-                    // Not overridden, but still recurse into nested nodes
-                    // to handle nested blocks that might be overridden
-                    Node::Block {
-                        name: name.clone(),
-                        nodes: self.apply_block_overrides(nodes),
-                    }
+                    // Keep original if no override
+                    node.clone()
                 }
             }
             // Recursively process nested structures
@@ -318,10 +312,11 @@ fn node_to_template_string(node: &Node) -> String {
             result.push_str("}}");
             result
         }
-        Node::Block { name: _, nodes } => {
-            // After inheritance resolution, blocks are finalized
-            // Just output the content without the wrapper tags
-            nodes_to_template_string(nodes)
+        Node::Block { name, nodes } => {
+            let mut result = format!("{{% block {name} %}}");
+            result.push_str(&nodes_to_template_string(nodes));
+            result.push_str("{% endblock %}");
+            result
         }
         Node::If {
             condition,
@@ -373,7 +368,27 @@ fn node_to_template_string(node: &Node) -> String {
         }
         Node::Comment => String::new(),    // Comments are stripped
         Node::Extends(_) => String::new(), // Extends is already processed
-        Node::Include(path) => format!("{{% include \"{path}\" %}}"),
+        Node::Include {
+            path,
+            with_vars,
+            only,
+        } => {
+            let mut result = format!("{{% include \"{path}\"");
+            if !with_vars.is_empty() {
+                result.push_str(" with ");
+                for (i, (var_name, expression)) in with_vars.iter().enumerate() {
+                    if i > 0 {
+                        result.push(' ');
+                    }
+                    result.push_str(&format!("{var_name}={expression}"));
+                }
+            }
+            if *only {
+                result.push_str(" only");
+            }
+            result.push_str(" %}");
+            result
+        }
         Node::CsrfToken => "{% csrf_token %}".to_string(),
         Node::Static(path) => format!("{{% static \"{path}\" %}}"),
         Node::ReactComponent { .. } => {
@@ -507,7 +522,6 @@ mod tests {
 
     #[test]
     fn test_nodes_to_template_string_block_syntax() {
-        // After inheritance resolution, blocks are stripped - just content is output
         let nodes = vec![Node::Block {
             name: "content".to_string(),
             nodes: vec![
@@ -519,12 +533,9 @@ mod tests {
 
         let result = nodes_to_template_string(&nodes);
 
-        // Block wrappers are stripped, only content remains
-        assert!(!result.contains("{% block"));
-        assert!(!result.contains("{% endblock"));
-        assert!(result.contains("<p>"));
+        assert!(result.contains("{% block content %}"));
         assert!(result.contains("{{ message }}"));
-        assert!(result.contains("</p>"));
+        assert!(result.contains("{% endblock %}"));
     }
 
     #[test]
@@ -609,15 +620,49 @@ mod tests {
 
     #[test]
     fn test_nodes_to_template_string_include() {
-        let nodes = vec![Node::Include("partials/header.html".to_string())];
+        let nodes = vec![Node::Include {
+            path: "partials/header.html".to_string(),
+            with_vars: vec![],
+            only: false,
+        }];
         let result = nodes_to_template_string(&nodes);
         assert_eq!(result, "{% include \"partials/header.html\" %}");
     }
 
     #[test]
+    fn test_nodes_to_template_string_include_with_vars() {
+        let nodes = vec![Node::Include {
+            path: "partials/card.html".to_string(),
+            with_vars: vec![
+                ("title".to_string(), "post.title".to_string()),
+                ("content".to_string(), "post.body".to_string()),
+            ],
+            only: false,
+        }];
+        let result = nodes_to_template_string(&nodes);
+        assert_eq!(
+            result,
+            "{% include \"partials/card.html\" with title=post.title content=post.body %}"
+        );
+    }
+
+    #[test]
+    fn test_nodes_to_template_string_include_only() {
+        let nodes = vec![Node::Include {
+            path: "partials/card.html".to_string(),
+            with_vars: vec![("item".to_string(), "post".to_string())],
+            only: true,
+        }];
+        let result = nodes_to_template_string(&nodes);
+        assert_eq!(
+            result,
+            "{% include \"partials/card.html\" with item=post only %}"
+        );
+    }
+
+    #[test]
     fn test_nodes_to_template_string_complex_nested() {
         // Test a complex nested structure
-        // After inheritance resolution, blocks are stripped but other tags preserved
         let nodes = vec![Node::Block {
             name: "content".to_string(),
             nodes: vec![Node::If {
@@ -639,10 +684,8 @@ mod tests {
 
         let result = nodes_to_template_string(&nodes);
 
-        // Block wrappers are stripped after inheritance resolution
-        assert!(!result.contains("{% block"));
-        assert!(!result.contains("{% endblock"));
-        // But other Django template tags are preserved
+        // Should preserve all nested structures
+        assert!(result.contains("{% block content %}"));
         assert!(result.contains("{% if items %}"));
         assert!(result.contains("{% for item in items %}"));
         assert!(result.contains("{{ item.name |upper }}"));
@@ -650,6 +693,7 @@ mod tests {
         assert!(result.contains("<p>No items</p>"));
         assert!(result.contains("{% endfor %}"));
         assert!(result.contains("{% endif %}"));
+        assert!(result.contains("{% endblock %}"));
     }
 
     #[test]
