@@ -9,6 +9,7 @@ import os
 import sys
 from datetime import datetime, date, time
 from decimal import Decimal
+from functools import lru_cache
 from urllib.parse import parse_qs, urlencode
 from uuid import UUID
 from typing import Any, Dict, Optional, Callable
@@ -301,12 +302,16 @@ def get_session_stats() -> Dict[str, Any]:
 _jit_serializer_cache: Dict[tuple, tuple] = {}
 
 
+@lru_cache(maxsize=128)
 def _get_model_hash(model_class: type) -> str:
     """
     Generate a hash of a model's field structure and serializable methods.
 
     This hash changes when the model's fields or get_*/is_*/has_*/can_* methods
     are modified, ensuring the JIT serializer cache is invalidated.
+
+    Results are cached for performance since model structure rarely changes
+    during a request. Cache is cleared when clear_jit_cache() is called.
 
     Args:
         model_class: The Django model class to hash
@@ -364,7 +369,9 @@ def clear_jit_cache() -> int:
     global _jit_serializer_cache
     count = len(_jit_serializer_cache)
     _jit_serializer_cache.clear()
-    logger.debug(f"[JIT] Cleared {count} cached serializers")
+    _get_model_hash.cache_clear()  # Also clear the model hash cache
+    if count > 0:
+        logger.info(f"[JIT] Cleared {count} cached serializers")
     return count
 
 
