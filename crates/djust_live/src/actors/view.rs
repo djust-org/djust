@@ -12,7 +12,6 @@ use djust_core::Value;
 use indexmap::IndexMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods};
-use pyo3::ToPyObject;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -370,13 +369,16 @@ impl ViewActor {
             })?;
 
             // Convert params to Python dict
-            let params_dict = PyDict::new_bound(py);
+            let params_dict = PyDict::new(py);
             for (key, value) in params {
                 params_dict
-                    .set_item(key, value.to_object(py))
-                    .map_err(|e| {
-                        ActorError::Python(format!("Failed to convert param '{key}': {e}"))
-                    })?;
+                    .set_item(
+                        key,
+                        value.into_pyobject(py).map_err(|e| {
+                            ActorError::Python(format!("Failed to convert param '{key}': {e}"))
+                        })?,
+                    )
+                    .map_err(|e| ActorError::Python(format!("Failed to set param '{key}': {e}")))?;
             }
 
             // Call handler(**params)
@@ -604,16 +606,28 @@ impl ViewActor {
             match view.getattr("handle_component_event") {
                 Ok(handler) => {
                     // Convert data to Python dict
-                    let data_dict = PyDict::new_bound(py);
+                    let data_dict = PyDict::new(py);
 
                     // Populate dict
                     for (key, value) in &data {
-                        if let Err(e) = data_dict.set_item(key, value.to_object(py)) {
+                        let py_value = match value.into_pyobject(py) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                warn!(
+                                    view_path = %self.view_path,
+                                    component_id = %component_id,
+                                    error = %e,
+                                    "Failed to convert value to Python"
+                                );
+                                return;
+                            }
+                        };
+                        if let Err(e) = data_dict.set_item(key, py_value) {
                             warn!(
                                 view_path = %self.view_path,
                                 component_id = %component_id,
                                 error = %e,
-                                "Failed to convert data to Python dict"
+                                "Failed to set item in Python dict"
                             );
                             return;
                         }

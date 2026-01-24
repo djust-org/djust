@@ -156,7 +156,7 @@ pub fn serialize_models_to_list(
     py: Python<'_>,
     models_data: &Bound<'_, PyList>,
 ) -> PyResult<Py<PyList>> {
-    let result_list = PyList::empty_bound(py);
+    let result_list = PyList::empty(py);
 
     for item in models_data.iter() {
         // Pass through dicts after normalization
@@ -171,7 +171,7 @@ pub fn serialize_models_to_list(
 
 /// Normalize a Python dict (convert Django types to JSON-compatible types)
 fn normalize_dict(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<Py<PyDict>> {
-    let result = PyDict::new_bound(py);
+    let result = PyDict::new(py);
 
     for (key, value) in dict.iter() {
         let key_str: String = key.extract()?;
@@ -200,29 +200,29 @@ fn normalize_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<PyObjec
 
     // Handle nested dict
     if let Ok(dict) = value.downcast::<PyDict>() {
-        return normalize_dict(py, dict).map(|d| d.into_py(py));
+        return normalize_dict(py, dict).map(|d| d.into_any());
     }
 
     // Handle list
     if let Ok(list) = value.downcast::<PyList>() {
-        let result_list = PyList::empty_bound(py);
-        for item in list.iter() {
-            let normalized = normalize_value(py, &item)?;
+        let result_list = PyList::empty(py);
+        for item in list.try_iter()? {
+            let normalized = normalize_value(py, &item?)?;
             result_list.append(normalized)?;
         }
-        return Ok(result_list.into_py(py));
+        return Ok(result_list.unbind().into());
     }
 
     // Handle tuple (convert to list for JSON compatibility)
     if let Ok(tuple) = value.downcast::<PyTuple>() {
-        let result_list = PyList::empty_bound(py);
+        let result_list = PyList::empty(py);
         for item in tuple.iter() {
             let normalized = normalize_value(py, &item)?;
             result_list.append(normalized)?;
         }
-        return Ok(result_list.into_py(py));
+        return Ok(result_list.unbind().into());
     }
 
     // For other types, convert to string
-    Ok(value.str()?.into_py(py))
+    Ok(value.str()?.unbind().into())
 }

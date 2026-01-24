@@ -12,7 +12,7 @@ use djust_core::{Context, Value};
 use djust_templates::Template;
 use djust_vdom::{diff, parse_html, VNode};
 use pyo3::types::{PyAnyMethods, PyDictMethods};
-use pyo3::{FromPyObject, ToPyObject};
+use pyo3::{FromPyObject, IntoPyObject};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -289,13 +289,16 @@ impl ComponentActor {
             })?;
 
             // Convert params to Python dict
-            let params_dict = PyDict::new_bound(py);
+            let params_dict = PyDict::new(py);
             for (key, value) in params {
                 params_dict
-                    .set_item(key, value.to_object(py))
-                    .map_err(|e| {
-                        ActorError::Python(format!("Failed to convert param '{key}': {e}"))
-                    })?;
+                    .set_item(
+                        key,
+                        value.into_pyobject(py).map_err(|e| {
+                            ActorError::Python(format!("Failed to convert param '{key}': {e}"))
+                        })?,
+                    )
+                    .map_err(|e| ActorError::Python(format!("Failed to set param '{key}': {e}")))?;
             }
 
             // Call handler(**params)

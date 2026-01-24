@@ -9,7 +9,7 @@
 #![allow(clippy::only_used_in_recursion)]
 // TODO: Migrate to IntoPyObject when pyo3 stabilizes the new API
 // See: https://pyo3.rs/v0.23.0/migration
-#![allow(deprecated)]
+// TEMP REMOVED: #![allow(deprecated)]
 
 // Actor system module
 pub mod actors;
@@ -114,9 +114,9 @@ impl RustLiveViewBackend {
 
     /// Get current state
     fn get_state(&self, py: Python) -> PyResult<PyObject> {
-        let dict = PyDict::new_bound(py);
+        let dict = PyDict::new(py);
         for (k, v) in &self.state {
-            dict.set_item(k, v.to_object(py))?;
+            dict.set_item(k, v.into_pyobject(py)?)?;
         }
         Ok(dict.into())
     }
@@ -205,7 +205,7 @@ impl RustLiveViewBackend {
             if !patches.is_empty() {
                 let bytes = rmp_serde::to_vec(&patches)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-                Some(PyBytes::new_bound(py, &bytes).into())
+                Some(PyBytes::new(py, &bytes).into())
             } else {
                 None
             }
@@ -257,7 +257,7 @@ impl RustLiveViewBackend {
                 "MessagePack serialization error: {e}"
             ))
         })?;
-        Ok(PyBytes::new_bound(py, &bytes).into())
+        Ok(PyBytes::new(py, &bytes).into())
     }
 
     /// Deserialize a RustLiveView from MessagePack bytes
@@ -543,11 +543,11 @@ impl SessionActorHandlePy {
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
             Python::with_gil(|py| -> PyResult<PyObject> {
-                let dict = PyDict::new_bound(py);
+                let dict = PyDict::new(py);
                 dict.set_item("html", result.html)?;
                 dict.set_item("session_id", result.session_id)?;
                 dict.set_item("view_id", result.view_id)?; // Phase 6: Return view_id
-                Ok(dict.into_py(py))
+                Ok(dict.unbind().into())
             })
         })
     }
@@ -584,7 +584,7 @@ impl SessionActorHandlePy {
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
             Python::with_gil(|py| -> PyResult<PyObject> {
-                let dict = PyDict::new_bound(py);
+                let dict = PyDict::new(py);
 
                 // Add patches if available
                 if let Some(patches) = result.patches {
@@ -604,7 +604,7 @@ impl SessionActorHandlePy {
                 }
 
                 dict.set_item("version", result.version)?;
-                Ok(dict.into_py(py))
+                Ok(dict.unbind().into())
             })
         })
     }
@@ -817,7 +817,7 @@ pub fn create_session_actor(py: Python<'_>, session_id: String) -> PyResult<Boun
         let handle = SUPERVISOR.get_or_create_session(session_id).await;
 
         Python::with_gil(|py| -> PyResult<PyObject> {
-            Ok(Py::new(py, SessionActorHandlePy { handle })?.into_py(py))
+            Ok(Py::new(py, SessionActorHandlePy { handle })?.into_any())
         })
     })
 }
@@ -1014,26 +1014,26 @@ enum PathNode {
 fn json_value_to_py(py: Python, value: &serde_json::Value) -> PyResult<PyObject> {
     match value {
         serde_json::Value::Null => Ok(py.None()),
-        serde_json::Value::Bool(b) => Ok(b.to_object(py)),
+        serde_json::Value::Bool(b) => Ok((*b).into_pyobject(py)?.to_owned().into_any().unbind()),
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                Ok(i.to_object(py))
+                Ok(i.into_pyobject(py)?.to_owned().into_any().unbind())
             } else if let Some(f) = n.as_f64() {
-                Ok(f.to_object(py))
+                Ok(f.into_pyobject(py)?.to_owned().into_any().unbind())
             } else {
                 Ok(py.None())
             }
         }
-        serde_json::Value::String(s) => Ok(s.to_object(py)),
+        serde_json::Value::String(s) => Ok(s.into_pyobject(py)?.to_owned().into_any().unbind()),
         serde_json::Value::Array(arr) => {
-            let py_list = PyList::empty_bound(py);
+            let py_list = PyList::empty(py);
             for item in arr {
                 py_list.append(json_value_to_py(py, item)?)?;
             }
             Ok(py_list.into())
         }
         serde_json::Value::Object(obj) => {
-            let py_dict = PyDict::new_bound(py);
+            let py_dict = PyDict::new(py);
             for (key, val) in obj {
                 py_dict.set_item(key, json_value_to_py(py, val)?)?;
             }
@@ -1074,7 +1074,7 @@ fn serialize_queryset_py(
     let path_tree = build_field_tree(&field_paths);
 
     // Create Python list to hold results
-    let result_list = PyList::empty_bound(py);
+    let result_list = PyList::empty(py);
 
     // Iterate over objects
     for obj in objects.iter() {
@@ -1097,7 +1097,7 @@ fn serialize_queryset_py(
 /// - Django types (datetime, Decimal, UUID): convert to strings
 #[pyfunction(name = "serialize_context")]
 fn serialize_context_py(py: Python, context: &Bound<'_, PyDict>) -> PyResult<Py<PyDict>> {
-    let result_dict = PyDict::new_bound(py);
+    let result_dict = PyDict::new(py);
 
     for (key, value) in context.iter() {
         let key_str: String = key.extract()?;
@@ -1126,7 +1126,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<PyOb
 
     // Lists and tuples: recursively serialize
     if let Ok(list) = value.downcast::<PyList>() {
-        let result_list = PyList::empty_bound(py);
+        let result_list = PyList::empty(py);
         for item in list.iter() {
             let serialized = serialize_python_value(py, &item)?;
             result_list.append(serialized)?;
@@ -1135,7 +1135,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<PyOb
     }
 
     if let Ok(tuple) = value.downcast::<PyTuple>() {
-        let result_list = PyList::empty_bound(py);
+        let result_list = PyList::empty(py);
         for item in tuple.iter() {
             let serialized = serialize_python_value(py, &item)?;
             result_list.append(serialized)?;
@@ -1145,7 +1145,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<PyOb
 
     // Dicts: recursively serialize
     if let Ok(dict) = value.downcast::<PyDict>() {
-        let result_dict = PyDict::new_bound(py);
+        let result_dict = PyDict::new(py);
         for (k, v) in dict.iter() {
             let key_str: String = k.extract()?;
             let serialized = serialize_python_value(py, &v)?;
@@ -1157,7 +1157,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<PyOb
     // Django QuerySet: Convert to list which triggers JIT serialization
     if type_name == "QuerySet" {
         // Call list() on the QuerySet to force evaluation
-        if let Ok(list_fn) = py.eval_bound("list", None, None) {
+        if let Ok(list_fn) = py.eval(c"list", None, None) {
             if let Ok(as_list) = list_fn.call1((value,)) {
                 return serialize_python_value(py, &as_list);
             }
@@ -1167,16 +1167,16 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<PyOb
     // Fast path: Simple types (str, int, float, bool)
     // These must come AFTER compound types to avoid converting them to strings
     if let Ok(s) = value.extract::<String>() {
-        return Ok(s.to_object(py));
+        return Ok(s.into_pyobject(py)?.to_owned().into_any().unbind());
     }
     if let Ok(i) = value.extract::<i64>() {
-        return Ok(i.to_object(py));
+        return Ok(i.into_pyobject(py)?.to_owned().into_any().unbind());
     }
     if let Ok(f) = value.extract::<f64>() {
-        return Ok(f.to_object(py));
+        return Ok(f.into_pyobject(py)?.to_owned().into_any().unbind());
     }
     if let Ok(b) = value.extract::<bool>() {
-        return Ok(b.to_object(py));
+        return Ok(b.into_pyobject(py)?.to_owned().into_any().unbind());
     }
 
     // Components: Check if object has 'render' method
@@ -1187,7 +1187,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<PyOb
             match render_method.call0() {
                 Ok(rendered) => {
                     // Wrap in {"render": ...} dict
-                    let wrapper = PyDict::new_bound(py);
+                    let wrapper = PyDict::new(py);
                     let rendered_str: String = rendered.extract()?;
                     wrapper.set_item("render", rendered_str)?;
                     return Ok(wrapper.into());
@@ -1195,7 +1195,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<PyOb
                 Err(_) => {
                     // Render failed, fallback to str()
                     let str_repr = value.str()?.to_string();
-                    return Ok(str_repr.to_object(py));
+                    return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
                 }
             }
         }
@@ -1206,20 +1206,20 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<PyOb
     if type_name == "datetime" || type_name == "date" || type_name == "time" {
         if let Ok(isoformat) = value.call_method0("isoformat") {
             let iso_str: String = isoformat.extract()?;
-            return Ok(iso_str.to_object(py));
+            return Ok(iso_str.into_pyobject(py)?.to_owned().into_any().unbind());
         }
     }
 
     // Decimal, UUID: convert to string
     if type_name == "Decimal" || type_name == "UUID" {
         let str_repr = value.str()?.to_string();
-        return Ok(str_repr.to_object(py));
+        return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
     }
 
     // Django model instances: serialize to dict using model_to_dict + methods
     if value.hasattr("_meta")? {
         // Use Django's model_to_dict to serialize the model fields
-        if let Ok(forms_module) = py.import_bound("django.forms.models") {
+        if let Ok(forms_module) = py.import("django.forms.models") {
             if let Ok(model_to_dict_fn) = forms_module.getattr("model_to_dict") {
                 if let Ok(model_dict) = model_to_dict_fn.call1((value,)) {
                     // Convert to PyDict so we can add method results
@@ -1256,7 +1256,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<PyOb
 
     // Fallback: convert to string representation
     let str_repr = value.str()?.to_string();
-    Ok(str_repr.to_object(py))
+    Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind())
 }
 
 /// Build a tree structure from flat field paths for efficient nested traversal
@@ -1441,7 +1441,7 @@ fn serialize_object_with_paths(
                     // It has .all() method - call it to get the QuerySet
                     if let Ok(queryset) = all_method.call0() {
                         // Convert QuerySet to Python list for iteration
-                        if let Ok(list_func) = py.eval_bound("list", None, None) {
+                        if let Ok(list_func) = py.eval(c"list", None, None) {
                             if let Ok(py_list) = list_func.call1((queryset,)) {
                                 py_list
                             } else {
@@ -1458,8 +1458,12 @@ fn serialize_object_with_paths(
                 };
 
                 // Try to iterate
-                if let Ok(iterator) = iterable.iter() {
-                    for item_obj in iterator.flatten() {
+                if let Ok(iterator) = iterable.try_iter() {
+                    for item_result in iterator {
+                        let item_obj = match item_result {
+                            Ok(obj) => obj,
+                            Err(_) => continue,
+                        };
                         let item_result = serialize_object_with_paths(py, &item_obj, nested_tree)?;
                         list_results.push(item_result);
                     }
@@ -1517,9 +1521,9 @@ fn extract_template_variables_py(py: Python, template: String) -> PyResult<PyObj
     })?;
 
     // Convert Rust HashMap to Python dict
-    let py_dict = PyDict::new_bound(py);
+    let py_dict = PyDict::new(py);
     for (key, paths) in vars_map {
-        let py_list = PyList::new_bound(py, paths.iter().map(|s| s.as_str()));
+        let py_list = PyList::new(py, paths.iter().map(|s| s.as_str()))?;
         py_dict.set_item(key, py_list)?;
     }
 

@@ -9,8 +9,8 @@
 use djust_core::Result;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 pub mod diff;
 pub mod parser;
@@ -20,22 +20,21 @@ pub mod patch;
 // Compact ID Generation (Base62)
 // ============================================================================
 
-/// Global counter for generating unique IDs within a parse session.
-///
-/// # Thread Safety
-///
-/// This counter is atomic and safe for concurrent access. However, when multiple
-/// requests parse HTML concurrently, their IDs will interleave (e.g., request A
-/// gets "0", "2", "4" while request B gets "1", "3", "5"). This is acceptable
-/// because:
-///
-/// 1. Each request produces its own HTML output with its own set of IDs
-/// 2. The diff algorithm uses the OLD node's ID for patch targeting
-/// 3. IDs only need to be unique within a single HTML document
-///
-/// Call `reset_id_counter()` before parsing if you need deterministic IDs
-/// (e.g., for testing), but this is not required in production.
-static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+// Thread-local counter for generating unique IDs within a parse session.
+//
+// Thread Safety: This counter is thread-local, meaning each thread has its own
+// independent counter. This ensures that concurrent parses in different threads
+// don't interfere with each other's ID sequences, which is important for:
+//
+// 1. Test isolation - parallel tests don't affect each other
+// 2. Concurrent request handling - each request gets sequential IDs
+// 3. Deterministic output - same input always produces same IDs
+//
+// Call `reset_id_counter()` before parsing to reset the counter (this is
+// done automatically by `parse_html()`).
+thread_local! {
+    static ID_COUNTER: Cell<u64> = const { Cell::new(0) };
+}
 
 /// Base62 character set: 0-9, a-z, A-Z
 const BASE62_CHARS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -66,13 +65,16 @@ pub fn to_base62(mut n: u64) -> String {
 
 /// Generate the next unique djust_id
 pub fn next_djust_id() -> String {
-    let id = ID_COUNTER.fetch_add(1, Ordering::SeqCst);
-    to_base62(id)
+    ID_COUNTER.with(|counter| {
+        let id = counter.get();
+        counter.set(id + 1);
+        to_base62(id)
+    })
 }
 
 /// Reset the ID counter (call before parsing a new document)
 pub fn reset_id_counter() {
-    ID_COUNTER.store(0, Ordering::SeqCst);
+    ID_COUNTER.with(|counter| counter.set(0));
 }
 
 /// A virtual DOM node

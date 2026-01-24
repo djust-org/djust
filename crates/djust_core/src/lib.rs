@@ -4,6 +4,7 @@
 //! the djust ecosystem.
 
 use pyo3::prelude::*;
+use pyo3::types::{PyAnyMethods, PyDict, PyList};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -79,21 +80,45 @@ impl<'py> FromPyObject<'py> for Value {
     }
 }
 
-// TODO: Migrate to IntoPyObject when pyo3 stabilizes the new API
-// See: https://pyo3.rs/v0.23.0/migration
-#[allow(deprecated)]
-impl ToPyObject for Value {
-    fn to_object(&self, py: Python) -> PyObject {
-        #[allow(deprecated)]
+/// Convert Value to Python object using the new IntoPyObject trait.
+impl<'py> IntoPyObject<'py> for Value {
+    type Target = PyAny;
+    type Output = Bound<'py, Self::Target>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> std::result::Result<Self::Output, Self::Error> {
         match self {
-            Value::Null => py.None(),
-            Value::Bool(b) => b.to_object(py),
-            Value::Integer(i) => i.to_object(py),
-            Value::Float(f) => f.to_object(py),
-            Value::String(s) => s.to_object(py),
-            Value::List(l) => l.to_object(py),
-            Value::Object(o) => o.to_object(py),
+            Value::Null => Ok(py.None().into_bound(py)),
+            Value::Bool(b) => Ok(b.into_pyobject(py)?.to_owned().into_any()),
+            Value::Integer(i) => Ok(i.into_pyobject(py)?.to_owned().into_any()),
+            Value::Float(f) => Ok(f.into_pyobject(py)?.to_owned().into_any()),
+            Value::String(s) => Ok(s.into_pyobject(py)?.to_owned().into_any()),
+            Value::List(l) => {
+                let py_list = PyList::empty(py);
+                for item in l {
+                    py_list.append(item.into_pyobject(py)?)?;
+                }
+                Ok(py_list.into_any())
+            }
+            Value::Object(o) => {
+                let py_dict = PyDict::new(py);
+                for (k, v) in o {
+                    py_dict.set_item(k, v.into_pyobject(py)?)?;
+                }
+                Ok(py_dict.into_any())
+            }
         }
+    }
+}
+
+/// Convert &Value to Python object (clones the value).
+impl<'py> IntoPyObject<'py> for &Value {
+    type Target = PyAny;
+    type Output = Bound<'py, Self::Target>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> std::result::Result<Self::Output, Self::Error> {
+        self.clone().into_pyobject(py)
     }
 }
 
