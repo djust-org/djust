@@ -62,3 +62,7 @@ coverage/
 # Build artifacts
 marketing-site/
 .serena/
+wheels/
+
+# Claude Code
+.claude/
