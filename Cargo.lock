@@ -62,12 +62,9 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "bincode"
-version = "1.3.3"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
-dependencies = [
- "serde",
-]
+checksum = "fd6a120d2e16b3e1b4a24bd70f23b12d3e16b81f113364a26935f8db7245452d"
 
 [[package]]
 name = "bitflags"
@@ -268,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "djust_components"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ahash",
  "criterion",
@@ -283,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "djust_core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ahash",
  "criterion",
@@ -298,7 +295,7 @@ dependencies = [
 
 [[package]]
 name = "djust_live"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bincode",
  "dashmap",
@@ -322,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "djust_templates"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ahash",
  "chrono",
@@ -341,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "djust_vdom"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ahash",
  "criterion",
