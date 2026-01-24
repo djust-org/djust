@@ -186,7 +186,9 @@ pre-commit: ## Run pre-commit hooks on all files
 pre-commit-install: ## Install pre-commit hooks (run once after clone)
 	@echo "$(GREEN)Installing pre-commit hooks...$(NC)"
 	@uvx pre-commit install
+	@uvx pre-commit install --hook-type pre-push
 	@echo "$(GREEN)Pre-commit hooks installed! They will run automatically on git commit.$(NC)"
+	@echo "$(GREEN)Pre-push hooks installed! Tests will run before git push.$(NC)"
 
 .PHONY: check
 check: lint test ## Run linters and tests
