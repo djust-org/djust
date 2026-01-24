@@ -59,7 +59,115 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
         i += 1;
     }
 
-    Ok(nodes)
+    // Apply AST optimization to merge adjacent text nodes
+    Ok(optimize_ast(nodes))
+}
+
+/// Optimize the AST by merging adjacent Text nodes.
+///
+/// This optimization pass reduces render-time string allocations and concatenations
+/// by merging contiguous static text regions into single pre-rendered strings.
+///
+/// # Performance Impact
+///
+/// Templates with many small text nodes (common in HTML) benefit significantly:
+/// - Fewer nodes to iterate during rendering
+/// - Fewer string allocations (one merged string vs many small ones)
+/// - Better CPU cache utilization
+///
+/// # Example
+///
+/// Input: [Text("Hello "), Text("World"), Text("!")]
+/// Output: [Text("Hello World!")]
+pub fn optimize_ast(nodes: Vec<Node>) -> Vec<Node> {
+    let mut optimized = Vec::with_capacity(nodes.len());
+    let mut text_buffer = String::new();
+
+    for node in nodes {
+        match node {
+            Node::Text(text) => {
+                // Accumulate adjacent text nodes
+                text_buffer.push_str(&text);
+            }
+            // Recursively optimize child nodes for block structures
+            Node::If {
+                condition,
+                true_nodes,
+                false_nodes,
+            } => {
+                flush_text_buffer(&mut text_buffer, &mut optimized);
+                optimized.push(Node::If {
+                    condition,
+                    true_nodes: optimize_ast(true_nodes),
+                    false_nodes: optimize_ast(false_nodes),
+                });
+            }
+            Node::For {
+                var_names,
+                iterable,
+                reversed,
+                nodes,
+                empty_nodes,
+            } => {
+                flush_text_buffer(&mut text_buffer, &mut optimized);
+                optimized.push(Node::For {
+                    var_names,
+                    iterable,
+                    reversed,
+                    nodes: optimize_ast(nodes),
+                    empty_nodes: optimize_ast(empty_nodes),
+                });
+            }
+            Node::Block { name, nodes } => {
+                flush_text_buffer(&mut text_buffer, &mut optimized);
+                optimized.push(Node::Block {
+                    name,
+                    nodes: optimize_ast(nodes),
+                });
+            }
+            Node::With { assignments, nodes } => {
+                flush_text_buffer(&mut text_buffer, &mut optimized);
+                optimized.push(Node::With {
+                    assignments,
+                    nodes: optimize_ast(nodes),
+                });
+            }
+            Node::ReactComponent {
+                name,
+                props,
+                children,
+            } => {
+                flush_text_buffer(&mut text_buffer, &mut optimized);
+                optimized.push(Node::ReactComponent {
+                    name,
+                    props,
+                    children: optimize_ast(children),
+                });
+            }
+            // Skip Comment nodes entirely - they produce no output
+            Node::Comment => {
+                // Don't add comments to output, but don't break text merging
+            }
+            // All other nodes break text merging
+            other => {
+                flush_text_buffer(&mut text_buffer, &mut optimized);
+                optimized.push(other);
+            }
+        }
+    }
+
+    // Flush any remaining text
+    flush_text_buffer(&mut text_buffer, &mut optimized);
+
+    optimized
+}
+
+/// Helper to flush accumulated text buffer into optimized nodes list
+#[inline]
+fn flush_text_buffer(buffer: &mut String, nodes: &mut Vec<Node>) {
+    if !buffer.is_empty() {
+        nodes.push(Node::Text(std::mem::take(buffer)));
+    }
 }
 
 fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
@@ -807,18 +915,11 @@ mod tests {
     fn test_verbatim_tag_mixed() {
         let tokens = tokenize("Before{% verbatim %}{{ name }}{% endverbatim %}After").unwrap();
         let nodes = parse(&tokens).unwrap();
-        assert_eq!(nodes.len(), 3);
+        // After AST optimization, adjacent text nodes are merged
+        assert_eq!(nodes.len(), 1);
         match &nodes[0] {
-            Node::Text(text) => assert_eq!(text, "Before"),
-            _ => panic!("Expected Text node"),
-        }
-        match &nodes[1] {
-            Node::Text(text) => assert_eq!(text, "{{ name }}"),
-            _ => panic!("Expected Text node from verbatim"),
-        }
-        match &nodes[2] {
-            Node::Text(text) => assert_eq!(text, "After"),
-            _ => panic!("Expected Text node"),
+            Node::Text(text) => assert_eq!(text, "Before{{ name }}After"),
+            _ => panic!("Expected merged Text node"),
         }
     }
 
@@ -858,12 +959,8 @@ mod tests {
     fn test_load_tag() {
         let tokens = tokenize("{% load static %}").unwrap();
         let nodes = parse(&tokens).unwrap();
-        assert_eq!(nodes.len(), 1);
-        // Load is treated as a comment (no-op)
-        match &nodes[0] {
-            Node::Comment => (),
-            _ => panic!("Expected Comment node for load tag"),
-        }
+        // Load tag is treated as a comment, and AST optimization removes comments
+        assert_eq!(nodes.len(), 0);
     }
 
     #[test]
@@ -1262,5 +1359,164 @@ mod tests {
             .get("count")
             .unwrap()
             .contains(&"increment".to_string()));
+    }
+
+    // Tests for AST optimization (text node merging)
+
+    #[test]
+    fn test_optimize_ast_merges_adjacent_text() {
+        // Create nodes manually without going through parse() to test optimize_ast directly
+        let nodes = vec![
+            Node::Text("Hello ".to_string()),
+            Node::Text("World".to_string()),
+            Node::Text("!".to_string()),
+        ];
+        let optimized = optimize_ast(nodes);
+        assert_eq!(optimized.len(), 1);
+        match &optimized[0] {
+            Node::Text(text) => assert_eq!(text, "Hello World!"),
+            _ => panic!("Expected merged Text node"),
+        }
+    }
+
+    #[test]
+    fn test_optimize_ast_preserves_variables() {
+        let nodes = vec![
+            Node::Text("Hello ".to_string()),
+            Node::Variable("name".to_string(), vec![]),
+            Node::Text("!".to_string()),
+        ];
+        let optimized = optimize_ast(nodes);
+        assert_eq!(optimized.len(), 3);
+        match &optimized[0] {
+            Node::Text(text) => assert_eq!(text, "Hello "),
+            _ => panic!("Expected Text node"),
+        }
+        match &optimized[1] {
+            Node::Variable(name, _) => assert_eq!(name, "name"),
+            _ => panic!("Expected Variable node"),
+        }
+        match &optimized[2] {
+            Node::Text(text) => assert_eq!(text, "!"),
+            _ => panic!("Expected Text node"),
+        }
+    }
+
+    #[test]
+    fn test_optimize_ast_removes_comments() {
+        let nodes = vec![
+            Node::Text("Before".to_string()),
+            Node::Comment,
+            Node::Text("After".to_string()),
+        ];
+        let optimized = optimize_ast(nodes);
+        // Comments should be removed and adjacent text merged
+        assert_eq!(optimized.len(), 1);
+        match &optimized[0] {
+            Node::Text(text) => assert_eq!(text, "BeforeAfter"),
+            _ => panic!("Expected merged Text node"),
+        }
+    }
+
+    #[test]
+    fn test_optimize_ast_recursive_if() {
+        let nodes = vec![Node::If {
+            condition: "true".to_string(),
+            true_nodes: vec![Node::Text("A".to_string()), Node::Text("B".to_string())],
+            false_nodes: vec![Node::Text("C".to_string()), Node::Text("D".to_string())],
+        }];
+        let optimized = optimize_ast(nodes);
+        assert_eq!(optimized.len(), 1);
+        match &optimized[0] {
+            Node::If {
+                true_nodes,
+                false_nodes,
+                ..
+            } => {
+                // True branch should be merged
+                assert_eq!(true_nodes.len(), 1);
+                match &true_nodes[0] {
+                    Node::Text(text) => assert_eq!(text, "AB"),
+                    _ => panic!("Expected merged Text in true branch"),
+                }
+                // False branch should be merged
+                assert_eq!(false_nodes.len(), 1);
+                match &false_nodes[0] {
+                    Node::Text(text) => assert_eq!(text, "CD"),
+                    _ => panic!("Expected merged Text in false branch"),
+                }
+            }
+            _ => panic!("Expected If node"),
+        }
+    }
+
+    #[test]
+    fn test_optimize_ast_recursive_for() {
+        let nodes = vec![Node::For {
+            var_names: vec!["item".to_string()],
+            iterable: "items".to_string(),
+            reversed: false,
+            nodes: vec![
+                Node::Text("<li>".to_string()),
+                Node::Variable("item".to_string(), vec![]),
+                Node::Text("</li>".to_string()),
+            ],
+            empty_nodes: vec![
+                Node::Text("No ".to_string()),
+                Node::Text("items".to_string()),
+            ],
+        }];
+        let optimized = optimize_ast(nodes);
+        assert_eq!(optimized.len(), 1);
+        match &optimized[0] {
+            Node::For {
+                nodes, empty_nodes, ..
+            } => {
+                // Loop body should have variable preserved
+                assert_eq!(nodes.len(), 3);
+                // Empty block should be merged
+                assert_eq!(empty_nodes.len(), 1);
+                match &empty_nodes[0] {
+                    Node::Text(text) => assert_eq!(text, "No items"),
+                    _ => panic!("Expected merged Text in empty block"),
+                }
+            }
+            _ => panic!("Expected For node"),
+        }
+    }
+
+    #[test]
+    fn test_optimize_ast_through_parse() {
+        // Test that optimization is applied through normal parsing
+        let template = "<div><!-- comment -->Hello</div>";
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+
+        // Should have merged text nodes (comment removed)
+        // The exact behavior depends on lexer output
+        let has_comment = nodes.iter().any(|n| matches!(n, Node::Comment));
+        // Comments should be filtered out during optimization
+        assert!(
+            !has_comment,
+            "Comments should be removed during optimization"
+        );
+    }
+
+    #[test]
+    fn test_optimize_ast_empty_input() {
+        let nodes: Vec<Node> = vec![];
+        let optimized = optimize_ast(nodes);
+        assert_eq!(optimized.len(), 0);
+    }
+
+    #[test]
+    fn test_optimize_ast_single_text() {
+        let nodes = vec![Node::Text("Hello".to_string())];
+        let optimized = optimize_ast(nodes);
+        assert_eq!(optimized.len(), 1);
+        match &optimized[0] {
+            Node::Text(text) => assert_eq!(text, "Hello"),
+            _ => panic!("Expected Text node"),
+        }
     }
 }
