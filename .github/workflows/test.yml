@@ -340,7 +340,9 @@ jobs:
 
       - name: Run Bandit (Python security linter)
         run: |
-          uv run bandit -r python/djust/ -ll -ii -x python/djust/tests/
+          # Skip expected patterns: B703/B308 (mark_safe), B324 (MD5 cache keys),
+          # B301 (pickle for JIT), B102 (exec for JIT codegen)
+          uv run bandit -r python/djust/ -ll -ii -x python/djust/tests/ -s B703,B308,B324,B301,B102
 
       - name: Run Safety (Python dependency vulnerabilities)
         run: |

@@ -309,10 +309,8 @@ class TestHotReloadMessage:
                 "channels.db.database_sync_to_async",
                 side_effect=lambda f: AsyncMock(return_value=f()),
             ):
-                with patch("logging.getLogger") as mock_logger:
-                    mock_log = Mock()
-                    mock_logger.return_value = mock_log
-
+                # Mock the module-level hotreload_logger directly
+                with patch("djust.websocket.hotreload_logger") as mock_log:
                     # Call hotreload_message
                     await mock_consumer.hotreload_message({"file": "test.html"})
 
@@ -338,15 +336,26 @@ class TestHotReloadMessage:
                 "channels.db.database_sync_to_async",
                 side_effect=lambda f: AsyncMock(return_value=f()),
             ):
-                with patch("time.time") as mock_time:
-                    # Simulate >100ms render time
-                    # Calls: start_time, render_start, render_end, total_end
-                    mock_time.side_effect = [0.0, 0.0, 0.15, 0.15]
+                # Patch time.time directly in the time module
+                # (it's imported locally inside hotreload_message)
+                import time
 
-                    with patch("logging.getLogger") as mock_logger:
-                        mock_log = Mock()
-                        mock_logger.return_value = mock_log
+                original_time = time.time
+                call_count = [0]
 
+                def mock_time_func():
+                    call_count[0] += 1
+                    # First call: start_time = 0.0
+                    # Second call: render_start = 0.0
+                    # Third call: render_end = 0.15 (150ms)
+                    # Fourth call: total_end = 0.15
+                    times = [0.0, 0.0, 0.15, 0.15, 0.15, 0.15]
+                    return times[min(call_count[0] - 1, len(times) - 1)]
+
+                time.time = mock_time_func
+                try:
+                    # Mock the module-level hotreload_logger directly
+                    with patch("djust.websocket.hotreload_logger") as mock_log:
                         # Call hotreload_message
                         await mock_consumer.hotreload_message({"file": "test.html"})
 
@@ -354,6 +363,8 @@ class TestHotReloadMessage:
                         assert mock_log.warning.called
                         warning_calls = [str(call) for call in mock_log.warning.call_args_list]
                         assert any("Slow patch generation" in str(call) for call in warning_calls)
+                finally:
+                    time.time = original_time
 
 
 class TestHotReloadIntegration:
