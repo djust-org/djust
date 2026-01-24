@@ -11,6 +11,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from .live_view import DjangoJSONEncoder
 from .validation import validate_handler_params
 from .profiler import profiler
+from .security import create_safe_error_response, sanitize_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     async def receive(self, text_data=None, bytes_data=None):
         """Handle incoming WebSocket messages"""
         import logging
-        import traceback
 
         logger = logging.getLogger(__name__)
 
@@ -140,27 +140,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 }
             )
         except Exception as e:
-            error_msg = f"Error in WebSocket receive: {type(e).__name__}: {str(e)}"
-            logger.error(error_msg, exc_info=True)
+            logger.error(
+                f"Error in WebSocket receive: {type(e).__name__}",
+                exc_info=True,
+            )
 
-            # In debug mode, include traceback
-            from django.conf import settings
-
-            if settings.DEBUG:
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "error": error_msg,
-                        "traceback": traceback.format_exc(),
-                    }
-                )
-            else:
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "error": "An error occurred. Please check server logs.",
-                    }
-                )
+            # Use safe error response (DEBUG-aware, no params leaked)
+            response = create_safe_error_response(
+                exception=e,
+                error_type="default",
+            )
+            await self.send_json(response)
 
     async def handle_mount(self, data: Dict[str, Any]):
         """
@@ -169,8 +159,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         Dynamically imports and instantiates a LiveView class, creates a request
         context, mounts the view, and returns the initial HTML.
         """
-        import logging
-        import traceback
         from django.test import RequestFactory
         from django.conf import settings
 
@@ -321,24 +309,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # Run synchronous view operations in a thread pool
             await sync_to_async(self.view_instance.mount)(request, **params)
         except Exception as e:
-            error_msg = f"Error in {view_path}.mount(): {type(e).__name__}: {str(e)}"
-            logger.error(error_msg, exc_info=True)
+            logger.error(
+                f"Error in {sanitize_for_log(view_path)}.mount(): {type(e).__name__}",
+                exc_info=True,
+            )
 
-            if settings.DEBUG:
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "error": error_msg,
-                        "traceback": traceback.format_exc(),
-                    }
-                )
-            else:
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "error": "Failed to mount view",
-                    }
-                )
+            # Use safe error response (DEBUG-aware, no params leaked)
+            response = create_safe_error_response(
+                exception=e,
+                error_type="mount",
+                view_class=view_path,
+            )
+            await self.send_json(response)
             return
 
         # Get initial HTML (skip if client already has pre-rendered content)
@@ -414,24 +396,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
 
         except Exception as e:
-            error_msg = f"Error rendering {view_path}: {type(e).__name__}: {str(e)}"
-            logger.error(error_msg, exc_info=True)
+            logger.error(
+                f"Error rendering {sanitize_for_log(view_path)}: {type(e).__name__}",
+                exc_info=True,
+            )
 
-            if settings.DEBUG:
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "error": error_msg,
-                        "traceback": traceback.format_exc(),
-                    }
-                )
-            else:
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "error": "Failed to render view",
-                    }
-                )
+            # Use safe error response (DEBUG-aware, no params leaked)
+            response = create_safe_error_response(
+                exception=e,
+                error_type="render",
+                view_class=view_path,
+            )
+            await self.send_json(response)
             return
 
         # Send success response (HTML only if generated)
@@ -459,7 +435,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     async def handle_event(self, data: Dict[str, Any]):
         """Handle client events"""
         import logging
-        import traceback
         import time
         from djust.performance import PerformanceTracker
 
@@ -544,32 +519,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self.send_json(response)
 
             except Exception as e:
-                view_class = (
+                view_class_name = (
                     self.view_instance.__class__.__name__ if self.view_instance else "Unknown"
                 )
-                error_msg = f"Error in actor event handling for {view_class}.{event_name}(): {type(e).__name__}: {str(e)}"
-                logger.error(error_msg, exc_info=True)
+                logger.error(
+                    f"Error in actor event handling for {view_class_name}.{sanitize_for_log(event_name)}(): {type(e).__name__}",
+                    exc_info=True,
+                )
 
-                # In debug mode, send detailed error
-                from django.conf import settings
-
-                if settings.DEBUG:
-                    await self.send_json(
-                        {
-                            "type": "error",
-                            "error": error_msg,
-                            "traceback": traceback.format_exc(),
-                            "event": event_name,
-                            "params": params,
-                        }
-                    )
-                else:
-                    await self.send_json(
-                        {
-                            "type": "error",
-                            "error": "An error occurred processing your request.",
-                        }
-                    )
+                # Use safe error response (DEBUG-aware, no params leaked)
+                response = create_safe_error_response(
+                    exception=e,
+                    error_type="event",
+                    event_name=event_name,
+                    view_class=view_class_name,
+                )
+                await self.send_json(response)
 
         else:
             # Non-actor mode: Use traditional flow
@@ -802,33 +767,23 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self.send_json(response)
 
             except Exception as e:
-                view_class = (
+                view_class_name = (
                     self.view_instance.__class__.__name__ if self.view_instance else "Unknown"
                 )
                 event_type = "component event" if component_id else "event"
-                error_msg = f"Error in {view_class}.{event_name}() ({event_type}): {type(e).__name__}: {str(e)}"
-                logger.error(error_msg, exc_info=True)
+                logger.error(
+                    f"Error in {view_class_name}.{sanitize_for_log(event_name)}() ({event_type}): {type(e).__name__}",
+                    exc_info=True,
+                )
 
-                # In debug mode, send detailed error
-                from django.conf import settings
-
-                if settings.DEBUG:
-                    await self.send_json(
-                        {
-                            "type": "error",
-                            "error": error_msg,
-                            "traceback": traceback.format_exc(),
-                            "event": event_name,
-                            "params": params,
-                        }
-                    )
-                else:
-                    await self.send_json(
-                        {
-                            "type": "error",
-                            "error": "An error occurred processing your request.",
-                        }
-                    )
+                # Use safe error response (DEBUG-aware, no params leaked)
+                response = create_safe_error_response(
+                    exception=e,
+                    error_type="event",
+                    event_name=event_name,
+                    view_class=view_class_name,
+                )
+                await self.send_json(response)
 
     def _extract_cache_config(self) -> Dict[str, Any]:
         """

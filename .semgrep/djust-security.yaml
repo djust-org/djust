@@ -1,0 +1,203 @@
+rules:
+  # ==========================================================================
+  # Python Security Rules for djust
+  # ==========================================================================
+
+  - id: djust-unsafe-setattr
+    patterns:
+      - pattern: setattr($OBJ, $KEY, $VALUE)
+      - pattern-not: setattr($OBJ, "...", $VALUE)
+      - pattern-not-inside: |
+          def safe_setattr(...):
+              ...
+    message: |
+      Unsafe use of setattr() with dynamic key. This can lead to prototype
+      pollution attacks if the key comes from untrusted input.
+
+      Use djust's safe_setattr() instead:
+        from djust.security import safe_setattr
+        safe_setattr(obj, key, value)
+
+      See: docs/SECURITY_GUIDELINES.md
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-915: Improperly Controlled Modification of Dynamically-Determined Object Attributes"
+      owasp: "A03:2021 - Injection"
+
+  - id: djust-traceback-in-response
+    patterns:
+      - pattern: |
+          {..., "traceback": traceback.format_exc(), ...}
+      - pattern-not-inside: |
+          if settings.DEBUG:
+              ...
+      - pattern-not-inside: |
+          if debug_mode:
+              ...
+    message: |
+      Stack traces should never be included in responses without checking DEBUG mode.
+      This can leak sensitive information about your application structure.
+
+      Use djust's create_safe_error_response() instead:
+        from djust.security import create_safe_error_response
+        response = create_safe_error_response(exception, error_type="event")
+
+      See: docs/SECURITY_GUIDELINES.md
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-209: Generation of Error Message Containing Sensitive Information"
+      owasp: "A01:2021 - Broken Access Control"
+
+  - id: djust-params-in-error-response
+    patterns:
+      - pattern: |
+          {..., "params": $PARAMS, ...}
+      - pattern-inside: |
+          {..., "type": "error", ...}
+    message: |
+      Never include user parameters in error responses. This can leak sensitive
+      data back to the client or in logs.
+
+      Use djust's create_safe_error_response() instead, which never includes params:
+        from djust.security import create_safe_error_response
+        response = create_safe_error_response(exception)
+
+      See: docs/SECURITY_GUIDELINES.md
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+      owasp: "A01:2021 - Broken Access Control"
+
+  - id: djust-unsanitized-log
+    patterns:
+      - pattern-either:
+          - pattern: logger.info(f"...$VAR...")
+          - pattern: logger.warning(f"...$VAR...")
+          - pattern: logger.error(f"...$VAR...")
+          - pattern: logger.debug(f"...$VAR...")
+          - pattern: logging.info(f"...$VAR...")
+          - pattern: logging.warning(f"...$VAR...")
+          - pattern: logging.error(f"...$VAR...")
+          - pattern: logging.debug(f"...$VAR...")
+      - pattern-not: |
+          ...sanitize_for_log($VAR)...
+      - metavariable-pattern:
+          metavariable: $VAR
+          patterns:
+            - pattern-either:
+                - pattern: user_input
+                - pattern: params
+                - pattern: user_data
+                - pattern: request.POST
+                - pattern: request.GET
+                - pattern: data
+    message: |
+      Logging user-controlled data without sanitization can enable log injection
+      attacks. Use sanitize_for_log() to clean the input first.
+
+        from djust.security import sanitize_for_log
+        logger.info(f"User searched: {sanitize_for_log(user_input)}")
+
+      See: docs/SECURITY_GUIDELINES.md
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-117: Improper Output Neutralization for Logs"
+      owasp: "A09:2021 - Security Logging and Monitoring Failures"
+
+  - id: djust-eval-usage
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
+    message: |
+      Never use eval() or exec() with user input. This can lead to arbitrary
+      code execution.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+      owasp: "A03:2021 - Injection"
+
+  # ==========================================================================
+  # JavaScript Security Rules for djust
+  # ==========================================================================
+
+  - id: djust-unsafe-innerhtml
+    patterns:
+      - pattern: $ELEMENT.innerHTML = $VALUE
+      - pattern-not: $ELEMENT.innerHTML = ""
+      - pattern-not-inside: |
+          function safeSetInnerHTML(...) {
+            ...
+          }
+    message: |
+      Direct innerHTML assignment can lead to XSS vulnerabilities.
+      Use djustSecurity.safeSetInnerHTML() for untrusted content:
+
+        djustSecurity.safeSetInnerHTML(element, htmlString);
+
+      Note: innerHTML from DOMParser output (as used in djust's VDOM patching)
+      is generally safe as it's been re-parsed.
+
+      See: docs/SECURITY_GUIDELINES.md
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+      owasp: "A03:2021 - Injection"
+
+  - id: djust-unsafe-object-assign
+    patterns:
+      - pattern: Object.assign($TARGET, $SOURCE)
+      - pattern-not-inside: |
+          function safeObjectAssign(...) {
+            ...
+          }
+    message: |
+      Object.assign() with untrusted sources can lead to prototype pollution.
+      Use djustSecurity.safeObjectAssign() instead:
+
+        djustSecurity.safeObjectAssign(target, untrustedSource);
+
+      See: docs/SECURITY_GUIDELINES.md
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-1321: Improperly Controlled Modification of Object Prototype Attributes ('Prototype Pollution')"
+      owasp: "A03:2021 - Injection"
+
+  - id: djust-new-function
+    pattern-either:
+      - pattern: new Function(...)
+      - pattern: eval(...)
+    message: |
+      Never use new Function() or eval() with user input. This can lead to
+      arbitrary code execution.
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+      owasp: "A03:2021 - Injection"
+
+  - id: djust-document-write
+    pattern: document.write(...)
+    message: |
+      document.write() can lead to XSS vulnerabilities and should be avoided.
+      Use DOM manipulation methods instead.
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+      owasp: "A03:2021 - Injection"

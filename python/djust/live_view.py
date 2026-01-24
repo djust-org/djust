@@ -19,6 +19,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils.decorators import method_decorator
 from django.db import models
 from .validation import validate_handler_params
+from .security import safe_setattr
 
 # Try to use orjson for faster JSON operations (2-3x faster than stdlib)
 import importlib.util
@@ -2410,11 +2411,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # This ensures components are created with the correct restored state values
             for key, value in saved_state.items():
                 if not key.startswith("_") and not callable(value):
-                    try:
-                        setattr(self, key, value)
-                    except AttributeError:
-                        # Skip read-only properties
-                        pass
+                    # Use safe_setattr to prevent prototype pollution attacks
+                    safe_setattr(self, key, value, allow_private=False)
 
             # Initialize temporary assigns with default values
             self._initialize_temporary_assigns()

@@ -303,10 +303,84 @@ jobs:
             rm examples/demo_project/server.pid
           fi
 
+  # Security scanning job - runs in parallel
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: build-extensions
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-python-security-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-python-security-
+            ${{ runner.os }}-python-
+
+      - name: Install Python dependencies
+        run: uv sync --extra dev
+
+      - name: Install security tools
+        run: |
+          uv pip install bandit safety
+
+      - name: Run Bandit (Python security linter)
+        run: |
+          uv run bandit -r python/djust/ -ll -ii -x python/djust/tests/
+
+      - name: Run Safety (Python dependency vulnerabilities)
+        run: |
+          uv run safety check --full-report || echo "Safety check completed with warnings"
+        continue-on-error: true
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run cargo-audit (Rust dependency vulnerabilities)
+        run: cargo audit || echo "Cargo audit completed with warnings"
+        continue-on-error: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Run npm audit (JS dependency vulnerabilities)
+        run: npm audit --audit-level=high || echo "NPM audit completed with warnings"
+        continue-on-error: true
+
+      - name: Run ESLint with security plugin
+        run: npm run lint || echo "ESLint completed with warnings"
+        continue-on-error: true
+
   # Summary job - waits for all test jobs
   test-summary:
     runs-on: ubuntu-latest
-    needs: [rust-tests, python-tests, javascript-tests, playwright-tests]
+    needs: [rust-tests, python-tests, javascript-tests, playwright-tests, security-scan]
     if: always()
     steps:
       - name: Check test results
@@ -316,15 +390,19 @@ jobs:
           echo "  Python tests: ${{ needs.python-tests.result }}"
           echo "  JavaScript tests: ${{ needs.javascript-tests.result }}"
           echo "  Playwright tests: ${{ needs.playwright-tests.result }} (optional)"
+          echo "  Security scan: ${{ needs.security-scan.result }}"
 
           # Core tests must pass (Rust, Python, JavaScript)
-          # Playwright tests are optional (known issues with @loading attribute)
+          # Playwright tests and security scan are informational (not blocking)
           if [ "${{ needs.rust-tests.result }}" == "success" ] && \
              [ "${{ needs.python-tests.result }}" == "success" ] && \
              [ "${{ needs.javascript-tests.result }}" == "success" ]; then
             echo "✅ All core tests passed!"
             if [ "${{ needs.playwright-tests.result }}" != "success" ]; then
               echo "⚠️  Playwright tests failed (optional, not blocking)"
+            fi
+            if [ "${{ needs.security-scan.result }}" != "success" ]; then
+              echo "⚠️  Security scan had warnings (review recommended)"
             fi
             exit 0
           else

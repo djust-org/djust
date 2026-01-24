@@ -51,6 +51,7 @@ maturin develop
 black python/
 ruff check python/
 mypy python/
+bandit -r python/djust/ -ll
 ```
 
 ### Rust
@@ -61,6 +62,20 @@ mypy python/
 ```bash
 cargo fmt
 cargo clippy -- -D warnings
+```
+
+## Security
+
+**IMPORTANT**: All contributors must follow the security guidelines in [`docs/SECURITY_GUIDELINES.md`](docs/SECURITY_GUIDELINES.md).
+
+Key requirements:
+- Use `safe_setattr()` instead of raw `setattr()` with untrusted keys
+- Use `sanitize_for_log()` before logging user input
+- Use `create_safe_error_response()` for error responses
+- Never include stack traces or params in production error responses
+
+```python
+from djust.security import safe_setattr, sanitize_for_log, create_safe_error_response
 ```
 
 ## Testing
