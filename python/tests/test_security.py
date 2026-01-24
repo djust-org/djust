@@ -350,6 +350,44 @@ class TestErrorHandling:
         assert "sensitive" not in message
         assert "ValueError" not in message
 
+    def test_handle_exception_returns_safe_response(self):
+        """handle_exception should return a safe response dict."""
+        from djust.security import handle_exception
+        import logging
+
+        logger = logging.getLogger("test")
+        exc = ValueError("test error")
+
+        # With mock Django settings in production mode
+        response = handle_exception(
+            exc,
+            error_type="event",
+            event_name="click",
+            logger=logger,
+        )
+
+        assert response["type"] == "error"
+        assert "error" in response
+
+    def test_handle_exception_with_context(self):
+        """handle_exception should accept context parameters."""
+        from djust.security import handle_exception
+        import logging
+
+        logger = logging.getLogger("test")
+        exc = RuntimeError("test")
+
+        response = handle_exception(
+            exc,
+            error_type="mount",
+            view_class="TestView",
+            event_name="mount",
+            logger=logger,
+            log_message="Custom log message",
+        )
+
+        assert response["type"] == "error"
+
 
 class TestSecurityIntegration:
     """Integration tests for security utilities working together."""

@@ -9,11 +9,11 @@ This module provides security utilities for preventing common vulnerabilities:
 - **Log Injection**: Use `sanitize_for_log()` to clean user input before logging
   to prevent log injection attacks and terminal escape sequence injection.
 
-- **Information Disclosure**: Use `create_safe_error_response()` to generate
+- **Information Disclosure**: Use `handle_exception()` to both log and create
   error responses that respect DEBUG mode and don't leak sensitive information.
 
 Example Usage:
-    from djust.security import safe_setattr, sanitize_for_log, create_safe_error_response
+    from djust.security import safe_setattr, sanitize_for_log, handle_exception
 
     # Safe attribute setting (blocks __proto__, __class__, etc.)
     for key, value in user_params.items():
@@ -22,8 +22,8 @@ Example Usage:
     # Safe logging (strips control chars, truncates)
     logger.info(f"User searched for: {sanitize_for_log(user_query)}")
 
-    # Safe error response (DEBUG-aware)
-    response = create_safe_error_response(exception, event_name="click")
+    # Handle exception (logs + creates safe response in one call)
+    response = handle_exception(exception, error_type="event", event_name="click")
 """
 
 from .attribute_guard import (
@@ -39,6 +39,7 @@ from .log_sanitizer import (
 from .error_handling import (
     create_safe_error_response,
     safe_error_message,
+    handle_exception,
 )
 
 __all__ = [
@@ -53,4 +54,5 @@ __all__ = [
     # Error handling
     "create_safe_error_response",
     "safe_error_message",
+    "handle_exception",
 ]

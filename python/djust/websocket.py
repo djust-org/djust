@@ -11,7 +11,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from .live_view import DjangoJSONEncoder
 from .validation import validate_handler_params
 from .profiler import profiler
-from .security import create_safe_error_response, sanitize_for_log
+from .security import handle_exception, sanitize_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -140,15 +140,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 }
             )
         except Exception as e:
-            logger.error(
-                f"Error in WebSocket receive: {type(e).__name__}",
-                exc_info=True,
-            )
-
-            # Use safe error response (DEBUG-aware, no params leaked)
-            response = create_safe_error_response(
-                exception=e,
+            # Handle exception: logs (with stack trace only in DEBUG) and returns safe response
+            response = handle_exception(
+                e,
                 error_type="default",
+                logger=logger,
+                log_message="Error in WebSocket receive",
             )
             await self.send_json(response)
 
@@ -255,14 +252,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 logger.info(f"SessionActor created: {self.actor_handle.session_id}")
 
         except Exception as e:
-            error_msg = f"Failed to instantiate {view_path}: {type(e).__name__}: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            await self.send_json(
-                {
-                    "type": "error",
-                    "error": error_msg,
-                }
+            response = handle_exception(
+                e,
+                error_type="mount",
+                view_class=view_path,
+                logger=logger,
+                log_message=f"Failed to instantiate {view_path}",
             )
+            await self.send_json(response)
             return
 
         # Create request with session
@@ -289,14 +286,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 request.user = self.scope["user"]
 
         except Exception as e:
-            error_msg = f"Failed to create request context: {type(e).__name__}: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            await self.send_json(
-                {
-                    "type": "error",
-                    "error": error_msg,
-                }
+            response = handle_exception(
+                e,
+                error_type="mount",
+                logger=logger,
+                log_message="Failed to create request context",
             )
+            await self.send_json(response)
             return
 
         # Mount the view (needs sync_to_async for database operations)
@@ -309,16 +305,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # Run synchronous view operations in a thread pool
             await sync_to_async(self.view_instance.mount)(request, **params)
         except Exception as e:
-            logger.error(
-                f"Error in {sanitize_for_log(view_path)}.mount(): {type(e).__name__}",
-                exc_info=True,
-            )
-
-            # Use safe error response (DEBUG-aware, no params leaked)
-            response = create_safe_error_response(
-                exception=e,
+            response = handle_exception(
+                e,
                 error_type="mount",
                 view_class=view_path,
+                logger=logger,
+                log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
             )
             await self.send_json(response)
             return
@@ -396,16 +388,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
 
         except Exception as e:
-            logger.error(
-                f"Error rendering {sanitize_for_log(view_path)}: {type(e).__name__}",
-                exc_info=True,
-            )
-
-            # Use safe error response (DEBUG-aware, no params leaked)
-            response = create_safe_error_response(
-                exception=e,
+            response = handle_exception(
+                e,
                 error_type="render",
                 view_class=view_path,
+                logger=logger,
+                log_message=f"Error rendering {sanitize_for_log(view_path)}",
             )
             await self.send_json(response)
             return
@@ -522,17 +510,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 view_class_name = (
                     self.view_instance.__class__.__name__ if self.view_instance else "Unknown"
                 )
-                logger.error(
-                    f"Error in actor event handling for {view_class_name}.{sanitize_for_log(event_name)}(): {type(e).__name__}",
-                    exc_info=True,
-                )
-
-                # Use safe error response (DEBUG-aware, no params leaked)
-                response = create_safe_error_response(
-                    exception=e,
+                response = handle_exception(
+                    e,
                     error_type="event",
                     event_name=event_name,
                     view_class=view_class_name,
+                    logger=logger,
+                    log_message=f"Error in actor event handling for {view_class_name}.{sanitize_for_log(event_name)}()",
                 )
                 await self.send_json(response)
 
@@ -771,17 +755,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     self.view_instance.__class__.__name__ if self.view_instance else "Unknown"
                 )
                 event_type = "component event" if component_id else "event"
-                logger.error(
-                    f"Error in {view_class_name}.{sanitize_for_log(event_name)}() ({event_type}): {type(e).__name__}",
-                    exc_info=True,
-                )
-
-                # Use safe error response (DEBUG-aware, no params leaked)
-                response = create_safe_error_response(
-                    exception=e,
+                response = handle_exception(
+                    e,
                     error_type="event",
                     event_name=event_name,
                     view_class=view_class_name,
+                    logger=logger,
+                    log_message=f"Error in {view_class_name}.{sanitize_for_log(event_name)}() ({event_type})",
                 )
                 await self.send_json(response)
 

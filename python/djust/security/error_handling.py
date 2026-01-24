@@ -173,61 +173,100 @@ def create_safe_error_response(
     return response
 
 
-def log_exception_safely(
-    logger,
+def handle_exception(
     exception: Exception,
-    message: str,
+    error_type: str = "default",
     event_name: Optional[str] = None,
     view_class: Optional[str] = None,
+    logger: Optional[Any] = None,
+    log_message: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
-) -> None:
+) -> Dict[str, Any]:
     """
-    Log an exception with sanitized context.
+    Handle an exception: log it appropriately and return a safe response.
 
-    This function logs exceptions in a way that:
-    - Always includes exception info for debugging
-    - Sanitizes any user-provided data in extra
-    - Provides consistent log format
+    This is the recommended single entry point for exception handling.
+    It automatically:
+    - Determines DEBUG mode from Django settings
+    - Logs with stack trace only in DEBUG mode
+    - Returns a safe response (detailed in DEBUG, generic in production)
 
     Args:
-        logger: Logger instance to use.
-        exception: The exception to log.
-        message: Log message prefix.
+        exception: The exception that occurred.
+        error_type: Type of error ("mount", "event", "render", etc.).
         event_name: Optional event name for context.
         view_class: Optional view class name for context.
-        extra: Optional extra data (will be sanitized).
+        logger: Optional logger instance. If None, uses module logger.
+        log_message: Optional custom log message. Defaults to "Error occurred".
+        extra: Optional extra data for logging (will be sanitized).
+
+    Returns:
+        A dictionary suitable for JSON response.
 
     Examples:
         >>> import logging
         >>> logger = logging.getLogger(__name__)
-        >>> e = ValueError("test")
-        >>> log_exception_safely(logger, e, "Failed to process")
+        >>> try:
+        ...     raise ValueError("test")
+        ... except Exception as e:
+        ...     response = handle_exception(
+        ...         e,
+        ...         error_type="event",
+        ...         event_name="click",
+        ...         logger=logger,
+        ...     )
+        >>> response["type"]
+        'error'
     """
-    from .log_sanitizer import sanitize_dict_for_log
+    import logging as logging_module
 
-    # Build context string
+    # Determine DEBUG mode once
+    try:
+        from django.conf import settings
+        debug_mode = getattr(settings, "DEBUG", False)
+    except Exception:
+        debug_mode = False
+
+    # Get or create logger
+    if logger is None:
+        logger = logging_module.getLogger("djust.security")
+
+    # Build context for logging
     context_parts = []
     if view_class:
         context_parts.append(f"view={view_class}")
     if event_name:
         context_parts.append(f"event={event_name}")
-
     context = f" ({', '.join(context_parts)})" if context_parts else ""
 
-    # Sanitize extra data if provided
-    safe_extra = None
-    if extra:
-        safe_extra = sanitize_dict_for_log(extra)
+    # Log message
+    msg = log_message or "Error occurred"
 
-    # Log with exception info
-    if safe_extra:
-        logger.error(
-            f"{message}{context}: {type(exception).__name__}",
-            exc_info=True,
-            extra={"sanitized_context": safe_extra},
-        )
+    # Log with exc_info only in DEBUG mode (don't fill prod logs with stack traces)
+    if debug_mode:
+        # Full stack trace in development
+        if extra:
+            from .log_sanitizer import sanitize_dict_for_log
+            safe_extra = sanitize_dict_for_log(extra)
+            logger.error(
+                f"{msg}{context}: {type(exception).__name__}: {exception}",
+                exc_info=True,
+                extra={"sanitized_context": safe_extra},
+            )
+        else:
+            logger.error(
+                f"{msg}{context}: {type(exception).__name__}: {exception}",
+                exc_info=True,
+            )
     else:
-        logger.error(
-            f"{message}{context}: {type(exception).__name__}",
-            exc_info=True,
-        )
+        # Minimal logging in production - just exception type, no stack trace
+        logger.error(f"{msg}{context}: {type(exception).__name__}")
+
+    # Create and return safe response
+    return create_safe_error_response(
+        exception=exception,
+        error_type=error_type,
+        event_name=event_name,
+        view_class=view_class,
+        debug_mode=debug_mode,
+    )
