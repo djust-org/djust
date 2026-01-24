@@ -540,11 +540,17 @@ pub enum Node {
     For { var_names, iterable, nodes, reversed, empty_nodes },
     Block { name, nodes },
     Extends(String),
-    Include(String),
+    Include(String),               // {% include "partial.html" %}
+    Url { name, args, kwargs },    // {% url 'name' arg1 kwarg=val %} (preprocessed by Python)
     With { assignments, nodes },
     // ... more node types
 }
 ```
+
+**Condition operators**: The `If` node supports comparison operators:
+- Equality: `==`, `!=`
+- Comparison: `>`, `<`, `>=`, `<=`
+- Boolean: `and`, `or`, `not`
 
 #### Example
 
@@ -691,6 +697,13 @@ let result = apply_filter("upper", &value, None)?;
 | `last` | Last item | `{{ list\|last }}` | Last element |
 | `length` | List length | `{{ list\|length }}` | Number of items |
 | `slice` | Slice list | `{{ list\|slice:":3" }}` | First 3 items |
+
+#### URL Filters
+
+| Filter | Description | Example | Result |
+|--------|-------------|---------|--------|
+| `urlencode` | URL-safe encoding | `{{ "hello world"\|urlencode }}` | `"hello%20world"` |
+| `urlencode:""` | Encode all chars | `{{ "a/b"\|urlencode:"" }}` | `"a%2Fb"` |
 
 #### Utility Filters
 
@@ -856,6 +869,13 @@ variables = extract_template_variables(template_source)
 ---
 
 ## Changelog
+
+### v0.1.6 (2026-01-24)
+- Added `{% url %}` tag support (Python-side preprocessing)
+- Added `{% include %}` tag with template directory support
+- Added `urlencode` filter
+- Added comparison operators (`>`, `<`, `>=`, `<=`) in `{% if %}` tags
+- Added auto-serialization for Django types (datetime, Decimal, UUID, FieldFile)
 
 ### v0.1.0 (2025-01-15)
 - Initial release

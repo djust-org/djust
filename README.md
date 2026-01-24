@@ -252,15 +252,26 @@ djust supports Django template syntax with event binding:
 
 <!-- Filters -->
 <p>{{ text|upper }}</p>
+<a href="?q={{ query|urlencode }}">Search</a>
 
 <!-- Control flow -->
 {% if show %}
     <div>Visible</div>
 {% endif %}
 
+{% if count > 10 %}
+    <div>Many items!</div>
+{% endif %}
+
 {% for item in items %}
     <li>{{ item }}</li>
 {% endfor %}
+
+<!-- URL resolution -->
+<a href="{% url 'myapp:detail' pk=item.id %}">View</a>
+
+<!-- Template includes -->
+{% include "partials/header.html" %}
 
 <!-- Event binding -->
 <button @click="increment">Click me</button>
@@ -649,8 +660,10 @@ Areas we'd love help with:
 
 ## 📝 Roadmap
 
-- [ ] Template inheritance (`{% extends %}`)
-- [ ] More Django template filters
+- [x] Template inheritance (`{% extends %}`)
+- [x] `{% url %}` and `{% include %}` tags
+- [x] Comparison operators in `{% if %}` tags
+- [x] More Django template filters (`urlencode`)
 - [ ] File upload handling
 - [ ] Server-sent events (SSE) fallback
 - [ ] React/Vue component compatibility

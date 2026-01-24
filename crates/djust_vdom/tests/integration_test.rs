@@ -430,25 +430,25 @@ fn test_base62_id_generation() {
 
 #[test]
 fn test_id_counter_produces_unique_ids() {
-    // Verify that consecutive parses produce different IDs when counter is NOT reset
-    // Note: We can't test reset behavior reliably due to test parallelism affecting
-    // the global counter. Instead, verify IDs are unique within a single parse.
-    use djust_vdom::reset_id_counter;
-
-    reset_id_counter();
+    // Verify IDs are unique within a single parse.
+    // Note: We don't reset the counter because that causes race conditions
+    // when tests run in parallel. We just verify uniqueness regardless of
+    // what values the IDs have.
     let html = "<div><span>A</span><span>B</span><span>C</span></div>";
     let vdom = parse_html(html).unwrap();
 
-    // Collect all IDs from the tree
-    let mut ids: Vec<String> = Vec::new();
-    if let Some(id) = &vdom.djust_id {
-        ids.push(id.clone());
-    }
-    for child in &vdom.children {
-        if let Some(id) = &child.djust_id {
+    // Collect all IDs from the tree (recursively to catch all nodes)
+    fn collect_ids(node: &djust_vdom::VNode, ids: &mut Vec<String>) {
+        if let Some(id) = &node.djust_id {
             ids.push(id.clone());
         }
+        for child in &node.children {
+            collect_ids(child, ids);
+        }
     }
+
+    let mut ids: Vec<String> = Vec::new();
+    collect_ids(&vdom, &mut ids);
 
     // All IDs should be unique
     let unique_count = {

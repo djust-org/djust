@@ -108,6 +108,31 @@ class DjangoJSONEncoder(json.JSONEncoder):
         if isinstance(obj, Decimal):
             return float(obj)
 
+        # Handle Django FieldFile/ImageFieldFile (must check before Model)
+        from django.db.models.fields.files import FieldFile
+
+        if isinstance(obj, FieldFile):
+            # Return URL if file exists, otherwise None
+            if obj:
+                try:
+                    return obj.url
+                except ValueError:
+                    # No file associated with this field
+                    return None
+            return None
+
+        # Duck-typing fallback for file-like objects (e.g., custom file fields, mocks)
+        # Must have 'url' and 'name' attributes (signature of file fields)
+        if hasattr(obj, "url") and hasattr(obj, "name") and not isinstance(obj, type):
+            # Exclude dicts, lists, and strings which might have these attrs
+            if not isinstance(obj, (dict, list, tuple, str)):
+                if obj:
+                    try:
+                        return obj.url
+                    except (ValueError, AttributeError):
+                        return None
+                return None
+
         # Handle Django model instances
         if isinstance(obj, models.Model):
             return self._serialize_model_safely(obj)

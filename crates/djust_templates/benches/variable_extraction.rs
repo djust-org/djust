@@ -1,5 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use djust_templates::extract_template_variables;
+use std::hint::black_box;
 
 fn bench_simple_variables(c: &mut Criterion) {
     let mut group = c.benchmark_group("simple_variables");
