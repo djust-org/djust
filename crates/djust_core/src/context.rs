@@ -99,6 +99,21 @@ impl Context {
             }
         }
     }
+
+    /// Convert the entire context to a flattened HashMap.
+    ///
+    /// This merges all stack frames (with later frames taking precedence)
+    /// into a single HashMap. Used for passing context to Python callbacks.
+    pub fn to_hashmap(&self) -> HashMap<String, Value> {
+        let mut result = HashMap::new();
+        // Iterate from bottom to top so later frames override earlier ones
+        for frame in &self.stack {
+            for (key, value) in frame {
+                result.insert(key.clone(), value.clone());
+            }
+        }
+        result
+    }
 }
 
 #[cfg(test)]

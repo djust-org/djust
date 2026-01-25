@@ -5,7 +5,7 @@ This package provides a Phoenix LiveView-style reactive framework for Django,
 powered by Rust for maximum performance.
 """
 
-from .live_view import LiveView, live_view, clear_jit_cache
+from .live_view import LiveView, live_view
 from .component import Component, LiveComponent
 from .decorators import (
     reactive,
@@ -19,17 +19,6 @@ from .decorators import (
 from .react import react_components, register_react_component, ReactMixin
 from .forms import FormMixin, LiveViewForm, form_field
 from .drafts import DraftModeMixin
-from .optimization.fingerprint import FingerprintMixin, fingerprint
-from .profiler import profiler, profile
-
-# Import testing utilities (for pytest/unittest integration)
-from .testing import (
-    LiveViewTestClient,
-    SnapshotTestMixin,
-    performance_test,
-    MockRequest,
-    create_test_view,
-)
 
 # Import Rust functions
 try:
@@ -42,6 +31,14 @@ except ImportError as e:
     render_template = None
     diff_html = None
     RustLiveView = None
+
+# Register template tag handlers (url, static, etc.)
+# This imports the template_tags module which auto-registers handlers
+try:
+    from . import template_tags  # noqa: F401
+except ImportError:
+    # Template tags module not available (e.g., during initial install)
+    pass
 
 # Import Rust components (optional, requires separate build)
 try:
@@ -178,7 +175,6 @@ def enable_hot_reload():
 __all__ = [
     "LiveView",
     "live_view",
-    "clear_jit_cache",
     "Component",
     "LiveComponent",
     "reactive",
@@ -198,16 +194,4 @@ __all__ = [
     "form_field",
     "DraftModeMixin",
     "enable_hot_reload",
-    # Fingerprint optimization
-    "FingerprintMixin",
-    "fingerprint",
-    # Profiler
-    "profiler",
-    "profile",
-    # Testing utilities
-    "LiveViewTestClient",
-    "SnapshotTestMixin",
-    "performance_test",
-    "MockRequest",
-    "create_test_view",
 ]
