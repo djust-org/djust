@@ -276,6 +276,59 @@ mod tests {
     }
 
     #[test]
+    fn test_nested_block_inheritance() {
+        // Test case: nested blocks across inheritance levels
+        // This mirrors the docs template structure:
+        // - base.html has {% block content %}
+        // - base_docs.html extends base, defines content with nested {% block docs_content %}
+        // - index.html extends base_docs, only overrides docs_content
+        let mut loader = TestTemplateLoader::new();
+
+        // Root template with outer block
+        loader.add(
+            "base.html",
+            "<html>{% block content %}Base Content{% endblock %}</html>",
+        );
+
+        // Intermediate template that wraps inner block inside content block
+        loader.add(
+            "base_docs.html",
+            "{% extends \"base.html\" %}{% block content %}<div class=\"wrapper\">{% block inner %}Default Inner{% endblock %}</div>{% endblock %}",
+        );
+
+        // Child template only overrides the inner nested block
+        let child_source =
+            "{% extends \"base_docs.html\" %}{% block inner %}Child Inner Content{% endblock %}";
+        let child_template = Template::new(child_source).unwrap();
+
+        let context = Context::new();
+        let result = child_template
+            .render_with_loader(&context, &loader)
+            .unwrap();
+
+        // Should have the wrapper div from base_docs.html
+        assert!(
+            result.contains("<div class=\"wrapper\">"),
+            "Missing wrapper div"
+        );
+        // Should have the child's inner content
+        assert!(
+            result.contains("Child Inner Content"),
+            "Missing child inner content"
+        );
+        // Should NOT have the default inner content
+        assert!(
+            !result.contains("Default Inner"),
+            "Should not have default inner"
+        );
+        // Should NOT have the base content (it was overridden by base_docs)
+        assert!(
+            !result.contains("Base Content"),
+            "Should not have base content"
+        );
+    }
+
+    #[test]
     fn test_inheritance_with_variables() {
         let mut loader = TestTemplateLoader::new();
 
