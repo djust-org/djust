@@ -193,6 +193,35 @@ pre-commit-install: ## Install pre-commit hooks (run once after clone)
 .PHONY: check
 check: lint test ## Run linters and tests
 
+##@ Benchmarks
+
+.PHONY: benchmark
+benchmark: benchmark-rust benchmark-python ## Run all benchmarks
+
+.PHONY: benchmark-rust
+benchmark-rust: ## Run Rust benchmarks (Criterion)
+	@echo "$(GREEN)Running Rust benchmarks...$(NC)"
+	@echo "$(YELLOW)Note: This may take several minutes$(NC)"
+	@PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo bench --workspace --exclude djust_live 2>&1 | tee benchmark-rust.log
+	@echo "$(GREEN)Rust benchmark results saved to benchmark-rust.log$(NC)"
+	@echo "$(YELLOW)HTML reports available in target/criterion/$(NC)"
+
+.PHONY: benchmark-python
+benchmark-python: ## Run Python benchmarks (pytest-benchmark)
+	@echo "$(GREEN)Running Python benchmarks...$(NC)"
+	@PYTHONPATH=. .venv/bin/python -m pytest tests/benchmarks/ -v --benchmark-only --benchmark-autosave
+
+.PHONY: benchmark-python-compare
+benchmark-python-compare: ## Compare Python benchmarks against saved baseline
+	@echo "$(GREEN)Comparing Python benchmarks against baseline...$(NC)"
+	@PYTHONPATH=. .venv/bin/python -m pytest tests/benchmarks/ -v --benchmark-compare
+
+.PHONY: benchmark-quick
+benchmark-quick: ## Run quick benchmark subset (for CI)
+	@echo "$(GREEN)Running quick benchmarks...$(NC)"
+	@PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo bench --workspace --exclude djust_live -- --quick
+	@PYTHONPATH=. .venv/bin/python -m pytest tests/benchmarks/ -v --benchmark-only --benchmark-disable-gc
+
 ##@ Database
 
 .PHONY: migrate

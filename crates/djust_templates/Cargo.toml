@@ -28,3 +28,7 @@ tempfile = "3.24"
 [[bench]]
 name = "variable_extraction"
 harness = false
+
+[[bench]]
+name = "tag_registry"
+harness = false
