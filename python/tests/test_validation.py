@@ -820,5 +820,173 @@ class TestFormatTypeErrorHint:
         assert "data-user-profile-id:int" in hint
 
 
+class TestPositionalArgsMapping:
+    """Test positional arguments mapping from inline handler syntax.
+
+    Tests the feature that allows @click="handler('value')" to pass
+    positional arguments that are mapped to named parameters.
+    """
+
+    def test_single_positional_arg_maps_to_first_param(self):
+        """Test that a single positional arg maps to the first parameter."""
+
+        def handler(self, value: str, **kwargs):
+            pass
+
+        result = validate_handler_params(handler, {}, "handler", positional_args=["hello"])
+        assert result["valid"] is True
+        assert result["coerced_params"]["value"] == "hello"
+
+    def test_multiple_positional_args_map_in_order(self):
+        """Test that multiple positional args map to parameters in order."""
+
+        def handler(self, name: str, count: int, enabled: bool = False, **kwargs):
+            pass
+
+        result = validate_handler_params(
+            handler, {}, "handler", positional_args=["Alice", 42, True]
+        )
+        assert result["valid"] is True
+        assert result["coerced_params"]["name"] == "Alice"
+        assert result["coerced_params"]["count"] == 42
+        assert result["coerced_params"]["enabled"] is True
+
+    def test_positional_args_take_precedence_over_data_attrs(self):
+        """Test that positional args override data-* attribute values."""
+
+        def handler(self, value: str, **kwargs):
+            pass
+
+        # data-value="from_attr" but positional arg says "from_handler"
+        result = validate_handler_params(
+            handler, {"value": "from_attr"}, "handler", positional_args=["from_handler"]
+        )
+        assert result["valid"] is True
+        assert result["coerced_params"]["value"] == "from_handler"
+
+    def test_extra_positional_args_are_ignored(self):
+        """Test that extra positional args beyond parameters are ignored."""
+
+        def handler(self, value: str, **kwargs):
+            pass
+
+        result = validate_handler_params(
+            handler, {}, "handler", positional_args=["first", "second", "third"]
+        )
+        assert result["valid"] is True
+        assert result["coerced_params"]["value"] == "first"
+        assert "second" not in result["coerced_params"]
+        assert "third" not in result["coerced_params"]
+
+    def test_positional_args_with_type_coercion(self):
+        """Test that positional args are coerced to expected types."""
+
+        def handler(self, count: int, price: float, **kwargs):
+            pass
+
+        # Note: In practice, parseEventHandler already parses to typed values
+        # but if strings are passed, coercion should still work
+        result = validate_handler_params(handler, {}, "handler", positional_args=[42, 19.99])
+        assert result["valid"] is True
+        assert result["coerced_params"]["count"] == 42
+        assert result["coerced_params"]["price"] == 19.99
+
+    def test_empty_positional_args_list(self):
+        """Test that empty positional args list works correctly."""
+
+        def handler(self, value: str = "default", **kwargs):
+            pass
+
+        result = validate_handler_params(handler, {}, "handler", positional_args=[])
+        assert result["valid"] is True
+        # Default value is used since nothing was provided
+        assert result["coerced_params"] == {}
+
+    def test_positional_args_with_required_params(self):
+        """Test that positional args satisfy required parameters."""
+
+        def handler(self, required_value: str):
+            """Handler with required parameter and no **kwargs."""
+            pass
+
+        # Without positional args, validation fails
+        result = validate_handler_params(handler, {}, "handler")
+        assert result["valid"] is False
+        assert "missing required parameters" in result["error"]
+
+        # With positional args, validation passes
+        result = validate_handler_params(handler, {}, "handler", positional_args=["provided"])
+        assert result["valid"] is True
+        assert result["coerced_params"]["required_value"] == "provided"
+
+    def test_positional_args_none_uses_default(self):
+        """Test that None positional_args behaves like empty list."""
+
+        def handler(self, value: str = "default", **kwargs):
+            pass
+
+        result = validate_handler_params(handler, {}, "handler", positional_args=None)
+        assert result["valid"] is True
+
+    def test_real_world_set_period_scenario(self):
+        """Test the set_period('month') scenario from Issue #62."""
+
+        class DashboardView:
+            def set_period(self, value: str, **kwargs):
+                """Set the time period filter."""
+                pass
+
+        view = DashboardView()
+
+        # @click="set_period('month')" should map 'month' to value parameter
+        result = validate_handler_params(
+            view.set_period, {}, "set_period", positional_args=["month"]
+        )
+        assert result["valid"] is True
+        assert result["coerced_params"]["value"] == "month"
+
+        # Different period values
+        for period in ["day", "week", "month", "year"]:
+            result = validate_handler_params(
+                view.set_period, {}, "set_period", positional_args=[period]
+            )
+            assert result["valid"] is True
+            assert result["coerced_params"]["value"] == period
+
+    def test_real_world_select_tab_scenario(self):
+        """Test tab selection with integer index."""
+
+        class TabView:
+            def select_tab(self, index: int, **kwargs):
+                """Select a tab by index."""
+                pass
+
+        view = TabView()
+
+        # @click="select_tab(2)" should map 2 to index parameter
+        result = validate_handler_params(view.select_tab, {}, "select_tab", positional_args=[2])
+        assert result["valid"] is True
+        assert result["coerced_params"]["index"] == 2
+        assert isinstance(result["coerced_params"]["index"], int)
+
+    def test_positional_args_combined_with_data_attrs(self):
+        """Test combining positional args with data-* attributes."""
+
+        def handler(self, action: str, item_id: int = 0, confirm: bool = False, **kwargs):
+            pass
+
+        # @click="handler('delete')" with data-item-id="123" data-confirm="true"
+        result = validate_handler_params(
+            handler,
+            {"item_id": "123", "confirm": "true"},
+            "handler",
+            positional_args=["delete"],
+        )
+        assert result["valid"] is True
+        assert result["coerced_params"]["action"] == "delete"
+        assert result["coerced_params"]["item_id"] == 123  # Coerced from string
+        assert result["coerced_params"]["confirm"] is True
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
