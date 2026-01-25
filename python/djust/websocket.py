@@ -2,11 +2,13 @@
 WebSocket consumer for LiveView real-time updates
 """
 
+import inspect
 import json
 import logging
 import sys
 import msgpack
 from typing import Callable, Dict, Any, Optional
+from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from .live_view import DjangoJSONEncoder
 from .validation import validate_handler_params
@@ -36,6 +38,30 @@ def get_handler_coerce_setting(handler: Callable) -> bool:
     if hasattr(handler, "_djust_decorators"):
         return handler._djust_decorators.get("event_handler", {}).get("coerce_types", True)
     return True
+
+
+async def _call_handler(handler: Callable, params: Optional[Dict[str, Any]] = None):
+    """
+    Call an event handler, handling both sync and async handlers.
+
+    Args:
+        handler: The event handler method (sync or async)
+        params: Optional dictionary of parameters to pass to the handler.
+            Note: Empty dict {} is treated as no params (falsy check).
+
+    Returns:
+        The result of calling the handler
+    """
+    if inspect.iscoroutinefunction(handler):
+        # Handler is already async, call it directly
+        if params:
+            return await handler(**params)
+        return await handler()
+    else:
+        # Handler is sync, wrap with sync_to_async
+        if params:
+            return await sync_to_async(handler)(**params)
+        return await sync_to_async(handler)()
 
 
 class LiveViewConsumer(AsyncWebsocketConsumer):
@@ -566,13 +592,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         )
                         return
 
-                    # Call component's event handler (needs sync_to_async)
+                    # Call component's event handler (supports both sync and async)
                     # This may call send_parent() which triggers handle_component_event()
                     handler_start = time.perf_counter()
-                    if event_data:
-                        await sync_to_async(handler)(**event_data)
-                    else:
-                        await sync_to_async(handler)()
+                    await _call_handler(handler, event_data if event_data else None)
                     timing["handler"] = (
                         time.perf_counter() - handler_start
                     ) * 1000  # Convert to ms
@@ -605,14 +628,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                     # Wrap everything in a root "Event Processing" tracker
                     with tracker.track("Event Processing"):
-                        # Call handler with tracking
+                        # Call handler with tracking (supports both sync and async handlers)
                         handler_start = time.perf_counter()
                         with tracker.track("Event Handler", event_name=event_name, params=params):
                             with profiler.profile(profiler.OP_EVENT_HANDLE):
-                                if params:
-                                    await sync_to_async(handler)(**params)
-                                else:
-                                    await sync_to_async(handler)()
+                                await _call_handler(handler, params if params else None)
                         timing["handler"] = (
                             time.perf_counter() - handler_start
                         ) * 1000  # Convert to ms

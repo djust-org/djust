@@ -6,6 +6,7 @@ This guide explains how to write effective event handlers in djust LiveView appl
 
 - [Parameter Naming Convention](#parameter-naming-convention)
 - [The @event_handler Decorator](#the-event_handler-decorator)
+- [Async Event Handlers](#async-event-handlers)
 - [Type Hints and Validation](#type-hints-and-validation)
 - [Public vs Private Variables](#public-vs-private-variables)
 - [Error Handling](#error-handling)
@@ -108,6 +109,47 @@ def sort_properties(self, value: str = "name"):
     """Explicit description overrides docstring"""
     self.sort_by = value
     self._refresh_properties()
+```
+
+## Async Event Handlers
+
+Event handlers can be defined as either sync or async functions. Use async handlers when you need to perform non-blocking I/O operations.
+
+### Basic Async Handler
+
+```python
+@event_handler()
+async def fetch_external_data(self, item_id: int):
+    """Async handler for non-blocking external API calls"""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"https://api.example.com/items/{item_id}") as response:
+            self.item_data = await response.json()
+```
+
+### When to Use Async Handlers
+
+| Use Case | Sync or Async |
+|----------|---------------|
+| Database queries (Django ORM) | Sync (use `sync_to_async` inside if needed) |
+| External API calls | Async |
+| File I/O with `aiofiles` | Async |
+| Simple state updates | Sync |
+
+### Mixing Sync and Async
+
+You can have both sync and async handlers in the same LiveView:
+
+```python
+class MyView(LiveView):
+    @event_handler()
+    def increment(self):
+        """Sync handler for simple state update"""
+        self.count += 1
+
+    @event_handler()
+    async def fetch_weather(self, city: str):
+        """Async handler for external API"""
+        self.weather = await get_weather_async(city)
 ```
 
 ## Type Hints and Validation
