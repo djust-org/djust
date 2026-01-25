@@ -2403,8 +2403,23 @@ const lazyHydrationManager = {
     // IntersectionObserver instance for viewport-based hydration
     viewportObserver: null,
 
+    // Queue of elements waiting for WebSocket connection
+    pendingMounts: [],
+
     // Initialize lazy hydration
     init() {
+        // Clear pending mounts on reinit (e.g., TurboNav navigation)
+        this.pendingMounts = [];
+        this.hydratedElements.clear();
+
+        // Inject CSS for lazy click elements (only once)
+        if (!document.getElementById('djust-lazy-styles')) {
+            const style = document.createElement('style');
+            style.id = 'djust-lazy-styles';
+            style.textContent = '.djust-lazy-click { cursor: pointer; }';
+            document.head.appendChild(style);
+        }
+
         // Create viewport observer if supported
         if ('IntersectionObserver' in window) {
             this.viewportObserver = new IntersectionObserver(
@@ -2436,8 +2451,8 @@ const lazyHydrationManager = {
         switch (lazyMode) {
             case 'click':
                 element.addEventListener('click', () => this.hydrateElement(element), { once: true });
-                // Add visual indicator that content is interactive-on-click
-                element.style.cursor = 'pointer';
+                // Add CSS class for styling (avoids overriding inline styles)
+                element.classList.add('djust-lazy-click');
                 break;
 
             case 'hover':
@@ -2498,15 +2513,28 @@ const lazyHydrationManager = {
         if (liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) {
             this.mountElement(element, viewPath);
         } else {
-            // Queue mount for when WebSocket connects
-            const originalOnOpen = liveViewWS.ws?.onopen;
-            if (liveViewWS.ws) {
+            // Queue mount for when WebSocket connects (handles multiple lazy elements)
+            this.pendingMounts.push({ element, viewPath });
+
+            // Set up connection callback if not already done
+            if (this.pendingMounts.length === 1 && liveViewWS.ws) {
+                const originalOnOpen = liveViewWS.ws.onopen;
                 liveViewWS.ws.onopen = (event) => {
-                    if (originalOnOpen) originalOnOpen(event);
-                    this.mountElement(element, viewPath);
+                    if (originalOnOpen) originalOnOpen.call(liveViewWS.ws, event);
+                    this.processPendingMounts();
                 };
             }
         }
+    },
+
+    // Process all queued mounts when WebSocket connects
+    processPendingMounts() {
+        console.log(`[LiveView:lazy] Processing ${this.pendingMounts.length} pending mounts`);
+        const mounts = this.pendingMounts.slice();
+        this.pendingMounts = [];
+        mounts.forEach(({ element, viewPath }) => {
+            this.mountElement(element, viewPath);
+        });
     },
 
     // Mount a specific element
