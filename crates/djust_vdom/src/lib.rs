@@ -77,6 +77,16 @@ pub fn reset_id_counter() {
     ID_COUNTER.with(|counter| counter.set(0));
 }
 
+/// Get the current ID counter value (for session persistence)
+pub fn get_id_counter() -> u64 {
+    ID_COUNTER.with(|counter| counter.get())
+}
+
+/// Set the ID counter to a specific value (for session restoration)
+pub fn set_id_counter(value: u64) {
+    ID_COUNTER.with(|counter| counter.set(value));
+}
+
 /// A virtual DOM node
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VNode {
@@ -281,9 +291,15 @@ pub fn diff(old: &VNode, new: &VNode) -> Vec<Patch> {
     diff::diff_nodes(old, new, &[])
 }
 
-/// Parse HTML into a virtual DOM
+/// Parse HTML into a virtual DOM (resets ID counter)
 pub fn parse_html(html: &str) -> Result<VNode> {
     parser::parse_html(html)
+}
+
+/// Parse HTML into a virtual DOM without resetting ID counter.
+/// Use this for subsequent renders within the same session.
+pub fn parse_html_continue(html: &str) -> Result<VNode> {
+    parser::parse_html_continue(html)
 }
 
 /// Python bindings

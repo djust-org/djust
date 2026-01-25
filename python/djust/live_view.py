@@ -2017,7 +2017,6 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         Returns:
             Tuple of (html, patches_json, version)
         """
-
         print(
             f"[LiveView] render_with_diff() called (extract_liveview_root={extract_liveview_root})",
             file=sys.stderr,

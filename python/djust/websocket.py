@@ -367,6 +367,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
             else:
                 # Non-actor mode: Use traditional flow
+
                 # Initialize Rust view and sync state
                 await sync_to_async(self.view_instance._initialize_rust_view)(request)
                 await sync_to_async(self.view_instance._sync_state_to_rust)()

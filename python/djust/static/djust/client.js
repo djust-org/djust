@@ -8,6 +8,99 @@
 window.djust = window.djust || {};
 
 // ============================================================================
+// TurboNav Integration - Early Registration
+// ============================================================================
+// Register turbo:load handler early to ensure it's ready before TurboNav navigation.
+// This handler will be called when TurboNav swaps page content.
+
+// Track if we've been initialized via DOMContentLoaded
+let djustInitialized = false;
+
+// Track pending turbo:load reinit
+let pendingTurboReinit = false;
+
+window.addEventListener('turbo:load', function(event) {
+    console.log('[LiveView:TurboNav] turbo:load event received!');
+    console.log('[LiveView:TurboNav] djustInitialized:', djustInitialized);
+
+    if (!djustInitialized) {
+        // client.js hasn't finished initializing yet, defer reinit
+        console.log('[LiveView:TurboNav] Deferring reinit until DOMContentLoaded completes');
+        pendingTurboReinit = true;
+        return;
+    }
+
+    try {
+        reinitLiveViewForTurboNav();
+    } catch (error) {
+        console.error('[LiveView:TurboNav] Error during reinit:', error);
+    }
+});
+
+// Reinitialize LiveView after TurboNav navigation
+function reinitLiveViewForTurboNav() {
+    console.log('[LiveView:TurboNav] Reinitializing LiveView...');
+
+    // Disconnect existing WebSocket
+    if (typeof liveViewWS !== 'undefined' && liveViewWS) {
+        console.log('[LiveView:TurboNav] Disconnecting existing WebSocket');
+        liveViewWS.disconnect();
+        liveViewWS = null;
+    }
+
+    // Reset client VDOM version
+    if (typeof clientVdomVersion !== 'undefined') {
+        clientVdomVersion = null;
+    }
+
+    // Clear lazy hydration state
+    if (typeof lazyHydrationManager !== 'undefined') {
+        lazyHydrationManager.init();
+    }
+
+    // Find all LiveView containers in the new content
+    const allContainers = document.querySelectorAll('[data-live-view]');
+    const lazyContainers = document.querySelectorAll('[data-live-view][data-live-lazy]');
+    const eagerContainers = document.querySelectorAll('[data-live-view]:not([data-live-lazy])');
+
+    console.log(`[LiveView:TurboNav] Found ${allContainers.length} containers (${lazyContainers.length} lazy, ${eagerContainers.length} eager)`);
+
+    // Register lazy containers with the lazy hydration manager
+    if (typeof lazyHydrationManager !== 'undefined') {
+        lazyContainers.forEach(container => {
+            lazyHydrationManager.register(container);
+        });
+    }
+
+    // Only initialize WebSocket if there are eager containers
+    if (eagerContainers.length > 0) {
+        console.log('[LiveView:TurboNav] Initializing new WebSocket connection');
+        // Initialize WebSocket
+        liveViewWS = new LiveViewWebSocket();
+        liveViewWS.connect();
+
+        // Start heartbeat
+        liveViewWS.startHeartbeat();
+    } else if (lazyContainers.length > 0) {
+        console.log('[LiveView:TurboNav] Deferring WebSocket connection until lazy elements are needed');
+    } else {
+        console.log('[LiveView:TurboNav] No LiveView containers found, skipping WebSocket');
+    }
+
+    // Re-bind events
+    if (typeof bindLiveViewEvents === 'function') {
+        bindLiveViewEvents();
+    }
+
+    // Re-scan @loading attributes
+    if (typeof globalLoadingManager !== 'undefined') {
+        globalLoadingManager.scanAndRegister();
+    }
+
+    console.log('[LiveView:TurboNav] Reinitialization complete');
+}
+
+// ============================================================================
 // Centralized Response Handler (WebSocket + HTTP)
 // ============================================================================
 
@@ -173,6 +266,32 @@ class LiveViewWebSocket {
             messages: [],      // Recent message history (last 50)
             connectedAt: null, // Timestamp of current connection
         };
+    }
+
+    /**
+     * Cleanly disconnect the WebSocket for TurboNav navigation
+     */
+    disconnect() {
+        console.log('[LiveView] Disconnecting for navigation...');
+
+        // Stop heartbeat
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+            this.heartbeatInterval = null;
+        }
+
+        // Clear reconnect attempts so we don't auto-reconnect
+        this.reconnectAttempts = this.maxReconnectAttempts;
+
+        // Close WebSocket if open
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.close();
+        }
+
+        this.ws = null;
+        this.sessionId = null;
+        this.viewMounted = false;
+        this.vdomVersion = null;
     }
 
     connect(url = null) {
@@ -1965,16 +2084,41 @@ function applyDjUpdateElements(existingRoot, newRoot) {
 
 /**
  * Get significant children (elements and non-whitespace text nodes).
+ * Preserves all whitespace inside <pre>, <code>, and <textarea> elements.
  */
 function getSignificantChildren(node) {
+    // Check if we're inside a whitespace-preserving element
+    const preserveWhitespace = isWhitespacePreserving(node);
+
     return Array.from(node.childNodes).filter(child => {
         if (child.nodeType === Node.ELEMENT_NODE) return true;
         if (child.nodeType === Node.TEXT_NODE) {
+            // Preserve all text nodes inside pre/code/textarea
+            if (preserveWhitespace) return true;
             return child.textContent.trim().length > 0;
         }
         return false;
     });
 }
+
+/**
+ * Check if a node is a whitespace-preserving element or inside one.
+ */
+function isWhitespacePreserving(node) {
+    const WHITESPACE_PRESERVING_TAGS = ['PRE', 'CODE', 'TEXTAREA', 'SCRIPT', 'STYLE'];
+    let current = node;
+    while (current) {
+        if (current.nodeType === Node.ELEMENT_NODE &&
+            WHITESPACE_PRESERVING_TAGS.includes(current.tagName)) {
+            return true;
+        }
+        current = current.parentNode;
+    }
+    return false;
+}
+
+// Export for testing
+window.djust.getSignificantChildren = getSignificantChildren;
 
 /**
  * Group patches by their parent path for batching.
@@ -2455,4 +2599,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Scan and register @loading attributes
     globalLoadingManager.scanAndRegister();
+
+    // Mark as initialized so turbo:load handler knows we're ready
+    djustInitialized = true;
+    console.log('[LiveView] Initialization complete, djustInitialized = true');
+
+    // Check if we have a pending turbo reinit (turbo:load fired before we finished init)
+    if (pendingTurboReinit) {
+        console.log('[LiveView] Processing pending turbo:load reinit');
+        pendingTurboReinit = false;
+        reinitLiveViewForTurboNav();
+    }
 });
