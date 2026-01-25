@@ -217,10 +217,18 @@ benchmark-python-compare: ## Compare Python benchmarks against saved baseline
 	@PYTHONPATH=. .venv/bin/python -m pytest tests/benchmarks/ -v --benchmark-compare
 
 .PHONY: benchmark-quick
-benchmark-quick: ## Run quick benchmark subset (for CI)
-	@echo "$(GREEN)Running quick benchmarks...$(NC)"
-	@PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo bench --workspace --exclude djust_live -- --quick
-	@PYTHONPATH=. .venv/bin/python -m pytest tests/benchmarks/ -v --benchmark-only --benchmark-disable-gc
+benchmark-quick: ## Run quick benchmarks (minimal iterations)
+	@echo "$(GREEN)Running quick Python benchmarks...$(NC)"
+	@PYTHONPATH=. .venv/bin/python -m pytest tests/benchmarks/ -v --benchmark-only \
+		--benchmark-min-rounds=3 \
+		--benchmark-warmup=off \
+		--benchmark-disable-gc
+
+.PHONY: benchmark-e2e
+benchmark-e2e: ## Run end-to-end LiveView benchmarks
+	@echo "$(GREEN)Running end-to-end benchmarks...$(NC)"
+	@PYTHONPATH=. .venv/bin/python -m pytest tests/benchmarks/test_e2e.py -v --benchmark-only \
+		--benchmark-min-rounds=5
 
 ##@ Database
 
