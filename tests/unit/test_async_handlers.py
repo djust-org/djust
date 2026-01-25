@@ -4,7 +4,6 @@ Tests for async event handler support in WebSocket consumer.
 Verifies that both sync and async event handlers work correctly.
 Regression test for issue #60.
 """
-import functools
 import pytest
 from djust.decorators import event_handler
 from djust.websocket import _call_handler
