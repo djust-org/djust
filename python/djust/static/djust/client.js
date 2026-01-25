@@ -1141,6 +1141,13 @@ function parseEventHandler(handlerString) {
     }
 
     const name = str.slice(0, parenIndex).trim();
+
+    // Validate handler name is a valid Python identifier
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+        console.warn(`[LiveView] Invalid handler name: "${name}", treating as literal`);
+        return { name: str, args: [] };
+    }
+
     const closeParen = str.lastIndexOf(')');
 
     // Invalid syntax - missing close paren, treat as simple name

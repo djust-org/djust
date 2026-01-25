@@ -40,11 +40,7 @@ def get_handler_coerce_setting(handler: Callable) -> bool:
     return True
 
 
-async def _call_handler(
-    handler: Callable,
-    params: Optional[Dict[str, Any]] = None,
-    positional_args: Optional[list] = None,
-):
+async def _call_handler(handler: Callable, params: Optional[Dict[str, Any]] = None):
     """
     Call an event handler, handling both sync and async handlers.
 
@@ -52,25 +48,22 @@ async def _call_handler(
         handler: The event handler method (sync or async)
         params: Optional dictionary of parameters to pass to the handler.
             Note: Empty dict {} is treated as no params (falsy check).
-        positional_args: Optional list of positional arguments to pass before
-            keyword arguments. Used when handler is called with inline args
-            like @click="handler('value')".
+            Positional args from @click="handler('value')" syntax are merged
+            into params by validate_handler_params() before calling this.
 
     Returns:
         The result of calling the handler
     """
-    positional_args = positional_args or []
-
     if inspect.iscoroutinefunction(handler):
         # Handler is already async, call it directly
         if params:
-            return await handler(*positional_args, **params)
-        return await handler(*positional_args)
+            return await handler(**params)
+        return await handler()
     else:
         # Handler is sync, wrap with sync_to_async
         if params:
-            return await sync_to_async(handler)(*positional_args, **params)
-        return await sync_to_async(handler)(*positional_args)
+            return await sync_to_async(handler)(**params)
+        return await sync_to_async(handler)()
 
 
 class LiveViewConsumer(AsyncWebsocketConsumer):

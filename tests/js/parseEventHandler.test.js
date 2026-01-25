@@ -196,6 +196,18 @@ describe('parseEventHandler', () => {
             expect(result.args).toEqual([]);
         });
 
+        it('should reject invalid handler names starting with number', () => {
+            const result = parseEventHandler("123invalid('arg')");
+            expect(result.name).toBe("123invalid('arg')");
+            expect(result.args).toEqual([]);
+        });
+
+        it('should reject handler names with spaces', () => {
+            const result = parseEventHandler("has spaces('arg')");
+            expect(result.name).toBe("has spaces('arg')");
+            expect(result.args).toEqual([]);
+        });
+
         it('should handle handler with commas in quoted strings', () => {
             const result = parseEventHandler("tag('red,green,blue')");
             expect(result.name).toBe('tag');

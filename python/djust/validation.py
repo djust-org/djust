@@ -10,9 +10,12 @@ Provides runtime validation of event handler signatures including:
 """
 
 import inspect
+import logging
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, List, Optional, Union, get_type_hints, get_origin, get_args
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 
 def coerce_parameter_types(handler: Callable, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -223,7 +226,13 @@ def validate_handler_params(
     if positional_args:
         for i, arg in enumerate(positional_args):
             if i < len(param_names):
-                merged_params[param_names[i]] = arg
+                param_name = param_names[i]
+                if param_name in params:
+                    logger.debug(
+                        f"Positional arg overrides data-* attribute for '{param_name}': "
+                        f"{params[param_name]!r} -> {arg!r}"
+                    )
+                merged_params[param_name] = arg
 
     # Coerce parameters before validation
     coerced_params = coerce_parameter_types(handler, merged_params) if coerce else merged_params
