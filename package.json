@@ -18,7 +18,7 @@
     "eslint-plugin-security": "^3.0.0",
     "happy-dom": "^20.3.7",
     "jsdom": "^27.4.0",
-    "vitest": "^2.0.0"
+    "vitest": "^4.0.18"
   },
   "keywords": [
     "django",
