@@ -15,6 +15,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, List, Optional, Union, get_type_hints, get_origin, get_args
 from uuid import UUID
 
+from djust.security import sanitize_for_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -228,9 +230,14 @@ def validate_handler_params(
             if i < len(param_names):
                 param_name = param_names[i]
                 if param_name in params:
+                    # Sanitize values for safe logging to prevent log injection
+                    old_val = sanitize_for_log(str(params[param_name]), max_length=100)
+                    new_val = sanitize_for_log(str(arg), max_length=100)
                     logger.debug(
-                        f"Positional arg overrides data-* attribute for '{param_name}': "
-                        f"{params[param_name]!r} -> {arg!r}"
+                        "Positional arg overrides data-* attribute for %r: %s -> %s",
+                        param_name,
+                        old_val,
+                        new_val,
                     )
                 merged_params[param_name] = arg
 
