@@ -71,9 +71,14 @@ class TestUrlResolver:
         template = '{% url "profile" user_id %}'
         context = {"user_id": 123}
 
-        # The resolution depends on having the URL defined
-        # This test verifies the context variable is passed correctly
-        assert URL_TAG_RE.search(template) is not None
+        # Verify regex matches the URL tag with context variable
+        match = URL_TAG_RE.search(template)
+        assert match is not None
+        assert match.group(1) == "profile"
+        assert "user_id" in match.group(2)
+
+        # Verify context variable would be resolved (value accessible)
+        assert context["user_id"] == 123
 
     def test_unresolved_loop_variable_preserved(self):
         """Test that URLs with loop variables are preserved (not resolved)."""
