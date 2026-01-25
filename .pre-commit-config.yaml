@@ -10,10 +10,10 @@ repos:
       # Linter
       - id: ruff
         args: [--fix]
-        files: ^python/
+        files: ^(python/|tests/)
       # Formatter
       - id: ruff-format
-        files: ^python/
+        files: ^(python/|tests/)
 
   # Rust - Formatting and linting
   - repo: local

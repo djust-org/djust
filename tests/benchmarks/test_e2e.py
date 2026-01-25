@@ -13,20 +13,7 @@ a state change and the UI needs to be updated.
 
 import pytest
 
-# Try to import Rust extension
-try:
-    from djust._rust import render_template, diff_vdom, create_vnode, VNode
-    RUST_AVAILABLE = True
-except ImportError:
-    RUST_AVAILABLE = False
-
-# Try to import Python LiveView components
-try:
-    from djust.live_view import LiveView
-    from djust.context import Context
-    LIVEVIEW_AVAILABLE = True
-except ImportError:
-    LIVEVIEW_AVAILABLE = False
+from djust._rust import render_template
 
 
 class TestFullRenderCycle:
@@ -65,6 +52,7 @@ class TestFullRenderCycle:
     @pytest.mark.benchmark(group="e2e_simple")
     def test_counter_increment(self, benchmark, counter_template):
         """Benchmark counter increment: render old, render new, diff."""
+
         def cycle():
             old_html = render_template(counter_template, {"count": 5})
             new_html = render_template(counter_template, {"count": 6})
@@ -77,6 +65,7 @@ class TestFullRenderCycle:
     @pytest.mark.benchmark(group="e2e_simple")
     def test_counter_many_updates(self, benchmark, counter_template):
         """Benchmark 10 sequential counter updates."""
+
         def cycle():
             results = []
             for i in range(10):
@@ -271,18 +260,27 @@ class TestDataTable:
     def test_table_10_rows(self, benchmark, table_template):
         """Benchmark rendering a 10-row table."""
         rows = [
-            {"id": i, "name": f"User {i}", "email": f"user{i}@example.com", "created": "2024-01-01", "selected": False}
+            {
+                "id": i,
+                "name": f"User {i}",
+                "email": f"user{i}@example.com",
+                "created": "2024-01-01",
+                "selected": False,
+            }
             for i in range(10)
         ]
 
         def cycle():
-            return render_template(table_template, {
-                "rows": rows,
-                "search": "",
-                "sort": "name",
-                "page": 1,
-                "total_pages": 1,
-            })
+            return render_template(
+                table_template,
+                {
+                    "rows": rows,
+                    "search": "",
+                    "sort": "name",
+                    "page": 1,
+                    "total_pages": 1,
+                },
+            )
 
         result = benchmark(cycle)
         assert "User 0" in result
@@ -292,18 +290,27 @@ class TestDataTable:
     def test_table_50_rows(self, benchmark, table_template):
         """Benchmark rendering a 50-row table."""
         rows = [
-            {"id": i, "name": f"User {i}", "email": f"user{i}@example.com", "created": "2024-01-01", "selected": False}
+            {
+                "id": i,
+                "name": f"User {i}",
+                "email": f"user{i}@example.com",
+                "created": "2024-01-01",
+                "selected": False,
+            }
             for i in range(50)
         ]
 
         def cycle():
-            return render_template(table_template, {
-                "rows": rows,
-                "search": "",
-                "sort": "name",
-                "page": 1,
-                "total_pages": 5,
-            })
+            return render_template(
+                table_template,
+                {
+                    "rows": rows,
+                    "search": "",
+                    "sort": "name",
+                    "page": 1,
+                    "total_pages": 5,
+                },
+            )
 
         result = benchmark(cycle)
         assert "User 49" in result
@@ -312,29 +319,47 @@ class TestDataTable:
     def test_table_row_selection(self, benchmark, table_template):
         """Benchmark selecting a row in the table."""
         rows_before = [
-            {"id": i, "name": f"User {i}", "email": f"user{i}@example.com", "created": "2024-01-01", "selected": False}
+            {
+                "id": i,
+                "name": f"User {i}",
+                "email": f"user{i}@example.com",
+                "created": "2024-01-01",
+                "selected": False,
+            }
             for i in range(20)
         ]
         rows_after = [
-            {"id": i, "name": f"User {i}", "email": f"user{i}@example.com", "created": "2024-01-01", "selected": i == 5}
+            {
+                "id": i,
+                "name": f"User {i}",
+                "email": f"user{i}@example.com",
+                "created": "2024-01-01",
+                "selected": i == 5,
+            }
             for i in range(20)
         ]
 
         def cycle():
-            old_html = render_template(table_template, {
-                "rows": rows_before,
-                "search": "",
-                "sort": "name",
-                "page": 1,
-                "total_pages": 2,
-            })
-            new_html = render_template(table_template, {
-                "rows": rows_after,
-                "search": "",
-                "sort": "name",
-                "page": 1,
-                "total_pages": 2,
-            })
+            old_html = render_template(
+                table_template,
+                {
+                    "rows": rows_before,
+                    "search": "",
+                    "sort": "name",
+                    "page": 1,
+                    "total_pages": 2,
+                },
+            )
+            new_html = render_template(
+                table_template,
+                {
+                    "rows": rows_after,
+                    "search": "",
+                    "sort": "name",
+                    "page": 1,
+                    "total_pages": 2,
+                },
+            )
             return old_html, new_html
 
         result = benchmark(cycle)
@@ -345,29 +370,47 @@ class TestDataTable:
     def test_table_pagination(self, benchmark, table_template):
         """Benchmark changing pages (complete data swap)."""
         page1_rows = [
-            {"id": i, "name": f"User {i}", "email": f"user{i}@example.com", "created": "2024-01-01", "selected": False}
+            {
+                "id": i,
+                "name": f"User {i}",
+                "email": f"user{i}@example.com",
+                "created": "2024-01-01",
+                "selected": False,
+            }
             for i in range(20)
         ]
         page2_rows = [
-            {"id": i, "name": f"User {i}", "email": f"user{i}@example.com", "created": "2024-01-01", "selected": False}
+            {
+                "id": i,
+                "name": f"User {i}",
+                "email": f"user{i}@example.com",
+                "created": "2024-01-01",
+                "selected": False,
+            }
             for i in range(20, 40)
         ]
 
         def cycle():
-            old_html = render_template(table_template, {
-                "rows": page1_rows,
-                "search": "",
-                "sort": "name",
-                "page": 1,
-                "total_pages": 5,
-            })
-            new_html = render_template(table_template, {
-                "rows": page2_rows,
-                "search": "",
-                "sort": "name",
-                "page": 2,
-                "total_pages": 5,
-            })
+            old_html = render_template(
+                table_template,
+                {
+                    "rows": page1_rows,
+                    "search": "",
+                    "sort": "name",
+                    "page": 1,
+                    "total_pages": 5,
+                },
+            )
+            new_html = render_template(
+                table_template,
+                {
+                    "rows": page2_rows,
+                    "search": "",
+                    "sort": "name",
+                    "page": 2,
+                    "total_pages": 5,
+                },
+            )
             return old_html, new_html
 
         result = benchmark(cycle)
@@ -436,10 +479,25 @@ class TestComplexComponent:
                 {"title": "Tasks", "content": "5 pending tasks"},
             ],
             "cards": [
-                {"title": "Revenue", "description": "Monthly revenue", "stat1": "$12,345", "stat2": "+5.2%"},
-                {"title": "Users", "description": "Active users", "stat1": "1,234", "stat2": "+12.3%"},
+                {
+                    "title": "Revenue",
+                    "description": "Monthly revenue",
+                    "stat1": "$12,345",
+                    "stat2": "+5.2%",
+                },
+                {
+                    "title": "Users",
+                    "description": "Active users",
+                    "stat1": "1,234",
+                    "stat2": "+12.3%",
+                },
                 {"title": "Orders", "description": "New orders", "stat1": "567", "stat2": "-2.1%"},
-                {"title": "Conversion", "description": "Conversion rate", "stat1": "3.2%", "stat2": "+0.5%"},
+                {
+                    "title": "Conversion",
+                    "description": "Conversion rate",
+                    "stat1": "3.2%",
+                    "stat2": "+0.5%",
+                },
             ],
             "last_updated": "2024-01-15 10:30:00",
         }
@@ -461,8 +519,18 @@ class TestComplexComponent:
                 {"title": "Quick Stats", "content": "1,234 visitors today"},
             ],
             "cards": [
-                {"title": "Revenue", "description": "Monthly revenue", "stat1": "$12,345", "stat2": "+5.2%"},
-                {"title": "Users", "description": "Active users", "stat1": "1,234", "stat2": "+12.3%"},
+                {
+                    "title": "Revenue",
+                    "description": "Monthly revenue",
+                    "stat1": "$12,345",
+                    "stat2": "+5.2%",
+                },
+                {
+                    "title": "Users",
+                    "description": "Active users",
+                    "stat1": "1,234",
+                    "stat2": "+12.3%",
+                },
             ],
             "last_updated": "2024-01-15 10:30:00",
         }
@@ -470,8 +538,18 @@ class TestComplexComponent:
         updated_context = {
             **base_context,
             "cards": [
-                {"title": "Revenue", "description": "Monthly revenue", "stat1": "$12,500", "stat2": "+5.8%"},
-                {"title": "Users", "description": "Active users", "stat1": "1,250", "stat2": "+13.1%"},
+                {
+                    "title": "Revenue",
+                    "description": "Monthly revenue",
+                    "stat1": "$12,500",
+                    "stat2": "+5.8%",
+                },
+                {
+                    "title": "Users",
+                    "description": "Active users",
+                    "stat1": "1,250",
+                    "stat2": "+13.1%",
+                },
             ],
             "last_updated": "2024-01-15 10:31:00",
         }
