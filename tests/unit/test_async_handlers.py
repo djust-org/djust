@@ -4,7 +4,9 @@ Tests for async event handler support in WebSocket consumer.
 Verifies that both sync and async event handlers work correctly.
 Regression test for issue #60.
 """
+import functools
 import pytest
+from djust.decorators import event_handler
 from djust.websocket import _call_handler
 
 
@@ -34,6 +36,21 @@ async def async_handler_with_params(item_id: int, name: str):
     """An async handler with params."""
     call_log.append(('async_handler_with_params', {'item_id': item_id, 'name': name}))
     return f'async_{item_id}_{name}'
+
+
+# Decorated handlers to test decorator compatibility
+@event_handler()
+async def decorated_async_handler():
+    """An async handler with @event_handler decorator."""
+    call_log.append(('decorated_async_handler', None))
+    return 'decorated_async'
+
+
+@event_handler()
+async def decorated_async_handler_with_params(item_id: int, name: str):
+    """An async handler with @event_handler decorator and params."""
+    call_log.append(('decorated_async_handler_with_params', {'item_id': item_id, 'name': name}))
+    return f'decorated_async_{item_id}_{name}'
 
 
 @pytest.fixture(autouse=True)
@@ -87,3 +104,17 @@ class TestCallHandler:
         """Passing empty dict should call handler without arguments (falsy check)."""
         result = await _call_handler(sync_handler, {})
         assert result == 'sync_no_params'
+
+    @pytest.mark.asyncio
+    async def test_decorated_async_handler(self):
+        """Async handler with @event_handler decorator should work."""
+        result = await _call_handler(decorated_async_handler)
+        assert result == 'decorated_async'
+        assert call_log == [('decorated_async_handler', None)]
+
+    @pytest.mark.asyncio
+    async def test_decorated_async_handler_with_params(self):
+        """Async handler with @event_handler decorator and params should work."""
+        result = await _call_handler(decorated_async_handler_with_params, {'item_id': 7, 'name': 'decorated'})
+        assert result == 'decorated_async_7_decorated'
+        assert call_log == [('decorated_async_handler_with_params', {'item_id': 7, 'name': 'decorated'})]

@@ -8,6 +8,7 @@ import logging
 import sys
 import msgpack
 from typing import Callable, Dict, Any, Optional
+from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from .live_view import DjangoJSONEncoder
 from .validation import validate_handler_params
@@ -45,13 +46,12 @@ async def _call_handler(handler: Callable, params: Optional[Dict[str, Any]] = No
 
     Args:
         handler: The event handler method (sync or async)
-        params: Optional dictionary of parameters to pass to the handler
+        params: Optional dictionary of parameters to pass to the handler.
+            Note: Empty dict {} is treated as no params (falsy check).
 
     Returns:
         The result of calling the handler
     """
-    from asgiref.sync import sync_to_async
-
     if inspect.iscoroutinefunction(handler):
         # Handler is already async, call it directly
         if params:
