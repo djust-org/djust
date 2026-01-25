@@ -191,6 +191,55 @@ class TestLiveViewUrlResolution:
         assert 'html' in data or 'patches' in data
 
 
+class TestUrlResolutionCaching:
+    """Test URL resolution caching and performance optimizations."""
+
+    @pytest.mark.django_db
+    def test_templates_without_url_tags_skip_resolution(self, get_request):
+        """Test that templates without {% url %} tags skip resolution entirely."""
+
+        class SimpleView(LiveView):
+            template = "<div>{{ message }}</div>"  # No URL tags
+
+            def mount(self, request, **kwargs):
+                self.message = "Hello"
+
+        view = SimpleView()
+        view._initialize_rust_view(get_request)
+        view.mount(get_request)
+        view._sync_state_to_rust()
+
+        # Original template should be stored
+        assert hasattr(view, "_original_template_source")
+        assert "{% url" not in view._original_template_source
+
+    @pytest.mark.django_db
+    def test_original_template_preserved_for_reresolution(self, get_request):
+        """Test that original template is preserved for context-dependent URLs."""
+
+        class DynamicView(LiveView):
+            template = '<a href="{% url \'home\' %}">{{ label }}</a>'
+
+            def mount(self, request, **kwargs):
+                self.label = "Home"
+
+        view = DynamicView()
+        view._initialize_rust_view(get_request)
+        view.mount(get_request)
+        view._sync_state_to_rust()
+
+        # Original template with {% url %} tag should be preserved
+        assert hasattr(view, "_original_template_source")
+        assert "{% url" in view._original_template_source
+
+        # Change state and sync again - should still work
+        view.label = "Dashboard"
+        view._sync_state_to_rust()
+
+        # Original template should still have the {% url %} tag
+        assert "{% url" in view._original_template_source
+
+
 class TestUrlResolverEdgeCases:
     """Test edge cases in URL resolution."""
 

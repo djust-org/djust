@@ -1520,11 +1520,26 @@ class LiveView(View):
             # Resolve {% url %} tags in the template BEFORE sending to Rust
             # This is critical for LiveView - without this, URLs are empty because
             # Rust doesn't have access to Django's URL resolver
+            #
+            # We store the original template to support context-dependent URLs like
+            # {% url 'profile' user.id %} where user.id may change between renders.
+            # Without this, URLs would be "baked in" after first resolution.
             try:
-                current_template = self._rust_view.get_template()
-                resolved_template = resolve_url_tags(current_template, rendered_context)
-                if resolved_template != current_template:
-                    self._rust_view.update_template(resolved_template)
+                # Use original template if we have it, otherwise get current
+                if not hasattr(self, "_original_template_source"):
+                    self._original_template_source = self._rust_view.get_template()
+
+                # Quick check: skip resolution if no URL tags exist
+                if "{% url" not in self._original_template_source:
+                    pass  # No URL tags, skip resolution entirely
+                else:
+                    resolved_template = resolve_url_tags(
+                        self._original_template_source, rendered_context
+                    )
+                    # Only update if template actually changed
+                    current_template = self._rust_view.get_template()
+                    if resolved_template != current_template:
+                        self._rust_view.update_template(resolved_template)
             except Exception as e:
                 # Log but don't fail - URLs will be empty but view will still work
                 logger.warning(f"[LiveView] URL resolution failed: {e}")
