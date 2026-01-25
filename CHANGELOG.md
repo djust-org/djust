@@ -7,9 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-01-25
+
 ### Added
 
-- **Inline Handler Arguments**: Event handlers now support function-call syntax with arguments directly in the template attribute. Use `@click="handler('arg')"` instead of `@click="handler" data-value="arg"`. Supports strings, numbers, booleans, null, and multiple arguments. Arguments are automatically parsed and mapped to handler parameters by position. ([#67](https://github.com/djust-org/djust/pull/67))
+- **Tag Handler Registry**: Extensible system for custom Django template tags in Rust. Register Python callbacks for tags like `{% url %}` and `{% static %}` with ~100-500ns overhead per call. Built-in tags (if, for, block) remain zero-overhead native Rust. Includes ADR documenting architecture decisions. ([#65](https://github.com/djust-org/djust/pull/65))
+- **Comparison Operators**: Template conditions now support `>`, `<`, `>=`, `<=` operators in addition to `==` and `!=`. ([#65](https://github.com/djust-org/djust/pull/65))
+- **Enhanced `{% include %}` Tag**: Full support for `with` clause (pass variables) and `only` keyword (isolate context). ([#65](https://github.com/djust-org/djust/pull/65))
+- **Performance Testing Infrastructure**: Comprehensive benchmarking with Criterion (Rust) and pytest-benchmark (Python). New Makefile commands: `make benchmark`, `make benchmark-quick`, `make benchmark-e2e`. Enables tracking performance across releases and detecting regressions. ([#69](https://github.com/djust-org/djust/pull/69))
+- **Inline Handler Arguments**: Event handlers now support function-call syntax with arguments directly in the template attribute. Use `@click="handler('arg')"` instead of `@click="handler" data-value="arg"`. Supports strings, numbers, booleans, null, and multiple arguments. ([#67](https://github.com/djust-org/djust/pull/67))
+
+### Fixed
+
+- **Async Event Handlers**: WebSocket consumer now properly supports `async def` event handlers. Previously only synchronous handlers worked correctly. ([#63](https://github.com/djust-org/djust/pull/63))
+
+### Performance
+
+- Dashboard render: ~37µs (27,000 renders/sec)
+- Tag handler overhead: ~100-500ns per call
+- Template variable substitution: ~970ns
+- 50-row data table: ~188µs
 
 ## [0.1.6] - 2026-01-24
 
@@ -66,7 +83,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bug fixes and stability improvements
 
-[Unreleased]: https://github.com/djust-org/djust/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/djust-org/djust/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/djust-org/djust/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/djust-org/djust/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/djust-org/djust/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/djust-org/djust/compare/v0.1.3...v0.1.4
