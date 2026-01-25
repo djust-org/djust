@@ -112,6 +112,12 @@ impl RustLiveViewBackend {
         self.template_source = new_template_source;
     }
 
+    /// Get the current template source
+    /// This allows Python to read the template for URL resolution
+    fn get_template(&self) -> String {
+        self.template_source.clone()
+    }
+
     /// Get current state
     fn get_state(&self, py: Python) -> PyResult<PyObject> {
         let dict = PyDict::new(py);

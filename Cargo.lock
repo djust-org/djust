@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "djust_components"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "ahash",
  "criterion",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "djust_core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "ahash",
  "criterion",
@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "djust_live"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "bincode",
  "dashmap",
@@ -322,7 +322,7 @@ dependencies = [
 
 [[package]]
 name = "djust_templates"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "ahash",
  "chrono",
@@ -341,7 +341,7 @@ dependencies = [
 
 [[package]]
 name = "djust_vdom"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "ahash",
  "criterion",

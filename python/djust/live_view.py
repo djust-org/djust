@@ -1497,6 +1497,7 @@ class LiveView(View):
         """Sync Python state to Rust backend"""
         if self._rust_view:
             from .component import Component, LiveComponent
+            from .url_resolver import resolve_url_tags
             from django import forms
 
             context = self.get_context_data()
@@ -1515,6 +1516,18 @@ class LiveView(View):
                     continue
                 else:
                     rendered_context[key] = value
+
+            # Resolve {% url %} tags in the template BEFORE sending to Rust
+            # This is critical for LiveView - without this, URLs are empty because
+            # Rust doesn't have access to Django's URL resolver
+            try:
+                current_template = self._rust_view.get_template()
+                resolved_template = resolve_url_tags(current_template, rendered_context)
+                if resolved_template != current_template:
+                    self._rust_view.update_template(resolved_template)
+            except Exception as e:
+                # Log but don't fail - URLs will be empty but view will still work
+                logger.warning(f"[LiveView] URL resolution failed: {e}")
 
             # Serialize and deserialize to ensure all types are JSON-compatible
             # This converts UUIDs, datetimes, etc. to their JSON representations
