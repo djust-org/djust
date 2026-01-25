@@ -8,6 +8,16 @@
 window.djust = window.djust || {};
 
 // ============================================================================
+// Double-Load Guard
+// ============================================================================
+// Prevent double execution when client.js is included in both base template
+// (for TurboNav compatibility) and injected by LiveView.
+if (window._djustClientLoaded) {
+    console.log('[LiveView] client.js already loaded, skipping duplicate initialization');
+} else {
+window._djustClientLoaded = true;
+
+// ============================================================================
 // TurboNav Integration - Early Registration
 // ============================================================================
 // Register turbo:load handler early to ensure it's ready before TurboNav navigation.
@@ -2629,3 +2639,5 @@ document.addEventListener('DOMContentLoaded', () => {
         reinitLiveViewForTurboNav();
     }
 });
+
+} // End of double-load guard
