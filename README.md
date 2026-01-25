@@ -4,7 +4,7 @@
 
 djust brings Phoenix LiveView-style reactive components to Django, with performance that feels native. Write server-side Python code with automatic, instant client updates—no JavaScript bundling, no build step, no complexity.
 
-🌐 **[djust.org](https://djust.org)** | 🚀 **[Quick Start](https://djust.org/quickstart/)** | 🎮 **[Playground](https://djust.org/playground/)**
+🌐 **[djust.org](https://djust.org)** | 🚀 **[Quick Start](https://djust.org/quickstart/)** | 📝 **[Examples](https://djust.org/examples/)**
 
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
@@ -697,7 +697,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 - 🌐 **[djust.org](https://djust.org)** - Official website
 - 🚀 **[Quick Start](https://djust.org/quickstart/)** - Get started in minutes
-- 🎮 **[Playground](https://djust.org/playground/)** - Try djust in your browser
+- 📝 **[Examples](https://djust.org/examples/)** - Live code examples
 - 🐛 **[Issues](https://github.com/djust-org/djust/issues)** - Bug reports & feature requests
 - 📧 **Email**: support@djust.org
 
