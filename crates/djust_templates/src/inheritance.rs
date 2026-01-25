@@ -106,7 +106,9 @@ impl InheritanceChain {
                 if let Some(merged_nodes) = self.merged_blocks.get(name) {
                     Node::Block {
                         name: name.clone(),
-                        nodes: merged_nodes.clone(),
+                        // IMPORTANT: Recursively apply block overrides to merged content
+                        // This handles nested blocks (e.g., docs_content inside content)
+                        nodes: self.apply_block_overrides(merged_nodes),
                     }
                 } else {
                     // Keep original if no override
