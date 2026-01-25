@@ -42,21 +42,17 @@ function reinitLiveViewForTurboNav() {
     console.log('[LiveView:TurboNav] Reinitializing LiveView...');
 
     // Disconnect existing WebSocket
-    if (typeof liveViewWS !== 'undefined' && liveViewWS) {
+    if (liveViewWS) {
         console.log('[LiveView:TurboNav] Disconnecting existing WebSocket');
         liveViewWS.disconnect();
         liveViewWS = null;
     }
 
     // Reset client VDOM version
-    if (typeof clientVdomVersion !== 'undefined') {
-        clientVdomVersion = null;
-    }
+    clientVdomVersion = null;
 
     // Clear lazy hydration state
-    if (typeof lazyHydrationManager !== 'undefined') {
-        lazyHydrationManager.init();
-    }
+    lazyHydrationManager.init();
 
     // Find all LiveView containers in the new content
     const allContainers = document.querySelectorAll('[data-live-view]');
@@ -66,11 +62,9 @@ function reinitLiveViewForTurboNav() {
     console.log(`[LiveView:TurboNav] Found ${allContainers.length} containers (${lazyContainers.length} lazy, ${eagerContainers.length} eager)`);
 
     // Register lazy containers with the lazy hydration manager
-    if (typeof lazyHydrationManager !== 'undefined') {
-        lazyContainers.forEach(container => {
-            lazyHydrationManager.register(container);
-        });
-    }
+    lazyContainers.forEach(container => {
+        lazyHydrationManager.register(container);
+    });
 
     // Only initialize WebSocket if there are eager containers
     if (eagerContainers.length > 0) {
@@ -88,14 +82,10 @@ function reinitLiveViewForTurboNav() {
     }
 
     // Re-bind events
-    if (typeof bindLiveViewEvents === 'function') {
-        bindLiveViewEvents();
-    }
+    bindLiveViewEvents();
 
     // Re-scan @loading attributes
-    if (typeof globalLoadingManager !== 'undefined') {
-        globalLoadingManager.scanAndRegister();
-    }
+    globalLoadingManager.scanAndRegister();
 
     console.log('[LiveView:TurboNav] Reinitialization complete');
 }
