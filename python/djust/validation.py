@@ -10,9 +10,14 @@ Provides runtime validation of event handler signatures including:
 """
 
 import inspect
+import logging
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, List, Optional, Union, get_type_hints, get_origin, get_args
 from uuid import UUID
+
+from djust.security import sanitize_for_log
+
+logger = logging.getLogger(__name__)
 
 
 def coerce_parameter_types(handler: Callable, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -157,7 +162,11 @@ def _coerce_single_value(value: str, expected_type: type) -> Any:
 
 
 def validate_handler_params(
-    handler: Callable, params: Dict[str, Any], event_name: str, coerce: bool = True
+    handler: Callable,
+    params: Dict[str, Any],
+    event_name: str,
+    coerce: bool = True,
+    positional_args: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
     """
     Validate event parameters match handler signature.
@@ -166,11 +175,16 @@ def validate_handler_params(
     type hints (enabled by default). Template data-* attributes always
     pass strings, so coercion converts them to int, float, bool, etc.
 
+    Positional arguments from inline handler syntax (e.g., @click="handler('value')")
+    are mapped to named parameters based on their position in the handler signature.
+
     Args:
         handler: Event handler method to validate against
         params: Parameters provided by client event
         event_name: Name of the event (for error messages)
         coerce: Whether to coerce string values to expected types (default: True)
+        positional_args: Optional list of positional arguments from inline handler
+            syntax (e.g., ['value'] from @click="handler('value')")
 
     Returns:
         Dict with validation result:
@@ -192,11 +206,43 @@ def validate_handler_params(
         >>> result = validate_handler_params(my_handler, {}, "my_event")
         >>> assert result["valid"] is False
         >>> assert "missing required parameters" in result["error"]
+        >>> # Positional args are mapped to named parameters
+        >>> result = validate_handler_params(my_handler, {}, "my_event", positional_args=["hello"])
+        >>> assert result["valid"] is True
+        >>> assert result["coerced_params"]["value"] == "hello"
     """
-    # Coerce parameters before validation
-    coerced_params = coerce_parameter_types(handler, params) if coerce else params
-
+    # Map positional arguments to named parameters based on handler signature
     sig = inspect.signature(handler)
+
+    # Build list of parameter names (excluding self, *args, **kwargs)
+    param_names = []
+    for name, param in sig.parameters.items():
+        if name == "self":
+            continue
+        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            continue
+        param_names.append(name)
+
+    # Merge positional args into params (positional args take precedence)
+    merged_params = params.copy()
+    if positional_args:
+        for i, arg in enumerate(positional_args):
+            if i < len(param_names):
+                param_name = param_names[i]
+                if param_name in params and logger.isEnabledFor(logging.DEBUG):
+                    # Sanitize values for safe logging to prevent log injection
+                    old_val = sanitize_for_log(str(params[param_name]), max_length=100)
+                    new_val = sanitize_for_log(str(arg), max_length=100)
+                    logger.debug(
+                        "Positional arg overrides data-* attribute for %r: %s -> %s",
+                        param_name,
+                        old_val,
+                        new_val,
+                    )
+                merged_params[param_name] = arg
+
+    # Coerce parameters before validation
+    coerced_params = coerce_parameter_types(handler, merged_params) if coerce else merged_params
 
     # Extract parameter information
     required_params = []

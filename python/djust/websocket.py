@@ -48,6 +48,8 @@ async def _call_handler(handler: Callable, params: Optional[Dict[str, Any]] = No
         handler: The event handler method (sync or async)
         params: Optional dictionary of parameters to pass to the handler.
             Note: Empty dict {} is treated as no params (falsy check).
+            Positional args from @click="handler('value')" syntax are merged
+            into params by validate_handler_params() before calling this.
 
     Returns:
         The result of calling the handler
@@ -461,6 +463,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Extract cache request ID if present (for @cache decorator)
         cache_request_id = params.get("_cacheRequestId")
 
+        # Extract positional arguments from inline handler syntax
+        # e.g., @click="set_period('month')" sends params._args = ['month']
+        positional_args = params.pop("_args", [])
+
         print(
             f"[WebSocket] handle_event called: {event_name} with params: {params}", file=sys.stderr
         )
@@ -573,9 +579,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     event_data.pop("component_id", None)
 
                     # Validate parameters before calling handler
+                    # Pass positional_args so they can be mapped to named parameters
                     coerce = get_handler_coerce_setting(handler)
                     validation = validate_handler_params(
-                        handler, event_data, event_name, coerce=coerce
+                        handler,
+                        event_data,
+                        event_name,
+                        coerce=coerce,
+                        positional_args=positional_args,
                     )
                     if not validation["valid"]:
                         logger.error(f"Parameter validation failed: {validation['error']}")
@@ -592,10 +603,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         )
                         return
 
+                    # Use coerced params (with positional args merged in)
+                    coerced_event_data = validation.get("coerced_params", event_data)
+
                     # Call component's event handler (supports both sync and async)
                     # This may call send_parent() which triggers handle_component_event()
                     handler_start = time.perf_counter()
-                    await _call_handler(handler, event_data if event_data else None)
+                    await _call_handler(handler, coerced_event_data if coerced_event_data else None)
                     timing["handler"] = (
                         time.perf_counter() - handler_start
                     ) * 1000  # Convert to ms
@@ -609,8 +623,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         return
 
                     # Validate parameters before calling handler
+                    # Pass positional_args so they can be mapped to named parameters
                     coerce = get_handler_coerce_setting(handler)
-                    validation = validate_handler_params(handler, params, event_name, coerce=coerce)
+                    validation = validate_handler_params(
+                        handler, params, event_name, coerce=coerce, positional_args=positional_args
+                    )
                     if not validation["valid"]:
                         logger.error(f"Parameter validation failed: {validation['error']}")
                         await self.send_json(
@@ -626,13 +643,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         )
                         return
 
+                    # Use coerced params (with positional args merged in)
+                    coerced_params = validation.get("coerced_params", params)
+
                     # Wrap everything in a root "Event Processing" tracker
                     with tracker.track("Event Processing"):
                         # Call handler with tracking (supports both sync and async handlers)
                         handler_start = time.perf_counter()
-                        with tracker.track("Event Handler", event_name=event_name, params=params):
+                        with tracker.track(
+                            "Event Handler", event_name=event_name, params=coerced_params
+                        ):
                             with profiler.profile(profiler.OP_EVENT_HANDLE):
-                                await _call_handler(handler, params if params else None)
+                                await _call_handler(
+                                    handler, coerced_params if coerced_params else None
+                                )
                         timing["handler"] = (
                             time.perf_counter() - handler_start
                         ) * 1000  # Convert to ms

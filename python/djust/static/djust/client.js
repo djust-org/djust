@@ -1118,6 +1118,167 @@ const DEFAULT_RATE_LIMITS = {
 };
 
 /**
+ * Parse an event handler string to extract function name and arguments.
+ *
+ * Supports syntax like:
+ *   "handler"              -> { name: "handler", args: [] }
+ *   "handler()"            -> { name: "handler", args: [] }
+ *   "handler('arg')"       -> { name: "handler", args: ["arg"] }
+ *   "handler(123)"         -> { name: "handler", args: [123] }
+ *   "handler(true)"        -> { name: "handler", args: [true] }
+ *   "handler('a', 123)"    -> { name: "handler", args: ["a", 123] }
+ *
+ * @param {string} handlerString - The handler attribute value
+ * @returns {Object} - { name: string, args: any[] }
+ */
+function parseEventHandler(handlerString) {
+    const str = handlerString.trim();
+    const parenIndex = str.indexOf('(');
+
+    // No parentheses - simple handler name
+    if (parenIndex === -1) {
+        return { name: str, args: [] };
+    }
+
+    const name = str.slice(0, parenIndex).trim();
+
+    // Validate handler name is a valid Python identifier
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+        console.warn(`[LiveView] Invalid handler name: "${name}", treating as literal`);
+        return { name: str, args: [] };
+    }
+
+    const closeParen = str.lastIndexOf(')');
+
+    // Invalid syntax - missing close paren, treat as simple name
+    if (closeParen === -1 || closeParen < parenIndex) {
+        return { name: str, args: [] };
+    }
+
+    const argsStr = str.slice(parenIndex + 1, closeParen).trim();
+
+    // Empty parentheses
+    if (!argsStr) {
+        return { name, args: [] };
+    }
+
+    return { name, args: parseArguments(argsStr) };
+}
+
+/**
+ * Parse comma-separated arguments into typed values.
+ * Handles quoted strings, numbers, booleans, and null.
+ *
+ * @param {string} argsStr - Arguments string (e.g., "'hello', 123, true")
+ * @returns {any[]} - Array of parsed argument values
+ */
+function parseArguments(argsStr) {
+    const args = [];
+    let current = '';
+    let inString = false;
+    let stringChar = null;
+    let i = 0;
+
+    while (i < argsStr.length) {
+        const char = argsStr[i];
+
+        if (inString) {
+            if (char === '\\' && i + 1 < argsStr.length) {
+                // Handle escaped characters
+                current += char + argsStr[i + 1];
+                i += 2;
+                continue;
+            }
+            if (char === stringChar) {
+                // End of string
+                inString = false;
+                current += char;
+            } else {
+                current += char;
+            }
+        } else {
+            if (char === '"' || char === "'") {
+                // Start of string
+                inString = true;
+                stringChar = char;
+                current += char;
+            } else if (char === ',') {
+                // Argument separator
+                const parsed = parseSingleArgument(current.trim());
+                if (parsed !== undefined) {
+                    args.push(parsed);
+                }
+                current = '';
+            } else {
+                current += char;
+            }
+        }
+        i++;
+    }
+
+    // Handle the last argument
+    if (current.trim()) {
+        const parsed = parseSingleArgument(current.trim());
+        if (parsed !== undefined) {
+            args.push(parsed);
+        }
+    }
+
+    return args;
+}
+
+/**
+ * Parse a single argument value into its typed representation.
+ *
+ * @param {string} value - Single argument value string
+ * @returns {any} - Parsed value (string, number, boolean, or null)
+ */
+function parseSingleArgument(value) {
+    if (!value) return undefined;
+
+    // Quoted string - remove quotes and handle escapes
+    if ((value.startsWith("'") && value.endsWith("'")) ||
+        (value.startsWith('"') && value.endsWith('"'))) {
+        const inner = value.slice(1, -1);
+        // Handle escape sequences in a single pass to avoid double-processing
+        // e.g., \\t should become \t (backslash-t), not tab character
+        return inner.replace(/\\(.)/g, (match, char) => {
+            switch (char) {
+                case 'n': return '\n';
+                case 't': return '\t';
+                case 'r': return '\r';
+                case '\\': return '\\';
+                case "'": return "'";
+                case '"': return '"';
+                default: return char; // Unknown escape, just return the char
+            }
+        });
+    }
+
+    // Boolean
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+
+    // Null
+    if (value === 'null') return null;
+
+    // Number (integer or float)
+    if (/^-?\d+$/.test(value)) {
+        return parseInt(value, 10);
+    }
+    if (/^-?\d*\.\d+$/.test(value) || /^-?\d+\.\d*$/.test(value)) {
+        return parseFloat(value);
+    }
+
+    // Unknown - return as string (without quotes)
+    return value;
+}
+
+// Export for global access and testing
+window.djust = window.djust || {};
+window.djust.parseEventHandler = parseEventHandler;
+
+/**
  * Extract parameters from element data-* attributes with optional type coercion.
  *
  * Supports typed attributes via suffix notation:
@@ -1245,11 +1406,19 @@ function bindLiveViewEvents() {
         const clickHandler = element.getAttribute('@click');
         if (clickHandler && !element.dataset.liveviewClickBound) {
             element.dataset.liveviewClickBound = 'true';
+            // Parse handler string to extract function name and arguments
+            const parsed = parseEventHandler(clickHandler);
             element.addEventListener('click', async (e) => {
                 e.preventDefault();
 
                 // Extract all data-* attributes with type coercion support
                 const params = extractTypedParams(element);
+
+                // Add positional arguments from handler syntax if present
+                // e.g., @click="set_period('month')" -> params._args = ['month']
+                if (parsed.args.length > 0) {
+                    params._args = parsed.args;
+                }
 
                 // Phase 4: Check if event is from a component (walk up DOM tree)
                 let currentElement = e.currentTarget;
@@ -1264,7 +1433,7 @@ function bindLiveViewEvents() {
                 // Pass target element for optimistic updates (Phase 3)
                 params._targetElement = e.currentTarget;
 
-                await handleEvent(clickHandler, params);
+                await handleEvent(parsed.name, params);
             });
         }
 

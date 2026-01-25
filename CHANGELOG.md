@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Inline Handler Arguments**: Event handlers now support function-call syntax with arguments directly in the template attribute. Use `@click="handler('arg')"` instead of `@click="handler" data-value="arg"`. Supports strings, numbers, booleans, null, and multiple arguments. Arguments are automatically parsed and mapped to handler parameters by position. ([#67](https://github.com/djust-org/djust/pull/67))
+
 ## [0.1.6] - 2026-01-24
 
 ### Added
