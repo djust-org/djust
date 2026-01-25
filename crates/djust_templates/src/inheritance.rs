@@ -368,7 +368,24 @@ fn node_to_template_string(node: &Node) -> String {
         }
         Node::Comment => String::new(),    // Comments are stripped
         Node::Extends(_) => String::new(), // Extends is already processed
-        Node::Include(path) => format!("{{% include \"{path}\" %}}"),
+        Node::Include {
+            template,
+            with_vars,
+            only,
+        } => {
+            let mut result = format!("{{% include \"{template}\"");
+            if !with_vars.is_empty() {
+                result.push_str(" with");
+                for (key, value) in with_vars {
+                    result.push_str(&format!(" {key}={value}"));
+                }
+            }
+            if *only {
+                result.push_str(" only");
+            }
+            result.push_str(" %}");
+            result
+        }
         Node::CsrfToken => "{% csrf_token %}".to_string(),
         Node::Static(path) => format!("{{% static \"{path}\" %}}"),
         Node::ReactComponent { .. } => {
@@ -610,7 +627,11 @@ mod tests {
 
     #[test]
     fn test_nodes_to_template_string_include() {
-        let nodes = vec![Node::Include("partials/header.html".to_string())];
+        let nodes = vec![Node::Include {
+            template: "partials/header.html".to_string(),
+            with_vars: vec![],
+            only: false,
+        }];
         let result = nodes_to_template_string(&nodes);
         assert_eq!(result, "{% include \"partials/header.html\" %}");
     }

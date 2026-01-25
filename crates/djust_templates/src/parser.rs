@@ -24,7 +24,11 @@ pub enum Node {
         nodes: Vec<Node>,
     },
     Extends(String), // Parent template path
-    Include(String),
+    Include {
+        template: String,
+        with_vars: Vec<(String, String)>, // key=value assignments
+        only: bool,                       // if true, only pass with_vars, not parent context
+    },
     Comment,
     CsrfToken,
     Static(String), // Path to static file
@@ -221,7 +225,39 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             "Include tag requires a template name".to_string(),
                         ));
                     }
-                    Ok(Some(Node::Include(args[0].clone())))
+                    let template = args[0].clone();
+                    let mut with_vars = Vec::new();
+                    let mut only = false;
+
+                    // Parse remaining args for 'with' and 'only' keywords
+                    let mut i = 1;
+                    while i < args.len() {
+                        if args[i] == "with" {
+                            // Parse key=value pairs after 'with'
+                            i += 1;
+                            while i < args.len() && args[i] != "only" {
+                                if args[i].contains('=') {
+                                    let parts: Vec<&str> = args[i].splitn(2, '=').collect();
+                                    if parts.len() == 2 {
+                                        with_vars
+                                            .push((parts[0].to_string(), parts[1].to_string()));
+                                    }
+                                }
+                                i += 1;
+                            }
+                        } else if args[i] == "only" {
+                            only = true;
+                            i += 1;
+                        } else {
+                            i += 1;
+                        }
+                    }
+
+                    Ok(Some(Node::Include {
+                        template,
+                        with_vars,
+                        only,
+                    }))
                 }
 
                 "csrf_token" => {

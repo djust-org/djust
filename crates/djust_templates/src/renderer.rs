@@ -1,21 +1,46 @@
 //! Template renderer that converts AST nodes to output strings
 
 use crate::filters;
+use crate::inheritance::TemplateLoader;
 use crate::parser::Node;
 use djust_components::Component;
 use djust_core::{Context, DjangoRustError, Result, Value};
 
 pub fn render_nodes(nodes: &[Node], context: &Context) -> Result<String> {
+    render_nodes_with_loader(nodes, context, None::<&NoOpLoader>)
+}
+
+/// Render nodes with an optional template loader for {% include %} support
+pub fn render_nodes_with_loader<L: TemplateLoader>(
+    nodes: &[Node],
+    context: &Context,
+    loader: Option<&L>,
+) -> Result<String> {
     let mut output = String::new();
 
     for node in nodes {
-        output.push_str(&render_node(node, context)?);
+        output.push_str(&render_node_with_loader(node, context, loader)?);
     }
 
     Ok(output)
 }
 
-fn render_node(node: &Node, context: &Context) -> Result<String> {
+/// No-op loader for when no loader is provided
+struct NoOpLoader;
+
+impl TemplateLoader for NoOpLoader {
+    fn load_template(&self, _name: &str) -> Result<Vec<Node>> {
+        Err(DjangoRustError::TemplateError(
+            "Template loader not configured".to_string(),
+        ))
+    }
+}
+
+fn render_node_with_loader<L: TemplateLoader>(
+    node: &Node,
+    context: &Context,
+    loader: Option<&L>,
+) -> Result<String> {
     match node {
         Node::Text(text) => Ok(text.clone()),
 
@@ -38,9 +63,9 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
             let condition_result = evaluate_condition(condition, context)?;
 
             if condition_result {
-                render_nodes(true_nodes, context)
+                render_nodes_with_loader(true_nodes, context, loader)
             } else {
-                render_nodes(false_nodes, context)
+                render_nodes_with_loader(false_nodes, context, loader)
             }
         }
 
@@ -57,7 +82,7 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
                 Value::List(items) => {
                     // If list is empty, render the {% empty %} block
                     if items.is_empty() {
-                        return render_nodes(empty_nodes, context);
+                        return render_nodes_with_loader(empty_nodes, context, loader);
                     }
 
                     let mut output = String::new();
@@ -99,14 +124,14 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
                                 }
                             }
                         }
-                        output.push_str(&render_nodes(nodes, &ctx)?);
+                        output.push_str(&render_nodes_with_loader(nodes, &ctx, loader)?);
                     }
 
                     Ok(output)
                 }
                 _ => {
                     // If not a list (null, etc.), render the empty block
-                    render_nodes(empty_nodes, context)
+                    render_nodes_with_loader(empty_nodes, context, loader)
                 }
             }
         }
@@ -114,13 +139,50 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
         Node::Block { name: _, nodes } => {
             // For now, just render the block content
             // In a full implementation, this would handle template inheritance
-            render_nodes(nodes, context)
+            render_nodes_with_loader(nodes, context, loader)
         }
 
-        Node::Include(_template_name) => {
-            // For now, just skip includes
-            // In a full implementation, this would load and render the included template
-            Ok(String::new())
+        Node::Include {
+            template,
+            with_vars,
+            only,
+        } => {
+            // Load and render the included template
+            if let Some(loader) = loader {
+                // Remove quotes from template name if present
+                let name = template.trim_matches(|c| c == '"' || c == '\'');
+                let nodes = loader.load_template(name)?;
+
+                // Create context for included template
+                let mut include_context = if *only {
+                    // Only use with_vars, not parent context
+                    Context::new()
+                } else {
+                    // Start with parent context
+                    context.clone()
+                };
+
+                // Apply with_vars assignments
+                for (key, value_expr) in with_vars {
+                    // Resolve value from parent context or use as literal
+                    let value = context.get(value_expr).cloned().unwrap_or_else(|| {
+                        // Check if it's a string literal
+                        if (value_expr.starts_with('"') && value_expr.ends_with('"'))
+                            || (value_expr.starts_with('\'') && value_expr.ends_with('\''))
+                        {
+                            Value::String(value_expr[1..value_expr.len() - 1].to_string())
+                        } else {
+                            Value::String(value_expr.clone())
+                        }
+                    });
+                    include_context.set(key.clone(), value);
+                }
+
+                render_nodes_with_loader(&nodes, &include_context, Some(loader))
+            } else {
+                // No loader available, silently skip (for backwards compatibility)
+                Ok(String::new())
+            }
         }
 
         Node::ReactComponent {
@@ -167,7 +229,7 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
 
             // Render children
             for child in children {
-                output.push_str(&render_node(child, context)?);
+                output.push_str(&render_node_with_loader(child, context, loader)?);
             }
 
             output.push_str("</div>");
@@ -220,7 +282,7 @@ fn render_node(node: &Node, context: &Context) -> Result<String> {
             }
 
             // Render children with new context
-            render_nodes(nodes, &new_context)
+            render_nodes_with_loader(nodes, &new_context, loader)
         }
 
         Node::Extends(_) => {
@@ -841,6 +903,46 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
         }
     }
 
+    // Handle >= (must be before > to avoid false match)
+    if condition.contains(">=") {
+        let parts: Vec<&str> = condition.split(">=").map(|s| s.trim()).collect();
+        if parts.len() == 2 {
+            let left = get_value(parts[0], context)?;
+            let right = get_value(parts[1], context)?;
+            return Ok(compare_values(&left, &right) >= 0);
+        }
+    }
+
+    // Handle <= (must be before < to avoid false match)
+    if condition.contains("<=") {
+        let parts: Vec<&str> = condition.split("<=").map(|s| s.trim()).collect();
+        if parts.len() == 2 {
+            let left = get_value(parts[0], context)?;
+            let right = get_value(parts[1], context)?;
+            return Ok(compare_values(&left, &right) <= 0);
+        }
+    }
+
+    // Handle > (greater than)
+    if condition.contains(" > ") {
+        let parts: Vec<&str> = condition.split(" > ").map(|s| s.trim()).collect();
+        if parts.len() == 2 {
+            let left = get_value(parts[0], context)?;
+            let right = get_value(parts[1], context)?;
+            return Ok(compare_values(&left, &right) > 0);
+        }
+    }
+
+    // Handle < (less than)
+    if condition.contains(" < ") {
+        let parts: Vec<&str> = condition.split(" < ").map(|s| s.trim()).collect();
+        if parts.len() == 2 {
+            let left = get_value(parts[0], context)?;
+            let right = get_value(parts[1], context)?;
+            return Ok(compare_values(&left, &right) < 0);
+        }
+    }
+
     // Default to false for unknown conditions
     Ok(false)
 }
@@ -878,6 +980,49 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,
         (Value::String(a), Value::String(b)) => a == b,
         _ => false,
+    }
+}
+
+/// Compare two values and return -1 (less), 0 (equal), or 1 (greater).
+/// Returns 0 for incomparable types.
+fn compare_values(a: &Value, b: &Value) -> i32 {
+    match (a, b) {
+        (Value::Integer(a), Value::Integer(b)) => a.cmp(b) as i32,
+        (Value::Float(a), Value::Float(b)) => {
+            if (a - b).abs() < f64::EPSILON {
+                0
+            } else if a < b {
+                -1
+            } else {
+                1
+            }
+        }
+        // Allow comparing integers and floats
+        (Value::Integer(a), Value::Float(b)) => {
+            let a_f = *a as f64;
+            if (a_f - b).abs() < f64::EPSILON {
+                0
+            } else if a_f < *b {
+                -1
+            } else {
+                1
+            }
+        }
+        (Value::Float(a), Value::Integer(b)) => {
+            let b_f = *b as f64;
+            if (a - b_f).abs() < f64::EPSILON {
+                0
+            } else if *a < b_f {
+                -1
+            } else {
+                1
+            }
+        }
+        (Value::String(a), Value::String(b)) => a.cmp(b) as i32,
+        // Null comparisons
+        (Value::Null, Value::Null) => 0,
+        // Incomparable types return 0 (treated as equal, so < and > fail)
+        _ => 0,
     }
 }
 

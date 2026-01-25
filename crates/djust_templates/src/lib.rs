@@ -23,7 +23,7 @@ pub mod tags;
 
 use inheritance::{build_inheritance_chain, TemplateLoader};
 use parser::Node;
-use renderer::render_nodes;
+use renderer::render_nodes_with_loader;
 
 // Re-export for JIT auto-serialization
 pub use parser::extract_template_variables;
@@ -57,7 +57,7 @@ impl Template {
         self.render_with_loader(context, &NoOpTemplateLoader)
     }
 
-    /// Render with a custom template loader for inheritance
+    /// Render with a custom template loader for inheritance and {% include %} support
     pub fn render_with_loader<L: TemplateLoader>(
         &self,
         context: &Context,
@@ -77,11 +77,11 @@ impl Template {
             let root_nodes = chain.get_root_nodes();
             let final_nodes = chain.apply_block_overrides(root_nodes);
 
-            // Render the merged template
-            render_nodes(&final_nodes, context)
+            // Render the merged template with loader for {% include %} support
+            render_nodes_with_loader(&final_nodes, context, Some(loader))
         } else {
-            // No inheritance, render normally
-            render_nodes(&self.nodes, context)
+            // No inheritance, render with loader for {% include %} support
+            render_nodes_with_loader(&self.nodes, context, Some(loader))
         }
     }
 }
