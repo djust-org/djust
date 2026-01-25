@@ -5,6 +5,7 @@ This guide explains how to write effective event handlers in djust LiveView appl
 ## Table of Contents
 
 - [Parameter Naming Convention](#parameter-naming-convention)
+- [Inline Handler Arguments](#inline-handler-arguments)
 - [The @event_handler Decorator](#the-event_handler-decorator)
 - [Async Event Handlers](#async-event-handlers)
 - [Type Hints and Validation](#type-hints-and-validation)
@@ -59,6 +60,131 @@ Template usage:
 <button @click="delete_property" data-property-id="{{ property.id }}">
     Delete
 </button>
+```
+
+## Inline Handler Arguments
+
+You can pass arguments directly in the handler attribute using function-call syntax. This provides a cleaner alternative to `data-*` attributes for simple values.
+
+### Basic Usage
+
+```html
+<!-- Instead of using data-* attributes -->
+<button @click="set_period" data-value="month">30 Days</button>
+
+<!-- You can use inline arguments -->
+<button @click="set_period('month')">30 Days</button>
+```
+
+Both approaches call the same handler:
+
+```python
+@event_handler()
+def set_period(self, value: str, **kwargs):
+    """Set the time period filter"""
+    self.period = value
+    self._refresh_data()
+```
+
+### Supported Argument Types
+
+Inline arguments are automatically parsed into their appropriate types:
+
+| Syntax | Parsed Value | Python Type |
+|--------|--------------|-------------|
+| `'string'` or `"string"` | `"string"` | `str` |
+| `123` | `123` | `int` |
+| `45.67` | `45.67` | `float` |
+| `true` / `false` | `True` / `False` | `bool` |
+| `null` | `None` | `NoneType` |
+
+### Multiple Arguments
+
+Pass multiple arguments separated by commas:
+
+```html
+<button @click="sort_by('name', true)">Sort by Name (Ascending)</button>
+<button @click="filter('status', 'active', 1)">Active Items</button>
+```
+
+```python
+@event_handler()
+def sort_by(self, field: str, ascending: bool = True, **kwargs):
+    """Sort items by field"""
+    self.sort_field = field
+    self.sort_ascending = ascending
+
+@event_handler()
+def filter(self, field: str, value: str, page: int = 1, **kwargs):
+    """Filter items"""
+    self.filters[field] = value
+    self.current_page = page
+```
+
+### Combining with data-* Attributes
+
+You can combine inline arguments with `data-*` attributes. Inline arguments map to parameters by position, while `data-*` attributes map by name:
+
+```html
+<button @click="update_item('delete')"
+        data-item-id="{{ item.id }}"
+        data-confirm="true">
+    Delete Item
+</button>
+```
+
+```python
+@event_handler()
+def update_item(self, action: str, item_id: int = 0, confirm: bool = False, **kwargs):
+    """
+    action comes from inline arg ('delete')
+    item_id comes from data-item-id
+    confirm comes from data-confirm
+    """
+    if action == 'delete' and confirm:
+        Item.objects.filter(id=item_id).delete()
+```
+
+**Note**: If both an inline argument and a `data-*` attribute provide the same parameter, the inline argument takes precedence.
+
+### When to Use Each Approach
+
+| Approach | Best For |
+|----------|----------|
+| **Inline arguments** | Static values known at template render time |
+| **data-* attributes** | Dynamic values from template context (e.g., `{{ item.id }}`) |
+| **Combined** | Action type as inline arg + entity ID from context |
+
+### Examples
+
+#### Tab Selection
+```html
+<div class="tabs">
+    <button @click="select_tab(0)">Overview</button>
+    <button @click="select_tab(1)">Details</button>
+    <button @click="select_tab(2)">Settings</button>
+</div>
+```
+
+#### Period Selector
+```html
+<div class="period-selector">
+    <button @click="set_period('day')">Today</button>
+    <button @click="set_period('week')">This Week</button>
+    <button @click="set_period('month')">This Month</button>
+    <button @click="set_period('year')">This Year</button>
+</div>
+```
+
+#### Action Buttons with Context
+```html
+{% for item in items %}
+<div class="item-row">
+    <span>{{ item.name }}</span>
+    <button @click="item_action('edit')" data-item-id="{{ item.id }}">Edit</button>
+    <button @click="item_action('delete')" data-item-id="{{ item.id }}">Delete</button>
+</div>
+{% endfor %}
 ```
 
 ## The @event_handler Decorator
