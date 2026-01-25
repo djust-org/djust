@@ -329,6 +329,49 @@ mod tests {
     }
 
     #[test]
+    fn test_deeply_nested_block_inheritance() {
+        // Test 4-level nesting to ensure recursion works at arbitrary depths:
+        // level1 > level2 > level3 > child
+        // Each level adds a nested block inside the previous level's block
+        let mut loader = TestTemplateLoader::new();
+
+        // Level 1: outermost block
+        loader.add("level1.html", "{% block outer %}L1{% endblock %}");
+
+        // Level 2: wraps a middle block inside outer
+        loader.add(
+            "level2.html",
+            "{% extends \"level1.html\" %}{% block outer %}[{% block middle %}L2{% endblock %}]{% endblock %}",
+        );
+
+        // Level 3: wraps an inner block inside middle
+        loader.add(
+            "level3.html",
+            "{% extends \"level2.html\" %}{% block middle %}({% block inner %}L3{% endblock %}){% endblock %}",
+        );
+
+        // Child: only overrides the innermost block
+        let child_source = "{% extends \"level3.html\" %}{% block inner %}DEEP{% endblock %}";
+        let child_template = Template::new(child_source).unwrap();
+
+        let context = Context::new();
+        let result = child_template
+            .render_with_loader(&context, &loader)
+            .unwrap();
+
+        // Should have the full nested structure with child's content at the deepest level
+        assert!(
+            result.contains("[(DEEP)]"),
+            "Expected '[(DEEP)]' but got: {}",
+            result
+        );
+        // Should NOT have any of the default content from intermediate levels
+        assert!(!result.contains("L1"), "Should not have L1 default");
+        assert!(!result.contains("L2"), "Should not have L2 default");
+        assert!(!result.contains("L3"), "Should not have L3 default");
+    }
+
+    #[test]
     fn test_inheritance_with_variables() {
         let mut loader = TestTemplateLoader::new();
 
