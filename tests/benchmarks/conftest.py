@@ -9,9 +9,7 @@ import pytest
 def pytest_configure(config):
     """Configure pytest-benchmark defaults."""
     # These can be overridden via command line
-    config.addinivalue_line(
-        "markers", "benchmark: marks tests as benchmarks"
-    )
+    config.addinivalue_line("markers", "benchmark: marks tests as benchmarks")
 
 
 @pytest.fixture
@@ -36,17 +34,14 @@ def nested_context():
                 "settings": {
                     "theme": "dark",
                     "notifications": True,
-                }
-            }
+                },
+            },
         },
-        "items": [
-            {"id": i, "name": f"Item {i}", "price": i * 10.5}
-            for i in range(10)
-        ],
+        "items": [{"id": i, "name": f"Item {i}", "price": i * 10.5} for i in range(10)],
         "site": {
             "name": "My Site",
             "version": "1.0.0",
-        }
+        },
     }
 
 
@@ -70,6 +65,7 @@ def large_list_context():
 @pytest.fixture
 def mock_lease():
     """Mock lease object for serialization benchmarks."""
+
     class User:
         email = "john@example.com"
         first_name = "John"
@@ -103,6 +99,7 @@ def mock_lease():
 @pytest.fixture
 def mock_leases(mock_lease):
     """List of mock lease objects."""
+
     # Create 100 lease instances
     class User:
         email = "john@example.com"

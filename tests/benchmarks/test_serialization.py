@@ -74,7 +74,7 @@ class TestSerializerCompilation:
                 "tenant.user.email",
                 "tenant.phone",
                 "start_date",
-            ]
+            ],
         )
         func_name = code.split("def ")[1].split("(")[0]
 
@@ -103,6 +103,7 @@ class TestSerializerExecution:
     @pytest.mark.benchmark(group="serializer_exec")
     def test_manual_serialization(self, benchmark, mock_lease):
         """Benchmark manual serialization for comparison."""
+
         def manual_serialize(lease):
             return {
                 "property": {
@@ -144,6 +145,7 @@ class TestDeepNesting:
     @pytest.fixture
     def deep_object(self):
         """Create deeply nested object."""
+
         class Level5:
             value = "deep"
 
@@ -183,15 +185,14 @@ class TestDeepNesting:
     @pytest.mark.benchmark(group="serializer_deep")
     def test_deep_nesting_manual(self, benchmark, deep_object):
         """Benchmark deep nesting with manual access."""
+
         def manual_access(obj):
             return {
                 "level1": {
                     "level2": {
                         "level3": {
                             "level4": {
-                                "level5": {
-                                    "value": obj.level1.level2.level3.level4.level5.value
-                                }
+                                "level5": {"value": obj.level1.level2.level3.level4.level5.value}
                             }
                         }
                     }
@@ -208,6 +209,7 @@ class TestManyFields:
     @pytest.fixture
     def wide_object(self):
         """Create object with many fields."""
+
         class WideModel:
             field1 = "value1"
             field2 = "value2"
@@ -237,6 +239,7 @@ class TestManyFields:
     @pytest.mark.benchmark(group="serializer_wide")
     def test_many_fields_manual(self, benchmark, wide_object):
         """Benchmark many fields with manual serialization."""
+
         def manual_serialize(obj):
             return {
                 "field1": obj.field1,
