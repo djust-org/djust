@@ -21,7 +21,7 @@ use actors::{ActorSupervisor, SessionActorHandle};
 use dashmap::DashMap;
 use djust_core::{Context, Value};
 use djust_templates::Template;
-use djust_vdom::{diff, parse_html, VNode};
+use djust_vdom::{diff, parse_html, parse_html_continue, reset_id_counter, VNode};
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
@@ -155,8 +155,17 @@ impl RustLiveViewBackend {
         let html = template_arc.render(&context)?;
 
         // Parse new HTML to VDOM
-        let new_vdom = parse_html(&html)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        // IMPORTANT: Use parse_html() only for the FIRST render (resets ID counter to 0).
+        // For subsequent renders, use parse_html_continue() to ensure newly inserted
+        // elements get unique IDs that don't collide with existing elements in the DOM.
+        let new_vdom = if self.last_vdom.is_some() {
+            // Subsequent render: continue ID sequence to avoid collisions
+            parse_html_continue(&html)
+        } else {
+            // First render: reset ID counter to start fresh
+            parse_html(&html)
+        }
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
         // Compute diff if we have a previous render
         let patches =
@@ -197,8 +206,13 @@ impl RustLiveViewBackend {
         let context = Context::from_dict(self.state.clone());
         let html = template_arc.render(&context)?;
 
-        let new_vdom = parse_html(&html)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        // IMPORTANT: Use parse_html_continue() for subsequent renders to avoid ID collisions
+        let new_vdom = if self.last_vdom.is_some() {
+            parse_html_continue(&html)
+        } else {
+            parse_html(&html)
+        }
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
         let patches_bytes = if let Some(old_vdom) = &self.last_vdom {
             let patches = diff(old_vdom, &new_vdom);
@@ -226,6 +240,8 @@ impl RustLiveViewBackend {
     fn reset(&mut self) {
         self.last_vdom = None;
         self.version = 0;
+        // Reset ID counter so next render starts fresh
+        reset_id_counter();
     }
 
     /// Serialize the RustLiveView state to MessagePack bytes

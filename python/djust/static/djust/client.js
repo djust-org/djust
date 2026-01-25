@@ -8,6 +8,99 @@
 window.djust = window.djust || {};
 
 // ============================================================================
+// Double-Load Guard
+// ============================================================================
+// Prevent double execution when client.js is included in both base template
+// (for TurboNav compatibility) and injected by LiveView.
+if (window._djustClientLoaded) {
+    console.log('[LiveView] client.js already loaded, skipping duplicate initialization');
+} else {
+window._djustClientLoaded = true;
+
+// ============================================================================
+// TurboNav Integration - Early Registration
+// ============================================================================
+// Register turbo:load handler early to ensure it's ready before TurboNav navigation.
+// This handler will be called when TurboNav swaps page content.
+
+// Track if we've been initialized via DOMContentLoaded
+let djustInitialized = false;
+
+// Track pending turbo:load reinit
+let pendingTurboReinit = false;
+
+window.addEventListener('turbo:load', function(event) {
+    console.log('[LiveView:TurboNav] turbo:load event received!');
+    console.log('[LiveView:TurboNav] djustInitialized:', djustInitialized);
+
+    if (!djustInitialized) {
+        // client.js hasn't finished initializing yet, defer reinit
+        console.log('[LiveView:TurboNav] Deferring reinit until DOMContentLoaded completes');
+        pendingTurboReinit = true;
+        return;
+    }
+
+    try {
+        reinitLiveViewForTurboNav();
+    } catch (error) {
+        console.error('[LiveView:TurboNav] Error during reinit:', error);
+    }
+});
+
+// Reinitialize LiveView after TurboNav navigation
+function reinitLiveViewForTurboNav() {
+    console.log('[LiveView:TurboNav] Reinitializing LiveView...');
+
+    // Disconnect existing WebSocket
+    if (liveViewWS) {
+        console.log('[LiveView:TurboNav] Disconnecting existing WebSocket');
+        liveViewWS.disconnect();
+        liveViewWS = null;
+    }
+
+    // Reset client VDOM version
+    clientVdomVersion = null;
+
+    // Clear lazy hydration state
+    lazyHydrationManager.init();
+
+    // Find all LiveView containers in the new content
+    const allContainers = document.querySelectorAll('[data-live-view]');
+    const lazyContainers = document.querySelectorAll('[data-live-view][data-live-lazy]');
+    const eagerContainers = document.querySelectorAll('[data-live-view]:not([data-live-lazy])');
+
+    console.log(`[LiveView:TurboNav] Found ${allContainers.length} containers (${lazyContainers.length} lazy, ${eagerContainers.length} eager)`);
+
+    // Register lazy containers with the lazy hydration manager
+    lazyContainers.forEach(container => {
+        lazyHydrationManager.register(container);
+    });
+
+    // Only initialize WebSocket if there are eager containers
+    if (eagerContainers.length > 0) {
+        console.log('[LiveView:TurboNav] Initializing new WebSocket connection');
+        // Initialize WebSocket
+        liveViewWS = new LiveViewWebSocket();
+        liveViewWS.connect();
+
+        // Start heartbeat
+        liveViewWS.startHeartbeat();
+    } else if (lazyContainers.length > 0) {
+        console.log('[LiveView:TurboNav] Deferring WebSocket connection until lazy elements are needed');
+    } else {
+        console.log('[LiveView:TurboNav] No LiveView containers found, skipping WebSocket');
+    }
+
+    // Re-bind events
+    bindLiveViewEvents();
+
+    // Re-scan @loading attributes
+    globalLoadingManager.scanAndRegister();
+
+    console.log('[LiveView:TurboNav] Reinitialization complete');
+}
+
+// ============================================================================
 // Centralized Response Handler (WebSocket + HTTP)
 // ============================================================================
 
@@ -173,6 +266,32 @@ class LiveViewWebSocket {
             messages: [],      // Recent message history (last 50)
             connectedAt: null, // Timestamp of current connection
         };
+    }
+
+    /**
+     * Cleanly disconnect the WebSocket for TurboNav navigation
+     */
+    disconnect() {
+        console.log('[LiveView] Disconnecting for navigation...');
+
+        // Stop heartbeat
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+            this.heartbeatInterval = null;
+        }
+
+        // Clear reconnect attempts so we don't auto-reconnect
+        this.reconnectAttempts = this.maxReconnectAttempts;
+
+        // Close WebSocket if open
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.close();
+        }
+
+        this.ws = null;
+        this.sessionId = null;
+        this.viewMounted = false;
+        this.vdomVersion = null;
     }
 
     connect(url = null) {
@@ -1965,16 +2084,41 @@ function applyDjUpdateElements(existingRoot, newRoot) {
 
 /**
  * Get significant children (elements and non-whitespace text nodes).
+ * Preserves all whitespace inside <pre>, <code>, and <textarea> elements.
  */
 function getSignificantChildren(node) {
+    // Check if we're inside a whitespace-preserving element
+    const preserveWhitespace = isWhitespacePreserving(node);
+
     return Array.from(node.childNodes).filter(child => {
         if (child.nodeType === Node.ELEMENT_NODE) return true;
         if (child.nodeType === Node.TEXT_NODE) {
+            // Preserve all text nodes inside pre/code/textarea
+            if (preserveWhitespace) return true;
             return child.textContent.trim().length > 0;
         }
         return false;
     });
 }
+
+/**
+ * Check if a node is a whitespace-preserving element or inside one.
+ */
+function isWhitespacePreserving(node) {
+    const WHITESPACE_PRESERVING_TAGS = ['PRE', 'CODE', 'TEXTAREA', 'SCRIPT', 'STYLE'];
+    let current = node;
+    while (current) {
+        if (current.nodeType === Node.ELEMENT_NODE &&
+            WHITESPACE_PRESERVING_TAGS.includes(current.tagName)) {
+            return true;
+        }
+        current = current.parentNode;
+    }
+    return false;
+}
+
+// Export for testing
+window.djust.getSignificantChildren = getSignificantChildren;
 
 /**
  * Group patches by their parent path for batching.
@@ -2236,13 +2380,241 @@ function applyPatches(patches) {
     return true;
 }
 
+// ============================================================================
+// Lazy Hydration Support (Performance Optimization)
+// ============================================================================
+
+/**
+ * Lazy LiveView Hydration Manager
+ *
+ * Defers WebSocket connection and LiveView mounting until elements enter the
+ * viewport. This significantly reduces memory usage and WebSocket connections
+ * for pages with below-fold LiveView components.
+ *
+ * Usage:
+ *   <div data-live-view="my_view" data-live-lazy>
+ *     <!-- Content loads when element scrolls into view -->
+ *   </div>
+ *
+ *   <div data-live-view="my_view" data-live-lazy="click">
+ *     <!-- Content loads on first user interaction -->
+ *   </div>
+ *
+ * Supported lazy modes:
+ *   - "viewport" (default): Mount when element enters viewport
+ *   - "click": Mount on first click within the element
+ *   - "hover": Mount on first mouse hover
+ *   - "idle": Mount when browser is idle (requestIdleCallback)
+ */
+const lazyHydrationManager = {
+    // Set of element IDs that have been hydrated
+    hydratedElements: new Set(),
+
+    // IntersectionObserver instance for viewport-based hydration
+    viewportObserver: null,
+
+    // Queue of elements waiting for WebSocket connection
+    pendingMounts: [],
+
+    // Initialize lazy hydration
+    init() {
+        // Clear pending mounts on reinit (e.g., TurboNav navigation)
+        this.pendingMounts = [];
+        this.hydratedElements.clear();
+
+        // Inject CSS for lazy click elements (only once)
+        if (!document.getElementById('djust-lazy-styles')) {
+            const style = document.createElement('style');
+            style.id = 'djust-lazy-styles';
+            style.textContent = '.djust-lazy-click { cursor: pointer; }';
+            document.head.appendChild(style);
+        }
+
+        // Create viewport observer if supported
+        if ('IntersectionObserver' in window) {
+            this.viewportObserver = new IntersectionObserver(
+                (entries) => this.handleIntersection(entries),
+                {
+                    // Start loading slightly before element is visible
+                    rootMargin: '50px',
+                    threshold: 0
+                }
+            );
+        }
+    },
+
+    // Handle viewport intersection
+    handleIntersection(entries) {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const element = entry.target;
+                this.hydrateElement(element);
+                this.viewportObserver.unobserve(element);
+            }
+        });
+    },
+
+    // Register an element for lazy hydration
+    register(element) {
+        const lazyMode = element.getAttribute('data-live-lazy') || 'viewport';
+
+        switch (lazyMode) {
+            case 'click':
+                element.addEventListener('click', () => this.hydrateElement(element), { once: true });
+                // Add CSS class for styling (avoids overriding inline styles)
+                element.classList.add('djust-lazy-click');
+                break;
+
+            case 'hover':
+                element.addEventListener('mouseenter', () => this.hydrateElement(element), { once: true });
+                break;
+
+            case 'idle':
+                if ('requestIdleCallback' in window) {
+                    requestIdleCallback(() => this.hydrateElement(element), { timeout: 5000 });
+                } else {
+                    // Fallback: use setTimeout
+                    setTimeout(() => this.hydrateElement(element), 2000);
+                }
+                break;
+
+            case 'viewport':
+            case '':
+            default:
+                if (this.viewportObserver) {
+                    this.viewportObserver.observe(element);
+                } else {
+                    // Fallback for browsers without IntersectionObserver
+                    this.hydrateElement(element);
+                }
+                break;
+        }
+
+        if (globalThis.djustDebug) {
+            console.log(`[LiveView:lazy] Registered element for lazy hydration (mode: ${lazyMode})`, element);
+        }
+    },
+
+    // Hydrate a single element
+    hydrateElement(element) {
+        const elementId = element.id || element.getAttribute('data-live-view');
+
+        // Prevent double hydration
+        if (this.hydratedElements.has(elementId)) {
+            return;
+        }
+        this.hydratedElements.add(elementId);
+
+        const viewPath = element.getAttribute('data-live-view');
+        if (!viewPath) {
+            console.warn('[LiveView:lazy] Element missing data-live-view attribute', element);
+            return;
+        }
+
+        console.log(`[LiveView:lazy] Hydrating: ${viewPath}`);
+
+        // Ensure WebSocket is connected
+        if (!liveViewWS || !liveViewWS.enabled) {
+            liveViewWS = new LiveViewWebSocket();
+            liveViewWS.connect();
+        }
+
+        // Wait for WebSocket connection then mount
+        if (liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) {
+            this.mountElement(element, viewPath);
+        } else {
+            // Queue mount for when WebSocket connects (handles multiple lazy elements)
+            this.pendingMounts.push({ element, viewPath });
+
+            // Set up connection callback if not already done
+            if (this.pendingMounts.length === 1 && liveViewWS.ws) {
+                const originalOnOpen = liveViewWS.ws.onopen;
+                liveViewWS.ws.onopen = (event) => {
+                    if (originalOnOpen) originalOnOpen.call(liveViewWS.ws, event);
+                    this.processPendingMounts();
+                };
+            }
+        }
+    },
+
+    // Process all queued mounts when WebSocket connects
+    processPendingMounts() {
+        console.log(`[LiveView:lazy] Processing ${this.pendingMounts.length} pending mounts`);
+        const mounts = this.pendingMounts.slice();
+        this.pendingMounts = [];
+        mounts.forEach(({ element, viewPath }) => {
+            this.mountElement(element, viewPath);
+        });
+    },
+
+    // Mount a specific element
+    mountElement(element, viewPath) {
+        // Check if content was already pre-rendered
+        const hasContent = element.innerHTML && element.innerHTML.trim().length > 0;
+
+        if (hasContent) {
+            console.log('[LiveView:lazy] Using pre-rendered content');
+            liveViewWS.skipMountHtml = true;
+        }
+
+        // Pass URL query params
+        const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+        liveViewWS.mount(viewPath, urlParams);
+
+        // Remove lazy attribute to indicate hydration complete
+        element.removeAttribute('data-live-lazy');
+        element.setAttribute('data-live-hydrated', 'true');
+
+        // Bind events to the newly hydrated content
+        bindLiveViewEvents();
+    },
+
+    // Check if an element is lazily loaded
+    isLazy(element) {
+        return element.hasAttribute('data-live-lazy');
+    },
+
+    // Force hydrate all lazy elements (useful for testing or SPA navigation)
+    hydrateAll() {
+        document.querySelectorAll('[data-live-lazy]').forEach(el => {
+            this.hydrateElement(el);
+        });
+    }
+};
+
+// Expose lazy hydration API
+window.djust.lazyHydration = lazyHydrationManager;
+
 // Initialize on load
 document.addEventListener('DOMContentLoaded', () => {
     console.log('[LiveView] Initializing...');
 
-    // Initialize WebSocket
-    liveViewWS = new LiveViewWebSocket();
-    liveViewWS.connect();
+    // Initialize lazy hydration manager
+    lazyHydrationManager.init();
+
+    // Find all LiveView containers
+    const allContainers = document.querySelectorAll('[data-live-view]');
+    const lazyContainers = document.querySelectorAll('[data-live-view][data-live-lazy]');
+    const eagerContainers = document.querySelectorAll('[data-live-view]:not([data-live-lazy])');
+
+    console.log(`[LiveView] Found ${allContainers.length} containers (${lazyContainers.length} lazy, ${eagerContainers.length} eager)`);
+
+    // Register lazy containers with the lazy hydration manager
+    lazyContainers.forEach(container => {
+        lazyHydrationManager.register(container);
+    });
+
+    // Only initialize WebSocket if there are eager containers
+    if (eagerContainers.length > 0) {
+        // Initialize WebSocket
+        liveViewWS = new LiveViewWebSocket();
+        liveViewWS.connect();
+
+        // Start heartbeat
+        liveViewWS.startHeartbeat();
+    } else if (lazyContainers.length > 0) {
+        console.log('[LiveView] Deferring WebSocket connection until lazy elements are needed');
+    }
 
     // Initialize React counters (if any)
     initReactCounters();
@@ -2256,6 +2628,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // Scan and register @loading attributes
     globalLoadingManager.scanAndRegister();
 
-    // Start heartbeat
-    liveViewWS.startHeartbeat();
+    // Mark as initialized so turbo:load handler knows we're ready
+    djustInitialized = true;
+    console.log('[LiveView] Initialization complete, djustInitialized = true');
+
+    // Check if we have a pending turbo reinit (turbo:load fired before we finished init)
+    if (pendingTurboReinit) {
+        console.log('[LiveView] Processing pending turbo:load reinit');
+        pendingTurboReinit = false;
+        reinitLiveViewForTurboNav();
+    }
 });
+
+} // End of double-load guard

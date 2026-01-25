@@ -15,6 +15,10 @@ use std::collections::HashMap;
 /// These IDs enable O(1) querySelector lookup on the client, avoiding fragile
 /// index-based path traversal.
 ///
+/// **Important**: This function resets the ID counter to 0. For subsequent renders
+/// within the same session (where you need unique IDs), use `parse_html_continue()`
+/// instead to avoid ID collisions.
+///
 /// Example output:
 /// ```html
 /// <div data-dj="0">
@@ -25,6 +29,17 @@ use std::collections::HashMap;
 pub fn parse_html(html: &str) -> Result<VNode> {
     // Reset ID counter for this parse session
     reset_id_counter();
+    parse_html_continue(html)
+}
+
+/// Parse HTML without resetting the ID counter.
+///
+/// Use this for subsequent renders within the same session to ensure
+/// newly inserted elements get unique IDs that don't collide with existing elements.
+///
+/// The ID counter continues from where the previous parse left off.
+pub fn parse_html_continue(html: &str) -> Result<VNode> {
+    // Don't reset - continue from current counter value
 
     let dom = parse_document(RcDom::default(), Default::default())
         .from_utf8()
@@ -113,6 +128,13 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
 
             // Convert children
             let mut children = Vec::new();
+
+            // Check if this element preserves whitespace
+            let preserve_whitespace = matches!(
+                tag.to_lowercase().as_str(),
+                "pre" | "code" | "textarea" | "script" | "style"
+            );
+
             for child in handle.children.borrow().iter() {
                 // Skip comment nodes - they are not part of the DOM that JavaScript sees
                 if matches!(child.data, NodeData::Comment { .. }) {
@@ -123,15 +145,20 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
 
                 let child_vnode = handle_to_vnode(child)?;
                 // Skip empty text nodes - use more robust whitespace detection
+                // IMPORTANT: Preserve whitespace inside pre, code, textarea, script, style
                 if child_vnode.is_text() {
                     if let Some(text) = &child_vnode.text {
-                        // Use chars().all() for more reliable whitespace detection
-                        // This catches all Unicode whitespace characters
-                        if !text.chars().all(|c| c.is_whitespace()) {
+                        // Preserve ALL text nodes inside whitespace-preserving elements
+                        if preserve_whitespace {
                             children.push(child_vnode);
                         } else {
+                            // Use chars().all() for more reliable whitespace detection
+                            // This catches all Unicode whitespace characters
+                            if !text.chars().all(|c| c.is_whitespace()) {
+                                children.push(child_vnode);
+                            }
                             // Debug logging disabled - too verbose
-                            // eprintln!("[Parser] Filtered whitespace text node: {:?}", text);
+                            // else { eprintln!("[Parser] Filtered whitespace text node: {:?}", text); }
                         }
                     }
                 } else {

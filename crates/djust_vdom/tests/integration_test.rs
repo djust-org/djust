@@ -532,3 +532,75 @@ fn test_html_escaping_in_to_html() {
         "< and > in attributes should be escaped"
     );
 }
+
+#[test]
+fn test_whitespace_preserved_in_pre_tags() {
+    // Whitespace (including newlines) should be preserved inside <pre> elements
+    // This is critical for code blocks with syntax highlighting
+    let html = r#"<pre><span class="line1">def foo():</span>
+<span class="line2">    return 42</span></pre>"#;
+
+    let vdom = parse_html(html).unwrap();
+
+    // The pre element should have 3 children: span, newline text node, span
+    assert_eq!(vdom.tag, "pre", "Root should be pre element");
+    assert_eq!(
+        vdom.children.len(),
+        3,
+        "Pre should have 3 children (span, newline text, span)"
+    );
+
+    // Middle child should be a text node with newline
+    assert!(
+        vdom.children[1].is_text(),
+        "Second child should be a text node"
+    );
+    assert_eq!(
+        vdom.children[1].text.as_deref(),
+        Some("\n"),
+        "Text node should contain the newline"
+    );
+}
+
+#[test]
+fn test_whitespace_preserved_in_code_tags() {
+    // Whitespace should also be preserved in <code> elements
+    let html = r#"<code>x = 1
+y = 2</code>"#;
+
+    let vdom = parse_html(html).unwrap();
+
+    assert_eq!(vdom.tag, "code", "Root should be code element");
+
+    // Should have the text content including newline
+    if vdom.children.len() == 1 && vdom.children[0].is_text() {
+        let text = vdom.children[0].text.as_deref().unwrap();
+        assert!(
+            text.contains('\n'),
+            "Code content should preserve newline: {:?}",
+            text
+        );
+    } else {
+        panic!("Code should have text content");
+    }
+}
+
+#[test]
+fn test_whitespace_filtered_outside_pre() {
+    // Outside of whitespace-preserving elements, whitespace-only nodes should be filtered
+    let html = r#"<div>
+    <span>A</span>
+    <span>B</span>
+</div>"#;
+
+    let vdom = parse_html(html).unwrap();
+
+    // The div should only have the 2 span elements, whitespace filtered out
+    assert_eq!(
+        vdom.children.len(),
+        2,
+        "Div should have 2 children (spans only, whitespace filtered)"
+    );
+    assert_eq!(vdom.children[0].tag, "span");
+    assert_eq!(vdom.children[1].tag, "span");
+}
