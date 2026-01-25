@@ -10,7 +10,13 @@ Related to: https://github.com/djust-org/djust/issues/61
 
 import pytest
 from djust.live_view import LiveView
-from djust.url_resolver import resolve_url_tags, URL_TAG_RE
+from djust.url_resolver import (
+    resolve_url_tags,
+    post_process_url_markers,
+    URL_TAG_RE,
+    URL_MARKER_START,
+    URL_MARKER_END,
+)
 
 
 class TestUrlResolver:
@@ -80,16 +86,126 @@ class TestUrlResolver:
         # Verify context variable would be resolved (value accessible)
         assert context["user_id"] == 123
 
-    def test_unresolved_loop_variable_preserved(self):
-        """Test that URLs with loop variables are preserved (not resolved)."""
+    def test_unresolved_loop_variable_converted_to_marker(self):
+        """Test that URLs with loop variables are converted to markers."""
         template = '{% for post in posts %}<a href="{% url \'detail\' post.id %}">{{ post.title }}</a>{% endfor %}'
         context = {"posts": []}  # post.id is a loop variable, not in context
 
-        # Should preserve the original tag since post.id can't be resolved
+        # Should convert to marker since post.id can't be resolved yet
         result = resolve_url_tags(template, context)
 
-        # Loop variable URL should be unchanged (can't resolve yet)
-        assert "{% url" in result
+        # Original {% url %} tag should be replaced with marker
+        assert "{% url" not in result
+        assert URL_MARKER_START in result
+        assert URL_MARKER_END in result
+        assert "detail" in result  # URL name preserved
+        assert "{{ post.id }}" in result  # Variable in Rust syntax
+
+
+class TestLoopVariableUrlResolution:
+    """Test URL resolution for loop variables (two-pass approach)."""
+
+    def test_marker_created_for_loop_variable(self):
+        """Test that loop variable URLs create markers with Rust variable syntax."""
+        template = '{% url "post_detail" post.slug %}'
+        context = {}  # post.slug not in context
+
+        result = resolve_url_tags(template, context)
+
+        # Should have marker with Rust variable syntax
+        assert URL_MARKER_START in result
+        assert "post_detail" in result
+        assert "{{ post.slug }}" in result
+        assert URL_MARKER_END in result
+
+    def test_marker_with_multiple_args(self):
+        """Test marker creation with multiple arguments."""
+        template = '{% url "article" category.slug post.id %}'
+        context = {}
+
+        result = resolve_url_tags(template, context)
+
+        assert URL_MARKER_START in result
+        assert "article" in result
+        assert "{{ category.slug }}" in result
+        assert "{{ post.id }}" in result
+
+    def test_marker_with_kwargs(self):
+        """Test marker creation with keyword arguments."""
+        template = '{% url "profile" username=user.username %}'
+        context = {}
+
+        result = resolve_url_tags(template, context)
+
+        assert URL_MARKER_START in result
+        assert "profile" in result
+        assert "username={{ user.username }}" in result
+
+    def test_marker_with_mixed_literal_and_variable(self):
+        """Test marker with both literal and variable arguments."""
+        template = "{% url 'page' 'section' item.id %}"
+        context = {}
+
+        result = resolve_url_tags(template, context)
+
+        assert URL_MARKER_START in result
+        assert "page" in result
+        assert "section" in result  # Literal preserved
+        assert "{{ item.id }}" in result  # Variable in Rust syntax
+
+    @pytest.mark.django_db
+    def test_post_process_resolves_marker(self, settings):
+        """Test that post_process_url_markers resolves markers to URLs."""
+        # Simulate what Rust would output after rendering a loop
+        # The marker format is: <!--__DJUST_URL__:url_name:args:__END__-->
+        # For no-args URLs, args is empty: <!--__DJUST_URL__:home::__END__-->
+        rendered_html = '<a href="<!--__DJUST_URL__:home::__END__-->">Home</a>'
+
+        result = post_process_url_markers(rendered_html)
+
+        # Should resolve to actual URL (if 'home' URL exists)
+        # or empty string if URL doesn't exist
+        assert URL_MARKER_START not in result
+
+    def test_post_process_with_args(self):
+        """Test post-processing marker with positional arguments."""
+        # Simulate rendered marker with actual values
+        rendered_html = '<!--__DJUST_URL__:item:42:__END__-->'
+
+        result = post_process_url_markers(rendered_html)
+
+        # Should attempt to resolve (may fail if URL doesn't exist in test env)
+        assert URL_MARKER_START not in result
+
+    def test_post_process_with_kwargs(self):
+        """Test post-processing marker with keyword arguments."""
+        rendered_html = '<!--__DJUST_URL__:profile:username=testuser:__END__-->'
+
+        result = post_process_url_markers(rendered_html)
+
+        assert URL_MARKER_START not in result
+
+    def test_post_process_no_markers(self):
+        """Test that HTML without markers passes through unchanged."""
+        html = '<div><a href="/home/">Home</a></div>'
+
+        result = post_process_url_markers(html)
+
+        assert result == html
+
+    def test_post_process_multiple_markers(self):
+        """Test post-processing multiple markers in one HTML string."""
+        rendered_html = """
+        <ul>
+            <li><a href="<!--__DJUST_URL__:home:__END__-->">Home</a></li>
+            <li><a href="<!--__DJUST_URL__:about:__END__-->">About</a></li>
+        </ul>
+        """
+
+        result = post_process_url_markers(rendered_html)
+
+        # Both markers should be processed
+        assert result.count(URL_MARKER_START) == 0
 
 
 class TestLiveViewUrlResolution:

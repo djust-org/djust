@@ -1643,6 +1643,11 @@ class LiveView(View):
         self._sync_state_to_rust()
         html = self._rust_view.render()
 
+        # Post-process URL markers for loop variables
+        from .url_resolver import post_process_url_markers
+
+        html = post_process_url_markers(html)
+
         # Post-process to hydrate React components
         html = self._hydrate_react_components(html)
 
@@ -2021,6 +2026,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             temp_rust.update_state(json_compatible_context)
             html = temp_rust.render()
 
+            # Post-process URL markers for loop variables
+            from .url_resolver import post_process_url_markers
+
+            html = post_process_url_markers(html)
+
             html = self._hydrate_react_components(html)
 
             # Inject handler metadata for client-side decorators
@@ -2069,6 +2079,13 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         result = self._rust_view.render_with_diff()
         html, patches_json, version = result
+
+        # Post-process URL markers for loop variables
+        # These markers were created during pre-processing for URLs like
+        # {% url 'post' post.slug %} inside {% for post in posts %}
+        from .url_resolver import post_process_url_markers
+
+        html = post_process_url_markers(html)
 
         print(
             f"[LiveView] Rendered HTML length: {len(html)} chars, starts with: {html[:100]}...",

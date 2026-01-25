@@ -7,11 +7,16 @@ rendering path (live_view.py).
 
 The Rust template engine doesn't have access to Django's URL resolver,
 so we pre-process templates to replace {% url %} tags with resolved URLs.
+
+For loop variables (e.g., {% url 'post' post.slug %} inside {% for post in posts %}),
+we use a two-pass approach:
+1. Pre-process: Convert to markers with Rust variable syntax
+2. Post-process: After Rust renders, resolve the markers to actual URLs
 """
 
 import logging
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +30,16 @@ URL_TAG_RE = re.compile(
     r"((?:\s+(?!as\s)(?:[a-zA-Z_][a-zA-Z0-9_.]*(?:=[^\s%}]+)?|['\"][^'\"]*['\"]|\d+))*)"  # args/kwargs (excluding 'as')
     r"(?:\s+as\s+([a-zA-Z_][a-zA-Z0-9_]*))?"  # optional 'as variable'
     r"\s*%}",
+    re.DOTALL,
+)
+
+# Marker format for deferred URL resolution (used for loop variables)
+# Format: <!--__DJUST_URL__:url_name:arg1:arg2:kwarg1=val1:__END__-->
+# Or for URLs with no args: <!--__DJUST_URL__:url_name:__END__-->
+URL_MARKER_START = "<!--__DJUST_URL__:"
+URL_MARKER_END = ":__END__-->"
+URL_MARKER_RE = re.compile(
+    r"<!--__DJUST_URL__:([^:]+):(.*?):__END__-->",
     re.DOTALL,
 )
 
@@ -159,14 +174,55 @@ def resolve_url_tags(template_source: str, context_dict: Dict[str, Any]) -> str:
                         break
 
         if has_unresolved:
-            # Leave the original tag in place - it references variables
-            # that don't exist in the context yet (e.g., loop variables)
-            # The Rust engine will treat this as an unknown tag (empty output)
+            # Convert to a deferred URL marker that Rust will render with variable values.
+            # This handles loop variables like {% url 'post' post.slug %} inside {% for %}.
+            #
+            # The marker format uses HTML comments (which Rust passes through) with
+            # Rust variable syntax for the unresolved parts:
+            #   {% url 'post_detail' post.slug %}
+            # becomes:
+            #   <!--__DJUST_URL__:post_detail:{{ post.slug }}:__END__-->
+            #
+            # After Rust renders the loop, post.slug is substituted:
+            #   <!--__DJUST_URL__:post_detail:my-actual-slug:__END__-->
+            #
+            # Then post_process_url_markers() resolves to the actual URL.
+            marker_parts = [url_name]
+            for token in tokens:
+                if "=" in token and not token.startswith("'") and not token.startswith('"'):
+                    # Keyword argument: key=value or key={{ var }}
+                    key, value = token.split("=", 1)
+                    if (value.startswith("'") and value.endswith("'")) or (
+                        value.startswith('"') and value.endswith('"')
+                    ):
+                        # Literal value
+                        marker_parts.append(f"{key}={value[1:-1]}")
+                    elif value.isdigit():
+                        marker_parts.append(f"{key}={value}")
+                    else:
+                        # Variable - use Rust syntax
+                        marker_parts.append(f"{key}={{{{ {value} }}}}")
+                else:
+                    # Positional argument
+                    if (token.startswith("'") and token.endswith("'")) or (
+                        token.startswith('"') and token.endswith('"')
+                    ):
+                        marker_parts.append(token[1:-1])
+                    elif token.isdigit():
+                        marker_parts.append(token)
+                    else:
+                        # Variable - use Rust syntax
+                        marker_parts.append(f"{{{{ {token} }}}}")
+
+            # Join parts with colons. Add empty string if no args to maintain format.
+            args_str = ":".join(marker_parts[1:]) if len(marker_parts) > 1 else ""
+            marker = f"{URL_MARKER_START}{marker_parts[0]}:{args_str}{URL_MARKER_END}"
             logger.debug(
-                "URL tag with unresolved variables (likely loop variable): %s",
+                "URL tag with loop variables converted to marker: %s -> %s",
                 match.group(0),
+                marker,
             )
-            return match.group(0)
+            return marker
 
         # Resolve the URL
         try:
@@ -188,3 +244,84 @@ def resolve_url_tags(template_source: str, context_dict: Dict[str, Any]) -> str:
 
     # Replace all {% url %} tags
     return URL_TAG_RE.sub(replace_url_tag, template_source)
+
+
+def post_process_url_markers(rendered_html: str) -> str:
+    """
+    Resolve URL markers in rendered HTML to actual URLs.
+
+    This is the second pass of URL resolution, called after Rust renders
+    the template. It handles markers created for loop variables where the
+    variable values weren't available during pre-processing.
+
+    Marker format: <!--__DJUST_URL__:url_name:arg1:arg2:kwarg=val:__END__-->
+
+    Args:
+        rendered_html: HTML rendered by Rust, potentially containing URL markers
+
+    Returns:
+        HTML with URL markers replaced by resolved URLs
+    """
+    from django.urls import NoReverseMatch, reverse
+
+    # Quick check: skip if no markers
+    if URL_MARKER_START not in rendered_html:
+        return rendered_html
+
+    def resolve_marker(match: re.Match) -> str:
+        """Resolve a single URL marker to its URL."""
+        url_name = match.group(1)
+        args_string = match.group(2)
+
+        # Parse the colon-separated arguments
+        args: List[Any] = []
+        kwargs: Dict[str, Any] = {}
+
+        # Split by colon, but be careful with kwargs that contain colons
+        parts = args_string.split(":")
+
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+
+            if "=" in part:
+                # Keyword argument
+                key, value = part.split("=", 1)
+                # Try to convert to int if it looks like a number
+                if value.isdigit():
+                    kwargs[key] = int(value)
+                else:
+                    kwargs[key] = value
+            else:
+                # Positional argument
+                if part.isdigit():
+                    args.append(int(part))
+                else:
+                    args.append(part)
+
+        try:
+            # Django doesn't allow mixing args and kwargs in reverse()
+            if kwargs:
+                url = reverse(url_name, kwargs=kwargs)
+            elif args:
+                url = reverse(url_name, args=args)
+            else:
+                url = reverse(url_name)
+            return url
+        except NoReverseMatch as e:
+            # Log warning but return empty string to avoid breaking the page
+            logger.warning(
+                "Failed to resolve URL marker: url_name=%s, args=%s, kwargs=%s, error=%s",
+                url_name,
+                args,
+                kwargs,
+                e,
+            )
+            return ""
+        except Exception as e:
+            # Catch any other errors (e.g., invalid URL name)
+            logger.warning("URL marker resolution failed: %s", e)
+            return ""
+
+    return URL_MARKER_RE.sub(resolve_marker, rendered_html)

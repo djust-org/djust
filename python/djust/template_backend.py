@@ -778,6 +778,13 @@ class DjustTemplate:
         try:
             template_dirs = [str(d) for d in self.backend.template_dirs]
             html = self.backend._render_fn_with_dirs(resolved_template, context_dict, template_dirs)
+
+            # Post-process URL markers for loop variables
+            # These markers were created during pre-processing for URLs that couldn't
+            # be resolved because they referenced loop variables (e.g., post.slug)
+            from .url_resolver import post_process_url_markers
+
+            html = post_process_url_markers(html)
             return SafeString(html)
         except Exception as e:
             # Provide helpful error message with template location
