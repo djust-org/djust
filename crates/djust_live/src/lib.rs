@@ -1593,5 +1593,27 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
 
+    // Tag handler registry for custom template tags (url, static, etc.)
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::register_tag_handler,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::unregister_tag_handler,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::has_tag_handler,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::get_registered_tags,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::clear_tag_handlers,
+        m
+    )?)?;
+
     Ok(())
 }

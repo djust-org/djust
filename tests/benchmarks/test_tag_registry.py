@@ -92,6 +92,7 @@ class TestTagHandlerWithContext:
     @pytest.mark.benchmark(group="tag_handler_context")
     def test_handler_with_simple_context(self, benchmark, simple_context):
         """Benchmark handler with simple context lookup."""
+
         class ContextAwareHandler:
             def render(self, args, context):
                 name = context.get("name", "")
@@ -106,6 +107,7 @@ class TestTagHandlerWithContext:
     @pytest.mark.benchmark(group="tag_handler_context")
     def test_handler_with_nested_context(self, benchmark, nested_context):
         """Benchmark handler with nested context lookup."""
+
         class DeepContextHandler:
             def render(self, args, context):
                 user = context.get("user", {})
@@ -127,6 +129,7 @@ class TestTagHandlerRegistration:
     @pytest.mark.benchmark(group="tag_registry_ops")
     def test_handler_instantiation(self, benchmark):
         """Benchmark handler object creation."""
+
         def create_handler():
             return MockTagHandler("test")
 
@@ -137,10 +140,7 @@ class TestTagHandlerRegistration:
     def test_registry_simulation(self, benchmark):
         """Benchmark dictionary-based registry lookup (simulates Rust registry)."""
         # Simulate the Python-side registry lookup
-        registry = {
-            f"tag-{i}": MockTagHandler(f"tag-{i}")
-            for i in range(50)
-        }
+        registry = {f"tag-{i}": MockTagHandler(f"tag-{i}") for i in range(50)}
 
         def lookup_and_render():
             handler = registry.get("tag-25")

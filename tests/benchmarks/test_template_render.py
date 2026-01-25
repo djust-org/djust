@@ -148,7 +148,7 @@ class TestTemplateCompilation:
             "items": [
                 {"name": "Item 1", "description": "Desc 1", "in_stock": True, "price": "10.00"},
                 {"name": "Item 2", "description": "Desc 2", "in_stock": False, "price": "20.00"},
-            ]
+            ],
         }
 
         result = benchmark(render_template, complex_template, context)

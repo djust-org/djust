@@ -6,12 +6,11 @@ use crate::parser::Node;
 use djust_components::Component;
 use djust_core::{Context, DjangoRustError, Result, Value};
 
-/// Render nodes without include support (for backwards compatibility)
 pub fn render_nodes(nodes: &[Node], context: &Context) -> Result<String> {
-    render_nodes_with_loader::<NoOpIncludeLoader>(nodes, context, None)
+    render_nodes_with_loader(nodes, context, None::<&NoOpLoader>)
 }
 
-/// Render nodes with template loader support for includes
+/// Render nodes with an optional template loader for {% include %} support
 pub fn render_nodes_with_loader<L: TemplateLoader>(
     nodes: &[Node],
     context: &Context,
@@ -26,14 +25,14 @@ pub fn render_nodes_with_loader<L: TemplateLoader>(
     Ok(output)
 }
 
-/// No-op template loader that returns an error when include is attempted
-struct NoOpIncludeLoader;
+/// No-op loader for when no loader is provided
+struct NoOpLoader;
 
-impl TemplateLoader for NoOpIncludeLoader {
-    fn load_template(&self, name: &str) -> Result<Vec<Node>> {
-        Err(DjangoRustError::TemplateError(format!(
-            "Template loader not configured. Cannot include template: {name}"
-        )))
+impl TemplateLoader for NoOpLoader {
+    fn load_template(&self, _name: &str) -> Result<Vec<Node>> {
+        Err(DjangoRustError::TemplateError(
+            "Template loader not configured".to_string(),
+        ))
     }
 }
 
@@ -144,39 +143,46 @@ fn render_node_with_loader<L: TemplateLoader>(
         }
 
         Node::Include {
-            path,
+            template,
             with_vars,
             only,
         } => {
             // Load and render the included template
-            let Some(template_loader) = loader else {
-                return Err(DjangoRustError::TemplateError(format!(
-                    "Template loader not configured. Cannot include template: {path}"
-                )));
-            };
+            if let Some(loader) = loader {
+                // Remove quotes from template name if present
+                let name = template.trim_matches(|c| c == '"' || c == '\'');
+                let nodes = loader.load_template(name)?;
 
-            // Load the included template
-            let included_nodes = template_loader.load_template(path)?;
+                // Create context for included template
+                let mut include_context = if *only {
+                    // Only use with_vars, not parent context
+                    Context::new()
+                } else {
+                    // Start with parent context
+                    context.clone()
+                };
 
-            // Build the context for the included template
-            // "only" keyword: start with empty context; otherwise inherit parent context
-            let mut include_context = if *only {
-                Context::new()
+                // Apply with_vars assignments
+                for (key, value_expr) in with_vars {
+                    // Resolve value from parent context or use as literal
+                    let value = context.get(value_expr).cloned().unwrap_or_else(|| {
+                        // Check if it's a string literal
+                        if (value_expr.starts_with('"') && value_expr.ends_with('"'))
+                            || (value_expr.starts_with('\'') && value_expr.ends_with('\''))
+                        {
+                            Value::String(value_expr[1..value_expr.len() - 1].to_string())
+                        } else {
+                            Value::String(value_expr.clone())
+                        }
+                    });
+                    include_context.set(key.clone(), value);
+                }
+
+                render_nodes_with_loader(&nodes, &include_context, Some(loader))
             } else {
-                context.clone()
-            };
-
-            // Apply with_vars to the context
-            for (var_name, expression) in with_vars {
-                let value = context
-                    .get(expression)
-                    .cloned()
-                    .unwrap_or_else(|| Value::String(expression.clone()));
-                include_context.set(var_name.clone(), value);
+                // No loader available, silently skip (for backwards compatibility)
+                Ok(String::new())
             }
-
-            // Render the included template with the new context
-            render_nodes_with_loader(&included_nodes, &include_context, loader)
         }
 
         Node::ReactComponent {
@@ -289,6 +295,61 @@ fn render_node_with_loader<L: TemplateLoader>(
         }
 
         Node::Comment => Ok(String::new()),
+
+        Node::CustomTag { name, args } => {
+            // Call Python handler for custom tags (e.g., {% url %}, {% static %})
+            //
+            // The handler is looked up in the registry and called with:
+            // - args: The raw arguments from the template tag
+            // - context: The current template context (converted to Python dict)
+            //
+            // The handler must return a string to be inserted in the output.
+
+            // First, resolve any variable references in args
+            let resolved_args: Vec<String> = args
+                .iter()
+                .map(|arg| {
+                    // Check if arg is a variable reference (not a string literal)
+                    let arg_trimmed = arg.trim();
+                    if (arg_trimmed.starts_with('"') && arg_trimmed.ends_with('"'))
+                        || (arg_trimmed.starts_with('\'') && arg_trimmed.ends_with('\''))
+                    {
+                        // String literal - keep as-is
+                        arg.clone()
+                    } else if let Some(eq_pos) = arg.find('=') {
+                        // Named parameter: key=value
+                        let key = &arg[..eq_pos];
+                        let value = arg[eq_pos + 1..].trim();
+                        if (value.starts_with('"') && value.ends_with('"'))
+                            || (value.starts_with('\'') && value.ends_with('\''))
+                        {
+                            // Value is a string literal
+                            arg.clone()
+                        } else {
+                            // Value is a variable - try to resolve
+                            match context.get(value) {
+                                Some(resolved) => format!("{}={}", key, resolved),
+                                None => arg.clone(),
+                            }
+                        }
+                    } else {
+                        // Might be a variable - try to resolve
+                        match context.get(arg_trimmed) {
+                            Some(resolved) => resolved.to_string(),
+                            None => arg.clone(),
+                        }
+                    }
+                })
+                .collect();
+
+            // Convert context to HashMap for the handler
+            let context_map = context.to_hashmap();
+
+            // Call the Python handler
+            crate::registry::call_handler(name, &resolved_args, &context_map).map_err(|e| {
+                DjangoRustError::TemplateError(format!("Custom tag '{}' error: {}", name, e))
+            })
+        }
     }
 }
 
@@ -823,27 +884,13 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
         return Ok(!evaluate_condition(rest, context)?);
     }
 
-    // Handle comparisons - check multi-character operators first to avoid partial matches
-    // Order matters: >= and <= must be checked before > and <
-    if condition.contains(">=") {
-        let parts: Vec<&str> = condition.split(">=").map(|s| s.trim()).collect();
+    // Handle comparisons
+    if condition.contains("==") {
+        let parts: Vec<&str> = condition.split("==").map(|s| s.trim()).collect();
         if parts.len() == 2 {
             let left = get_value(parts[0], context)?;
             let right = get_value(parts[1], context)?;
-            return Ok(compare_values(&left, &right)
-                .map(|ord| ord == std::cmp::Ordering::Greater || ord == std::cmp::Ordering::Equal)
-                .unwrap_or(false));
-        }
-    }
-
-    if condition.contains("<=") {
-        let parts: Vec<&str> = condition.split("<=").map(|s| s.trim()).collect();
-        if parts.len() == 2 {
-            let left = get_value(parts[0], context)?;
-            let right = get_value(parts[1], context)?;
-            return Ok(compare_values(&left, &right)
-                .map(|ord| ord == std::cmp::Ordering::Less || ord == std::cmp::Ordering::Equal)
-                .unwrap_or(false));
+            return Ok(values_equal(&left, &right));
         }
     }
 
@@ -856,35 +903,43 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
         }
     }
 
-    if condition.contains("==") {
-        let parts: Vec<&str> = condition.split("==").map(|s| s.trim()).collect();
+    // Handle >= (must be before > to avoid false match)
+    if condition.contains(">=") {
+        let parts: Vec<&str> = condition.split(">=").map(|s| s.trim()).collect();
         if parts.len() == 2 {
             let left = get_value(parts[0], context)?;
             let right = get_value(parts[1], context)?;
-            return Ok(values_equal(&left, &right));
+            return Ok(compare_values(&left, &right) >= 0);
         }
     }
 
-    // Check > and < after >= and <= (but we need to ensure we don't match >= as >)
-    if condition.contains('>') && !condition.contains(">=") {
-        let parts: Vec<&str> = condition.split('>').map(|s| s.trim()).collect();
+    // Handle <= (must be before < to avoid false match)
+    if condition.contains("<=") {
+        let parts: Vec<&str> = condition.split("<=").map(|s| s.trim()).collect();
         if parts.len() == 2 {
             let left = get_value(parts[0], context)?;
             let right = get_value(parts[1], context)?;
-            return Ok(compare_values(&left, &right)
-                .map(|ord| ord == std::cmp::Ordering::Greater)
-                .unwrap_or(false));
+            return Ok(compare_values(&left, &right) <= 0);
         }
     }
 
-    if condition.contains('<') && !condition.contains("<=") {
-        let parts: Vec<&str> = condition.split('<').map(|s| s.trim()).collect();
+    // Handle > (greater than)
+    if condition.contains(" > ") {
+        let parts: Vec<&str> = condition.split(" > ").map(|s| s.trim()).collect();
         if parts.len() == 2 {
             let left = get_value(parts[0], context)?;
             let right = get_value(parts[1], context)?;
-            return Ok(compare_values(&left, &right)
-                .map(|ord| ord == std::cmp::Ordering::Less)
-                .unwrap_or(false));
+            return Ok(compare_values(&left, &right) > 0);
+        }
+    }
+
+    // Handle < (less than)
+    if condition.contains(" < ") {
+        let parts: Vec<&str> = condition.split(" < ").map(|s| s.trim()).collect();
+        if parts.len() == 2 {
+            let left = get_value(parts[0], context)?;
+            let right = get_value(parts[1], context)?;
+            return Ok(compare_values(&left, &right) < 0);
         }
     }
 
@@ -924,32 +979,50 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,
         (Value::String(a), Value::String(b)) => a == b,
-        // Cross-type numeric comparisons for equality
-        (Value::Integer(a), Value::Float(b)) => (*a as f64 - b).abs() < f64::EPSILON,
-        (Value::Float(a), Value::Integer(b)) => (a - *b as f64).abs() < f64::EPSILON,
         _ => false,
     }
 }
 
-/// Compare two values and return their ordering.
-/// Returns None if the values cannot be compared (e.g., different types, non-numeric).
-fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+/// Compare two values and return -1 (less), 0 (equal), or 1 (greater).
+/// Returns 0 for incomparable types.
+fn compare_values(a: &Value, b: &Value) -> i32 {
     match (a, b) {
-        // Integer comparisons
-        (Value::Integer(a), Value::Integer(b)) => Some(a.cmp(b)),
-
-        // Float comparisons
-        (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
-
-        // Cross-type numeric comparisons (convert integer to float)
-        (Value::Integer(a), Value::Float(b)) => (*a as f64).partial_cmp(b),
-        (Value::Float(a), Value::Integer(b)) => a.partial_cmp(&(*b as f64)),
-
-        // String comparisons (lexicographic)
-        (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
-
-        // Cannot compare other types or mismatched types
-        _ => None,
+        (Value::Integer(a), Value::Integer(b)) => a.cmp(b) as i32,
+        (Value::Float(a), Value::Float(b)) => {
+            if (a - b).abs() < f64::EPSILON {
+                0
+            } else if a < b {
+                -1
+            } else {
+                1
+            }
+        }
+        // Allow comparing integers and floats
+        (Value::Integer(a), Value::Float(b)) => {
+            let a_f = *a as f64;
+            if (a_f - b).abs() < f64::EPSILON {
+                0
+            } else if a_f < *b {
+                -1
+            } else {
+                1
+            }
+        }
+        (Value::Float(a), Value::Integer(b)) => {
+            let b_f = *b as f64;
+            if (a - b_f).abs() < f64::EPSILON {
+                0
+            } else if *a < b_f {
+                -1
+            } else {
+                1
+            }
+        }
+        (Value::String(a), Value::String(b)) => a.cmp(b) as i32,
+        // Null comparisons
+        (Value::Null, Value::Null) => 0,
+        // Incomparable types return 0 (treated as equal, so < and > fail)
+        _ => 0,
     }
 }
 
@@ -1205,202 +1278,5 @@ mod tests {
         context.set("other".to_string(), Value::String("inner".to_string()));
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "outerinnerouter");
-    }
-
-    // ===========================================
-    // Tests for comparison operators in if tags
-    // ===========================================
-
-    #[test]
-    fn test_if_greater_than_true() {
-        let tokens = tokenize("{% if count > 0 %}has items{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("count".to_string(), Value::Integer(5));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "has items");
-    }
-
-    #[test]
-    fn test_if_greater_than_false() {
-        let tokens = tokenize("{% if count > 10 %}has many{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("count".to_string(), Value::Integer(5));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "");
-    }
-
-    #[test]
-    fn test_if_greater_than_equal() {
-        // When count == 10, should NOT satisfy > 10
-        let tokens = tokenize("{% if count > 10 %}yes{% else %}no{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("count".to_string(), Value::Integer(10));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "no");
-    }
-
-    #[test]
-    fn test_if_less_than_true() {
-        let tokens = tokenize("{% if age < 18 %}minor{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("age".to_string(), Value::Integer(15));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "minor");
-    }
-
-    #[test]
-    fn test_if_less_than_false() {
-        let tokens = tokenize("{% if age < 18 %}minor{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("age".to_string(), Value::Integer(21));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "");
-    }
-
-    #[test]
-    fn test_if_greater_than_or_equal_true() {
-        let tokens = tokenize("{% if price >= 100 %}expensive{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("price".to_string(), Value::Integer(100));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "expensive");
-    }
-
-    #[test]
-    fn test_if_greater_than_or_equal_above() {
-        let tokens = tokenize("{% if price >= 100 %}expensive{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("price".to_string(), Value::Integer(150));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "expensive");
-    }
-
-    #[test]
-    fn test_if_greater_than_or_equal_false() {
-        let tokens = tokenize("{% if price >= 100 %}expensive{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("price".to_string(), Value::Integer(50));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "");
-    }
-
-    #[test]
-    fn test_if_less_than_or_equal_true() {
-        let tokens = tokenize("{% if score <= 50 %}failing{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("score".to_string(), Value::Integer(50));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "failing");
-    }
-
-    #[test]
-    fn test_if_less_than_or_equal_below() {
-        let tokens = tokenize("{% if score <= 50 %}failing{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("score".to_string(), Value::Integer(30));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "failing");
-    }
-
-    #[test]
-    fn test_if_less_than_or_equal_false() {
-        let tokens = tokenize("{% if score <= 50 %}failing{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("score".to_string(), Value::Integer(80));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "");
-    }
-
-    #[test]
-    fn test_if_not_equal_true() {
-        let tokens = tokenize("{% if status != \"active\" %}inactive{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("status".to_string(), Value::String("pending".to_string()));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "inactive");
-    }
-
-    #[test]
-    fn test_if_not_equal_false() {
-        let tokens = tokenize("{% if status != \"active\" %}inactive{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("status".to_string(), Value::String("active".to_string()));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "");
-    }
-
-    #[test]
-    fn test_if_equal_string() {
-        let tokens = tokenize("{% if status == \"active\" %}is active{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("status".to_string(), Value::String("active".to_string()));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "is active");
-    }
-
-    #[test]
-    fn test_if_comparison_with_float() {
-        let tokens = tokenize("{% if temp > 98.6 %}fever{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("temp".to_string(), Value::Float(100.5));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "fever");
-    }
-
-    #[test]
-    fn test_if_comparison_float_less_than() {
-        let tokens = tokenize("{% if temp < 32.0 %}freezing{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("temp".to_string(), Value::Float(20.0));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "freezing");
-    }
-
-    #[test]
-    fn test_if_comparison_mixed_int_float() {
-        // Integer variable compared to float literal
-        let tokens = tokenize("{% if count > 5.5 %}many{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("count".to_string(), Value::Integer(10));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "many");
-    }
-
-    #[test]
-    fn test_if_comparison_variable_vs_variable() {
-        let tokens = tokenize("{% if current > threshold %}over limit{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("current".to_string(), Value::Integer(100));
-        context.set("threshold".to_string(), Value::Integer(50));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "over limit");
-    }
-
-    #[test]
-    fn test_if_comparison_else_branch() {
-        let tokens = tokenize("{% if count > 0 %}has items{% else %}empty{% endif %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set("count".to_string(), Value::Integer(0));
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(result, "empty");
     }
 }

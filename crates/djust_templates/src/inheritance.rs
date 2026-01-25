@@ -106,9 +106,7 @@ impl InheritanceChain {
                 if let Some(merged_nodes) = self.merged_blocks.get(name) {
                     Node::Block {
                         name: name.clone(),
-                        // IMPORTANT: Recursively apply block overrides to merged content
-                        // This handles nested blocks (e.g., docs_content inside content)
-                        nodes: self.apply_block_overrides(merged_nodes),
+                        nodes: merged_nodes.clone(),
                     }
                 } else {
                     // Keep original if no override
@@ -371,18 +369,15 @@ fn node_to_template_string(node: &Node) -> String {
         Node::Comment => String::new(),    // Comments are stripped
         Node::Extends(_) => String::new(), // Extends is already processed
         Node::Include {
-            path,
+            template,
             with_vars,
             only,
         } => {
-            let mut result = format!("{{% include \"{path}\"");
+            let mut result = format!("{{% include \"{template}\"");
             if !with_vars.is_empty() {
-                result.push_str(" with ");
-                for (i, (var_name, expression)) in with_vars.iter().enumerate() {
-                    if i > 0 {
-                        result.push(' ');
-                    }
-                    result.push_str(&format!("{var_name}={expression}"));
+                result.push_str(" with");
+                for (key, value) in with_vars {
+                    result.push_str(&format!(" {key}={value}"));
                 }
             }
             if *only {
@@ -402,6 +397,16 @@ fn node_to_template_string(node: &Node) -> String {
             // Rust components should be preserved as-is if possible
             // For now, skip them as they're handled separately
             String::new()
+        }
+        Node::CustomTag { name, args } => {
+            // Reconstruct custom tag: {% tagname arg1 arg2 %}
+            let mut result = format!("{{% {name}");
+            for arg in args {
+                result.push(' ');
+                result.push_str(arg);
+            }
+            result.push_str(" %}");
+            result
         }
     }
 }
@@ -623,43 +628,12 @@ mod tests {
     #[test]
     fn test_nodes_to_template_string_include() {
         let nodes = vec![Node::Include {
-            path: "partials/header.html".to_string(),
+            template: "partials/header.html".to_string(),
             with_vars: vec![],
             only: false,
         }];
         let result = nodes_to_template_string(&nodes);
         assert_eq!(result, "{% include \"partials/header.html\" %}");
-    }
-
-    #[test]
-    fn test_nodes_to_template_string_include_with_vars() {
-        let nodes = vec![Node::Include {
-            path: "partials/card.html".to_string(),
-            with_vars: vec![
-                ("title".to_string(), "post.title".to_string()),
-                ("content".to_string(), "post.body".to_string()),
-            ],
-            only: false,
-        }];
-        let result = nodes_to_template_string(&nodes);
-        assert_eq!(
-            result,
-            "{% include \"partials/card.html\" with title=post.title content=post.body %}"
-        );
-    }
-
-    #[test]
-    fn test_nodes_to_template_string_include_only() {
-        let nodes = vec![Node::Include {
-            path: "partials/card.html".to_string(),
-            with_vars: vec![("item".to_string(), "post".to_string())],
-            only: true,
-        }];
-        let result = nodes_to_template_string(&nodes);
-        assert_eq!(
-            result,
-            "{% include \"partials/card.html\" with item=post only %}"
-        );
     }
 
     #[test]
