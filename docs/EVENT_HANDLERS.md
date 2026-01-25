@@ -98,6 +98,8 @@ Inline arguments are automatically parsed into their appropriate types:
 | `true` / `false` | `True` / `False` | `bool` |
 | `null` | `None` | `NoneType` |
 
+**Limitation**: Only primitive types are supported. Arrays and objects (e.g., `handler([1,2,3])` or `handler({key: 'value'})`) are not supported. For complex data, use `data-*` attributes with JSON strings and parse them in your handler.
+
 ### Multiple Arguments
 
 Pass multiple arguments separated by commas:
