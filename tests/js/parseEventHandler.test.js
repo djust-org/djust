@@ -208,6 +208,18 @@ describe('parseEventHandler', () => {
             expect(result.args).toEqual([]);
         });
 
+        it('should reject handler names with hyphens', () => {
+            const result = parseEventHandler("my-handler('arg')");
+            expect(result.name).toBe("my-handler('arg')");
+            expect(result.args).toEqual([]);
+        });
+
+        it('should reject handler names with dots', () => {
+            const result = parseEventHandler("obj.method('arg')");
+            expect(result.name).toBe("obj.method('arg')");
+            expect(result.args).toEqual([]);
+        });
+
         it('should handle handler with commas in quoted strings', () => {
             const result = parseEventHandler("tag('red,green,blue')");
             expect(result.name).toBe('tag');

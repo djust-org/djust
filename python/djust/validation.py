@@ -229,7 +229,7 @@ def validate_handler_params(
         for i, arg in enumerate(positional_args):
             if i < len(param_names):
                 param_name = param_names[i]
-                if param_name in params:
+                if param_name in params and logger.isEnabledFor(logging.DEBUG):
                     # Sanitize values for safe logging to prevent log injection
                     old_val = sanitize_for_log(str(params[param_name]), max_length=100)
                     new_val = sanitize_for_log(str(arg), max_length=100)
