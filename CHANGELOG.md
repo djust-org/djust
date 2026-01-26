@@ -7,9 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-01-26
+
+### Added
+
+- **`{% include %}` Tag in LiveView/Components**: LiveView and Components now support `{% include %}` tags for template composition. Included templates are resolved from Django's configured template directories. ([#78](https://github.com/djust-org/djust/pull/78))
+- **Release Automation**: Added GitHub Actions workflow for automated releases with multi-platform wheel builds (Linux, macOS Intel/ARM, Windows) and PyPI publishing. ([#84](https://github.com/djust-org/djust/pull/84))
+
 ### Fixed
 
 - **`{% elif %}` Tag Support**: Template parser now correctly handles `{% elif %}` conditionals. Previously, elif branches fell through to the unknown tag handler and rendered all branches instead of just the matching one. ([#80](https://github.com/djust-org/djust/pull/80))
+- **SVG camelCase Attributes**: Preserved camelCase attribute names like `viewBox`, `preserveAspectRatio`, and `gradientUnits` in SVG elements. Previously these were incorrectly lowercased during parsing. ([#82](https://github.com/djust-org/djust/pull/82))
+- **Lazy CSRF Token Evaluation**: CSRF tokens are now properly evaluated before Rust serialization, fixing issues where lazy token objects were passed instead of actual token strings. ([#73](https://github.com/djust-org/djust/pull/73))
+- **LiveView Initialization Detection**: Improved `window.djustInitialized` handling for reliable E2E test detection and client-side navigation support. ([#75](https://github.com/djust-org/djust/pull/75), [#76](https://github.com/djust-org/djust/pull/76))
 
 ## [0.1.8] - 2026-01-25
 
