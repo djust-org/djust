@@ -58,6 +58,17 @@ pub enum Node {
         /// Arguments from the template tag as raw strings
         args: Vec<String>,
     },
+    /// Unsupported template tag - renders as HTML comment with warning.
+    ///
+    /// This is used for Django template tags that don't have a registered
+    /// handler. Instead of silently failing, it outputs a visible warning
+    /// in development to help developers identify missing tag implementations.
+    UnsupportedTag {
+        /// Tag name (e.g., "spaceless", "verbatim")
+        name: String,
+        /// Original arguments from the tag
+        args: Vec<String>,
+    },
 }
 
 pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
@@ -388,8 +399,11 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             args: args.clone(),
                         }))
                     } else {
-                        // Unknown tag with no handler, treat as comment
-                        Ok(Some(Node::Comment))
+                        // Unknown tag with no handler - create warning node
+                        Ok(Some(Node::UnsupportedTag {
+                            name: tag_name.clone(),
+                            args: args.clone(),
+                        }))
                     }
                 }
             }

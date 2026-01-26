@@ -180,8 +180,14 @@ fn render_node_with_loader<L: TemplateLoader>(
 
                 render_nodes_with_loader(&nodes, &include_context, Some(loader))
             } else {
-                // No loader available, silently skip (for backwards compatibility)
-                Ok(String::new())
+                // No loader available - warn developers
+                eprintln!(
+                    "[djust] Warning: '{{% include \"{template}\" %}}' ignored - \
+                     no template loader configured. Pass template_dirs to RustLiveView."
+                );
+                Ok(format!(
+                    "<!-- djust: include '{template}' ignored - no template loader -->"
+                ))
             }
         }
 
@@ -295,6 +301,24 @@ fn render_node_with_loader<L: TemplateLoader>(
         }
 
         Node::Comment => Ok(String::new()),
+
+        Node::UnsupportedTag { name, args } => {
+            // Log warning to stderr for developers
+            let args_str = if args.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", args.join(" "))
+            };
+            eprintln!(
+                "[djust] Warning: Unsupported template tag '{{% {name}{args_str} %}}' - \
+                 this tag has no registered handler and will be ignored"
+            );
+
+            // Return HTML comment so it's visible in page source during development
+            Ok(format!(
+                "<!-- djust: unsupported tag '{{% {name}{args_str} %}}' -->"
+            ))
+        }
 
         Node::CustomTag { name, args } => {
             // Call Python handler for custom tags (e.g., {% url %}, {% static %})
