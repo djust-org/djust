@@ -306,3 +306,84 @@ class TestSerializeContextFunction:
         result = serialize_context(context)
 
         assert result["avatar"] is None
+
+
+class TestCSRFTokenSerialization:
+    """Test CSRF token handling in template context (GitHub Issue #72).
+
+    CSRF tokens use Django's SimpleLazyObject which must be evaluated
+    before passing to the Rust rendering engine.
+    """
+
+    def test_csrf_token_not_rendered_as_list(self):
+        """CSRF token should be rendered as actual token, not [List]."""
+        from django.middleware.csrf import _get_new_csrf_string
+        from django.test import RequestFactory
+
+        from djust.template_backend import DjustTemplateBackend
+
+        # Create backend with minimal config
+        backend = DjustTemplateBackend(
+            params={
+                "NAME": "djust",
+                "DIRS": [],
+                "APP_DIRS": False,
+                "OPTIONS": {},
+            }
+        )
+
+        # Create a simple template that uses csrf_token
+        template_string = (
+            '<input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">'
+        )
+        template = backend.from_string(template_string)
+
+        # Create request with CSRF cookie
+        rf = RequestFactory()
+        request = rf.get("/")
+        request.META["CSRF_COOKIE"] = _get_new_csrf_string()
+
+        # Render the template
+        html = template.render(context={}, request=request)
+
+        # Should NOT contain [List]
+        assert "[List]" not in html
+        # Should contain csrfmiddlewaretoken
+        assert "csrfmiddlewaretoken" in html
+        # Value should be a token string (64 chars for CSRF token)
+        assert 'value=""' not in html
+
+    def test_csrf_input_not_rendered_as_list(self):
+        """csrf_input should be rendered as actual HTML input, not [List]."""
+        from django.middleware.csrf import _get_new_csrf_string
+        from django.test import RequestFactory
+
+        from djust.template_backend import DjustTemplateBackend
+
+        # Create backend with minimal config
+        backend = DjustTemplateBackend(
+            params={
+                "NAME": "djust",
+                "DIRS": [],
+                "APP_DIRS": False,
+                "OPTIONS": {},
+            }
+        )
+
+        # Create a template that uses csrf_input
+        template_string = "<form>{{ csrf_input }}</form>"
+        template = backend.from_string(template_string)
+
+        # Create request with CSRF cookie
+        rf = RequestFactory()
+        request = rf.get("/")
+        request.META["CSRF_COOKIE"] = _get_new_csrf_string()
+
+        # Render the template
+        html = template.render(context={}, request=request)
+
+        # Should NOT contain [List]
+        assert "[List]" not in html
+        # Should contain a proper hidden input
+        assert "csrfmiddlewaretoken" in html
+        assert 'type="hidden"' in html

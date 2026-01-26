@@ -900,9 +900,10 @@ class DjustTemplate:
         # Add request to context if provided
         if request is not None:
             context_dict["request"] = request
-            # Add CSRF token functions
-            context_dict["csrf_input"] = csrf_input_lazy(request)
-            context_dict["csrf_token"] = csrf_token_lazy(request)
+            # Add CSRF token - force evaluation of lazy string for Rust serialization
+            # csrf_token_lazy returns a SimpleLazyObject which must be converted to string
+            context_dict["csrf_input"] = str(csrf_input_lazy(request))
+            context_dict["csrf_token"] = str(csrf_token_lazy(request))
 
         # Apply context processors
         if request is not None:
