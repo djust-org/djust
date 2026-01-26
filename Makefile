@@ -380,11 +380,11 @@ ifndef VERSION
 	@exit 1
 endif
 	@echo "$(GREEN)Bumping version to $(VERSION)...$(NC)"
-	@# Update pyproject.toml
-	@sed -i '' 's/^version = ".*"/version = "$(VERSION)"/' pyproject.toml
+	@# Update pyproject.toml (portable sed - works on both macOS and Linux)
+	@sed 's/^version = ".*"/version = "$(VERSION)"/' pyproject.toml > pyproject.toml.tmp && mv pyproject.toml.tmp pyproject.toml
 	@# Convert Python version to Cargo version (0.2.0a1 -> 0.2.0-alpha.1)
 	@CARGO_VERSION=$$(echo "$(VERSION)" | sed 's/a/-alpha./; s/b/-beta./; s/rc/-rc./'); \
-	sed -i '' 's/^version = ".*"/version = "'$$CARGO_VERSION'"/' Cargo.toml
+	sed 's/^version = ".*"/version = "'$$CARGO_VERSION'"/' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
 	@echo "$(GREEN)Updated versions:$(NC)"
 	@echo "  pyproject.toml: $(VERSION)"
 	@grep 'version = ' Cargo.toml | head -1

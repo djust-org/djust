@@ -9,6 +9,11 @@ permissions:
   contents: write
   id-token: write
 
+# Prevent concurrent releases
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   # Build wheels for multiple platforms
   build:
@@ -34,7 +39,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
 
       - name: Install maturin
         run: pip install maturin
