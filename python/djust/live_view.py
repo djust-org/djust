@@ -20,6 +20,7 @@ from django.utils.decorators import method_decorator
 from django.db import models
 from .validation import validate_handler_params
 from .security import safe_setattr
+from .utils import get_template_dirs
 
 # Try to use orjson for faster JSON operations (2-3x faster than stdlib)
 import importlib.util
@@ -779,39 +780,6 @@ class LiveView(View):
         for stream_obj in self._streams.values():
             stream_obj.clear()
 
-    def _get_template_dirs(self) -> list[str]:
-        """
-        Get template directories from Django settings in search order.
-
-        Returns list of template directory paths in Django's search order:
-        1. DIRS from each TEMPLATES config (in order)
-        2. APP_DIRS (if enabled) - searches app templates in app order
-
-        Used for {% include %} tag support in Rust rendering.
-        """
-        from django.conf import settings
-        from pathlib import Path
-
-        template_dirs = []
-
-        # Step 1: Add DIRS from all TEMPLATES configs
-        for template_config in settings.TEMPLATES:
-            if "DIRS" in template_config:
-                template_dirs.extend(template_config["DIRS"])
-
-        # Step 2: Add app template directories (only for DjangoTemplates with APP_DIRS=True)
-        for template_config in settings.TEMPLATES:
-            if template_config["BACKEND"] == "django.template.backends.django.DjangoTemplates":
-                if template_config.get("APP_DIRS", False):
-                    from django.apps import apps
-
-                    for app_config in apps.get_app_configs():
-                        templates_dir = Path(app_config.path) / "templates"
-                        if templates_dir.exists():
-                            template_dirs.append(str(templates_dir))
-
-        return [str(d) for d in template_dirs]
-
     def get_template(self) -> str:
         """
         Get the Rust template source for this view.
@@ -1518,7 +1486,7 @@ class LiveView(View):
             print(f"[LiveView] Template preview: {template_source[:200]}...", file=sys.stderr)
 
             # Pass template directories for {% include %} tag support
-            template_dirs = self._get_template_dirs()
+            template_dirs = get_template_dirs()
             self._rust_view = RustLiveView(template_source, template_dirs)
 
             # Cache it if we have a cache key
@@ -2001,7 +1969,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             from djust._rust import RustLiveView
 
             # Pass template directories for {% include %} tag support
-            template_dirs = self._get_template_dirs()
+            template_dirs = get_template_dirs()
             temp_rust = RustLiveView(self._full_template, template_dirs)
 
             # Use pre-serialized context if provided (optimization for GET requests)

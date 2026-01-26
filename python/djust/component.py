@@ -5,6 +5,7 @@ Reusable LiveView components
 import uuid
 from typing import Dict, Any, Optional, Callable
 from ._rust import RustLiveView
+from .utils import get_template_dirs
 
 
 class Component:
@@ -47,38 +48,10 @@ class Component:
                 context[key] = getattr(self, key)
         return context
 
-    def _get_template_dirs(self) -> list[str]:
-        """
-        Get template directories from Django settings for {% include %} support.
-        """
-        from django.conf import settings
-        from pathlib import Path
-
-        template_dirs = []
-
-        # Add DIRS from all TEMPLATES configs
-        for template_config in settings.TEMPLATES:
-            if "DIRS" in template_config:
-                template_dirs.extend(template_config["DIRS"])
-
-        # Add app template directories (only for DjangoTemplates with APP_DIRS=True)
-        for template_config in settings.TEMPLATES:
-            if template_config["BACKEND"] == "django.template.backends.django.DjangoTemplates":
-                if template_config.get("APP_DIRS", False):
-                    from django.apps import apps
-
-                    for app_config in apps.get_app_configs():
-                        templates_dir = Path(app_config.path) / "templates"
-                        if templates_dir.exists():
-                            template_dirs.append(str(templates_dir))
-
-        return [str(d) for d in template_dirs]
-
     def render(self) -> str:
         """Render the component to HTML"""
         if self._rust_view is None:
-            template_dirs = self._get_template_dirs()
-            self._rust_view = RustLiveView(self.template, template_dirs)
+            self._rust_view = RustLiveView(self.template, get_template_dirs())
 
         context = self.get_context_data()
         self._rust_view.update_state(context)
@@ -408,8 +381,7 @@ class LiveComponent(Component):
                     template[:end] + f' data-component-id="{self.component_id}"' + template[end:]
                 )
 
-            template_dirs = self._get_template_dirs()
-            self._rust_view = RustLiveView(template, template_dirs)
+            self._rust_view = RustLiveView(template, get_template_dirs())
 
         context = self.get_context_data()
         self._rust_view.update_state(context)
