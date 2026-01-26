@@ -184,3 +184,43 @@ class TestGetTemplateDirs:
         # Cache should have been hit
         cache_info = _get_template_dirs_cached.cache_info()
         assert cache_info.hits >= 1
+
+    def test_clear_template_dirs_cache(self):
+        """Test that clear_template_dirs_cache clears the cache."""
+        from djust.utils import (
+            get_template_dirs,
+            clear_template_dirs_cache,
+            _get_template_dirs_cached,
+        )
+
+        # Ensure cache is populated
+        get_template_dirs()
+
+        # Clear it
+        clear_template_dirs_cache()
+
+        # Cache should be empty
+        cache_info = _get_template_dirs_cached.cache_info()
+        assert cache_info.currsize == 0
+
+
+class TestUnsupportedTagWarning:
+    """Tests for unsupported template tag warning behavior."""
+
+    def test_unsupported_tag_renders_html_comment(self):
+        """Test that unsupported tags render as HTML comments."""
+        from djust.live_view import LiveView
+
+        class MyView(LiveView):
+            template = """
+            <div data-liveview-root>
+                {% spaceless %}content{% endspaceless %}
+            </div>
+            """
+
+        view = MyView()
+        html = view.render()
+
+        # Should contain HTML comments for the unsupported tags
+        assert "<!-- djust: unsupported tag" in html
+        assert "spaceless" in html

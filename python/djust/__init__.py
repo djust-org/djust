@@ -5,7 +5,7 @@ This package provides a Phoenix LiveView-style reactive framework for Django,
 powered by Rust for maximum performance.
 """
 
-from .utils import get_template_dirs
+from .utils import get_template_dirs, clear_template_dirs_cache
 from .live_view import LiveView, live_view
 from .component import Component, LiveComponent
 from .decorators import (
@@ -196,4 +196,5 @@ __all__ = [
     "DraftModeMixin",
     "enable_hot_reload",
     "get_template_dirs",
+    "clear_template_dirs_cache",
 ]

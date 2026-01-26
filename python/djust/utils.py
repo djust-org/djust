@@ -49,6 +49,20 @@ def get_template_dirs() -> list[str]:
     Used internally for {% include %} tag support in Rust rendering.
 
     Note: Results are cached for performance. In production, template
-    directories don't change at runtime so this is safe.
+    directories don't change at runtime so this is safe. Call
+    clear_template_dirs_cache() if you need to refresh the cache.
     """
     return list(_get_template_dirs_cached())
+
+
+def clear_template_dirs_cache() -> None:
+    """
+    Clear the template directories cache.
+
+    Call this if you dynamically modify TEMPLATES settings and need
+    the changes to be reflected in template rendering.
+
+    Note: This is rarely needed in production since template directories
+    typically don't change at runtime.
+    """
+    _get_template_dirs_cached.cache_clear()
