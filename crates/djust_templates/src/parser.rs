@@ -385,7 +385,7 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     Ok(Some(Node::Comment))
                 }
 
-                "endif" | "endfor" | "endblock" | "else" => {
+                "endif" | "endfor" | "endblock" | "else" | "elif" => {
                     // These are handled by their opening tags
                     Ok(None)
                 }
@@ -455,6 +455,18 @@ fn parse_if_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, Vec<Node
                 in_else = true;
                 i += 1;
                 continue;
+            }
+            Token::Tag(name, args) if name == "elif" => {
+                // elif is equivalent to: else + nested if
+                // {% elif condition %} becomes {% else %}{% if condition %}...{% endif %}
+                let elif_condition = args.join(" ");
+                let (elif_true, elif_false, end_pos) = parse_if_block(tokens, i + 1)?;
+                false_nodes.push(Node::If {
+                    condition: elif_condition,
+                    true_nodes: elif_true,
+                    false_nodes: elif_false,
+                });
+                return Ok((true_nodes, false_nodes, end_pos));
             }
             Token::Tag(name, _) if name == "endif" => {
                 return Ok((true_nodes, false_nodes, i));
@@ -1328,5 +1340,195 @@ mod tests {
             .get("count")
             .unwrap()
             .contains(&"increment".to_string()));
+    }
+
+    // Tests for elif support (Issue #79)
+
+    #[test]
+    fn test_parse_if_elif() {
+        let tokens = tokenize("{% if a %}A{% elif b %}B{% endif %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        assert_eq!(nodes.len(), 1);
+        match &nodes[0] {
+            Node::If {
+                condition,
+                true_nodes,
+                false_nodes,
+            } => {
+                assert_eq!(condition, "a");
+                assert_eq!(true_nodes.len(), 1);
+                // false_nodes should contain a nested If for the elif
+                assert_eq!(false_nodes.len(), 1);
+                match &false_nodes[0] {
+                    Node::If {
+                        condition: elif_cond,
+                        true_nodes: elif_true,
+                        false_nodes: elif_false,
+                    } => {
+                        assert_eq!(elif_cond, "b");
+                        assert_eq!(elif_true.len(), 1);
+                        assert_eq!(elif_false.len(), 0);
+                    }
+                    _ => panic!("Expected nested If node for elif"),
+                }
+            }
+            _ => panic!("Expected If node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_if_elif_else() {
+        let tokens = tokenize("{% if a %}A{% elif b %}B{% else %}C{% endif %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        assert_eq!(nodes.len(), 1);
+        match &nodes[0] {
+            Node::If {
+                condition,
+                true_nodes,
+                false_nodes,
+            } => {
+                assert_eq!(condition, "a");
+                assert_eq!(true_nodes.len(), 1);
+                // false_nodes should contain a nested If for the elif
+                assert_eq!(false_nodes.len(), 1);
+                match &false_nodes[0] {
+                    Node::If {
+                        condition: elif_cond,
+                        true_nodes: elif_true,
+                        false_nodes: elif_false,
+                    } => {
+                        assert_eq!(elif_cond, "b");
+                        assert_eq!(elif_true.len(), 1);
+                        // The else branch should be in elif's false_nodes
+                        assert_eq!(elif_false.len(), 1);
+                        match &elif_false[0] {
+                            Node::Text(text) => assert_eq!(text, "C"),
+                            _ => panic!("Expected Text node for else branch"),
+                        }
+                    }
+                    _ => panic!("Expected nested If node for elif"),
+                }
+            }
+            _ => panic!("Expected If node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_multiple_elif() {
+        let tokens =
+            tokenize("{% if a %}A{% elif b %}B{% elif c %}C{% elif d %}D{% endif %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        assert_eq!(nodes.len(), 1);
+
+        // Verify nested structure: if a -> elif b -> elif c -> elif d
+        match &nodes[0] {
+            Node::If {
+                condition,
+                false_nodes,
+                ..
+            } => {
+                assert_eq!(condition, "a");
+                assert_eq!(false_nodes.len(), 1);
+                match &false_nodes[0] {
+                    Node::If {
+                        condition: cond_b,
+                        false_nodes: false_b,
+                        ..
+                    } => {
+                        assert_eq!(cond_b, "b");
+                        assert_eq!(false_b.len(), 1);
+                        match &false_b[0] {
+                            Node::If {
+                                condition: cond_c,
+                                false_nodes: false_c,
+                                ..
+                            } => {
+                                assert_eq!(cond_c, "c");
+                                assert_eq!(false_c.len(), 1);
+                                match &false_c[0] {
+                                    Node::If {
+                                        condition: cond_d, ..
+                                    } => {
+                                        assert_eq!(cond_d, "d");
+                                    }
+                                    _ => panic!("Expected If node for elif d"),
+                                }
+                            }
+                            _ => panic!("Expected If node for elif c"),
+                        }
+                    }
+                    _ => panic!("Expected If node for elif b"),
+                }
+            }
+            _ => panic!("Expected If node"),
+        }
+    }
+
+    #[test]
+    fn test_elif_with_string_comparison() {
+        // This is the exact use case from Issue #79
+        let tokens = tokenize(
+            r#"{% if icon == "arrow-left" %}ARROW{% elif icon == "close" %}CLOSE{% else %}DEFAULT{% endif %}"#,
+        )
+        .unwrap();
+        let nodes = parse(&tokens).unwrap();
+        assert_eq!(nodes.len(), 1);
+
+        match &nodes[0] {
+            Node::If {
+                condition,
+                true_nodes,
+                false_nodes,
+            } => {
+                assert_eq!(condition, r#"icon == "arrow-left""#);
+                // Verify true branch has "ARROW"
+                match &true_nodes[0] {
+                    Node::Text(text) => assert_eq!(text, "ARROW"),
+                    _ => panic!("Expected Text node"),
+                }
+                // Verify elif branch
+                match &false_nodes[0] {
+                    Node::If {
+                        condition: elif_cond,
+                        true_nodes: elif_true,
+                        false_nodes: elif_false,
+                    } => {
+                        assert_eq!(elif_cond, r#"icon == "close""#);
+                        match &elif_true[0] {
+                            Node::Text(text) => assert_eq!(text, "CLOSE"),
+                            _ => panic!("Expected Text node in elif"),
+                        }
+                        match &elif_false[0] {
+                            Node::Text(text) => assert_eq!(text, "DEFAULT"),
+                            _ => panic!("Expected Text node in else"),
+                        }
+                    }
+                    _ => panic!("Expected If node for elif"),
+                }
+            }
+            _ => panic!("Expected If node"),
+        }
+    }
+
+    #[test]
+    fn test_extract_variables_with_elif() {
+        let template = r#"
+            {% if user.is_admin %}
+                Admin
+            {% elif user.is_staff %}
+                Staff
+            {% elif user.is_verified %}
+                Verified
+            {% else %}
+                Regular
+            {% endif %}
+        "#;
+        let vars = extract_template_variables(template).unwrap();
+
+        assert!(vars.contains_key("user"));
+        let user_paths = vars.get("user").unwrap();
+        assert!(user_paths.contains(&"is_admin".to_string()));
+        assert!(user_paths.contains(&"is_staff".to_string()));
+        assert!(user_paths.contains(&"is_verified".to_string()));
     }
 }
