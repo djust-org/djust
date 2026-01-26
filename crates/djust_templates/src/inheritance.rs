@@ -101,16 +101,17 @@ impl InheritanceChain {
 
     fn apply_override_to_node(&self, node: &Node) -> Node {
         match node {
-            Node::Block { name, nodes: _ } => {
-                // Replace block with merged content
-                if let Some(merged_nodes) = self.merged_blocks.get(name) {
-                    Node::Block {
-                        name: name.clone(),
-                        nodes: merged_nodes.clone(),
-                    }
+            Node::Block { name, nodes } => {
+                // Get the content for this block - either from merged overrides or original
+                let block_content = if let Some(merged_nodes) = self.merged_blocks.get(name) {
+                    merged_nodes.clone()
                 } else {
-                    // Keep original if no override
-                    node.clone()
+                    nodes.clone()
+                };
+                // Always recursively apply overrides to handle nested blocks
+                Node::Block {
+                    name: name.clone(),
+                    nodes: self.apply_block_overrides(&block_content),
                 }
             }
             // Recursively process nested structures
@@ -715,5 +716,500 @@ mod tests {
 
         // Should have proper formatting with bullet points
         assert!(error_message.contains("  - "));
+    }
+
+    #[test]
+    fn test_nested_block_inheritance() {
+        // Test that blocks nested inside other blocks are correctly overridden
+        // Base template has: {% block body %}...{% block content %}DEFAULT{% endblock %}...{% endblock %}
+        // Child only overrides: {% block content %}CHILD{% endblock %}
+        // Expected: content should show CHILD, not DEFAULT
+
+        // Parent nodes: {% block body %}<div>{% block content %}DEFAULT{% endblock %}</div>{% endblock %}
+        let parent_nodes = vec![Node::Block {
+            name: "body".to_string(),
+            nodes: vec![
+                Node::Text("<div>".to_string()),
+                Node::Block {
+                    name: "content".to_string(),
+                    nodes: vec![Node::Text("DEFAULT".to_string())],
+                },
+                Node::Text("</div>".to_string()),
+            ],
+        }];
+
+        // Child nodes: {% extends "base.html" %}{% block content %}CHILD{% endblock %}
+        let child_nodes = vec![
+            Node::Extends("base.html".to_string()),
+            Node::Block {
+                name: "content".to_string(),
+                nodes: vec![Node::Text("CHILD".to_string())],
+            },
+        ];
+
+        // Create inheritance chain manually
+        let mut chain = InheritanceChain::new(child_nodes);
+        chain.add_parent(parent_nodes);
+        chain.merge_blocks();
+
+        // Verify merged_blocks has both blocks
+        assert!(
+            chain.merged_blocks.contains_key("content"),
+            "merged_blocks should have 'content'"
+        );
+        assert!(
+            chain.merged_blocks.contains_key("body"),
+            "merged_blocks should have 'body'"
+        );
+
+        // Verify content block has CHILD content
+        let content_nodes = chain.merged_blocks.get("content").unwrap();
+        let content_str = nodes_to_template_string(content_nodes);
+        assert!(
+            content_str.contains("CHILD"),
+            "content block should contain CHILD, got: {}",
+            content_str
+        );
+        assert!(
+            !content_str.contains("DEFAULT"),
+            "content block should NOT contain DEFAULT, got: {}",
+            content_str
+        );
+
+        // Apply overrides to parent nodes
+        let root_nodes = chain.get_root_nodes();
+        let final_nodes = chain.apply_block_overrides(root_nodes);
+        let result = nodes_to_template_string(&final_nodes);
+
+        // Result should contain CHILD, not DEFAULT
+        assert!(
+            result.contains("CHILD"),
+            "Result should contain CHILD, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("DEFAULT"),
+            "Result should NOT contain DEFAULT, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_deeply_nested_blocks() {
+        // Test 3 levels of nesting: outer > middle > inner
+        // Child only overrides inner block
+        let parent_nodes = vec![Node::Block {
+            name: "outer".to_string(),
+            nodes: vec![
+                Node::Text("<outer>".to_string()),
+                Node::Block {
+                    name: "middle".to_string(),
+                    nodes: vec![
+                        Node::Text("<middle>".to_string()),
+                        Node::Block {
+                            name: "inner".to_string(),
+                            nodes: vec![Node::Text("PARENT_INNER".to_string())],
+                        },
+                        Node::Text("</middle>".to_string()),
+                    ],
+                },
+                Node::Text("</outer>".to_string()),
+            ],
+        }];
+
+        let child_nodes = vec![
+            Node::Extends("base.html".to_string()),
+            Node::Block {
+                name: "inner".to_string(),
+                nodes: vec![Node::Text("CHILD_INNER".to_string())],
+            },
+        ];
+
+        let mut chain = InheritanceChain::new(child_nodes);
+        chain.add_parent(parent_nodes);
+        chain.merge_blocks();
+
+        let root_nodes = chain.get_root_nodes();
+        let final_nodes = chain.apply_block_overrides(root_nodes);
+        let result = nodes_to_template_string(&final_nodes);
+
+        assert!(
+            result.contains("CHILD_INNER"),
+            "Deeply nested block should be overridden, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("PARENT_INNER"),
+            "Parent's inner content should be replaced, got: {}",
+            result
+        );
+        // Verify structure is preserved
+        assert!(
+            result.contains("<outer>") && result.contains("</outer>"),
+            "Outer block structure should be preserved"
+        );
+        assert!(
+            result.contains("<middle>") && result.contains("</middle>"),
+            "Middle block structure should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_multiple_nested_blocks_same_level() {
+        // Parent has: {% block wrapper %}{% block left %}L{% endblock %}{% block right %}R{% endblock %}{% endblock %}
+        // Child overrides only 'right'
+        let parent_nodes = vec![Node::Block {
+            name: "wrapper".to_string(),
+            nodes: vec![
+                Node::Block {
+                    name: "left".to_string(),
+                    nodes: vec![Node::Text("LEFT_PARENT".to_string())],
+                },
+                Node::Block {
+                    name: "right".to_string(),
+                    nodes: vec![Node::Text("RIGHT_PARENT".to_string())],
+                },
+            ],
+        }];
+
+        let child_nodes = vec![
+            Node::Extends("base.html".to_string()),
+            Node::Block {
+                name: "right".to_string(),
+                nodes: vec![Node::Text("RIGHT_CHILD".to_string())],
+            },
+        ];
+
+        let mut chain = InheritanceChain::new(child_nodes);
+        chain.add_parent(parent_nodes);
+        chain.merge_blocks();
+
+        let root_nodes = chain.get_root_nodes();
+        let final_nodes = chain.apply_block_overrides(root_nodes);
+        let result = nodes_to_template_string(&final_nodes);
+
+        // Left should keep parent content
+        assert!(
+            result.contains("LEFT_PARENT"),
+            "Non-overridden block should keep parent content, got: {}",
+            result
+        );
+        // Right should have child content
+        assert!(
+            result.contains("RIGHT_CHILD"),
+            "Overridden block should have child content, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("RIGHT_PARENT"),
+            "Overridden block should NOT have parent content, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_nested_blocks_with_control_structures() {
+        // Test nested blocks inside if/for structures
+        let parent_nodes = vec![Node::If {
+            condition: "show_content".to_string(),
+            true_nodes: vec![Node::Block {
+                name: "content".to_string(),
+                nodes: vec![Node::Text("PARENT_CONTENT".to_string())],
+            }],
+            false_nodes: vec![Node::Text("hidden".to_string())],
+        }];
+
+        let child_nodes = vec![
+            Node::Extends("base.html".to_string()),
+            Node::Block {
+                name: "content".to_string(),
+                nodes: vec![Node::Text("CHILD_CONTENT".to_string())],
+            },
+        ];
+
+        let mut chain = InheritanceChain::new(child_nodes);
+        chain.add_parent(parent_nodes);
+        chain.merge_blocks();
+
+        let root_nodes = chain.get_root_nodes();
+        let final_nodes = chain.apply_block_overrides(root_nodes);
+        let result = nodes_to_template_string(&final_nodes);
+
+        assert!(
+            result.contains("CHILD_CONTENT"),
+            "Block inside if should be overridden, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("PARENT_CONTENT"),
+            "Parent content should be replaced, got: {}",
+            result
+        );
+        // Control structure should be preserved
+        assert!(
+            result.contains("{% if show_content %}"),
+            "If structure should be preserved, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_nested_blocks_in_for_loop() {
+        // Test block nested inside for loop
+        let parent_nodes = vec![Node::For {
+            var_names: vec!["item".to_string()],
+            iterable: "items".to_string(),
+            reversed: false,
+            nodes: vec![Node::Block {
+                name: "item_content".to_string(),
+                nodes: vec![Node::Text("PARENT_ITEM".to_string())],
+            }],
+            empty_nodes: vec![],
+        }];
+
+        let child_nodes = vec![
+            Node::Extends("base.html".to_string()),
+            Node::Block {
+                name: "item_content".to_string(),
+                nodes: vec![Node::Variable("item.name".to_string(), vec![])],
+            },
+        ];
+
+        let mut chain = InheritanceChain::new(child_nodes);
+        chain.add_parent(parent_nodes);
+        chain.merge_blocks();
+
+        let root_nodes = chain.get_root_nodes();
+        let final_nodes = chain.apply_block_overrides(root_nodes);
+        let result = nodes_to_template_string(&final_nodes);
+
+        assert!(
+            result.contains("{{ item.name"),
+            "Block inside for should be overridden with variable, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("PARENT_ITEM"),
+            "Parent content should be replaced, got: {}",
+            result
+        );
+        // For structure should be preserved
+        assert!(
+            result.contains("{% for item in items %}"),
+            "For structure should be preserved, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_child_overrides_both_outer_and_inner() {
+        // Child overrides both the outer and inner blocks
+        let parent_nodes = vec![Node::Block {
+            name: "outer".to_string(),
+            nodes: vec![
+                Node::Text("<outer>".to_string()),
+                Node::Block {
+                    name: "inner".to_string(),
+                    nodes: vec![Node::Text("PARENT_INNER".to_string())],
+                },
+                Node::Text("</outer>".to_string()),
+            ],
+        }];
+
+        let child_nodes = vec![
+            Node::Extends("base.html".to_string()),
+            Node::Block {
+                name: "outer".to_string(),
+                nodes: vec![
+                    Node::Text("<custom-outer>".to_string()),
+                    Node::Block {
+                        name: "inner".to_string(),
+                        nodes: vec![Node::Text("STILL_PARENT_INNER".to_string())],
+                    },
+                    Node::Text("</custom-outer>".to_string()),
+                ],
+            },
+            Node::Block {
+                name: "inner".to_string(),
+                nodes: vec![Node::Text("CHILD_INNER".to_string())],
+            },
+        ];
+
+        let mut chain = InheritanceChain::new(child_nodes);
+        chain.add_parent(parent_nodes);
+        chain.merge_blocks();
+
+        let root_nodes = chain.get_root_nodes();
+        let final_nodes = chain.apply_block_overrides(root_nodes);
+        let result = nodes_to_template_string(&final_nodes);
+
+        // Child's outer structure should be used
+        assert!(
+            result.contains("<custom-outer>"),
+            "Child's outer structure should be used, got: {}",
+            result
+        );
+        // Child's inner content should override
+        assert!(
+            result.contains("CHILD_INNER"),
+            "Child's inner content should be used, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("PARENT_INNER") && !result.contains("STILL_PARENT_INNER"),
+            "No parent inner content should remain, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_resolve_template_inheritance_with_nested_blocks_filesystem() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create temporary directory with test templates
+        let temp_dir = TempDir::new().unwrap();
+        let template_dir = temp_dir.path();
+
+        // Create base.html with nested blocks (like real Django templates)
+        let base_html = r#"<!DOCTYPE html>
+<html>
+<head><title>{% block title %}Default{% endblock %}</title></head>
+<body>
+    {% block body %}
+    <div id="app">
+        {% block content %}Default Content{% endblock %}
+    </div>
+    {% endblock %}
+</body>
+</html>"#;
+        fs::write(template_dir.join("base.html"), base_html).unwrap();
+
+        // Create child.html that only overrides content block
+        let child_html = r#"{% extends "base.html" %}
+
+{% block title %}Child Page{% endblock %}
+
+{% block content %}
+<div class="child-content">
+    <h1>Hello from child!</h1>
+</div>
+{% endblock %}"#;
+        fs::write(template_dir.join("child.html"), child_html).unwrap();
+
+        // Resolve inheritance
+        let result = resolve_template_inheritance("child.html", &[template_dir.to_path_buf()])
+            .expect("Should resolve template inheritance");
+
+        // Verify child content is present
+        assert!(
+            result.contains("Hello from child!"),
+            "Child content should be in result, got: {}",
+            result
+        );
+        assert!(
+            result.contains("child-content"),
+            "Child class should be in result, got: {}",
+            result
+        );
+
+        // Verify parent default content is NOT present
+        assert!(
+            !result.contains("Default Content"),
+            "Parent default content should be replaced, got: {}",
+            result
+        );
+
+        // Verify title was overridden
+        assert!(
+            result.contains("Child Page"),
+            "Title should be overridden, got: {}",
+            result
+        );
+
+        // Verify structure is preserved
+        assert!(
+            result.contains("<html>") && result.contains("</html>"),
+            "HTML structure should be preserved"
+        );
+        assert!(
+            result.contains("<div id=\"app\">"),
+            "App div should be preserved from body block"
+        );
+    }
+
+    #[test]
+    fn test_three_level_inheritance_filesystem() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let template_dir = temp_dir.path();
+
+        // base.html - root template
+        let base_html = r#"<!DOCTYPE html>
+<html>
+<body>
+{% block wrapper %}
+<div class="wrapper">
+    {% block content %}BASE CONTENT{% endblock %}
+</div>
+{% endblock %}
+</body>
+</html>"#;
+        fs::write(template_dir.join("base.html"), base_html).unwrap();
+
+        // middle.html - extends base, overrides wrapper
+        let middle_html = r#"{% extends "base.html" %}
+
+{% block wrapper %}
+<main class="middle-wrapper">
+    {% block content %}MIDDLE CONTENT{% endblock %}
+</main>
+{% endblock %}"#;
+        fs::write(template_dir.join("middle.html"), middle_html).unwrap();
+
+        // child.html - extends middle, overrides content
+        let child_html = r#"{% extends "middle.html" %}
+
+{% block content %}CHILD CONTENT{% endblock %}"#;
+        fs::write(template_dir.join("child.html"), child_html).unwrap();
+
+        // Resolve inheritance
+        let result = resolve_template_inheritance("child.html", &[template_dir.to_path_buf()])
+            .expect("Should resolve 3-level inheritance");
+
+        // Child content should be present
+        assert!(
+            result.contains("CHILD CONTENT"),
+            "Child content should be in result, got: {}",
+            result
+        );
+
+        // Middle's wrapper structure should be used
+        assert!(
+            result.contains("middle-wrapper"),
+            "Middle's wrapper should be used, got: {}",
+            result
+        );
+
+        // Base and middle default content should NOT be present
+        assert!(
+            !result.contains("BASE CONTENT"),
+            "Base content should be replaced, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("MIDDLE CONTENT"),
+            "Middle content should be replaced, got: {}",
+            result
+        );
+
+        // Base wrapper should NOT be present (overridden by middle)
+        assert!(
+            !result.contains("class=\"wrapper\""),
+            "Base wrapper should be replaced by middle's, got: {}",
+            result
+        );
     }
 }
