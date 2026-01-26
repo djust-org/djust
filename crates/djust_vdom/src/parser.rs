@@ -21,8 +21,6 @@ fn normalize_svg_attribute(attr_name: &str) -> &str {
         "gradientunits" => "gradientUnits",
         "gradienttransform" => "gradientTransform",
         "spreadmethod" => "spreadMethod",
-        "stop-opacity" => "stop-opacity", // hyphenated, stays as-is
-        "stop-color" => "stop-color",     // hyphenated, stays as-is
         "clippathunits" => "clipPathUnits",
         "maskcontentunits" => "maskContentUnits",
         "maskunits" => "maskUnits",
@@ -76,9 +74,10 @@ fn normalize_svg_attribute(attr_name: &str) -> &str {
 }
 
 /// Check if a tag name is an SVG element.
+/// Note: Tag names from html5ever are already lowercase, so no conversion needed.
 fn is_svg_element(tag_name: &str) -> bool {
     matches!(
-        tag_name.to_lowercase().as_str(),
+        tag_name,
         "svg"
             | "path"
             | "circle"
@@ -593,14 +592,36 @@ mod tests {
     #[test]
     fn test_is_svg_element() {
         // Test the SVG element detection function
+        // Note: html5ever provides tag names in lowercase
         assert!(is_svg_element("svg"));
         assert!(is_svg_element("path"));
         assert!(is_svg_element("circle"));
-        assert!(is_svg_element("linearGradient"));
-        assert!(is_svg_element("feGaussianBlur"));
+        assert!(is_svg_element("lineargradient"));
+        assert!(is_svg_element("fegaussianblur"));
         assert!(!is_svg_element("div"));
         assert!(!is_svg_element("span"));
         assert!(!is_svg_element("input"));
+    }
+
+    #[test]
+    fn test_svg_nested_in_html() {
+        // Test that SVG elements nested inside HTML elements get attribute normalization
+        let html =
+            r#"<div class="icon-wrapper"><svg viewBox="0 0 24 24"><path d="M0 0"/></svg></div>"#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.tag, "div");
+        assert_eq!(vnode.attrs.get("class"), Some(&"icon-wrapper".to_string()));
+
+        // The nested SVG should have viewBox preserved
+        assert_eq!(vnode.children.len(), 1);
+        let svg = &vnode.children[0];
+        assert_eq!(svg.tag, "svg");
+        assert_eq!(
+            svg.attrs.get("viewBox"),
+            Some(&"0 0 24 24".to_string()),
+            "SVG nested in HTML should still have viewBox camelCased"
+        );
     }
 
     #[test]
