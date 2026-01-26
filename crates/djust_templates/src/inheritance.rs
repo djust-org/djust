@@ -793,4 +793,272 @@ mod tests {
             result
         );
     }
+
+    #[test]
+    fn test_deeply_nested_blocks() {
+        // Test 3 levels of nesting: outer > middle > inner
+        // Child only overrides inner block
+        let parent_nodes = vec![Node::Block {
+            name: "outer".to_string(),
+            nodes: vec![
+                Node::Text("<outer>".to_string()),
+                Node::Block {
+                    name: "middle".to_string(),
+                    nodes: vec![
+                        Node::Text("<middle>".to_string()),
+                        Node::Block {
+                            name: "inner".to_string(),
+                            nodes: vec![Node::Text("PARENT_INNER".to_string())],
+                        },
+                        Node::Text("</middle>".to_string()),
+                    ],
+                },
+                Node::Text("</outer>".to_string()),
+            ],
+        }];
+
+        let child_nodes = vec![
+            Node::Extends("base.html".to_string()),
+            Node::Block {
+                name: "inner".to_string(),
+                nodes: vec![Node::Text("CHILD_INNER".to_string())],
+            },
+        ];
+
+        let mut chain = InheritanceChain::new(child_nodes);
+        chain.add_parent(parent_nodes);
+        chain.merge_blocks();
+
+        let root_nodes = chain.get_root_nodes();
+        let final_nodes = chain.apply_block_overrides(root_nodes);
+        let result = nodes_to_template_string(&final_nodes);
+
+        assert!(
+            result.contains("CHILD_INNER"),
+            "Deeply nested block should be overridden, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("PARENT_INNER"),
+            "Parent's inner content should be replaced, got: {}",
+            result
+        );
+        // Verify structure is preserved
+        assert!(
+            result.contains("<outer>") && result.contains("</outer>"),
+            "Outer block structure should be preserved"
+        );
+        assert!(
+            result.contains("<middle>") && result.contains("</middle>"),
+            "Middle block structure should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_multiple_nested_blocks_same_level() {
+        // Parent has: {% block wrapper %}{% block left %}L{% endblock %}{% block right %}R{% endblock %}{% endblock %}
+        // Child overrides only 'right'
+        let parent_nodes = vec![Node::Block {
+            name: "wrapper".to_string(),
+            nodes: vec![
+                Node::Block {
+                    name: "left".to_string(),
+                    nodes: vec![Node::Text("LEFT_PARENT".to_string())],
+                },
+                Node::Block {
+                    name: "right".to_string(),
+                    nodes: vec![Node::Text("RIGHT_PARENT".to_string())],
+                },
+            ],
+        }];
+
+        let child_nodes = vec![
+            Node::Extends("base.html".to_string()),
+            Node::Block {
+                name: "right".to_string(),
+                nodes: vec![Node::Text("RIGHT_CHILD".to_string())],
+            },
+        ];
+
+        let mut chain = InheritanceChain::new(child_nodes);
+        chain.add_parent(parent_nodes);
+        chain.merge_blocks();
+
+        let root_nodes = chain.get_root_nodes();
+        let final_nodes = chain.apply_block_overrides(root_nodes);
+        let result = nodes_to_template_string(&final_nodes);
+
+        // Left should keep parent content
+        assert!(
+            result.contains("LEFT_PARENT"),
+            "Non-overridden block should keep parent content, got: {}",
+            result
+        );
+        // Right should have child content
+        assert!(
+            result.contains("RIGHT_CHILD"),
+            "Overridden block should have child content, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("RIGHT_PARENT"),
+            "Overridden block should NOT have parent content, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_nested_blocks_with_control_structures() {
+        // Test nested blocks inside if/for structures
+        let parent_nodes = vec![Node::If {
+            condition: "show_content".to_string(),
+            true_nodes: vec![Node::Block {
+                name: "content".to_string(),
+                nodes: vec![Node::Text("PARENT_CONTENT".to_string())],
+            }],
+            false_nodes: vec![Node::Text("hidden".to_string())],
+        }];
+
+        let child_nodes = vec![
+            Node::Extends("base.html".to_string()),
+            Node::Block {
+                name: "content".to_string(),
+                nodes: vec![Node::Text("CHILD_CONTENT".to_string())],
+            },
+        ];
+
+        let mut chain = InheritanceChain::new(child_nodes);
+        chain.add_parent(parent_nodes);
+        chain.merge_blocks();
+
+        let root_nodes = chain.get_root_nodes();
+        let final_nodes = chain.apply_block_overrides(root_nodes);
+        let result = nodes_to_template_string(&final_nodes);
+
+        assert!(
+            result.contains("CHILD_CONTENT"),
+            "Block inside if should be overridden, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("PARENT_CONTENT"),
+            "Parent content should be replaced, got: {}",
+            result
+        );
+        // Control structure should be preserved
+        assert!(
+            result.contains("{% if show_content %}"),
+            "If structure should be preserved, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_nested_blocks_in_for_loop() {
+        // Test block nested inside for loop
+        let parent_nodes = vec![Node::For {
+            var_names: vec!["item".to_string()],
+            iterable: "items".to_string(),
+            reversed: false,
+            nodes: vec![Node::Block {
+                name: "item_content".to_string(),
+                nodes: vec![Node::Text("PARENT_ITEM".to_string())],
+            }],
+            empty_nodes: vec![],
+        }];
+
+        let child_nodes = vec![
+            Node::Extends("base.html".to_string()),
+            Node::Block {
+                name: "item_content".to_string(),
+                nodes: vec![Node::Variable("item.name".to_string(), vec![])],
+            },
+        ];
+
+        let mut chain = InheritanceChain::new(child_nodes);
+        chain.add_parent(parent_nodes);
+        chain.merge_blocks();
+
+        let root_nodes = chain.get_root_nodes();
+        let final_nodes = chain.apply_block_overrides(root_nodes);
+        let result = nodes_to_template_string(&final_nodes);
+
+        assert!(
+            result.contains("{{ item.name"),
+            "Block inside for should be overridden with variable, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("PARENT_ITEM"),
+            "Parent content should be replaced, got: {}",
+            result
+        );
+        // For structure should be preserved
+        assert!(
+            result.contains("{% for item in items %}"),
+            "For structure should be preserved, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_child_overrides_both_outer_and_inner() {
+        // Child overrides both the outer and inner blocks
+        let parent_nodes = vec![Node::Block {
+            name: "outer".to_string(),
+            nodes: vec![
+                Node::Text("<outer>".to_string()),
+                Node::Block {
+                    name: "inner".to_string(),
+                    nodes: vec![Node::Text("PARENT_INNER".to_string())],
+                },
+                Node::Text("</outer>".to_string()),
+            ],
+        }];
+
+        let child_nodes = vec![
+            Node::Extends("base.html".to_string()),
+            Node::Block {
+                name: "outer".to_string(),
+                nodes: vec![
+                    Node::Text("<custom-outer>".to_string()),
+                    Node::Block {
+                        name: "inner".to_string(),
+                        nodes: vec![Node::Text("STILL_PARENT_INNER".to_string())],
+                    },
+                    Node::Text("</custom-outer>".to_string()),
+                ],
+            },
+            Node::Block {
+                name: "inner".to_string(),
+                nodes: vec![Node::Text("CHILD_INNER".to_string())],
+            },
+        ];
+
+        let mut chain = InheritanceChain::new(child_nodes);
+        chain.add_parent(parent_nodes);
+        chain.merge_blocks();
+
+        let root_nodes = chain.get_root_nodes();
+        let final_nodes = chain.apply_block_overrides(root_nodes);
+        let result = nodes_to_template_string(&final_nodes);
+
+        // Child's outer structure should be used
+        assert!(
+            result.contains("<custom-outer>"),
+            "Child's outer structure should be used, got: {}",
+            result
+        );
+        // Child's inner content should override
+        assert!(
+            result.contains("CHILD_INNER"),
+            "Child's inner content should be used, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("PARENT_INNER") && !result.contains("STILL_PARENT_INNER"),
+            "No parent inner content should remain, got: {}",
+            result
+        );
+    }
 }
