@@ -101,16 +101,17 @@ impl InheritanceChain {
 
     fn apply_override_to_node(&self, node: &Node) -> Node {
         match node {
-            Node::Block { name, nodes: _ } => {
-                // Replace block with merged content
-                if let Some(merged_nodes) = self.merged_blocks.get(name) {
-                    Node::Block {
-                        name: name.clone(),
-                        nodes: merged_nodes.clone(),
-                    }
+            Node::Block { name, nodes } => {
+                // Get the content for this block - either from merged overrides or original
+                let block_content = if let Some(merged_nodes) = self.merged_blocks.get(name) {
+                    merged_nodes.clone()
                 } else {
-                    // Keep original if no override
-                    node.clone()
+                    nodes.clone()
+                };
+                // Always recursively apply overrides to handle nested blocks
+                Node::Block {
+                    name: name.clone(),
+                    nodes: self.apply_block_overrides(&block_content),
                 }
             }
             // Recursively process nested structures
@@ -715,5 +716,81 @@ mod tests {
 
         // Should have proper formatting with bullet points
         assert!(error_message.contains("  - "));
+    }
+
+    #[test]
+    fn test_nested_block_inheritance() {
+        // Test that blocks nested inside other blocks are correctly overridden
+        // Base template has: {% block body %}...{% block content %}DEFAULT{% endblock %}...{% endblock %}
+        // Child only overrides: {% block content %}CHILD{% endblock %}
+        // Expected: content should show CHILD, not DEFAULT
+
+        // Parent nodes: {% block body %}<div>{% block content %}DEFAULT{% endblock %}</div>{% endblock %}
+        let parent_nodes = vec![Node::Block {
+            name: "body".to_string(),
+            nodes: vec![
+                Node::Text("<div>".to_string()),
+                Node::Block {
+                    name: "content".to_string(),
+                    nodes: vec![Node::Text("DEFAULT".to_string())],
+                },
+                Node::Text("</div>".to_string()),
+            ],
+        }];
+
+        // Child nodes: {% extends "base.html" %}{% block content %}CHILD{% endblock %}
+        let child_nodes = vec![
+            Node::Extends("base.html".to_string()),
+            Node::Block {
+                name: "content".to_string(),
+                nodes: vec![Node::Text("CHILD".to_string())],
+            },
+        ];
+
+        // Create inheritance chain manually
+        let mut chain = InheritanceChain::new(child_nodes);
+        chain.add_parent(parent_nodes);
+        chain.merge_blocks();
+
+        // Verify merged_blocks has both blocks
+        assert!(
+            chain.merged_blocks.contains_key("content"),
+            "merged_blocks should have 'content'"
+        );
+        assert!(
+            chain.merged_blocks.contains_key("body"),
+            "merged_blocks should have 'body'"
+        );
+
+        // Verify content block has CHILD content
+        let content_nodes = chain.merged_blocks.get("content").unwrap();
+        let content_str = nodes_to_template_string(content_nodes);
+        assert!(
+            content_str.contains("CHILD"),
+            "content block should contain CHILD, got: {}",
+            content_str
+        );
+        assert!(
+            !content_str.contains("DEFAULT"),
+            "content block should NOT contain DEFAULT, got: {}",
+            content_str
+        );
+
+        // Apply overrides to parent nodes
+        let root_nodes = chain.get_root_nodes();
+        let final_nodes = chain.apply_block_overrides(root_nodes);
+        let result = nodes_to_template_string(&final_nodes);
+
+        // Result should contain CHILD, not DEFAULT
+        assert!(
+            result.contains("CHILD"),
+            "Result should contain CHILD, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("DEFAULT"),
+            "Result should NOT contain DEFAULT, got: {}",
+            result
+        );
     }
 }
