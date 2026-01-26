@@ -24,17 +24,17 @@ window._djustClientLoaded = true;
 // This handler will be called when TurboNav swaps page content.
 
 // Track if we've been initialized via DOMContentLoaded
-let djustInitialized = false;
-window.djustInitialized = false;  // Expose for external detection (e.g., E2E tests)
+// Exposed on window for external detection (e.g., Playwright E2E tests)
+window.djustInitialized = false;
 
 // Track pending turbo:load reinit
 let pendingTurboReinit = false;
 
 window.addEventListener('turbo:load', function(event) {
     console.log('[LiveView:TurboNav] turbo:load event received!');
-    console.log('[LiveView:TurboNav] djustInitialized:', djustInitialized);
+    console.log('[LiveView:TurboNav] djustInitialized:', window.djustInitialized);
 
-    if (!djustInitialized) {
+    if (!window.djustInitialized) {
         // client.js hasn't finished initializing yet, defer reinit
         console.log('[LiveView:TurboNav] Deferring reinit until DOMContentLoaded completes');
         pendingTurboReinit = true;
@@ -2799,9 +2799,8 @@ document.addEventListener('DOMContentLoaded', () => {
     globalLoadingManager.scanAndRegister();
 
     // Mark as initialized so turbo:load handler knows we're ready
-    djustInitialized = true;
-    window.djustInitialized = true;  // Expose for external detection (e.g., E2E tests)
-    console.log('[LiveView] Initialization complete, djustInitialized = true');
+    window.djustInitialized = true;
+    console.log('[LiveView] Initialization complete, window.djustInitialized = true');
 
     // Check if we have a pending turbo reinit (turbo:load fired before we finished init)
     if (pendingTurboReinit) {
