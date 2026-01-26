@@ -9,6 +9,134 @@ use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use std::collections::HashMap;
 
+/// SVG attributes that require camelCase preservation.
+/// html5ever lowercases all attributes per HTML5 spec, but SVG is case-sensitive.
+fn normalize_svg_attribute(attr_name: &str) -> &str {
+    match attr_name {
+        "viewbox" => "viewBox",
+        "preserveaspectratio" => "preserveAspectRatio",
+        "patternunits" => "patternUnits",
+        "patterntransform" => "patternTransform",
+        "patterncontentunits" => "patternContentUnits",
+        "gradientunits" => "gradientUnits",
+        "gradienttransform" => "gradientTransform",
+        "spreadmethod" => "spreadMethod",
+        "stop-opacity" => "stop-opacity", // hyphenated, stays as-is
+        "stop-color" => "stop-color",     // hyphenated, stays as-is
+        "clippathunits" => "clipPathUnits",
+        "maskcontentunits" => "maskContentUnits",
+        "maskunits" => "maskUnits",
+        "filterunits" => "filterUnits",
+        "primitiveunits" => "primitiveUnits",
+        "markerheight" => "markerHeight",
+        "markerwidth" => "markerWidth",
+        "markerunits" => "markerUnits",
+        "refx" => "refX",
+        "refy" => "refY",
+        "repeatcount" => "repeatCount",
+        "repeatdur" => "repeatDur",
+        "calcmode" => "calcMode",
+        "keypoints" => "keyPoints",
+        "keysplines" => "keySplines",
+        "keytimes" => "keyTimes",
+        "attributename" => "attributeName",
+        "attributetype" => "attributeType",
+        "basefrequency" => "baseFrequency",
+        "numoctaves" => "numOctaves",
+        "stitchtiles" => "stitchTiles",
+        "targetx" => "targetX",
+        "targety" => "targetY",
+        "kernelmatrix" => "kernelMatrix",
+        "kernelunitlength" => "kernelUnitLength",
+        "preservealpha" => "preserveAlpha",
+        "surfacescale" => "surfaceScale",
+        "specularconstant" => "specularConstant",
+        "specularexponent" => "specularExponent",
+        "diffuseconstant" => "diffuseConstant",
+        "pointsatx" => "pointsAtX",
+        "pointsaty" => "pointsAtY",
+        "pointsatz" => "pointsAtZ",
+        "limitingconeangle" => "limitingConeAngle",
+        "tablevalues" => "tableValues",
+        "filterres" => "filterRes",
+        "stddeviation" => "stdDeviation",
+        "edgemode" => "edgeMode",
+        "xchannelselector" => "xChannelSelector",
+        "ychannelselector" => "yChannelSelector",
+        "glyphref" => "glyphRef",
+        "textlength" => "textLength",
+        "lengthadjust" => "lengthAdjust",
+        "startoffset" => "startOffset",
+        "baseprofile" => "baseProfile",
+        "contentscripttype" => "contentScriptType",
+        "contentstyletype" => "contentStyleType",
+        "zoomandpan" => "zoomAndPan",
+        _ => attr_name, // Return original if no mapping
+    }
+}
+
+/// Check if a tag name is an SVG element.
+fn is_svg_element(tag_name: &str) -> bool {
+    matches!(
+        tag_name.to_lowercase().as_str(),
+        "svg"
+            | "path"
+            | "circle"
+            | "rect"
+            | "line"
+            | "polyline"
+            | "polygon"
+            | "ellipse"
+            | "g"
+            | "defs"
+            | "use"
+            | "symbol"
+            | "clippath"
+            | "mask"
+            | "pattern"
+            | "image"
+            | "switch"
+            | "foreignobject"
+            | "desc"
+            | "title"
+            | "metadata"
+            | "lineargradient"
+            | "radialgradient"
+            | "stop"
+            | "filter"
+            | "fegaussianblur"
+            | "feoffset"
+            | "feblend"
+            | "fecolormatrix"
+            | "fecomponenttransfer"
+            | "fecomposite"
+            | "feconvolvematrix"
+            | "fediffuselighting"
+            | "fedisplacementmap"
+            | "feflood"
+            | "feimage"
+            | "femerge"
+            | "femergenode"
+            | "femorphology"
+            | "fespecularlighting"
+            | "fetile"
+            | "feturbulence"
+            | "fefunca"
+            | "fefuncb"
+            | "fefuncg"
+            | "fefuncr"
+            | "text"
+            | "tspan"
+            | "textpath"
+            | "marker"
+            | "animate"
+            | "animatemotion"
+            | "animatetransform"
+            | "set"
+            | "mpath"
+    )
+}
+
 /// Parse HTML into a virtual DOM with compact IDs for patch targeting.
 ///
 /// Each element receives a `data-dj` attribute with a base62-encoded unique ID.
@@ -108,16 +236,22 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
             attributes.insert("data-dj".to_string(), djust_id);
 
             for attr in attrs.borrow().iter() {
-                let attr_name = attr.name.local.to_string();
+                let attr_name_lower = attr.name.local.to_string();
+                // Normalize SVG attributes to preserve camelCase (html5ever lowercases everything)
+                let attr_name = if is_svg_element(&tag) {
+                    normalize_svg_attribute(&attr_name_lower).to_string()
+                } else {
+                    attr_name_lower.clone()
+                };
                 let attr_value = attr.value.to_string();
 
                 // Extract data-key for efficient list diffing
-                if attr_name == "data-key" && !attr_value.is_empty() {
+                if attr_name_lower == "data-key" && !attr_value.is_empty() {
                     key = Some(attr_value.clone());
                 }
 
                 // Don't overwrite our generated data-dj if template already has one
-                if attr_name == "data-dj" {
+                if attr_name_lower == "data-dj" {
                     continue;
                 }
 
@@ -384,5 +518,104 @@ mod tests {
         assert_eq!(vnode.key, Some("parent".to_string()));
         assert_eq!(vnode.children.len(), 1);
         assert_eq!(vnode.children[0].key, Some("child".to_string()));
+    }
+
+    #[test]
+    fn test_svg_viewbox_preserved() {
+        // Test that SVG viewBox attribute preserves camelCase (Issue #81)
+        let html = r#"<svg viewBox="0 0 24 24"><path d="M0 0"/></svg>"#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.tag, "svg");
+        assert_eq!(
+            vnode.attrs.get("viewBox"),
+            Some(&"0 0 24 24".to_string()),
+            "viewBox should be camelCase, not lowercase"
+        );
+    }
+
+    #[test]
+    fn test_svg_preserve_aspect_ratio() {
+        // Test that preserveAspectRatio attribute is preserved
+        let html = r#"<svg preserveAspectRatio="xMidYMid meet"></svg>"#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(
+            vnode.attrs.get("preserveAspectRatio"),
+            Some(&"xMidYMid meet".to_string())
+        );
+    }
+
+    #[test]
+    fn test_svg_nested_elements_preserve_case() {
+        // Test that nested SVG elements also get attribute case normalization
+        let html = r#"<svg viewBox="0 0 100 100"><linearGradient gradientUnits="userSpaceOnUse"></linearGradient></svg>"#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.attrs.get("viewBox"), Some(&"0 0 100 100".to_string()));
+        assert_eq!(vnode.children.len(), 1);
+        assert_eq!(
+            vnode.children[0].attrs.get("gradientUnits"),
+            Some(&"userSpaceOnUse".to_string())
+        );
+    }
+
+    #[test]
+    fn test_non_svg_attributes_unchanged() {
+        // Test that non-SVG elements don't get SVG attribute normalization
+        let html = r#"<div data-viewbox="test"></div>"#;
+        let vnode = parse_html(html).unwrap();
+
+        // Should remain lowercase for non-SVG elements
+        assert_eq!(
+            vnode.attrs.get("data-viewbox"),
+            Some(&"test".to_string()),
+            "Non-SVG elements should keep lowercase attributes"
+        );
+        assert_eq!(vnode.attrs.get("data-viewBox"), None);
+    }
+
+    #[test]
+    fn test_svg_multiple_camelcase_attributes() {
+        // Test multiple SVG attributes that need case normalization
+        let html =
+            r#"<svg viewBox="0 0 24 24" preserveAspectRatio="xMinYMin" baseProfile="full"></svg>"#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.attrs.get("viewBox"), Some(&"0 0 24 24".to_string()));
+        assert_eq!(
+            vnode.attrs.get("preserveAspectRatio"),
+            Some(&"xMinYMin".to_string())
+        );
+        assert_eq!(vnode.attrs.get("baseProfile"), Some(&"full".to_string()));
+    }
+
+    #[test]
+    fn test_is_svg_element() {
+        // Test the SVG element detection function
+        assert!(is_svg_element("svg"));
+        assert!(is_svg_element("path"));
+        assert!(is_svg_element("circle"));
+        assert!(is_svg_element("linearGradient"));
+        assert!(is_svg_element("feGaussianBlur"));
+        assert!(!is_svg_element("div"));
+        assert!(!is_svg_element("span"));
+        assert!(!is_svg_element("input"));
+    }
+
+    #[test]
+    fn test_normalize_svg_attribute() {
+        // Test the SVG attribute normalization function
+        assert_eq!(normalize_svg_attribute("viewbox"), "viewBox");
+        assert_eq!(
+            normalize_svg_attribute("preserveaspectratio"),
+            "preserveAspectRatio"
+        );
+        assert_eq!(normalize_svg_attribute("gradientunits"), "gradientUnits");
+        assert_eq!(normalize_svg_attribute("stddeviation"), "stdDeviation");
+        // Non-mapped attributes should pass through unchanged
+        assert_eq!(normalize_svg_attribute("class"), "class");
+        assert_eq!(normalize_svg_attribute("id"), "id");
+        assert_eq!(normalize_svg_attribute("fill"), "fill");
     }
 }
