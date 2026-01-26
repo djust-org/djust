@@ -457,6 +457,12 @@ fn parse_if_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, Vec<Node
                 continue;
             }
             Token::Tag(name, args) if name == "elif" => {
+                // elif after else is invalid (matches Django behavior)
+                if in_else {
+                    return Err(DjangoRustError::TemplateError(
+                        "{% elif %} cannot appear after {% else %}".to_string(),
+                    ));
+                }
                 // elif is equivalent to: else + nested if
                 // {% elif condition %} becomes {% else %}{% if condition %}...{% endif %}
                 let elif_condition = args.join(" ");
@@ -1530,5 +1536,16 @@ mod tests {
         assert!(user_paths.contains(&"is_admin".to_string()));
         assert!(user_paths.contains(&"is_staff".to_string()));
         assert!(user_paths.contains(&"is_verified".to_string()));
+    }
+
+    #[test]
+    fn test_elif_after_else_is_error() {
+        // {% elif %} after {% else %} is invalid syntax (matches Django behavior)
+        let tokens = tokenize("{% if a %}A{% else %}B{% elif c %}C{% endif %}").unwrap();
+        let result = parse(&tokens);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("elif"));
+        assert!(err.to_string().contains("else"));
     }
 }
