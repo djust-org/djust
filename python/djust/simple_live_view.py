@@ -6,10 +6,12 @@ from django.views import View
 from django.http import HttpResponse
 
 try:
-    from ._rust import RustLiveView, render_template
+    from ._rust import RustLiveView, render_template_with_dirs
 except ImportError:
     RustLiveView = None
-    render_template = None
+    render_template_with_dirs = None
+
+from .utils import get_template_dirs
 
 
 class LiveView(View):
@@ -36,10 +38,10 @@ class LiveView(View):
 
     def render_template(self):
         """Render using Rust backend"""
-        if RustLiveView and render_template and self.template:
+        if RustLiveView and render_template_with_dirs and self.template:
             try:
                 context = self.get_context_data()
-                return render_template(self.template, context)
+                return render_template_with_dirs(self.template, context, get_template_dirs())
             except Exception as e:
                 return f"<div>Error: {e}</div>"
         return "<div>Rust backend not available</div>"

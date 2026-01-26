@@ -5,6 +5,25 @@ use crate::inheritance::TemplateLoader;
 use crate::parser::Node;
 use djust_components::Component;
 use djust_core::{Context, DjangoRustError, Result, Value};
+use std::collections::HashSet;
+use std::sync::Mutex;
+
+/// Track which unsupported tags we've already warned about (to avoid log spam)
+static WARNED_TAGS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+/// Warn about an unsupported tag (only once per tag name)
+fn warn_unsupported_tag(tag_signature: &str) {
+    let mut guard = WARNED_TAGS.lock().unwrap();
+    let warned = guard.get_or_insert_with(HashSet::new);
+
+    if !warned.contains(tag_signature) {
+        eprintln!(
+            "[djust] Warning: Unsupported template tag '{tag_signature}' - \
+             this tag has no registered handler and will be ignored"
+        );
+        warned.insert(tag_signature.to_string());
+    }
+}
 
 pub fn render_nodes(nodes: &[Node], context: &Context) -> Result<String> {
     render_nodes_with_loader(nodes, context, None::<&NoOpLoader>)
@@ -180,8 +199,12 @@ fn render_node_with_loader<L: TemplateLoader>(
 
                 render_nodes_with_loader(&nodes, &include_context, Some(loader))
             } else {
-                // No loader available, silently skip (for backwards compatibility)
-                Ok(String::new())
+                // No loader available - warn developers (once per template)
+                let tag_sig = format!("{{% include \"{template}\" %}} (no loader)");
+                warn_unsupported_tag(&tag_sig);
+                Ok(format!(
+                    "<!-- djust: include '{template}' ignored - no template loader -->"
+                ))
             }
         }
 
@@ -295,6 +318,22 @@ fn render_node_with_loader<L: TemplateLoader>(
         }
 
         Node::Comment => Ok(String::new()),
+
+        Node::UnsupportedTag { name, args } => {
+            // Build tag signature for warning (only warn once per unique tag)
+            let args_str = if args.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", args.join(" "))
+            };
+            let tag_sig = format!("{{% {name}{args_str} %}}");
+
+            // Warn once per tag signature (avoids log spam)
+            warn_unsupported_tag(&tag_sig);
+
+            // Return HTML comment so it's visible in page source during development
+            Ok(format!("<!-- djust: unsupported tag '{tag_sig}' -->"))
+        }
 
         Node::CustomTag { name, args } => {
             // Call Python handler for custom tags (e.g., {% url %}, {% static %})

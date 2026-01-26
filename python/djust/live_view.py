@@ -20,6 +20,7 @@ from django.utils.decorators import method_decorator
 from django.db import models
 from .validation import validate_handler_params
 from .security import safe_setattr
+from .utils import get_template_dirs
 
 # Try to use orjson for faster JSON operations (2-3x faster than stdlib)
 import importlib.util
@@ -1484,7 +1485,9 @@ class LiveView(View):
             print(f"[LiveView] Template length: {len(template_source)} chars", file=sys.stderr)
             print(f"[LiveView] Template preview: {template_source[:200]}...", file=sys.stderr)
 
-            self._rust_view = RustLiveView(template_source)
+            # Pass template directories for {% include %} tag support
+            template_dirs = get_template_dirs()
+            self._rust_view = RustLiveView(template_source, template_dirs)
 
             # Cache it if we have a cache key
             if self._cache_key:
@@ -1965,7 +1968,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # Render the full template using Rust
             from djust._rust import RustLiveView
 
-            temp_rust = RustLiveView(self._full_template)
+            # Pass template directories for {% include %} tag support
+            template_dirs = get_template_dirs()
+            temp_rust = RustLiveView(self._full_template, template_dirs)
 
             # Use pre-serialized context if provided (optimization for GET requests)
             if serialized_context is not None:

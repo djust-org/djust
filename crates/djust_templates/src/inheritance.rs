@@ -409,6 +409,16 @@ fn node_to_template_string(node: &Node) -> String {
             result.push_str(" %}");
             result
         }
+        Node::UnsupportedTag { name, args } => {
+            // Reconstruct unsupported tag as-is for debugging
+            let mut result = format!("{{% {name}");
+            for arg in args {
+                result.push(' ');
+                result.push_str(arg);
+            }
+            result.push_str(" %}");
+            result
+        }
     }
 }
 

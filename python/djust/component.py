@@ -5,6 +5,7 @@ Reusable LiveView components
 import uuid
 from typing import Dict, Any, Optional, Callable
 from ._rust import RustLiveView
+from .utils import get_template_dirs
 
 
 class Component:
@@ -50,7 +51,7 @@ class Component:
     def render(self) -> str:
         """Render the component to HTML"""
         if self._rust_view is None:
-            self._rust_view = RustLiveView(self.template)
+            self._rust_view = RustLiveView(self.template, get_template_dirs())
 
         context = self.get_context_data()
         self._rust_view.update_state(context)
@@ -380,7 +381,7 @@ class LiveComponent(Component):
                     template[:end] + f' data-component-id="{self.component_id}"' + template[end:]
                 )
 
-            self._rust_view = RustLiveView(template)
+            self._rust_view = RustLiveView(template, get_template_dirs())
 
         context = self.get_context_data()
         self._rust_view.update_state(context)
