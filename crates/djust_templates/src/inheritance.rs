@@ -1061,4 +1061,155 @@ mod tests {
             result
         );
     }
+
+    #[test]
+    fn test_resolve_template_inheritance_with_nested_blocks_filesystem() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create temporary directory with test templates
+        let temp_dir = TempDir::new().unwrap();
+        let template_dir = temp_dir.path();
+
+        // Create base.html with nested blocks (like real Django templates)
+        let base_html = r#"<!DOCTYPE html>
+<html>
+<head><title>{% block title %}Default{% endblock %}</title></head>
+<body>
+    {% block body %}
+    <div id="app">
+        {% block content %}Default Content{% endblock %}
+    </div>
+    {% endblock %}
+</body>
+</html>"#;
+        fs::write(template_dir.join("base.html"), base_html).unwrap();
+
+        // Create child.html that only overrides content block
+        let child_html = r#"{% extends "base.html" %}
+
+{% block title %}Child Page{% endblock %}
+
+{% block content %}
+<div class="child-content">
+    <h1>Hello from child!</h1>
+</div>
+{% endblock %}"#;
+        fs::write(template_dir.join("child.html"), child_html).unwrap();
+
+        // Resolve inheritance
+        let result = resolve_template_inheritance("child.html", &[template_dir.to_path_buf()])
+            .expect("Should resolve template inheritance");
+
+        // Verify child content is present
+        assert!(
+            result.contains("Hello from child!"),
+            "Child content should be in result, got: {}",
+            result
+        );
+        assert!(
+            result.contains("child-content"),
+            "Child class should be in result, got: {}",
+            result
+        );
+
+        // Verify parent default content is NOT present
+        assert!(
+            !result.contains("Default Content"),
+            "Parent default content should be replaced, got: {}",
+            result
+        );
+
+        // Verify title was overridden
+        assert!(
+            result.contains("Child Page"),
+            "Title should be overridden, got: {}",
+            result
+        );
+
+        // Verify structure is preserved
+        assert!(
+            result.contains("<html>") && result.contains("</html>"),
+            "HTML structure should be preserved"
+        );
+        assert!(
+            result.contains("<div id=\"app\">"),
+            "App div should be preserved from body block"
+        );
+    }
+
+    #[test]
+    fn test_three_level_inheritance_filesystem() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let template_dir = temp_dir.path();
+
+        // base.html - root template
+        let base_html = r#"<!DOCTYPE html>
+<html>
+<body>
+{% block wrapper %}
+<div class="wrapper">
+    {% block content %}BASE CONTENT{% endblock %}
+</div>
+{% endblock %}
+</body>
+</html>"#;
+        fs::write(template_dir.join("base.html"), base_html).unwrap();
+
+        // middle.html - extends base, overrides wrapper
+        let middle_html = r#"{% extends "base.html" %}
+
+{% block wrapper %}
+<main class="middle-wrapper">
+    {% block content %}MIDDLE CONTENT{% endblock %}
+</main>
+{% endblock %}"#;
+        fs::write(template_dir.join("middle.html"), middle_html).unwrap();
+
+        // child.html - extends middle, overrides content
+        let child_html = r#"{% extends "middle.html" %}
+
+{% block content %}CHILD CONTENT{% endblock %}"#;
+        fs::write(template_dir.join("child.html"), child_html).unwrap();
+
+        // Resolve inheritance
+        let result = resolve_template_inheritance("child.html", &[template_dir.to_path_buf()])
+            .expect("Should resolve 3-level inheritance");
+
+        // Child content should be present
+        assert!(
+            result.contains("CHILD CONTENT"),
+            "Child content should be in result, got: {}",
+            result
+        );
+
+        // Middle's wrapper structure should be used
+        assert!(
+            result.contains("middle-wrapper"),
+            "Middle's wrapper should be used, got: {}",
+            result
+        );
+
+        // Base and middle default content should NOT be present
+        assert!(
+            !result.contains("BASE CONTENT"),
+            "Base content should be replaced, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("MIDDLE CONTENT"),
+            "Middle content should be replaced, got: {}",
+            result
+        );
+
+        // Base wrapper should NOT be present (overridden by middle)
+        assert!(
+            !result.contains("class=\"wrapper\""),
+            "Base wrapper should be replaced by middle's, got: {}",
+            result
+        );
+    }
 }
