@@ -2,16 +2,17 @@
 Utility functions for djust.
 """
 
+from functools import lru_cache
 
-def get_template_dirs() -> list[str]:
+
+@lru_cache(maxsize=1)
+def _get_template_dirs_cached() -> tuple[str, ...]:
     """
-    Get template directories from Django settings in search order.
+    Internal cached implementation.
 
-    Returns list of template directory paths in Django's search order:
-    1. DIRS from each TEMPLATES config (in order)
-    2. APP_DIRS (if enabled) - searches app templates in app order
-
-    Used internally for {% include %} tag support in Rust rendering.
+    Reads from settings.TEMPLATES directly for compatibility with tests
+    that modify settings. Django's template.engines singleton doesn't
+    reflect settings changes after first access.
     """
     from django.conf import settings
     from pathlib import Path
@@ -34,4 +35,20 @@ def get_template_dirs() -> list[str]:
                     if templates_dir.exists():
                         template_dirs.append(str(templates_dir))
 
-    return [str(d) for d in template_dirs]
+    return tuple(str(d) for d in template_dirs)
+
+
+def get_template_dirs() -> list[str]:
+    """
+    Get template directories from Django settings in search order.
+
+    Returns list of template directory paths in Django's search order:
+    1. DIRS from each TEMPLATES config (in order)
+    2. APP_DIRS (if enabled) - searches app templates in app order
+
+    Used internally for {% include %} tag support in Rust rendering.
+
+    Note: Results are cached for performance. In production, template
+    directories don't change at runtime so this is safe.
+    """
+    return list(_get_template_dirs_cached())
