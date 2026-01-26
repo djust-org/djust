@@ -625,6 +625,7 @@ pub enum Node {
 - Equality: `==`, `!=`
 - Comparison: `>`, `<`, `>=`, `<=`
 - Boolean: `and`, `or`, `not`
+- Branching: `{% elif %}` is supported (converted to nested `If` nodes)
 
 #### Example
 

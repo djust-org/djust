@@ -133,7 +133,7 @@ def my_view(request):
 ✅ **Django Template Syntax**
 - Variables: `{{ variable }}`
 - Filters: `{{ variable|filter }}` (including `urlencode`)
-- Tags: `{% if %}`, `{% for %}`, `{% extends %}`, `{% block %}`, `{% url %}`, `{% include %}`
+- Tags: `{% if %}`, `{% elif %}`, `{% else %}`, `{% for %}`, `{% extends %}`, `{% block %}`, `{% url %}`, `{% include %}`
 - Comparison operators: `>`, `<`, `>=`, `<=` in `{% if %}` tags
 - Comments: `{# comment #}`
 
