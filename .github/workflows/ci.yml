@@ -16,6 +16,7 @@ jobs:
     name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false  # Run all Python versions even if one fails
       matrix:
         python-version: ['3.9', '3.10', '3.11', '3.12']
 
@@ -48,7 +49,7 @@ jobs:
 
       - name: Run Python tests
         run: |
-          uv run pytest tests/ -v --tb=short
+          uv run pytest tests/ python/tests/ -v --tb=short
 
   test-rust:
     name: Rust tests
