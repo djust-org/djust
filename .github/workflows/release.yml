@@ -145,9 +145,8 @@ jobs:
         id: prerelease
         run: |
           VERSION="${{ needs.verify.outputs.version }}"
-          if [[ "$VERSION" == *"a"* ]] || \
-             [[ "$VERSION" == *"b"* ]] || \
-             [[ "$VERSION" == *"rc"* ]]; then
+          # Match PEP 440 pre-release patterns: 0.2.0a1, 0.2.0b1, 0.2.0rc1, 0.2.0.dev1
+          if [[ "$VERSION" =~ (a|b|rc)[0-9]+$ ]] || [[ "$VERSION" =~ \.dev[0-9]+$ ]]; then
             echo "is_prerelease=true" >> $GITHUB_OUTPUT
           else
             echo "is_prerelease=false" >> $GITHUB_OUTPUT
