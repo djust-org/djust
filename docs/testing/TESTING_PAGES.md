@@ -245,7 +245,7 @@ Automated testing for the @my_decorator feature
                     type="text"
                     class="form-control"
                     placeholder="Enter test value..."
-                    @input="test_handler"
+                    dj-input="test_handler"
                     value=""
                 />
             </div>

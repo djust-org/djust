@@ -782,20 +782,20 @@ export const globalDraftManager = new DraftManager();
 // ============================================================================
 
 /**
- * LoadingManager handles @loading HTML attributes for showing/hiding elements
+ * LoadingManager handles dj-loading HTML attributes for showing/hiding elements
  * and adding/removing classes during async operations.
  *
  * Supported modifiers:
- * - @loading.disable: Disable element during loading
- * - @loading.class="class-name": Add class during loading
- * - @loading.show: Show element during loading (display: block/inline)
- * - @loading.hide: Hide element during loading (display: none)
+ * - dj-loading.disable: Disable element during loading
+ * - dj-loading.class="class-name": Add class during loading
+ * - dj-loading.show: Show element during loading (display: block/inline)
+ * - dj-loading.hide: Hide element during loading (display: none)
  *
  * Example:
- *   <button @click="save" @loading.disable>Save</button>
- *   <button @click="save" @loading.class="opacity-50">Save</button>
- *   <div @loading.show>Saving...</div>
- *   <div @loading.hide>Form content</div>
+ *   <button dj-click="save" dj-loading.disable>Save</button>
+ *   <button dj-click="save" dj-loading.class="opacity-50">Save</button>
+ *   <div dj-loading.show>Saving...</div>
+ *   <div dj-loading.hide>Form content</div>
  */
 export class LoadingManager {
     constructor() {
@@ -804,8 +804,8 @@ export class LoadingManager {
     }
 
     /**
-     * Register an element with @loading attributes
-     * @param {HTMLElement} element - Element with @loading attribute
+     * Register an element with dj-loading attributes
+     * @param {HTMLElement} element - Element with dj-loading attribute
      * @param {string} eventName - Event name that triggers loading
      */
     register(element, eventName) {
@@ -816,10 +816,10 @@ export class LoadingManager {
             originalState: {}
         };
 
-        // Parse @loading.* attributes
+        // Parse dj-loading.* attributes
         for (let i = 0; i < attributes.length; i++) {
             const attr = attributes[i];
-            const match = attr.name.match(/^@loading\.(.+)$/);
+            const match = attr.name.match(/^dj-loading\.(.+)$/);
             if (match) {
                 const modifier = match[1];
 
@@ -833,7 +833,7 @@ export class LoadingManager {
                     loadingConfig.modifiers.push({ type: 'hide' });
                     loadingConfig.originalState.display = element.style.display;
                 } else if (modifier === 'class') {
-                    // For @loading.class="className", value is in attr.value
+                    // For dj-loading.class="className", value is in attr.value
                     const className = attr.value;
                     if (className) {
                         loadingConfig.modifiers.push({ type: 'class', value: className });

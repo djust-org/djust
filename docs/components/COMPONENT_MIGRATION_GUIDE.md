@@ -265,7 +265,7 @@ class TabsComponent(LiveComponent):
         <ul class="nav nav-tabs">
             {% for tab in tabs %}
             <li class="nav-item">
-                <button @click="switch_tab" data-tab="{{ tab.id }}"
+                <button dj-click="switch_tab" data-tab="{{ tab.id }}"
                         class="nav-link {% if tab.id == active %}active{% endif %}">
                     {{ tab.label }}
                 </button>
@@ -576,7 +576,7 @@ class TabsComponent(LiveComponent):
     template_string = """
         <ul class="nav nav-tabs">
             {% for tab in tabs %}
-            <button @click="switch_tab" data-tab="{{ tab.id }}"
+            <button dj-click="switch_tab" data-tab="{{ tab.id }}"
                     class="nav-link {% if tab.id == active %}active{% endif %}">
                 {{ tab.label }}
             </button>

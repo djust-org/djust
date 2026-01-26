@@ -1335,7 +1335,7 @@
 
                     <h3>Step 1: User Clicks Button</h3>
                     <p>
-                        When a user clicks the button in the browser, the <code>@click</code> directive tells the djust client JavaScript to capture this event. The <code>@click="increment_notifications"</code> attribute specifies which event handler method should be called on the server-side LiveView. No page reload occurs - this is entirely handled via WebSocket.
+                        When a user clicks the button in the browser, the <code>@click</code> directive tells the djust client JavaScript to capture this event. The <code>dj-click="increment_notifications"</code> attribute specifies which event handler method should be called on the server-side LiveView. No page reload occurs - this is entirely handled via WebSocket.
                     </p>
                     <div class="code-block-with-header">
                         <div class="code-header">
@@ -1343,7 +1343,7 @@
                             <span class="file-path">examples/demo_project/templates/index.html</span>
                         </div>
                         <div class="code-content">
-<pre><code class="language-html">&lt;button @click="increment_notifications"&gt;
+<pre><code class="language-html">&lt;button dj-click="increment_notifications"&gt;
     Add Notification
 &lt;/button&gt;</code></pre>
                         </div>
@@ -1550,7 +1550,7 @@ context['button'] = ButtonComponent(
                         </div>
                         <div class="code-content">
 <pre><code class="language-html">&lt;!-- Template --&gt;
-&lt;button @click="handle_button_click"&gt;Click Me&lt;/button&gt;</code></pre>
+&lt;button dj-click="handle_button_click"&gt;Click Me&lt;/button&gt;</code></pre>
 <pre><code class="language-python"># LiveView
 def handle_button_click(self):
     self.is_loading = True
@@ -1713,11 +1713,11 @@ def handle_button_click(self):
                     <p>This page itself demonstrates component communication:</p>
 
                     <div class="text-center my-4">
-                        <button @click="increment_demo_count"
+                        <button dj-click="increment_demo_count"
                                 class="btn btn-primary btn-lg me-2">
                             Increment Counter
                         </button>
-                        <button @click="reset_demo_count"
+                        <button dj-click="reset_demo_count"
                                 class="btn btn-secondary btn-lg">
                             Reset
                         </button>

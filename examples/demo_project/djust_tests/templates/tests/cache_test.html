@@ -131,7 +131,7 @@
                     type="text"
                     name="query"
                     class="form-control form-control-lg"
-                    @input="search"
+                    dj-input="search"
                     placeholder="Type to test manually..."
                     value="{{ query }}"
                     autocomplete="off"
@@ -249,7 +249,7 @@
             }
             updateCacheEfficiency();
 
-            // Dispatch input event (will trigger @input="search" handler)
+            // Dispatch input event (will trigger dj-input="search" handler)
             input.value = value;
             input.dispatchEvent(new Event('input', { bubbles: true }));
 

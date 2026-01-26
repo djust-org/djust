@@ -17,13 +17,13 @@
     <!-- Status Filter -->
     <div class="bg-card border border-border rounded-lg p-4 mb-6">
       <div class="flex flex-wrap gap-2">
-        <button @click="filter_by_status" data-status="all" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors border
+        <button dj-click="filter_by_status" data-status="all" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors border
           {% if filter_status == 'all' %}bg-primary text-primary-foreground border-primary{% else %}bg-muted text-muted-foreground border-border hover:bg-accent{% endif %}">
           <i data-lucide="list" class="w-4 h-4"></i>
           All ({{ total_count }})
         </button>
         {% for val, label in status_choices %}
-        <button @click="filter_by_status" data-status="{{ val }}" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors border
+        <button dj-click="filter_by_status" data-status="{{ val }}" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors border
           {% if filter_status == val %}
             {% if val == 'completed' %}bg-green-500 text-white border-green-500
             {% elif val == 'in_progress' %}bg-blue-500 text-white border-blue-500

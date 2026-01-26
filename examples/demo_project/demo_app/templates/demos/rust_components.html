@@ -248,7 +248,7 @@
             {% if dropdown_message %}
             <div class="demo-message mb-4">
                 <strong>Dropdown Event:</strong> {{ dropdown_message }}
-                <button @click="clear_messages" class="btn btn-sm float-end" style="padding: 0.25rem 0.75rem;">Clear</button>
+                <button dj-click="clear_messages" class="btn btn-sm float-end" style="padding: 0.25rem 0.75rem;">Clear</button>
             </div>
             {% endif %}
 
@@ -422,13 +422,13 @@
                                 </p>
                                 <div class="mb-3 p-3" style="background: var(--color-bg); border-radius: var(--radius-md); border: 2px solid var(--color-accent);">
                                     <div class="d-flex align-items-center gap-3">
-                                        <button @click="increment_counter" class="btn btn-primary">
+                                        <button dj-click="increment_counter" class="btn btn-primary">
                                             <strong>+</strong> Increment
                                         </button>
                                         <div style="font-size: 1.5rem; font-weight: 700; color: var(--color-accent);">
                                             Counter: {{ counter }}
                                         </div>
-                                        <button @click="reset_counter" class="btn btn-secondary">
+                                        <button dj-click="reset_counter" class="btn btn-secondary">
                                             Reset
                                         </button>
                                     </div>

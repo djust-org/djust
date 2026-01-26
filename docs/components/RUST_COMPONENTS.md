@@ -159,7 +159,7 @@ btn = Button(
     on_click="submitForm",
     button_type="submit"
 )
-# <button class="btn btn-primary btn-lg w-100" type="submit" id="submit" @click="submitForm">Submit Form</button>
+# <button class="btn btn-primary btn-lg w-100" type="submit" id="submit" dj-click="submitForm">Submit Form</button>
 ```
 
 **Outline Button**
@@ -175,7 +175,7 @@ btn = Button("chain", "Chained") \
     .with_size("sm") \
     .with_icon("⚠️") \
     .with_on_click("showWarning")
-# <button class="btn btn-warning btn-sm" type="button" id="chain" @click="showWarning">⚠️ Chained</button>
+# <button class="btn btn-warning btn-sm" type="button" id="chain" dj-click="showWarning">⚠️ Chained</button>
 ```
 
 ### Input
@@ -260,7 +260,7 @@ input = Input(
     required=True,
     on_change="validatePassword"
 )
-# <input class="form-control" type="password" id="password" placeholder="Enter password" required="required" @change="validatePassword" />
+# <input class="form-control" type="password" id="password" placeholder="Enter password" required="required" dj-change="validatePassword" />
 ```
 
 **Number Input with Range**
@@ -285,7 +285,7 @@ input = Input(
     placeholder="Search...",
     on_input="handleSearch"
 )
-# <input class="form-control form-control-lg" type="search" id="search" placeholder="Search..." @input="handleSearch" />
+# <input class="form-control form-control-lg" type="search" id="search" placeholder="Search..." dj-input="handleSearch" />
 ```
 
 **Disabled Input**
@@ -1328,7 +1328,7 @@ Rust components can be used directly in Django templates with JSX-like syntax:
         <RustText content="{{ form_title }}" element="h3" />
     </div>
     <div class="card-body">
-        <form @submit="handleSubmit">
+        <form dj-submit="handleSubmit">
             <div class="mb-3">
                 <RustText content="Email" element="label" forInput="email" />
                 <RustInput

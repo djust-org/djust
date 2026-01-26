@@ -86,7 +86,7 @@
             <h3>Modal Dialogs</h3>
             <div class="component-demo">
                 <div class="demo-label">Modal Example</div>
-                <button class="btn btn-primary" @click="show_modal">Open Modal</button>
+                <button class="btn btn-primary" dj-click="show_modal">Open Modal</button>
                 <p class="text-muted mt-2 mb-0">
                     <small>Modal opened: <strong>{{ modal_open_count }}</strong> time(s)</small>
                 </p>
@@ -112,8 +112,8 @@
                     {{ progress_custom.render }}
                 </div>
                 <div class="mt-3">
-                    <button class="btn btn-sm btn-primary" @click="increment_progress">Increment (+10%)</button>
-                    <button class="btn btn-sm btn-secondary ms-2" @click="reset_progress">Reset</button>
+                    <button class="btn btn-sm btn-primary" dj-click="increment_progress">Increment (+10%)</button>
+                    <button class="btn btn-sm btn-secondary ms-2" dj-click="reset_progress">Reset</button>
                 </div>
             </div>
         </div>

@@ -20,18 +20,18 @@ body { background: #f3f4f6; }
         {% if success_message %}
         <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4">
             {{ success_message }}
-            <button type="button" class="float-right" @click="clear_message">&times;</button>
+            <button type="button" class="float-right" dj-click="clear_message">&times;</button>
         </div>
         {% endif %}
 
         {% if error_message %}
         <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
             {{ error_message }}
-            <button type="button" class="float-right" @click="clear_message">&times;</button>
+            <button type="button" class="float-right" dj-click="clear_message">&times;</button>
         </div>
         {% endif %}
 
-        <form @submit="submit_form" onsubmit="return false;">
+        <form dj-submit="submit_form" onsubmit="return false;">
             {% csrf_token %}
 
             <!-- Auto-rendered form using Tailwind adapter -->
@@ -41,7 +41,7 @@ body { background: #f3f4f6; }
                 <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
                     Send Message
                 </button>
-                <button type="button" class="w-full bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded" @click="reset_form">
+                <button type="button" class="w-full bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded" dj-click="reset_form">
                     Reset
                 </button>
             </div>

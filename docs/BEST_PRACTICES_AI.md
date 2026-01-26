@@ -135,12 +135,12 @@ class ProductListView(LiveView):
 <div>
     <!-- Search input with debouncing -->
     <input type="text"
-           @input="search"
+           dj-input="search"
            value="{{ search_query }}"
            placeholder="Search products..." />
 
     <!-- Category filter -->
-    <select @change="filter_by_category">
+    <select dj-change="filter_by_category">
         <option value="all" {% if filter_category == 'all' %}selected{% endif %}>
             All Categories
         </option>
@@ -282,20 +282,20 @@ def delete_item(self, item_id: int, **kwargs):
 
 ```html
 <!-- Text input -->
-<input type="text" @input="search" value="{{ search_query }}" />
+<input type="text" dj-input="search" value="{{ search_query }}" />
 
 <!-- Select/dropdown -->
-<select @change="filter_category">
+<select dj-change="filter_category">
     <option value="all">All</option>
 </select>
 
 <!-- Button with data -->
-<button @click="delete_item" data-item-id="{{ item.id }}">
+<button dj-click="delete_item" data-item-id="{{ item.id }}">
     Delete
 </button>
 
 <!-- Form submission -->
-<form @submit="save_form">
+<form dj-submit="save_form">
     <input name="email" type="email" />
     <input name="name" type="text" />
     <button type="submit">Save</button>
@@ -519,7 +519,7 @@ class LeaseFormView(FormMixin, LiveView):
     <div class="alert alert-error">{{ error_message }}</div>
     {% endif %}
 
-    <form @submit="submit_form">
+    <form dj-submit="submit_form">
         {% csrf_token %}
 
         <!-- FormMixin auto-renders with framework styling -->
@@ -528,7 +528,7 @@ class LeaseFormView(FormMixin, LiveView):
         <!-- Or manually render fields with real-time validation -->
         <div>
             <label>Tenant</label>
-            <select name="tenant" @change="validate_field">
+            <select name="tenant" dj-change="validate_field">
                 <option value="">Select tenant...</option>
                 {% for tenant in tenants %}
                 <option value="{{ tenant.id }}">{{ tenant.name }}</option>
@@ -615,7 +615,7 @@ def update_rent(self, value: str = "", **kwargs):
 
 ```html
 <!-- CSRF token required for all forms -->
-<form @submit="submit_form">
+<form dj-submit="submit_form">
     {% csrf_token %}
     <!-- form fields -->
 </form>

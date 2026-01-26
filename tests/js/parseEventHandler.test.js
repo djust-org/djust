@@ -1,7 +1,7 @@
 /**
  * Tests for parseEventHandler function
  *
- * Tests the client-side parsing of event handler strings like @click="handler('arg')"
+ * Tests the client-side parsing of event handler strings like dj-click="handler('arg')"
  * into function name and typed arguments.
  */
 

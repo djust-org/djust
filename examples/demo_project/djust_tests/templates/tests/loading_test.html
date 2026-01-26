@@ -9,7 +9,7 @@
 {% block page_title %}@loading Attribute Automated Test{% endblock %}
 
 {% block page_description %}
-Testing @loading.disable, @loading.class, @loading.show, @loading.hide HTML attributes
+Testing dj-loading.disable, dj-loading.class, dj-loading.show, dj-loading.hide HTML attributes
 {% endblock %}
 
 {% block content %}
@@ -84,68 +84,68 @@ Testing @loading.disable, @loading.class, @loading.show, @loading.hide HTML attr
                 Watch for visual feedback (disabled state, opacity changes, spinner visibility).
             </div>
 
-            <h6 class="mt-4 mb-3">Test 1: @loading.disable</h6>
+            <h6 class="mt-4 mb-3">Test 1: dj-loading.disable</h6>
             <p class="text-muted">Button should be disabled during 1-second operation</p>
             <button
                 class="btn btn-primary btn-lg"
-                @click="slow_operation"
-                @loading.disable>
+                dj-click="slow_operation"
+                dj-loading.disable>
                 <i class="bi bi-clock me-2"></i>
                 Slow Operation (1s)
             </button>
 
-            <h6 class="mt-4 mb-3">Test 2: @loading.class="opacity-25"</h6>
+            <h6 class="mt-4 mb-3">Test 2: dj-loading.class="opacity-25"</h6>
             <p class="text-muted">Button should become very transparent during operation (NOT disabled)</p>
             <button
                 class="btn btn-success btn-lg"
-                @click="slow_operation"
-                @loading.class="opacity-25">
+                dj-click="slow_operation"
+                dj-loading.class="opacity-25">
                 <i class="bi bi-lightning me-2"></i>
                 Opacity Effect (stays enabled)
             </button>
 
-            <h6 class="mt-4 mb-3">Test 3: @loading.disable + @loading.class="opacity-25"</h6>
+            <h6 class="mt-4 mb-3">Test 3: dj-loading.disable + dj-loading.class="opacity-25"</h6>
             <p class="text-muted">Button should be disabled AND very transparent</p>
             <button
                 class="btn btn-warning btn-lg"
-                @click="slow_operation"
-                @loading.disable
-                @loading.class="opacity-25">
+                dj-click="slow_operation"
+                dj-loading.disable
+                dj-loading.class="opacity-25">
                 <i class="bi bi-cpu me-2"></i>
                 Combined: disabled + opacity
             </button>
 
-            <h6 class="mt-4 mb-3">Test 4: @loading.show (spinner)</h6>
+            <h6 class="mt-4 mb-3">Test 4: dj-loading.show (spinner)</h6>
             <p class="text-muted">Spinner should appear during operation</p>
             <div class="d-flex align-items-center gap-3">
                 <button
                     class="btn btn-info btn-lg"
-                    @click="fast_operation">
+                    dj-click="fast_operation">
                     <i class="bi bi-play me-2"></i>
                     Fast Operation (100ms)
                 </button>
                 <div
-                    @loading.show
+                    dj-loading.show
                     style="display: none;"
                     class="spinner-border text-primary"
                     role="status">
                     <span class="visually-hidden">Loading...</span>
                 </div>
-                <span @loading.show style="display: none;" class="text-primary">
+                <span dj-loading.show style="display: none;" class="text-primary">
                     Processing...
                 </span>
             </div>
 
-            <h6 class="mt-4 mb-3">Test 5: @loading.hide (content)</h6>
+            <h6 class="mt-4 mb-3">Test 5: dj-loading.hide (content)</h6>
             <p class="text-muted">Content should hide during operation</p>
             <div class="d-flex align-items-center gap-3">
                 <button
                     class="btn btn-secondary btn-lg"
-                    @click="fast_operation">
+                    dj-click="fast_operation">
                     <i class="bi bi-eye-slash me-2"></i>
                     Hide Content Test
                 </button>
-                <div @loading.hide class="alert alert-success mb-0 py-2">
+                <div dj-loading.hide class="alert alert-success mb-0 py-2">
                     This content will disappear during loading
                 </div>
             </div>
@@ -210,10 +210,10 @@ Testing @loading.disable, @loading.class, @loading.show, @loading.hide HTML attr
         <div class="card-body">
             <h6>Available Modifiers:</h6>
             <ul>
-                <li><code class="code-block d-inline">@loading.disable</code> - Disables button/input during loading (also gets Bootstrap's default opacity: 0.65)</li>
-                <li><code class="code-block d-inline">@loading.class="class-name"</code> - Adds CSS class during loading (e.g., opacity-25, border-danger)</li>
-                <li><code class="code-block d-inline">@loading.show</code> - Shows element (display: block) during loading</li>
-                <li><code class="code-block d-inline">@loading.hide</code> - Hides element (display: none) during loading</li>
+                <li><code class="code-block d-inline">dj-loading.disable</code> - Disables button/input during loading (also gets Bootstrap's default opacity: 0.65)</li>
+                <li><code class="code-block d-inline">dj-loading.class="class-name"</code> - Adds CSS class during loading (e.g., opacity-25, border-danger)</li>
+                <li><code class="code-block d-inline">dj-loading.show</code> - Shows element (display: block) during loading</li>
+                <li><code class="code-block d-inline">dj-loading.hide</code> - Hides element (display: none) during loading</li>
             </ul>
 
             <h6 class="mt-3">Visual Differences:</h6>
@@ -308,8 +308,8 @@ function runLoadingTests() {
                 // Test 4: After slow operation completes, test fast operation
                 setTimeout(() => {
                     console.log('[Test] Simulating fast operation click...');
-                    // Find button that has @click="fast_operation"
-                    const fastButton = document.querySelector('button[\\@click="fast_operation"]');
+                    // Find button that has dj-click="fast_operation"
+                    const fastButton = document.querySelector('button[\\dj-click="fast_operation"]');
                     if (fastButton) {
                         fastButton.click();
                         // Wait for fast operation to complete (100ms + buffer)
@@ -323,7 +323,7 @@ function runLoadingTests() {
         } else {
             addClientTest(
                 'Button Disabled During Loading',
-                'Should find button with @loading.disable',
+                'Should find button with dj-loading.disable',
                 'Button not found',
                 false
             );

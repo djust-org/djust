@@ -69,9 +69,9 @@ class HelloView(LiveView):
     template_string = """
     <div>
         <h1>Hello {{ name }}!</h1>
-        <input type="text" @input="update_name" placeholder="Your name" />
+        <input type="text" dj-input="update_name" placeholder="Your name" />
         <p>You clicked {{ clicks }} times</p>
-        <button @click="increment">Click me!</button>
+        <button dj-click="increment">Click me!</button>
     </div>
     """
 
@@ -109,9 +109,9 @@ def increment(self):
 
 ### Event Binding
 ```html
-<button @click="save">Save</button>
-<input @input="on_search" type="text" />
-<form @submit="submit_form">...</form>
+<button dj-click="save">Save</button>
+<input dj-input="on_search" type="text" />
+<form dj-submit="submit_form">...</form>
 ```
 
 ### Template Syntax (Django-compatible)
@@ -151,7 +151,7 @@ Create custom components:
 from djust import Component
 
 class Button(Component):
-    template = '<button @click="clicked">{{ label }}</button>'
+    template = '<button dj-click="clicked">{{ label }}</button>'
 
     def __init__(self, label="Click"):
         self.label = label

@@ -90,7 +90,7 @@ from djust.decorators import optimistic, debounce
 class SliderView(LiveView):
     template_string = """
     <input type="range" min="0" max="100"
-           value="{{ value }}" @input="update_value" />
+           value="{{ value }}" dj-input="update_value" />
     <div>{{ value }}</div>
     """
 
@@ -276,7 +276,7 @@ from djust.decorators import debounce
 
 class SearchView(LiveView):
     template_string = """
-    <input type="text" @input="search" value="{{ query }}" />
+    <input type="text" dj-input="search" value="{{ query }}" />
     <div>
         {% for product in results %}
             <div>{{ product.name }}</div>
@@ -368,7 +368,7 @@ class CounterView(LiveView):
     template_string = """
     <div>
         <span>{{ count }}</span>
-        <button @click="increment">+1</button>
+        <button dj-click="increment">+1</button>
     </div>
     """
 
@@ -477,7 +477,7 @@ from djust.decorators import client_state, debounce, optimistic
 
 class DashboardView(LiveView):
     template_string = """
-    <input type="range" @input="update_temperature" value="{{ temperature }}" />
+    <input type="range" dj-input="update_temperature" value="{{ temperature }}" />
 
     <!-- Components auto-subscribe to 'temperature' -->
     <div data-subscribe="temperature">{{ temperature }}°F</div>
@@ -525,7 +525,7 @@ class CommentFormView(LiveView):
 ```
 
 ```html
-<form @submit="save_comment">
+<form dj-submit="save_comment">
     <textarea id="comment-text" name="comment_text">{{ comment_text }}</textarea>
     <button type="submit">Save</button>
 </form>
@@ -576,7 +576,7 @@ class CommentFormView(DraftModeMixin, LiveView):
     draft_restore = True
 
     template_string = """
-    <form @submit="save_comment">
+    <form dj-submit="save_comment">
         <textarea name="comment_text">{{ comment_text }}</textarea>
         <button type="submit">Save</button>
     </form>
@@ -672,7 +672,7 @@ from djust.decorators import cache, debounce
 
 class AutocompleteView(LiveView):
     template_string = """
-    <input type="text" @input="search" value="{{ query }}" />
+    <input type="text" dj-input="search" value="{{ query }}" />
     <ul>
         {% for result in results %}
             <li>{{ result }}</li>
@@ -713,7 +713,7 @@ class FormView(LiveView):
 ```
 
 ```html
-<form @submit="save_data">
+<form dj-submit="save_data">
     <input type="text" name="title" />
     <button id="submit-btn">Save</button>
     <div id="loading" style="display: none;">Saving...</div>
@@ -754,7 +754,7 @@ document.addEventListener('liveview:error', () => {
 ```python
 class FormView(LiveView):
     template_string = """
-    <form @submit="save_data">
+    <form dj-submit="save_data">
         <input type="text" name="title" />
         <button type="submit" @loading-text="Saving...">Save</button>
         <div @loading>Processing your request...</div>
@@ -853,16 +853,16 @@ class ProductSearchView(DraftModeMixin, LiveView):
 
     template_string = """
     <div>
-        <input type="text" @input="search" value="{{ query }}"
+        <input type="text" dj-input="search" value="{{ query }}"
                placeholder="Search products..." />
 
-        <select @change="apply_filters" name="category">
+        <select dj-change="apply_filters" name="category">
             <option value="">All Categories</option>
             <option value="electronics">Electronics</option>
             <option value="clothing">Clothing</option>
         </select>
 
-        <input type="number" @change="apply_filters"
+        <input type="number" dj-change="apply_filters"
                name="min_price" value="{{ min_price }}" />
 
         <div @loading>Searching...</div>

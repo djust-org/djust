@@ -234,7 +234,7 @@ class SettingsView(LiveView):
 ```html
 <div class="container">
     <h1>Settings</h1>
-    <form @submit="save_settings">
+    <form dj-submit="save_settings">
         {{ theme_radio.render|safe }}
         <button type="submit" class="btn btn-primary">Save</button>
     </form>

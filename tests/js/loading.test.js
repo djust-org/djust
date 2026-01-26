@@ -18,10 +18,10 @@ describe('LoadingManager', () => {
 
         // Create mock DOM element
         document.body.innerHTML = `
-            <button id="save-btn" @loading.disable>Save</button>
-            <button id="submit-btn" @loading.class="opacity-50">Submit</button>
-            <div id="spinner" @loading.show style="display: none;">Loading...</div>
-            <div id="content" @loading.hide>Form Content</div>
+            <button id="save-btn" dj-loading.disable>Save</button>
+            <button id="submit-btn" dj-loading.class="opacity-50">Submit</button>
+            <div id="spinner" dj-loading.show style="display: none;">Loading...</div>
+            <div id="content" dj-loading.hide>Form Content</div>
         `;
 
         mockElement = document.getElementById('save-btn');
@@ -36,7 +36,7 @@ describe('LoadingManager', () => {
     // ========================================================================
 
     describe('register', () => {
-        it('should register element with @loading.disable', () => {
+        it('should register element with dj-loading.disable', () => {
             const btn = document.getElementById('save-btn');
             manager.register(btn, 'save');
 
@@ -46,16 +46,16 @@ describe('LoadingManager', () => {
             expect(config.modifiers).toContainEqual({ type: 'disable' });
         });
 
-        it('should register element with @loading.class', () => {
+        it('should register element with dj-loading.class', () => {
             const btn = document.getElementById('submit-btn');
-            btn.setAttribute('@loading.class', 'opacity-50');
+            btn.setAttribute('dj-loading.class', 'opacity-50');
             manager.register(btn, 'submit');
 
             const config = manager.loadingElements.get(btn);
             expect(config.modifiers).toContainEqual({ type: 'class', value: 'opacity-50' });
         });
 
-        it('should register element with @loading.show', () => {
+        it('should register element with dj-loading.show', () => {
             const spinner = document.getElementById('spinner');
             manager.register(spinner, 'save');
 
@@ -63,7 +63,7 @@ describe('LoadingManager', () => {
             expect(config.modifiers).toContainEqual({ type: 'show' });
         });
 
-        it('should register element with @loading.hide', () => {
+        it('should register element with dj-loading.hide', () => {
             const content = document.getElementById('content');
             manager.register(content, 'save');
 
@@ -80,7 +80,7 @@ describe('LoadingManager', () => {
             expect(config.originalState.disabled).toBe(true);
         });
 
-        it('should not register element without @loading attributes', () => {
+        it('should not register element without dj-loading attributes', () => {
             const btn = document.createElement('button');
             manager.register(btn, 'save');
 
@@ -89,8 +89,8 @@ describe('LoadingManager', () => {
 
         it('should register multiple modifiers on same element', () => {
             const btn = document.createElement('button');
-            btn.setAttribute('@loading.disable', '');
-            btn.setAttribute('@loading.class', 'loading');
+            btn.setAttribute('dj-loading.disable', '');
+            btn.setAttribute('dj-loading.class', 'loading');
             manager.register(btn, 'save');
 
             const config = manager.loadingElements.get(btn);
@@ -136,7 +136,7 @@ describe('LoadingManager', () => {
             expect(btn2.disabled).toBe(false);
         });
 
-        it('should show element with @loading.show', () => {
+        it('should show element with dj-loading.show', () => {
             const spinner = document.getElementById('spinner');
             manager.register(spinner, 'save');
 
@@ -147,7 +147,7 @@ describe('LoadingManager', () => {
             expect(spinner.style.display).toBe('block');
         });
 
-        it('should hide element with @loading.hide', () => {
+        it('should hide element with dj-loading.hide', () => {
             const content = document.getElementById('content');
             manager.register(content, 'save');
 
@@ -158,9 +158,9 @@ describe('LoadingManager', () => {
             expect(content.style.display).toBe('none');
         });
 
-        it('should add class with @loading.class', () => {
+        it('should add class with dj-loading.class', () => {
             const btn = document.getElementById('submit-btn');
-            btn.setAttribute('@loading.class', 'opacity-50');
+            btn.setAttribute('dj-loading.class', 'opacity-50');
             manager.register(btn, 'submit');
 
             expect(btn.classList.contains('opacity-50')).toBe(false);
@@ -206,9 +206,9 @@ describe('LoadingManager', () => {
             expect(spinner.style.display).toBe(originalDisplay);
         });
 
-        it('should remove class with @loading.class', () => {
+        it('should remove class with dj-loading.class', () => {
             const btn = document.getElementById('submit-btn');
-            btn.setAttribute('@loading.class', 'opacity-50');
+            btn.setAttribute('dj-loading.class', 'opacity-50');
             manager.register(btn, 'submit');
 
             manager.startLoading('submit');
@@ -319,7 +319,7 @@ describe('LoadingManager', () => {
     describe('error handling', () => {
         it('should handle element with no style gracefully', () => {
             const div = document.createElement('div');
-            div.setAttribute('@loading.show', '');
+            div.setAttribute('dj-loading.show', '');
             manager.register(div, 'save');
 
             expect(() => manager.startLoading('save')).not.toThrow();
@@ -350,7 +350,7 @@ describe('globalLoadingManager', () => {
 
     it('should be cleared by clearAllState', () => {
         const btn = document.createElement('button');
-        btn.setAttribute('@loading.disable', '');
+        btn.setAttribute('dj-loading.disable', '');
         globalLoadingManager.register(btn, 'save');
         globalLoadingManager.startLoading('save');
 
@@ -369,10 +369,10 @@ describe('Integration scenarios', () => {
         clearAllState();
         document.body.innerHTML = `
             <form>
-                <button id="save" @loading.disable @loading.class="loading">Save</button>
-                <button id="cancel" @loading.hide>Cancel</button>
-                <div id="spinner" @loading.show style="display: none;">Saving...</div>
-                <div id="form" @loading.hide>Form fields</div>
+                <button id="save" dj-loading.disable dj-loading.class="loading">Save</button>
+                <button id="cancel" dj-loading.hide>Cancel</button>
+                <div id="spinner" dj-loading.show style="display: none;">Saving...</div>
+                <div id="form" dj-loading.hide>Form fields</div>
             </form>
         `;
     });
@@ -422,8 +422,8 @@ describe('Integration scenarios', () => {
         const btn1 = document.getElementById('save');
         const btn2 = document.getElementById('cancel');
 
-        btn1.setAttribute('@loading.disable', '');
-        btn2.setAttribute('@loading.disable', '');
+        btn1.setAttribute('dj-loading.disable', '');
+        btn2.setAttribute('dj-loading.disable', '');
 
         globalLoadingManager.register(btn1, 'save');
         globalLoadingManager.register(btn2, 'delete');

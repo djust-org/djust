@@ -239,7 +239,7 @@ Only **public variables** (not starting with `_`) are shown. This follows the JI
 2. Click **Event Handlers** tab
 3. Browse available handlers
 4. Note parameter names and types
-5. Use in template with `@click="handler_name"` or `@input="handler_name"`
+5. Use in template with `dj-click="handler_name"` or `dj-input="handler_name"`
 
 **Example**:
 ```
@@ -247,7 +247,7 @@ Debug Panel shows:
   filter_by_status(value: str = "all")
 
 Template:
-  <select @change="filter_by_status">
+  <select dj-change="filter_by_status">
     <option value="all">All</option>
     <option value="active">Active</option>
   </select>
@@ -274,7 +274,7 @@ Event History shows:
 Event Handlers shows:
   search(value: str = "")      ✅ Expects "value"
 
-Solution: Use @input="search" with parameter name "value"
+Solution: Use dj-input="search" with parameter name "value"
 ```
 
 ### Workflow 3: Performance Optimization

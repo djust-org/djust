@@ -360,13 +360,13 @@
                                 <div class="text-8xl lg:text-9xl font-black gradient-text tabular-nums">{{ counter }}</div>
                             </div>
                             <div class="flex flex-wrap justify-center gap-3">
-                                <button @click="decrement" class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-slate-800 bg-slate-900 text-slate-50 hover:bg-slate-800 h-11 px-6">
+                                <button dj-click="decrement" class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-slate-800 bg-slate-900 text-slate-50 hover:bg-slate-800 h-11 px-6">
                                     Decrement
                                 </button>
-                                <button @click="reset" class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-slate-800 bg-slate-900 text-slate-50 hover:bg-slate-800 h-11 px-6">
+                                <button dj-click="reset" class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-slate-800 bg-slate-900 text-slate-50 hover:bg-slate-800 h-11 px-6">
                                     Reset
                                 </button>
-                                <button @click="increment" class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-slate-50 text-slate-900 hover:bg-slate-200 h-11 px-6">
+                                <button dj-click="increment" class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-slate-50 text-slate-900 hover:bg-slate-200 h-11 px-6">
                                     Increment
                                 </button>
                             </div>
@@ -508,7 +508,7 @@
 
                     <div class="rounded-lg border border-slate-800 bg-slate-900 shadow-sm demo-card-hover p-12">
                         <div class="relative w-full max-w-md mx-auto">
-                            <button @click="toggle_dropdown" class="flex w-full items-center justify-between rounded-md border border-slate-700 bg-slate-950 px-4 py-3 text-sm font-medium text-slate-50 hover:border-slate-600 transition-colors focus-ring">
+                            <button dj-click="toggle_dropdown" class="flex w-full items-center justify-between rounded-md border border-slate-700 bg-slate-950 px-4 py-3 text-sm font-medium text-slate-50 hover:border-slate-600 transition-colors focus-ring">
                                 <span>{{ selected_item }}</span>
                                 <svg class="w-5 h-5 transition-transform {% if dropdown_open %}rotate-180{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
@@ -517,7 +517,7 @@
                             {% if dropdown_open %}
                             <div class="absolute top-full left-0 right-0 mt-2 rounded-md border border-slate-800 bg-slate-900 shadow-lg overflow-hidden z-50">
                                 {% for item in dropdown_items %}
-                                <div @click="select_item" data-item="{{ item }}" class="px-4 py-3 text-sm text-slate-50 hover:bg-slate-800 cursor-pointer transition-colors">
+                                <div dj-click="select_item" data-item="{{ item }}" class="px-4 py-3 text-sm text-slate-50 hover:bg-slate-800 cursor-pointer transition-colors">
                                     {{ item }}
                                 </div>
                                 {% endfor %}
@@ -563,7 +563,7 @@
                             <input
                                 type="text"
                                 class="flex h-14 w-full rounded-md border border-slate-700 bg-slate-950 px-4 py-2 text-lg ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 text-slate-50"
-                                @input="debounce_search"
+                                dj-input="debounce_search"
                                 placeholder="Type something rapidly..."
                                 value="{{ debounce_query }}"
                             >
@@ -715,7 +715,7 @@
                             <input
                                 type="text"
                                 class="flex h-14 w-full rounded-md border border-slate-700 bg-slate-950 px-4 py-2 text-lg ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 text-slate-50"
-                                @input="cache_search"
+                                dj-input="cache_search"
                                 placeholder="Try: laptop, mouse, keyboard..."
                                 value="{{ cache_query }}"
                             >

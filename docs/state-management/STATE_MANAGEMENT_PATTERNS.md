@@ -51,8 +51,8 @@ Use this guide when:
 | Dropdown with many options | `@cache(ttl=600)` | Avoid re-fetching static data |
 | Multi-widget dashboard | `@client_state` | Coordinate component updates |
 | Long form (comment, article) | `DraftModeMixin` | Prevent data loss |
-| Submit button | `@loading.disable + @loading.class` | Disable button + visual feedback |
-| AJAX loading spinner | `@loading.show` | Show/hide spinner during requests |
+| Submit button | `dj-loading.disable + dj-loading.class` | Disable button + visual feedback |
+| AJAX loading spinner | `dj-loading.show` | Show/hide spinner during requests |
 
 ### Flow Chart
 
@@ -98,7 +98,7 @@ from djust.decorators import debounce
 class ProductSearchView(LiveView):
     template_string = """
     <input type="text"
-           @input="search"
+           dj-input="search"
            placeholder="Search products..."
            value="{{ query }}" />
 
@@ -182,9 +182,9 @@ from djust.decorators import optimistic
 class CounterView(LiveView):
     template_string = """
     <div class="counter">
-        <button @click="decrement">-</button>
+        <button dj-click="decrement">-</button>
         <span class="count">{{ count }}</span>
-        <button @click="increment">+</button>
+        <button dj-click="increment">+</button>
     </div>
     """
 
@@ -263,7 +263,7 @@ class BlogPostEditor(DraftModeMixin, LiveView):
     draft_restore = True
 
     template_string = """
-    <form @submit="publish_post">
+    <form dj-submit="publish_post">
         <input type="text"
                name="title"
                placeholder="Post title..."
@@ -351,7 +351,7 @@ class TemperatureDashboard(LiveView):
         <input type="range"
                min="0" max="120"
                value="{{ temperature }}"
-               @input="update_temperature" />
+               dj-input="update_temperature" />
 
         <!-- Multiple displays subscribe to 'temperature' -->
         <div id="display" data-subscribe="temperature">
@@ -429,7 +429,7 @@ from djust.decorators import cache, debounce
 class LanguageAutocomplete(LiveView):
     template_string = """
     <input type="text"
-           @input="search"
+           dj-input="search"
            placeholder="Search languages..."
            value="{{ query }}" />
 
@@ -517,7 +517,7 @@ class ColorSliderView(LiveView):
         <input type="range"
                min="0" max="360"
                value="{{ hue }}"
-               @input="update_hue" />
+               dj-input="update_hue" />
 
         <div class="stats">
             Client updates: <span id="client-count">0</span><br>
@@ -585,17 +585,17 @@ from djust import LiveView
 
 class FormSubmitView(LiveView):
     template_string = """
-    <form @submit="save_data">
+    <form dj-submit="save_data">
         <input type="text" name="title" />
 
         <div class="d-flex align-items-center gap-3">
             <!-- Button becomes disabled and semi-transparent -->
-            <button type="submit" @loading.disable @loading.class="opacity-25">
+            <button type="submit" dj-loading.disable dj-loading.class="opacity-25">
                 Save
             </button>
 
             <!-- Spinner shows during loading -->
-            <div @loading.show style="display: none;" class="spinner-border text-primary" role="status">
+            <div dj-loading.show style="display: none;" class="spinner-border text-primary" role="status">
                 <span class="visually-hidden">Saving...</span>
             </div>
         </div>
@@ -664,18 +664,18 @@ Ensure loading states are announced:
 
 ```html
 <div class="d-flex gap-2">
-    <button @loading.disable aria-busy="false">
+    <button dj-loading.disable aria-busy="false">
         Save
     </button>
 
     <!-- Screen reader will announce this when it appears -->
-    <div @loading.show style="display: none;" aria-live="polite" role="status">
+    <div dj-loading.show style="display: none;" aria-live="polite" role="status">
         Saving...
     </div>
 </div>
 ```
 
-**Note:** Use `aria-live="polite"` on elements with `@loading.show` to announce state changes to screen reader users.
+**Note:** Use `aria-live="polite"` on elements with `dj-loading.show` to announce state changes to screen reader users.
 
 ---
 

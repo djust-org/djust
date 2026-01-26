@@ -124,7 +124,7 @@ Testing localStorage auto-save with 500ms debounce, auto-restore, and draft clea
             <div class="d-flex gap-2">
                 <button
                     class="btn btn-primary"
-                    @click="save_article"
+                    dj-click="save_article"
                     data-title="title"
                     data-content="content"
                     data-author="author"
@@ -134,7 +134,7 @@ Testing localStorage auto-save with 500ms debounce, auto-restore, and draft clea
                 </button>
                 <button
                     class="btn btn-outline-secondary"
-                    @click="discard_draft"
+                    dj-click="discard_draft"
                 >
                     <i class="bi bi-trash me-2"></i>
                     Discard Draft

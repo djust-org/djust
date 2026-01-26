@@ -3016,8 +3016,8 @@ class CounterActorView(LiveView):
 <!-- demo_app/templates/counter.html -->
 <div data-liveview-root>
     <h1>Counter: {{ count }}</h1>
-    <button @click="increment">+</button>
-    <button @click="decrement">-</button>
+    <button dj-click="increment">+</button>
+    <button dj-click="decrement">-</button>
 </div>
 ```
 
@@ -3068,7 +3068,7 @@ class ChatActorView(LiveView):
         {% endfor %}
     </div>
 
-    <form @submit="send_message">
+    <form dj-submit="send_message">
         <input name="message" type="text" placeholder="Type a message..." />
         <button type="submit">Send</button>
     </form>

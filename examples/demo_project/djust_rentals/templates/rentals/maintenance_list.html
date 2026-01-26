@@ -20,7 +20,7 @@
             </div>
           </label>
           <input type="text"
-                 @input="search"
+                 dj-input="search"
                  value="{{ search_query }}"
                  placeholder="Search by title, description, or property..."
                  class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
@@ -34,7 +34,7 @@
               Priority
             </div>
           </label>
-          <select @change="filter_by_priority"
+          <select dj-change="filter_by_priority"
                   class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
             <option value="all" {% if filter_priority == 'all' %}selected{% endif %}>All Priorities</option>
             {% for val, label in priority_choices %}
@@ -51,7 +51,7 @@
               Status
             </div>
           </label>
-          <select @change="filter_by_status"
+          <select dj-change="filter_by_status"
                   class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
             <option value="pending" {% if filter_status == 'pending' %}selected{% endif %}>Pending (Open + In Progress)</option>
             <option value="all" {% if filter_status == 'all' %}selected{% endif %}>All Statuses</option>
@@ -69,7 +69,7 @@
               Sort By
             </div>
           </label>
-          <select @change="sort_requests"
+          <select dj-change="sort_requests"
                   class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
             <option value="created" {% if sort_by == 'created' %}selected{% endif %}>Date Created</option>
             <option value="priority" {% if sort_by == 'priority' %}selected{% endif %}>Priority</option>

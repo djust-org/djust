@@ -127,7 +127,7 @@ class CounterView(LiveView):
     template_string = """
     &lt;div&gt;
         &lt;h1&gt;Count: &#123;&#123; count &#125;&#125;&lt;/h1&gt;  &lt;!-- self.count is auto-available --&gt;
-        &lt;button @click="increment"&gt;+1&lt;/button&gt;
+        &lt;button dj-click="increment"&gt;+1&lt;/button&gt;
     &lt;/div&gt;
     """
 
@@ -370,7 +370,7 @@ class DashboardView(LiveView):
     &lt;div&gt;
         &lt;h1&gt;Dashboard &#123;&#123; badge.render &#125;&#125;&lt;/h1&gt;
 
-        &lt;button @click="add_notification"&gt;Add Notification&lt;/button&gt;
+        &lt;button dj-click="add_notification"&gt;Add Notification&lt;/button&gt;
 
         &#123;&#123; notification_list.render &#125;&#125;
     &lt;/div&gt;
@@ -464,7 +464,7 @@ class ProductListView(LiveView):
                         <span>products.html</span>
                         <span class="code-badge-modern">Template</span>
                     </div>
-                    <pre class="bg-white p-4" style="background: rgba(0, 0, 0, 0.2) !important;"><code class="language-html">&lt;input @input="on_search"
+                    <pre class="bg-white p-4" style="background: rgba(0, 0, 0, 0.2) !important;"><code class="language-html">&lt;input dj-input="on_search"
        placeholder="Search..."&gt;
 
 &#123;% for product in products %&#125;
@@ -616,7 +616,7 @@ export default function ProductList() {
                     <div style="font-size: 3rem; font-weight: 800; color: var(--color-accent);" id="counter-display">
                         {{ demo_counter }}
                     </div>
-                    <button @click="increment_counter" style="background: var(--color-accent); color: white; border: none; padding: 0.75rem 2rem; border-radius: var(--radius-md); font-size: 1rem; font-weight: 600; cursor: pointer; transition: all var(--transition-fast);" onmouseover="this.style.background='#2563eb'; this.style.transform='translateY(-2px)'" onmouseout="this.style.background='var(--color-accent)'; this.style.transform='translateY(0)'">
+                    <button dj-click="increment_counter" style="background: var(--color-accent); color: white; border: none; padding: 0.75rem 2rem; border-radius: var(--radius-md); font-size: 1rem; font-weight: 600; cursor: pointer; transition: all var(--transition-fast);" onmouseover="this.style.background='#2563eb'; this.style.transform='translateY(-2px)'" onmouseout="this.style.background='var(--color-accent)'; this.style.transform='translateY(0)'">
                         Click to Increment
                     </button>
                     <div class="text-xs" style="color: var(--color-text-subtle);">
@@ -639,7 +639,7 @@ export default function ProductList() {
                 <div class="p-6" style="background: var(--color-bg); min-height: 200px;">
                     <input
                         type="text"
-                        @input="on_search_demo"
+                        dj-input="on_search_demo"
                         placeholder="Search programming languages..."
                         style="width: 100%; padding: 0.75rem 1rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg-elevated); color: var(--color-text); font-size: 0.875rem; margin-bottom: 1rem;"
                         value="{{ search_query }}"
@@ -672,7 +672,7 @@ export default function ProductList() {
                     </p>
                 </div>
                 <div class="p-6" style="background: var(--color-bg); min-height: 200px;">
-                    <form @submit="add_todo" style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                    <form dj-submit="add_todo" style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
                         <input
                             type="text"
                             name="todo_text"
@@ -687,11 +687,11 @@ export default function ProductList() {
                         {% if demo_todos %}
                             {% for todo in demo_todos %}
                             <div style="display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: var(--radius-sm);">
-                                <input type="checkbox" {% if todo.done %}checked{% endif %} @change="toggle_todo" data-index="{{ forloop.counter0 }}" style="cursor: pointer;">
+                                <input type="checkbox" {% if todo.done %}checked{% endif %} dj-change="toggle_todo" data-index="{{ forloop.counter0 }}" style="cursor: pointer;">
                                 <span style="flex: 1; color: var(--color-text); font-size: 0.875rem; {% if todo.done %}text-decoration: line-through; opacity: 0.6;{% endif %}">
                                     {{ todo.text }}
                                 </span>
-                                <button @click="delete_todo" data-index="{{ forloop.counter0 }}" style="background: transparent; border: 1px solid var(--color-border); color: var(--color-error); padding: 0.375rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.75rem; cursor: pointer; transition: all var(--transition-fast);" onmouseover="this.style.background='var(--color-error)'; this.style.color='white'; this.style.borderColor='var(--color-error)';" onmouseout="this.style.background='transparent'; this.style.color='var(--color-error)'; this.style.borderColor='var(--color-border)';">
+                                <button dj-click="delete_todo" data-index="{{ forloop.counter0 }}" style="background: transparent; border: 1px solid var(--color-border); color: var(--color-error); padding: 0.375rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.75rem; cursor: pointer; transition: all var(--transition-fast);" onmouseover="this.style.background='var(--color-error)'; this.style.color='white'; this.style.borderColor='var(--color-error)';" onmouseout="this.style.background='transparent'; this.style.color='var(--color-error)'; this.style.borderColor='var(--color-border)';">
                                     Delete
                                 </button>
                             </div>
@@ -740,12 +740,12 @@ export default function ProductList() {
             </p>
 
             <div class="flex gap-3 justify-center items-center mb-4">
-                <button @click="increment_notifications"
+                <button dj-click="increment_notifications"
                         class="btn-primary-modern px-6 py-3 text-lg font-semibold">
                     <span class="text-xl mr-2">🔔</span>
                     Add Notification
                 </button>
-                <button @click="reset_notifications"
+                <button dj-click="reset_notifications"
                         class="btn-secondary-modern px-6 py-3 text-lg font-semibold">
                     <span class="text-xl mr-2">🔄</span>
                     Reset

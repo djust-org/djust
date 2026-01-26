@@ -630,11 +630,11 @@ urlpatterns = [
                 <h3>Event Handlers</h3>
                 <p>Define methods to handle user interactions:</p>
                 <pre><code class="language-python">def increment(self):
-    """Called when element with @click="increment" is clicked"""
+    """Called when element with dj-click="increment" is clicked"""
     self.counter += 1
 
 def handle_submit(self):
-    """Called when form with @submit="handle_submit" is submitted"""
+    """Called when form with dj-submit="handle_submit" is submitted"""
     # Access form data via self.form_data
     query = self.form_data.get('query', '')
     self.results = search(query)
@@ -772,22 +772,22 @@ self.alert_success = AlertComponent(message="Success!")
                         <tr>
                             <td><code>@click</code></td>
                             <td>Handle click events</td>
-                            <td><code>&lt;button @click="increment"&gt;</code></td>
+                            <td><code>&lt;button dj-click="increment"&gt;</code></td>
                         </tr>
                         <tr>
                             <td><code>@submit</code></td>
                             <td>Handle form submissions</td>
-                            <td><code>&lt;form @submit="handle_submit"&gt;</code></td>
+                            <td><code>&lt;form dj-submit="handle_submit"&gt;</code></td>
                         </tr>
                         <tr>
                             <td><code>@change</code></td>
                             <td>Handle input changes</td>
-                            <td><code>&lt;input @change="validate_field"&gt;</code></td>
+                            <td><code>&lt;input dj-change="validate_field"&gt;</code></td>
                         </tr>
                         <tr>
                             <td><code>@input</code></td>
                             <td>Handle input while typing</td>
-                            <td><code>&lt;input @input="live_search"&gt;</code></td>
+                            <td><code>&lt;input dj-input="live_search"&gt;</code></td>
                         </tr>
                     </tbody>
                 </table>
@@ -796,7 +796,7 @@ self.alert_success = AlertComponent(message="Success!")
                 <p>Pass data to event handlers using <code>data-*</code> attributes:</p>
                 <pre><code class="language-html">&lt;!-- Template --&gt;
 &lt;button
-    @click="delete_item"
+    dj-click="delete_item"
     data-item-id="&#123;&#123; item.id &#125;&#125;"
     data-confirm="true"
 &gt;
@@ -870,7 +870,7 @@ class ContactFormView(LiveView):
 {&#37; load djust &#37;}
 
 &lt;div data-liveview-root&gt;
-    &lt;form @submit="handle_submit"&gt;
+    &lt;form dj-submit="handle_submit"&gt;
         {&#37; auto_form form framework="bootstrap5" &#37;}
 
         &lt;button type="submit" class="btn btn-primary"&gt;Submit&lt;/button&gt;
@@ -913,7 +913,7 @@ class ContactFormView(LiveView):
                 <pre><code class="language-html">&lt;input
     type="text"
     name="username"
-    @change="validate_username"
+    dj-change="validate_username"
     class="form-control"
 &gt;
 {&#37; if username_error &#37;}
@@ -990,7 +990,7 @@ def mount(self, request):
 {&#37; for item in items &#37;}
     &lt;div class="item"&gt;
         &lt;h3&gt;&#123;&#123; item.title &#125;&#125;&lt;/h3&gt;
-        &lt;button @click="delete" data-item-id="&#123;&#123; item.id &#125;&#125;"&gt;Delete&lt;/button&gt;
+        &lt;button dj-click="delete" data-item-id="&#123;&#123; item.id &#125;&#125;"&gt;Delete&lt;/button&gt;
     &lt;/div&gt;
 {&#37; empty &#37;}
     &lt;p&gt;No items found.&lt;/p&gt;
@@ -1133,7 +1133,7 @@ class UserCardComponent(LiveComponent):
 
         {&#37; if show_actions &#37;}
             &lt;button
-                @click="toggle_follow"
+                dj-click="toggle_follow"
                 class="btn btn-{&#37; if is_following &#37;}secondary{&#37; else &#37;}primary{&#37; endif &#37;}"
             &gt;
                 {&#37; if is_following &#37;}Unfollow{&#37; else &#37;}Follow{&#37; endif &#37;}
@@ -1237,7 +1237,7 @@ class ProfileView(LiveView):
                 <p>Apply classes conditionally based on state:</p>
                 <pre><code class="language-html">&lt;button
     class="btn {&#37; if is_active &#37;}btn-primary{&#37; else &#37;}btn-secondary{&#37; endif &#37;}"
-    @click="toggle"
+    dj-click="toggle"
 &gt;
     Toggle
 &lt;/button&gt;
@@ -1495,22 +1495,22 @@ uvicorn myproject.asgi:application --host 0.0.0.0 --port 8000 --workers 4</code>
                         <tr>
                             <td><code>@click</code></td>
                             <td>Element clicked</td>
-                            <td><code>&lt;button @click="increment"&gt;</code></td>
+                            <td><code>&lt;button dj-click="increment"&gt;</code></td>
                         </tr>
                         <tr>
                             <td><code>@submit</code></td>
                             <td>Form submitted</td>
-                            <td><code>&lt;form @submit="handle_form"&gt;</code></td>
+                            <td><code>&lt;form dj-submit="handle_form"&gt;</code></td>
                         </tr>
                         <tr>
                             <td><code>@change</code></td>
                             <td>Input value changed</td>
-                            <td><code>&lt;select @change="filter"&gt;</code></td>
+                            <td><code>&lt;select dj-change="filter"&gt;</code></td>
                         </tr>
                         <tr>
                             <td><code>@input</code></td>
                             <td>Input while typing</td>
-                            <td><code>&lt;input @input="search"&gt;</code></td>
+                            <td><code>&lt;input dj-input="search"&gt;</code></td>
                         </tr>
                     </tbody>
                 </table>

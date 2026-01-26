@@ -254,12 +254,12 @@ class ProductSearchView(LiveView):
         <input
             type="text"
             name="query"
-            @input="search"
+            dj-input="search"
             value="{{ query }}"
             placeholder="Search products..."
         />
 
-        <select @change="search" name="category">
+        <select dj-change="search" name="category">
             {% for value, label in categories %}
             <option value="{{ value }}" {% if value == category %}selected{% endif %}>
                 {{ label }}
@@ -269,7 +269,7 @@ class ProductSearchView(LiveView):
 
         <input
             type="range"
-            @input="search"
+            dj-input="search"
             name="min_price"
             value="{{ min_price }}"
             min="0"
@@ -388,14 +388,14 @@ class ShoppingCartView(LiveView):
 
             <input
                 type="number"
-                @input="update_quantity"
+                dj-input="update_quantity"
                 data-item-id="{{ item.id }}"
                 value="{{ item.quantity }}"
                 min="0"
             />
 
             <button
-                @click="remove_item"
+                dj-click="remove_item"
                 data-item-id="{{ item.id }}"
             >
                 Remove
@@ -405,7 +405,7 @@ class ShoppingCartView(LiveView):
 
         <div class="total">
             <h2>Total: ${{ total }}</h2>
-            <button @click="clear_cart">Clear Cart</button>
+            <button dj-click="clear_cart">Clear Cart</button>
         </div>
     </div>
     {% djust_body %}
@@ -590,10 +590,10 @@ class LiveChatView(DraftModeMixin, LiveView):
             {% endfor %}
         </div>
 
-        <form @submit="send_message">
+        <form dj-submit="send_message">
             <input
                 type="text"
-                @input="typing_indicator"
+                dj-input="typing_indicator"
                 name="message"
                 data-draft="true"
                 value="{{ message }}"
@@ -745,14 +745,14 @@ class DashboardView(LiveView):
 <body>
     <div class="dashboard">
         <div class="controls">
-            <select @change="change_period">
+            <select dj-change="change_period">
                 <option value="24h" {% if period == "24h" %}selected{% endif %}>Last 24 Hours</option>
                 <option value="7d" {% if period == "7d" %}selected{% endif %}>Last 7 Days</option>
                 <option value="30d" {% if period == "30d" %}selected{% endif %}>Last 30 Days</option>
             </select>
 
             <button
-                @click="refresh"
+                dj-click="refresh"
                 @loading-text="Refreshing..."
             >
                 Refresh
@@ -913,7 +913,7 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
         <div class="alert alert-success">{{ success_message }}</div>
         {% endif %}
 
-        <form @submit="handle_form_submit">
+        <form dj-submit="handle_form_submit">
             {{ form.as_p }}
 
             <button

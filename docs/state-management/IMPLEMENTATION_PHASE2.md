@@ -431,7 +431,7 @@ class DebounceSearchView(LiveView):
     template_string = """
     <div>
         <h2>Debounce Demo</h2>
-        <input type="text" @input="search" placeholder="Search...">
+        <input type="text" dj-input="search" placeholder="Search...">
         <p>Search query: {{ query }}</p>
         <p>Search count: {{ search_count }}</p>
     </div>

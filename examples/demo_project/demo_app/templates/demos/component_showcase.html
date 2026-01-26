@@ -90,8 +90,8 @@
                             <h5 class="font-bold mb-3" style="color: var(--color-accent);">Counter</h5>
                             <div class="text-4xl font-bold mb-3" style="color: var(--color-text);">{{ counter }}</div>
                             <div class="flex gap-2 justify-center">
-                                <button class="btn btn-sm btn-primary" @click="decrement">-</button>
-                                <button class="btn btn-sm btn-primary" @click="increment">+</button>
+                                <button class="btn btn-sm btn-primary" dj-click="decrement">-</button>
+                                <button class="btn btn-sm btn-primary" dj-click="increment">+</button>
                             </div>
                         </div>
 
@@ -99,7 +99,7 @@
                         <div class="p-4 rounded-lg text-center" style="background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.2);">
                             <h5 class="font-bold mb-3" style="color: var(--color-success);">Toggle Switch</h5>
                             <div class="text-3xl mb-3">{% if switch_enabled %}✅{% else %}⭕{% endif %}</div>
-                            <button class="btn btn-sm btn-success" @click="toggle_switch">Toggle</button>
+                            <button class="btn btn-sm btn-success" dj-click="toggle_switch">Toggle</button>
                             <div class="mt-2 text-sm" style="color: var(--color-text-muted);">
                                 State: <strong>{% if switch_enabled %}ON{% else %}OFF{% endif %}</strong>
                             </div>

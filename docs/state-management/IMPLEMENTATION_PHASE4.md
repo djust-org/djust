@@ -146,7 +146,7 @@ class TodoListComponent(LiveComponent):
     template_string = """
         <div class="todo-list">
             {% for item in items %}
-            <div @click="toggle_todo" data-id="{{ item.id }}">
+            <div dj-click="toggle_todo" data-id="{{ item.id }}">
                 {{ item.text }}
             </div>
             {% endfor %}

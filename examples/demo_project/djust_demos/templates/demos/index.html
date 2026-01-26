@@ -409,9 +409,9 @@
                             {{ counter }}
                         </div>
                         <div style="display: flex; gap: 1rem; justify-content: center;">
-                            <button @click="decrement" class="btn btn-outline-primary">Decrement</button>
-                            <button @click="reset" class="btn btn-outline-secondary">Reset</button>
-                            <button @click="increment" class="btn btn-primary">Increment</button>
+                            <button dj-click="decrement" class="btn btn-outline-primary">Decrement</button>
+                            <button dj-click="reset" class="btn btn-outline-secondary">Reset</button>
+                            <button dj-click="increment" class="btn btn-primary">Increment</button>
                         </div>
                     </div>
                 </div>
@@ -468,14 +468,14 @@
                 <!-- Live Demo -->
                 <div class="demo-live">
                     <div class="dropdown">
-                        <button @click="toggle_dropdown" class="dropdown-toggle">
+                        <button dj-click="toggle_dropdown" class="dropdown-toggle">
                             <span>{{ selected_item }}</span>
                             <span style="margin-left: 0.5rem;">{% if dropdown_open %}▲{% else %}▼{% endif %}</span>
                         </button>
                         {% if dropdown_open %}
                         <div class="dropdown-menu">
                             {% for item in dropdown_items %}
-                            <div @click="select_item" data-item="{{ item }}" class="dropdown-item">
+                            <div dj-click="select_item" data-item="{{ item }}" class="dropdown-item">
                                 {{ item }}
                             </div>
                             {% endfor %}
@@ -540,7 +540,7 @@
                         <input
                             type="text"
                             class="form-control form-control-lg"
-                            @input="debounce_search"
+                            dj-input="debounce_search"
                             placeholder="Type something..."
                             value="{{ debounce_query }}"
                             style="background: var(--color-bg); color: var(--color-text); border-color: var(--color-border);"
@@ -620,7 +620,7 @@
                         <input
                             type="text"
                             class="form-control form-control-lg"
-                            @input="cache_search"
+                            dj-input="cache_search"
                             placeholder="Try: laptop, mouse, keyboard..."
                             value="{{ cache_query }}"
                             style="background: var(--color-bg); color: var(--color-text); border-color: var(--color-border);"

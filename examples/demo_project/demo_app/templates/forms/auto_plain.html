@@ -54,18 +54,18 @@
     {% if success_message %}
     <div class="alert alert-success">
         {{ success_message }}
-        <button type="button" style="float: right; border: none; background: none; font-size: 20px;" @click="clear_message">&times;</button>
+        <button type="button" style="float: right; border: none; background: none; font-size: 20px;" dj-click="clear_message">&times;</button>
     </div>
     {% endif %}
 
     {% if error_message %}
     <div class="alert alert-danger">
         {{ error_message }}
-        <button type="button" style="float: right; border: none; background: none; font-size: 20px;" @click="clear_message">&times;</button>
+        <button type="button" style="float: right; border: none; background: none; font-size: 20px;" dj-click="clear_message">&times;</button>
     </div>
     {% endif %}
 
-    <form @submit="submit_form" onsubmit="return false;">
+    <form dj-submit="submit_form" onsubmit="return false;">
         {% csrf_token %}
 
         <!-- Auto-rendered form using Plain adapter -->
@@ -73,7 +73,7 @@
 
         <div>
             <button type="submit">Send Message</button>
-            <button type="button" @click="reset_form">Reset</button>
+            <button type="button" dj-click="reset_form">Reset</button>
         </div>
     </form>
 

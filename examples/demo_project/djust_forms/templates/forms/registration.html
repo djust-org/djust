@@ -23,15 +23,15 @@
                     <div class="card-body">
                         <div class="alert alert-success alert-dismissible fade show{% if not success_message %} d-none{% endif %}" role="alert">
                             {{ success_message }}
-                            <button type="button" class="btn-close" @click="clear_message"></button>
+                            <button type="button" class="btn-close" dj-click="clear_message"></button>
                         </div>
 
                         <div class="alert alert-danger alert-dismissible fade show{% if not error_message %} d-none{% endif %}" role="alert">
                             {{ error_message }}
-                            <button type="button" class="btn-close" @click="clear_message"></button>
+                            <button type="button" class="btn-close" dj-click="clear_message"></button>
                         </div>
 
-                        <form @submit="submit_form" class="needs-validation" novalidate>
+                        <form dj-submit="submit_form" class="needs-validation" novalidate>
                             <!-- Username -->
                             <div class="mb-3">
                                 <label for="username" class="form-label">Username</label>
@@ -41,7 +41,7 @@
                                     id="username"
                                     class="form-control {% if field_errors.username %}is-invalid{% endif %}"
                                     value="{{ form_data.username }}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="username"
                                     required
                                 />
@@ -64,7 +64,7 @@
                                     id="email"
                                     class="form-control {% if field_errors.email %}is-invalid{% endif %}"
                                     value="{{ form_data.email }}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="email"
                                     required
                                 />
@@ -87,7 +87,7 @@
                                     id="password"
                                     class="form-control {% if field_errors.password %}is-invalid{% endif %}"
                                     value="{{ form_data.password }}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="password"
                                     required
                                 />
@@ -110,7 +110,7 @@
                                     id="password_confirm"
                                     class="form-control {% if field_errors.password_confirm %}is-invalid{% endif %}"
                                     value="{{ form_data.password_confirm }}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="password_confirm"
                                     required
                                 />
@@ -131,7 +131,7 @@
                                     id="agree_terms"
                                     class="form-check-input {% if field_errors.agree_terms %}is-invalid{% endif %}"
                                     {% if form_data.agree_terms %}checked{% endif %}
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="agree_terms"
                                     required
                                 />
@@ -161,7 +161,7 @@
                                 <button type="submit" class="btn btn-primary btn-lg">
                                     Create Account
                                 </button>
-                                <button type="button" class="btn btn-outline-secondary" @click="reset_form">
+                                <button type="button" class="btn btn-outline-secondary" dj-click="reset_form">
                                     Reset Form
                                 </button>
                             </div>

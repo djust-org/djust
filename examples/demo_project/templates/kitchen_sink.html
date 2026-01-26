@@ -426,7 +426,7 @@
                             <h3 class="text-lg font-bold mb-3 mt-4" style="color: var(--color-text);">Modals</h3>
                             <div class="component-demo">
                                 <div class="demo-label">Modal Dialogs</div>
-                                <button @click="show_modal" class="btn-primary-modern">
+                                <button dj-click="show_modal" class="btn-primary-modern">
                                     <span>Show Modal</span>
                                 </button>
                                 {{ modal_example.render }}
@@ -442,10 +442,10 @@
                                     {{ progress_custom.render }}
                                 </div>
                                 <div class="flex gap-2 mt-3">
-                                    <button @click="increment_progress" class="btn-primary-modern">
+                                    <button dj-click="increment_progress" class="btn-primary-modern">
                                         <span>Increment</span>
                                     </button>
-                                    <button @click="reset_progress" class="btn-secondary-modern">
+                                    <button dj-click="reset_progress" class="btn-secondary-modern">
                                         <span>Reset</span>
                                     </button>
                                 </div>
@@ -567,8 +567,8 @@ class CounterView(LiveView):
                                 <div class="code-block-modern">
                                     <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-html">&lt;div data-liveview-root&gt;
   &lt;h1&gt;Count: &#123;&#123; count &#125;&#125;&lt;/h1&gt;
-  &lt;button @click="increment"&gt;+&lt;/button&gt;
-  &lt;button @click="decrement"&gt;-&lt;/button&gt;
+  &lt;button dj-click="increment"&gt;+&lt;/button&gt;
+  &lt;button dj-click="decrement"&gt;-&lt;/button&gt;
 &lt;/div&gt;
 
 &lt;script src="/static/djust/client.js"&gt;&lt;/script&gt;</code></pre>

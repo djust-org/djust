@@ -24,11 +24,11 @@
                     {% if success_message %}
                     <div class="alert alert-success alert-dismissible fade show" role="alert">
                         {{ success_message }}
-                        <button type="button" class="btn-close" @click="clear_message"></button>
+                        <button type="button" class="btn-close" dj-click="clear_message"></button>
                     </div>
                     {% endif %}
 
-                    <form @submit="submit_form" class="needs-validation" novalidate>
+                    <form dj-submit="submit_form" class="needs-validation" novalidate>
                         <div class="row">
                             <!-- First Name -->
                             <div class="col-md-6 mb-3">
@@ -39,7 +39,7 @@
                                     id="first_name"
                                     class="form-control {% if field_errors.first_name %}is-invalid{% endif %}"
                                     value="{{ form_data.first_name }}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="first_name"
                                     required
                                 />
@@ -59,7 +59,7 @@
                                     id="last_name"
                                     class="form-control {% if field_errors.last_name %}is-invalid{% endif %}"
                                     value="{{ form_data.last_name }}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="last_name"
                                     required
                                 />
@@ -79,7 +79,7 @@
                                 id="bio"
                                 class="form-control {% if field_errors.bio %}is-invalid{% endif %}"
                                 rows="4"
-                                @change="validate_field"
+                                dj-change="validate_field"
                                 data-field="bio"
                             >{{ form_data.bio }}</textarea>
                             <small class="form-text text-muted">Tell us about yourself (max 500 characters)</small>
@@ -100,7 +100,7 @@
                                     id="birth_date"
                                     class="form-control {% if field_errors.birth_date %}is-invalid{% endif %}"
                                     value="{{ form_data.birth_date }}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="birth_date"
                                 />
                                 {% if field_errors.birth_date %}
@@ -117,7 +117,7 @@
                                     name="country"
                                     id="country"
                                     class="form-control {% if field_errors.country %}is-invalid{% endif %}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="country"
                                 >
                                     <option value="">Select country...</option>
@@ -148,7 +148,7 @@
                                     id="phone"
                                     class="form-control {% if field_errors.phone %}is-invalid{% endif %}"
                                     value="{{ form_data.phone }}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="phone"
                                     placeholder="+1 (555) 123-4567"
                                 />
@@ -169,7 +169,7 @@
                                     id="website"
                                     class="form-control {% if field_errors.website %}is-invalid{% endif %}"
                                     value="{{ form_data.website }}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="website"
                                     placeholder="https://yourwebsite.com"
                                 />
@@ -189,7 +189,7 @@
                                 id="receive_updates"
                                 class="form-check-input"
                                 {% if form_data.receive_updates %}checked{% endif %}
-                                @change="validate_field"
+                                dj-change="validate_field"
                                 data-field="receive_updates"
                             />
                             <label class="form-check-label" for="receive_updates">
@@ -202,7 +202,7 @@
                             <button type="submit" class="btn btn-info btn-lg text-white">
                                 Save Profile
                             </button>
-                            <button type="button" class="btn btn-outline-secondary" @click="reset_form">
+                            <button type="button" class="btn btn-outline-secondary" dj-click="reset_form">
                                 Reset Form
                             </button>
                         </div>

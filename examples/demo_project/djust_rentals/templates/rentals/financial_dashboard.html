@@ -16,15 +16,15 @@
           <p class="text-foreground">{{ start_date|date:"M d, Y" }} - {{ end_date|date:"M d, Y" }}</p>
         </div>
         <div class="flex gap-2">
-          <button @click="change_period" data-period="month"
+          <button dj-click="change_period" data-period="month"
                   class="px-4 py-2 rounded-md text-sm font-medium transition-colors {% if period == 'month' %}bg-primary text-primary-foreground{% else %}bg-muted text-muted-foreground hover:bg-accent{% endif %}">
             Month
           </button>
-          <button @click="change_period" data-period="quarter"
+          <button dj-click="change_period" data-period="quarter"
                   class="px-4 py-2 rounded-md text-sm font-medium transition-colors {% if period == 'quarter' %}bg-primary text-primary-foreground{% else %}bg-muted text-muted-foreground hover:bg-accent{% endif %}">
             Quarter
           </button>
-          <button @click="change_period" data-period="year"
+          <button dj-click="change_period" data-period="year"
                   class="px-4 py-2 rounded-md text-sm font-medium transition-colors {% if period == 'year' %}bg-primary text-primary-foreground{% else %}bg-muted text-muted-foreground hover:bg-accent{% endif %}">
             Year
           </button>
