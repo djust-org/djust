@@ -25,6 +25,7 @@ window._djustClientLoaded = true;
 
 // Track if we've been initialized via DOMContentLoaded
 let djustInitialized = false;
+window.djustInitialized = false;  // Expose for external detection (e.g., E2E tests)
 
 // Track pending turbo:load reinit
 let pendingTurboReinit = false;
@@ -2799,6 +2800,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Mark as initialized so turbo:load handler knows we're ready
     djustInitialized = true;
+    window.djustInitialized = true;  // Expose for external detection (e.g., E2E tests)
     console.log('[LiveView] Initialization complete, djustInitialized = true');
 
     // Check if we have a pending turbo reinit (turbo:load fired before we finished init)
