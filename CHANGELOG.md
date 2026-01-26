@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-01-25
+
+### Fixed
+
+- **Nested Block Inheritance**: Fixed template inheritance for nested blocks. When a child template overrides a block that is nested inside another block in the parent (e.g., `content` inside `body`), the override is now correctly applied. ([#71](https://github.com/djust-org/djust/pull/71))
+
 ## [0.1.7] - 2026-01-25
 
 ### Added
@@ -83,7 +89,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bug fixes and stability improvements
 
-[Unreleased]: https://github.com/djust-org/djust/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/djust-org/djust/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/djust-org/djust/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/djust-org/djust/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/djust-org/djust/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/djust-org/djust/compare/v0.1.4...v0.1.5
