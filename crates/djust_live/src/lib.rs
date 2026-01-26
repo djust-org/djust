@@ -20,6 +20,7 @@ pub mod model_serializer;
 use actors::{ActorSupervisor, SessionActorHandle};
 use dashmap::DashMap;
 use djust_core::{Context, Value};
+use djust_templates::inheritance::FilesystemTemplateLoader;
 use djust_templates::Template;
 use djust_vdom::{diff, parse_html, parse_html_continue, reset_id_counter, VNode};
 use once_cell::sync::Lazy;
@@ -81,19 +82,32 @@ pub struct RustLiveViewBackend {
     version: u64,
     /// Unix timestamp when this view was last serialized (for session age tracking)
     timestamp: f64,
+    /// Template directories for {% include %} tag support
+    template_dirs: Vec<PathBuf>,
 }
 
 #[pymethods]
 impl RustLiveViewBackend {
     #[new]
-    fn new(template_source: String) -> Self {
+    #[pyo3(signature = (template_source, template_dirs=None))]
+    fn new(template_source: String, template_dirs: Option<Vec<String>>) -> Self {
         Self {
             template_source,
             state: HashMap::new(),
             last_vdom: None,
             version: 0,
             timestamp: 0.0, // Will be set on first serialization
+            template_dirs: template_dirs
+                .unwrap_or_default()
+                .into_iter()
+                .map(PathBuf::from)
+                .collect(),
         }
+    }
+
+    /// Set template directories for {% include %} tag support
+    fn set_template_dirs(&mut self, dirs: Vec<String>) {
+        self.template_dirs = dirs.into_iter().map(PathBuf::from).collect();
     }
 
     /// Set a state variable
@@ -134,7 +148,10 @@ impl RustLiveViewBackend {
         };
 
         let context = Context::from_dict(self.state.clone());
-        let html = template_arc.render(&context)?;
+
+        // Use template loader for {% include %} support
+        let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
+        let html = template_arc.render_with_loader(&context, &loader)?;
         Ok(html)
     }
 
@@ -152,7 +169,10 @@ impl RustLiveViewBackend {
         };
 
         let context = Context::from_dict(self.state.clone());
-        let html = template_arc.render(&context)?;
+
+        // Use template loader for {% include %} support
+        let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
+        let html = template_arc.render_with_loader(&context, &loader)?;
 
         // Parse new HTML to VDOM
         // IMPORTANT: Use parse_html() only for the FIRST render (resets ID counter to 0).
@@ -204,7 +224,10 @@ impl RustLiveViewBackend {
         };
 
         let context = Context::from_dict(self.state.clone());
-        let html = template_arc.render(&context)?;
+
+        // Use template loader for {% include %} support
+        let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
+        let html = template_arc.render_with_loader(&context, &loader)?;
 
         // IMPORTANT: Use parse_html_continue() for subsequent renders to avoid ID collisions
         let new_vdom = if self.last_vdom.is_some() {
@@ -294,12 +317,14 @@ impl RustLiveViewBackend {
         })?;
 
         // Convert back to RustLiveViewBackend
+        // Note: template_dirs must be re-set after deserialization via set_template_dirs()
         Ok(Self {
             template_source: serializable.template_source,
             state: serializable.state,
             last_vdom: serializable.last_vdom,
             version: serializable.version,
             timestamp: serializable.timestamp,
+            template_dirs: Vec::new(),
         })
     }
 
@@ -315,7 +340,12 @@ impl RustLiveViewBackend {
 impl RustLiveViewBackend {
     /// Create a new RustLiveViewBackend (Rust API)
     pub fn new_rust(template_source: String) -> Self {
-        Self::new(template_source)
+        Self::new(template_source, None)
+    }
+
+    /// Create new LiveView with template directories (Rust API)
+    pub fn new_rust_with_dirs(template_source: String, template_dirs: Vec<String>) -> Self {
+        Self::new(template_source, Some(template_dirs))
     }
 
     /// Update state (Rust API)

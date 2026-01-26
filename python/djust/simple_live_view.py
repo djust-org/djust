@@ -6,10 +6,10 @@ from django.views import View
 from django.http import HttpResponse
 
 try:
-    from ._rust import RustLiveView, render_template
+    from ._rust import RustLiveView, render_template_with_dirs
 except ImportError:
     RustLiveView = None
-    render_template = None
+    render_template_with_dirs = None
 
 
 class LiveView(View):
@@ -34,12 +34,38 @@ class LiveView(View):
                     context[key] = getattr(self, key)
         return context
 
+    def _get_template_dirs(self) -> list:
+        """Get template directories from Django settings for {% include %} support."""
+        from django.conf import settings
+        from pathlib import Path
+
+        template_dirs = []
+
+        # Add DIRS from all TEMPLATES configs
+        for template_config in settings.TEMPLATES:
+            if "DIRS" in template_config:
+                template_dirs.extend(template_config["DIRS"])
+
+        # Add app template directories (only for DjangoTemplates with APP_DIRS=True)
+        for template_config in settings.TEMPLATES:
+            if template_config["BACKEND"] == "django.template.backends.django.DjangoTemplates":
+                if template_config.get("APP_DIRS", False):
+                    from django.apps import apps
+
+                    for app_config in apps.get_app_configs():
+                        templates_dir = Path(app_config.path) / "templates"
+                        if templates_dir.exists():
+                            template_dirs.append(str(templates_dir))
+
+        return [str(d) for d in template_dirs]
+
     def render_template(self):
         """Render using Rust backend"""
-        if RustLiveView and render_template and self.template:
+        if RustLiveView and render_template_with_dirs and self.template:
             try:
                 context = self.get_context_data()
-                return render_template(self.template, context)
+                template_dirs = self._get_template_dirs()
+                return render_template_with_dirs(self.template, context, template_dirs)
             except Exception as e:
                 return f"<div>Error: {e}</div>"
         return "<div>Rust backend not available</div>"
