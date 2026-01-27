@@ -66,9 +66,9 @@ function reinitLiveViewForTurboNav() {
     lazyHydrationManager.init();
 
     // Find all LiveView containers in the new content
-    const allContainers = document.querySelectorAll('[data-live-view]');
-    const lazyContainers = document.querySelectorAll('[data-live-view][data-live-lazy]');
-    const eagerContainers = document.querySelectorAll('[data-live-view]:not([data-live-lazy])');
+    const allContainers = document.querySelectorAll('[data-djust-view]');
+    const lazyContainers = document.querySelectorAll('[data-djust-view][data-djust-lazy]');
+    const eagerContainers = document.querySelectorAll('[data-djust-view]:not([data-djust-lazy])');
 
     console.log(`[LiveView:TurboNav] Found ${allContainers.length} containers (${lazyContainers.length} lazy, ${eagerContainers.length} eager)`);
 
@@ -150,7 +150,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                     const parser = new DOMParser();
                     const doc = parser.parseFromString(data.html, 'text/html');
                     const liveviewRoot = getLiveViewRoot();
-                    const newRoot = doc.querySelector('[data-liveview-root]') || doc.body;
+                    const newRoot = doc.querySelector('[data-djust-root]') || doc.body;
                     liveviewRoot.innerHTML = newRoot.innerHTML;
                     clientVdomVersion = data.version;
                     initReactCounters();
@@ -206,7 +206,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             const parser = new DOMParser();
             const doc = parser.parseFromString(data.html, 'text/html');
             const liveviewRoot = getLiveViewRoot();
-            const newRoot = doc.querySelector('[data-liveview-root]') || doc.body;
+            const newRoot = doc.querySelector('[data-djust-root]') || doc.body;
 
             // Handle dj-update="append|prepend|ignore" for efficient list updates
             // This preserves existing DOM elements and only adds/updates new content
@@ -226,7 +226,7 @@ function handleServerResponse(data, eventName, triggerElement) {
         // Handle form reset
         if (data.reset_form) {
             console.log('[LiveView] Resetting form');
-            const form = document.querySelector('[data-liveview-root] form');
+            const form = document.querySelector('[data-djust-root] form');
             if (form) form.reset();
         }
 
@@ -392,13 +392,13 @@ class LiveViewWebSocket {
         console.log('[LiveView] Received:', data.type, data);
 
         switch (data.type) {
-            case 'connected':
+            case 'connect':
                 this.sessionId = data.session_id;
                 console.log('[LiveView] Session ID:', this.sessionId);
                 this.autoMount();
                 break;
 
-            case 'mounted':
+            case 'mount':
                 this.viewMounted = true;
                 console.log('[LiveView] View mounted:', data.view);
 
@@ -414,7 +414,7 @@ class LiveViewWebSocket {
                 }
 
                 // OPTIMIZATION: Skip HTML replacement if content was pre-rendered via HTTP GET
-                // BUT: Force hydration if server HTML has data-dj attributes for reliable patching
+                // BUT: Force hydration if server HTML has data-djust-id attributes for reliable patching
                 // Server sends has_ids flag to avoid client-side string search
                 const hasDataDjAttrs = data.has_ids === true;
                 if (this.skipMountHtml && !hasDataDjAttrs) {
@@ -423,13 +423,13 @@ class LiveViewWebSocket {
                     bindLiveViewEvents(); // Bind events to existing content
                 } else if (data.html) {
                     // Replace page content with server-rendered HTML
-                    // This is required when using ID-based patch targeting (data-dj attributes)
+                    // This is required when using ID-based patch targeting (data-djust-id attributes)
                     if (hasDataDjAttrs) {
-                        console.log('[LiveView] Hydrating DOM with data-dj attributes for reliable patching');
+                        console.log('[LiveView] Hydrating DOM with data-djust-id attributes for reliable patching');
                     }
-                    let container = document.querySelector('[data-live-view]');
+                    let container = document.querySelector('[data-djust-view]');
                     if (!container) {
-                        container = document.querySelector('[data-liveview-root]');
+                        container = document.querySelector('[data-djust-root]');
                     }
                     if (container) {
                         container.innerHTML = data.html;
@@ -532,10 +532,10 @@ class LiveViewWebSocket {
 
     autoMount() {
         // Look for container with view path
-        let container = document.querySelector('[data-live-view]');
+        let container = document.querySelector('[data-djust-view]');
         if (!container) {
-            // Fallback: look for data-liveview-root with data-live-view attribute
-            container = document.querySelector('[data-liveview-root][data-live-view]');
+            // Fallback: look for data-djust-root with data-djust-view attribute
+            container = document.querySelector('[data-djust-root][data-djust-view]');
         }
 
         if (container) {
@@ -1675,7 +1675,7 @@ function throttle(func, limit) {
 
 // Helper: Get LiveView root element
 function getLiveViewRoot() {
-    return document.querySelector('[data-liveview-root]') || document.body;
+    return document.querySelector('[data-djust-root]') || document.body;
 }
 
 // Helper: Clear optimistic state
@@ -1982,7 +1982,7 @@ function sanitizeIdForLog(id) {
  * Resolve a DOM node using ID-based lookup (primary) or path traversal (fallback).
  *
  * Resolution strategy:
- * 1. If djustId is provided, try querySelector('[data-dj="..."]') - O(1), reliable
+ * 1. If djustId is provided, try querySelector('[data-djust-id="..."]') - O(1), reliable
  * 2. Fall back to index-based path traversal
  *
  * @param {Array<number>} path - Index-based path (fallback)
@@ -1992,13 +1992,13 @@ function sanitizeIdForLog(id) {
 function getNodeByPath(path, djustId = null) {
     // Strategy 1: ID-based resolution (fast, reliable)
     if (djustId) {
-        const byId = document.querySelector(`[data-dj="${CSS.escape(djustId)}"]`);
+        const byId = document.querySelector(`[data-djust-id="${CSS.escape(djustId)}"]`);
         if (byId) {
             return byId;
         }
         // ID not found - fall through to path-based
         if (globalThis.djustDebug) {
-            console.log(`[LiveView] ID lookup failed for data-dj="${sanitizeIdForLog(djustId)}", trying path`);
+            console.log(`[LiveView] ID lookup failed for data-djust-id="${sanitizeIdForLog(djustId)}", trying path`);
         }
     }
 
@@ -2045,16 +2045,41 @@ function createNodeFromVNode(vnode) {
     if (vnode.attrs) {
         for (const [key, value] of Object.entries(vnode.attrs)) {
             if (key.startsWith('dj-')) {
-                const eventName = key.substring(3);
-                elem.addEventListener(eventName, (e) => {
+                // Parse attribute name to extract event type and modifiers
+                // e.g., "dj-keydown.enter" -> eventType: "keydown", modifiers: ["enter"]
+                const attrParts = key.substring(3).split('.');
+                const eventType = attrParts[0];
+                const modifiers = attrParts.slice(1);
+
+                // Parse handler string to extract function name and arguments
+                // e.g., "set_period('month')" -> { name: 'set_period', args: ['month'] }
+                const parsed = parseEventHandler(value);
+                elem.addEventListener(eventType, (e) => {
+                    // Handle key modifiers for keydown/keyup events
+                    if ((eventType === 'keydown' || eventType === 'keyup') && modifiers.length > 0) {
+                        const requiredKey = modifiers[0];
+                        if (requiredKey === 'enter' && e.key !== 'Enter') return;
+                        if (requiredKey === 'escape' && e.key !== 'Escape') return;
+                        if (requiredKey === 'space' && e.key !== ' ') return;
+                        if (requiredKey === 'tab' && e.key !== 'Tab') return;
+                    }
+
                     e.preventDefault();
                     const params = {};
                     Array.from(elem.attributes).forEach(attr => {
                         if (attr.name.startsWith('data-') && !attr.name.startsWith('data-liveview')) {
-                            const key = attr.name.substring(5).replace(/-/g, '_');
-                            params[key] = attr.value;
+                            const paramKey = attr.name.substring(5).replace(/-/g, '_');
+                            params[paramKey] = attr.value;
                         }
                     });
+
+                    // Add positional arguments from handler syntax if present
+                    if (parsed.args.length > 0) {
+                        params._args = parsed.args;
+                    }
+
+                    // Pass target element for optimistic updates (Phase 3)
+                    params._targetElement = e.currentTarget;
 
                     let currentElement = elem;
                     while (currentElement && currentElement !== document.body) {
@@ -2065,7 +2090,7 @@ function createNodeFromVNode(vnode) {
                         currentElement = currentElement.parentElement;
                     }
 
-                    handleEvent(value, params);
+                    handleEvent(parsed.name, params);
                 });
             } else {
                 if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
@@ -2561,11 +2586,11 @@ function applyPatches(patches) {
  * for pages with below-fold LiveView components.
  *
  * Usage:
- *   <div data-live-view="my_view" data-live-lazy>
+ *   <div data-djust-view="my_view" data-djust-lazy>
  *     <!-- Content loads when element scrolls into view -->
  *   </div>
  *
- *   <div data-live-view="my_view" data-live-lazy="click">
+ *   <div data-djust-view="my_view" data-djust-lazy="click">
  *     <!-- Content loads on first user interaction -->
  *   </div>
  *
@@ -2625,7 +2650,7 @@ const lazyHydrationManager = {
 
     // Register an element for lazy hydration
     register(element) {
-        const lazyMode = element.getAttribute('data-live-lazy') || 'viewport';
+        const lazyMode = element.getAttribute('data-djust-lazy') || 'viewport';
 
         switch (lazyMode) {
             case 'click':
@@ -2666,7 +2691,7 @@ const lazyHydrationManager = {
 
     // Hydrate a single element
     hydrateElement(element) {
-        const elementId = element.id || element.getAttribute('data-live-view');
+        const elementId = element.id || element.getAttribute('data-djust-view');
 
         // Prevent double hydration
         if (this.hydratedElements.has(elementId)) {
@@ -2674,9 +2699,9 @@ const lazyHydrationManager = {
         }
         this.hydratedElements.add(elementId);
 
-        const viewPath = element.getAttribute('data-live-view');
+        const viewPath = element.getAttribute('data-djust-view');
         if (!viewPath) {
-            console.warn('[LiveView:lazy] Element missing data-live-view attribute', element);
+            console.warn('[LiveView:lazy] Element missing data-djust-view attribute', element);
             return;
         }
 
@@ -2731,7 +2756,7 @@ const lazyHydrationManager = {
         liveViewWS.mount(viewPath, urlParams);
 
         // Remove lazy attribute to indicate hydration complete
-        element.removeAttribute('data-live-lazy');
+        element.removeAttribute('data-djust-lazy');
         element.setAttribute('data-live-hydrated', 'true');
 
         // Bind events to the newly hydrated content
@@ -2740,12 +2765,12 @@ const lazyHydrationManager = {
 
     // Check if an element is lazily loaded
     isLazy(element) {
-        return element.hasAttribute('data-live-lazy');
+        return element.hasAttribute('data-djust-lazy');
     },
 
     // Force hydrate all lazy elements (useful for testing or SPA navigation)
     hydrateAll() {
-        document.querySelectorAll('[data-live-lazy]').forEach(el => {
+        document.querySelectorAll('[data-djust-lazy]').forEach(el => {
             this.hydrateElement(el);
         });
     }
@@ -2762,9 +2787,9 @@ document.addEventListener('DOMContentLoaded', () => {
     lazyHydrationManager.init();
 
     // Find all LiveView containers
-    const allContainers = document.querySelectorAll('[data-live-view]');
-    const lazyContainers = document.querySelectorAll('[data-live-view][data-live-lazy]');
-    const eagerContainers = document.querySelectorAll('[data-live-view]:not([data-live-lazy])');
+    const allContainers = document.querySelectorAll('[data-djust-view]');
+    const lazyContainers = document.querySelectorAll('[data-djust-view][data-djust-lazy]');
+    const eagerContainers = document.querySelectorAll('[data-djust-view]:not([data-djust-lazy])');
 
     console.log(`[LiveView] Found ${allContainers.length} containers (${lazyContainers.length} lazy, ${eagerContainers.length} eager)`);
 
