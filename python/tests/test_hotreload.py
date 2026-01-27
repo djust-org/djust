@@ -129,7 +129,7 @@ class TestClearTemplateCaches:
 
 
 class TestHotReloadMessage:
-    """Tests for hotreload_message() method."""
+    """Tests for hotreload() method."""
 
     @pytest.mark.asyncio
     async def test_hotreload_successful_patch_generation(self, mock_consumer, mock_view_instance):
@@ -148,8 +148,8 @@ class TestHotReloadMessage:
                 "channels.db.database_sync_to_async",
                 side_effect=lambda f: AsyncMock(return_value=f()),
             ):
-                # Call hotreload_message
-                await mock_consumer.hotreload_message({"file": "test.html"})
+                # Call hotreload
+                await mock_consumer.hotreload({"file": "test.html"})
 
         # Verify patches sent to client
         mock_consumer.send_json.assert_called_once()
@@ -174,8 +174,8 @@ class TestHotReloadMessage:
                 "channels.db.database_sync_to_async",
                 side_effect=lambda f: AsyncMock(return_value=f()),
             ):
-                # Call hotreload_message
-                await mock_consumer.hotreload_message({"file": "test.html"})
+                # Call hotreload
+                await mock_consumer.hotreload({"file": "test.html"})
 
         # Verify fallback to full reload
         mock_consumer.send_json.assert_called_once()
@@ -199,8 +199,8 @@ class TestHotReloadMessage:
                 "channels.db.database_sync_to_async",
                 side_effect=lambda f: AsyncMock(return_value=f()),
             ):
-                # Call hotreload_message
-                await mock_consumer.hotreload_message({"file": "test.html"})
+                # Call hotreload
+                await mock_consumer.hotreload({"file": "test.html"})
 
         # Verify fallback to full reload
         mock_consumer.send_json.assert_called_once()
@@ -222,8 +222,8 @@ class TestHotReloadMessage:
                 "channels.db.database_sync_to_async",
                 side_effect=lambda f: AsyncMock(return_value=f()),
             ):
-                # Call hotreload_message
-                await mock_consumer.hotreload_message({"file": "test.html"})
+                # Call hotreload
+                await mock_consumer.hotreload({"file": "test.html"})
 
         # Verify fallback to full reload (no patches to apply)
         mock_consumer.send_json.assert_called_once()
@@ -245,8 +245,8 @@ class TestHotReloadMessage:
                 "channels.db.database_sync_to_async",
                 side_effect=lambda f: AsyncMock(return_value=f()),
             ):
-                # Call hotreload_message
-                await mock_consumer.hotreload_message({"file": "test.html"})
+                # Call hotreload
+                await mock_consumer.hotreload({"file": "test.html"})
 
         # Empty array is still sent as patch (no check after parsing)
         mock_consumer.send_json.assert_called_once()
@@ -269,8 +269,8 @@ class TestHotReloadMessage:
                 "channels.db.database_sync_to_async",
                 side_effect=lambda f: AsyncMock(return_value=f()),
             ):
-                # Call hotreload_message
-                await mock_consumer.hotreload_message({"file": "test.html"})
+                # Call hotreload
+                await mock_consumer.hotreload({"file": "test.html"})
 
         # Verify fallback to full reload
         mock_consumer.send_json.assert_called_once()
@@ -284,8 +284,8 @@ class TestHotReloadMessage:
         """Test hot reload when view_instance is None."""
         mock_consumer.view_instance = None
 
-        # Call hotreload_message (should handle gracefully)
-        await mock_consumer.hotreload_message({"file": "test.html"})
+        # Call hotreload (should handle gracefully)
+        await mock_consumer.hotreload({"file": "test.html"})
 
         # Should send full reload (no view instance to generate patches)
         mock_consumer.send_json.assert_called_once()
@@ -311,8 +311,8 @@ class TestHotReloadMessage:
             ):
                 # Mock the module-level hotreload_logger directly
                 with patch("djust.websocket.hotreload_logger") as mock_log:
-                    # Call hotreload_message
-                    await mock_consumer.hotreload_message({"file": "test.html"})
+                    # Call hotreload
+                    await mock_consumer.hotreload({"file": "test.html"})
 
                     # Verify performance logging
                     assert mock_log.info.called
@@ -337,7 +337,7 @@ class TestHotReloadMessage:
                 side_effect=lambda f: AsyncMock(return_value=f()),
             ):
                 # Patch time.time directly in the time module
-                # (it's imported locally inside hotreload_message)
+                # (it's imported locally inside hotreload)
                 import time
 
                 original_time = time.time
@@ -356,8 +356,8 @@ class TestHotReloadMessage:
                 try:
                     # Mock the module-level hotreload_logger directly
                     with patch("djust.websocket.hotreload_logger") as mock_log:
-                        # Call hotreload_message
-                        await mock_consumer.hotreload_message({"file": "test.html"})
+                        # Call hotreload
+                        await mock_consumer.hotreload({"file": "test.html"})
 
                         # Verify warning logged for slow patch generation
                         assert mock_log.warning.called
@@ -399,8 +399,8 @@ class TestHotReloadIntegration:
                 # Simulate file change event
                 event = {"file": "templates/index.html"}
 
-                # Call hotreload_message
-                await mock_consumer.hotreload_message(event)
+                # Call hotreload
+                await mock_consumer.hotreload(event)
 
         # Verify complete flow
         # 1. Template cache cleared
@@ -440,8 +440,8 @@ class TestHotReloadIntegration:
                 "channels.db.database_sync_to_async",
                 side_effect=lambda f: AsyncMock(return_value=f()),
             ):
-                # Call hotreload_message
-                await mock_consumer.hotreload_message({"file": "test.html"})
+                # Call hotreload
+                await mock_consumer.hotreload({"file": "test.html"})
 
         # Verify _template was cleared
         assert not hasattr(mock_view_instance, "_template")
@@ -471,7 +471,7 @@ class TestHotReloadEdgeCases:
                 side_effect=lambda f: AsyncMock(return_value=f()),
             ):
                 # Call with empty event
-                await mock_consumer.hotreload_message({})
+                await mock_consumer.hotreload({})
 
         # Should still work, file defaults to "unknown"
         mock_consumer.send_json.assert_called_once()
@@ -494,8 +494,8 @@ class TestHotReloadEdgeCases:
                 "channels.db.database_sync_to_async",
                 side_effect=lambda f: AsyncMock(return_value=f()),
             ):
-                # Call hotreload_message
-                await mock_consumer.hotreload_message({"file": "test.html"})
+                # Call hotreload
+                await mock_consumer.hotreload({"file": "test.html"})
 
         # Should handle array patches correctly
         mock_consumer.send_json.assert_called_once()
@@ -519,7 +519,7 @@ class TestHotReloadEdgeCases:
                 side_effect=lambda f: AsyncMock(return_value=f()),
             ):
                 # Call with unicode file path
-                await mock_consumer.hotreload_message({"file": "templates/编辑.html"})
+                await mock_consumer.hotreload({"file": "templates/编辑.html"})
 
         # Should handle unicode correctly
         mock_consumer.send_json.assert_called_once()

@@ -51,7 +51,7 @@ class TestLiveViewInclude:
 
         class MyView(LiveView):
             template = """
-            <div data-liveview-root>
+            <div data-djust-root>
                 {% include "_header.html" %}
                 <main>{{ content }}</main>
             </div>
@@ -75,7 +75,7 @@ class TestLiveViewInclude:
 
         class MyView(LiveView):
             template = """
-            <div data-liveview-root>
+            <div data-djust-root>
                 {% include "_header.html" %}
                 {% include "_footer.html" %}
             </div>
@@ -99,7 +99,7 @@ class TestComponentInclude:
 
     def test_component_with_include(self, patch_template_dirs):
         """Test that Component can render templates with {% include %}."""
-        from djust.component import Component
+        from djust.components.base import Component
 
         class Card(Component):
             template = """
@@ -108,6 +108,9 @@ class TestComponentInclude:
                 <div class="card-body">{{ body }}</div>
             </div>
             """
+
+            def get_context_data(self):
+                return {"site_name": self.site_name, "body": self.body}
 
         card = Card(site_name="Card Header", body="Card content")
         html = card.render()
@@ -121,7 +124,7 @@ class TestLiveComponentInclude:
 
     def test_live_component_with_include(self, patch_template_dirs):
         """Test that LiveComponent can render templates with {% include %}."""
-        from djust.component import LiveComponent
+        from djust.components.base import LiveComponent
 
         class Widget(LiveComponent):
             template = """
@@ -134,6 +137,9 @@ class TestLiveComponentInclude:
             def mount(self, site_name="Default", message="Hello"):
                 self.site_name = site_name
                 self.message = message
+
+            def get_context_data(self):
+                return {"site_name": self.site_name, "message": self.message}
 
         widget = Widget(site_name="Widget Title", message="Widget content")
         html = widget.render()
@@ -213,7 +219,7 @@ class TestUnsupportedTagWarning:
 
         class MyView(LiveView):
             template = """
-            <div data-liveview-root>
+            <div data-djust-root>
                 {% spaceless %}content{% endspaceless %}
             </div>
             """

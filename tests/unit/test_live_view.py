@@ -11,6 +11,7 @@ class TestLiveViewBasics:
 
     def test_liveview_initialization(self):
         """Test LiveView can be instantiated."""
+
         class SimpleView(LiveView):
             template = "<div>{{ message }}</div>"
 
@@ -20,6 +21,7 @@ class TestLiveViewBasics:
 
     def test_get_template_with_string(self):
         """Test get_template returns template string."""
+
         class SimpleView(LiveView):
             template = "<div>Hello</div>"
 
@@ -30,6 +32,7 @@ class TestLiveViewBasics:
     @pytest.mark.django_db
     def test_mount_called(self, get_request):
         """Test mount method is called on GET request."""
+
         class CounterView(LiveView):
             template = "<div>{{ count }}</div>"
             mount_called = False
@@ -39,10 +42,10 @@ class TestLiveViewBasics:
                 self.count = 0
 
         view = CounterView()
-        response = view.get(get_request)
+        _response = view.get(get_request)  # noqa: F841
 
         assert view.mount_called is True
-        assert hasattr(view, 'count')
+        assert hasattr(view, "count")
         assert view.count == 0
 
 
@@ -57,12 +60,13 @@ class TestSessionCleanup:
     def test_get_session_stats_empty(self):
         """Test stats with empty cache."""
         stats = get_session_stats()
-        assert stats['total_sessions'] == 0
-        assert stats['oldest_session_age'] == 0
+        assert stats["total_sessions"] == 0
+        assert stats["oldest_session_age"] == 0
 
     @pytest.mark.django_db
     def test_session_stats_with_sessions(self, get_request):
         """Test stats with active sessions."""
+
         # Create a LiveView to populate cache
         class SimpleView(LiveView):
             template = "<div>Test</div>"
@@ -71,7 +75,7 @@ class TestSessionCleanup:
         view.get(get_request)
 
         stats = get_session_stats()
-        assert stats['total_sessions'] >= 0  # May be 0 if no session key
+        assert stats["total_sessions"] >= 0  # May be 0 if no session key
 
 
 class TestTemplateInheritance:
@@ -85,7 +89,7 @@ class TestTemplateInheritance:
         templates_dir.mkdir()
 
         # Update Django settings to use temp directory
-        settings.TEMPLATES[0]['DIRS'] = [str(templates_dir)]
+        settings.TEMPLATES[0]["DIRS"] = [str(templates_dir)]
 
         # Create base template with liveview-root in block
         base_template = templates_dir / "base.html"
@@ -93,10 +97,10 @@ class TestTemplateInheritance:
             "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>"
         )
 
-        # Create child template with data-liveview-root div
+        # Create child template with data-djust-root div
         child_template = templates_dir / "child.html"
         child_template.write_text(
-            "{% extends 'base.html' %}{% block content %}<div data-liveview-root><div>{$ message $}</div></div>{% endblock %}"
+            "{% extends 'base.html' %}{% block content %}<div data-djust-root><div>{$ message $}</div></div>{% endblock %}"
         )
 
         # Test that get_template() extracts liveview-root from resolved template
@@ -112,20 +116,21 @@ class TestTemplateInheritance:
         assert "<body>" not in result
         assert "<html>" not in result
         # Should contain the liveview-root div and child content
-        assert "data-liveview-root" in result
+        assert "data-djust-root" in result
         assert "<div>{$ message $}</div>" in result
         # Should NOT contain Django template tags
         assert "{% extends" not in result
         assert "{% block" not in result
 
         # Full template should be stored in _full_template attribute
-        assert hasattr(view, '_full_template')
+        assert hasattr(view, "_full_template")
         assert "<!DOCTYPE html>" in view._full_template
         assert "<body>" in view._full_template
 
     @pytest.mark.django_db
     def test_get_template_without_extends_unchanged(self):
         """Test get_template without {% extends %} returns raw source."""
+
         class SimpleView(LiveView):
             template = "<div>{{ message }}</div>"
 
@@ -136,14 +141,16 @@ class TestTemplateInheritance:
         assert result == "<div>{{ message }}</div>"
 
     @pytest.mark.django_db
-    @pytest.mark.skip(reason="Django template loader caching prevents dynamic template loading in tests")
+    @pytest.mark.skip(
+        reason="Django template loader caching prevents dynamic template loading in tests"
+    )
     def test_liveview_syntax_conversion(self, tmp_path, settings):
         """Test {$ var $} syntax is converted to {{ var }}."""
         from django.template import engines
 
         templates_dir = tmp_path / "templates"
         templates_dir.mkdir()
-        settings.TEMPLATES[0]['DIRS'] = [str(templates_dir)]
+        settings.TEMPLATES[0]["DIRS"] = [str(templates_dir)]
 
         base = templates_dir / "base.html"
         base.write_text("<html>{% block content %}{% endblock %}</html>")
@@ -175,6 +182,7 @@ class TestTemplateInheritance:
     @pytest.mark.django_db
     def test_backward_compatibility_standalone_templates(self):
         """Test standalone templates still use {{ }} syntax."""
+
         class StandaloneView(LiveView):
             template_name = None
             template = "<div>{{ count }}</div>"
@@ -204,7 +212,7 @@ class TestErrorHandling:
 
         # Simulate POST with non-existent handler
         # Note: Currently the code silently ignores missing handlers and returns HTML
-        post_request._body = json.dumps({'event': 'nonexistent', 'params': {}}).encode()
+        post_request._body = json.dumps({"event": "nonexistent", "params": {}}).encode()
         response = view.post(post_request)
 
         # Currently returns 200 with HTML (not an error)
@@ -212,6 +220,7 @@ class TestErrorHandling:
         assert response.status_code == 200
         # JsonResponse.content is bytes, need to decode and parse
         import json
+
         data = json.loads(response.content.decode())
         # Should return HTML or version, not an error
-        assert 'html' in data or 'version' in data
+        assert "html" in data or "version" in data

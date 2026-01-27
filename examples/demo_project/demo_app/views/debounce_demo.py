@@ -17,7 +17,7 @@ class DebounceSearchView(LiveView):
     """
 
     template = """
-    <div data-liveview-root class="container mt-5">
+    <div data-djust-root class="container mt-5">
         <div class="row">
             <div class="col-md-8 offset-md-2">
                 <div class="card">

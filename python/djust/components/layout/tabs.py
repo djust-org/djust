@@ -92,7 +92,7 @@ class TabsComponent(LiveComponent):
         if not self.active and self.tabs:
             self.active = self.tabs[0]["id"]
 
-    def get_context(self) -> Dict[str, Any]:
+    def get_context_data(self) -> Dict[str, Any]:
         """Get tabs context"""
         return {
             "tabs": self.tabs,

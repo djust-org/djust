@@ -44,6 +44,12 @@ from .data import (
     PaginationComponent,
 )
 
+# Form Components
+from .forms import (
+    ForeignKeySelect,
+    ManyToManySelect,
+)
+
 # Auto-register built-in components
 # UI Components
 register_component("alert", AlertComponent)
@@ -85,6 +91,9 @@ __all__ = [
     # Data Components
     "TableComponent",
     "PaginationComponent",
+    # Form Components
+    "ForeignKeySelect",
+    "ManyToManySelect",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

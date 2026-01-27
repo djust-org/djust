@@ -87,7 +87,7 @@ class NavbarComponent(LiveComponent):
         self.custom_classes = kwargs.get("custom_classes", "")
         self.logo_height = kwargs.get("logo_height", 16)  # Default to 16px like GitHub
 
-    def get_context(self) -> Dict[str, Any]:
+    def get_context_data(self) -> Dict[str, Any]:
         """Get navbar context"""
         return {
             "brand_name": self.brand_name,

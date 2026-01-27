@@ -48,17 +48,6 @@ class TestEventHandlerDecorator:
         assert "required" in metadata["required"]
         assert "optional" in metadata["optional"]
 
-    def test_event_handler_backward_compatible(self):
-        """Test that existing markers are still set"""
-
-        @event_handler
-        def my_handler(self):
-            pass
-
-        assert hasattr(my_handler, "_is_event_handler")
-        assert my_handler._is_event_handler is True
-        assert my_handler._event_name == "my_handler"
-
     def test_event_handler_with_description(self):
         """Test explicit description parameter"""
 
@@ -109,7 +98,6 @@ class TestEventHandlerDecorator:
             """Test handler"""
             pass
 
-        assert hasattr(my_handler, "_is_event_handler")
         assert hasattr(my_handler, "_djust_decorators")
         metadata = my_handler._djust_decorators["event_handler"]
         assert metadata["description"] == "Test handler"
@@ -122,7 +110,6 @@ class TestEventHandlerDecorator:
             """Test handler"""
             pass
 
-        assert hasattr(my_handler, "_is_event_handler")
         assert hasattr(my_handler, "_djust_decorators")
 
     def test_event_alias(self):
@@ -133,8 +120,8 @@ class TestEventHandlerDecorator:
             """Test handler"""
             pass
 
-        assert hasattr(my_handler, "_is_event_handler")
-        assert my_handler._event_name == "my_handler"
+        assert hasattr(my_handler, "_djust_decorators")
+        assert "event_handler" in my_handler._djust_decorators
 
     def test_event_handler_metadata_structure(self):
         """Test complete metadata structure"""
@@ -252,17 +239,6 @@ class TestDecoratorMetadata:
 
         assert handler._djust_decorators["debounce"] == {"wait": 0.5, "max_wait": 2.0}
 
-    def test_debounce_backward_compatibility(self):
-        """Test @debounce maintains backward compatibility attributes."""
-
-        @debounce(wait=0.5)
-        def handler(self, **kwargs):
-            pass
-
-        # Old attributes still exist for backward compatibility
-        assert handler._debounce_seconds == 0.5
-        assert handler._debounce_ms == 500
-
     def test_throttle_metadata(self):
         """Test @throttle attaches correct metadata."""
 
@@ -290,17 +266,6 @@ class TestDecoratorMetadata:
             "leading": True,  # Default
             "trailing": True,  # Default
         }
-
-    def test_throttle_backward_compatibility(self):
-        """Test @throttle maintains backward compatibility attributes."""
-
-        @throttle(interval=0.1)
-        def handler(self, **kwargs):
-            pass
-
-        # Old attributes still exist for backward compatibility
-        assert handler._throttle_seconds == 0.1
-        assert handler._throttle_ms == 100
 
     def test_optimistic_metadata(self):
         """Test @optimistic attaches correct metadata."""

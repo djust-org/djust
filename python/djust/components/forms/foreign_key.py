@@ -126,7 +126,7 @@ class ForeignKeySelect(LiveComponent):
 
         return options
 
-    def get_context(self) -> Dict[str, Any]:
+    def get_context_data(self) -> Dict[str, Any]:
         """Get context for rendering."""
         return {
             "name": self.name,
@@ -455,7 +455,7 @@ class ManyToManySelect(LiveComponent):
 
         self.trigger_update()
 
-    def get_context(self) -> Dict[str, Any]:
+    def get_context_data(self) -> Dict[str, Any]:
         """Get context for rendering."""
         return {
             "name": self.name,

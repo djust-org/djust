@@ -78,7 +78,7 @@ class OptimisticTodoView(LiveView):
         </style>
     </head>
     <body>
-        <div data-liveview-root class="demo-container">
+        <div data-djust-root class="demo-container">
             <div class="card">
                 <div class="card-header bg-primary text-white">
                     <h3 class="mb-0">Optimistic Updates Demo - Todo List</h3>

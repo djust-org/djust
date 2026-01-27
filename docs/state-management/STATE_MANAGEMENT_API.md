@@ -878,7 +878,7 @@ class CommentFormView(DraftModeMixin, LiveView):
 
 ```html
 <!-- Root element needs draft attributes -->
-<div data-liveview-root
+<div data-djust-root
      data-draft-enabled="{{ draft_enabled }}"
      data-draft-key="{{ draft_key }}">
 
@@ -975,7 +975,7 @@ class AdvancedFormView(DraftModeMixin, LiveView):
 **Template:**
 
 ```html
-<div data-liveview-root
+<div data-djust-root
      data-draft-enabled="{{ draft_enabled }}"
      data-draft-key="{{ draft_key }}"
      {% if draft_clear %}data-draft-clear="true"{% endif %}>
@@ -992,7 +992,7 @@ class AdvancedFormView(DraftModeMixin, LiveView):
 The draft timestamp is stored in localStorage and can be displayed using JavaScript:
 
 ```html
-<div data-liveview-root
+<div data-djust-root
      data-draft-enabled="{{ draft_enabled }}"
      data-draft-key="{{ draft_key }}">
 

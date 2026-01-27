@@ -414,7 +414,7 @@ class LiveViewWebSocket {
                 }
 
                 // OPTIMIZATION: Skip HTML replacement if content was pre-rendered via HTTP GET
-                // BUT: Force hydration if server HTML has data-djust-id attributes for reliable patching
+                // BUT: Force hydration if server HTML has data-dj-id attributes for reliable patching
                 // Server sends has_ids flag to avoid client-side string search
                 const hasDataDjAttrs = data.has_ids === true;
                 if (this.skipMountHtml && !hasDataDjAttrs) {
@@ -423,9 +423,9 @@ class LiveViewWebSocket {
                     bindLiveViewEvents(); // Bind events to existing content
                 } else if (data.html) {
                     // Replace page content with server-rendered HTML
-                    // This is required when using ID-based patch targeting (data-djust-id attributes)
+                    // This is required when using ID-based patch targeting (data-dj-id attributes)
                     if (hasDataDjAttrs) {
-                        console.log('[LiveView] Hydrating DOM with data-djust-id attributes for reliable patching');
+                        console.log('[LiveView] Hydrating DOM with data-dj-id attributes for reliable patching');
                     }
                     let container = document.querySelector('[data-djust-view]');
                     if (!container) {
@@ -539,7 +539,7 @@ class LiveViewWebSocket {
         }
 
         if (container) {
-            const viewPath = container.dataset.liveView;
+            const viewPath = container.dataset.djustView;
             if (viewPath) {
                 // OPTIMIZATION: Check if content was already rendered by HTTP GET
                 // We still send mount message (server needs to initialize session),
@@ -1982,7 +1982,7 @@ function sanitizeIdForLog(id) {
  * Resolve a DOM node using ID-based lookup (primary) or path traversal (fallback).
  *
  * Resolution strategy:
- * 1. If djustId is provided, try querySelector('[data-djust-id="..."]') - O(1), reliable
+ * 1. If djustId is provided, try querySelector('[data-dj-id="..."]') - O(1), reliable
  * 2. Fall back to index-based path traversal
  *
  * @param {Array<number>} path - Index-based path (fallback)
@@ -1992,13 +1992,13 @@ function sanitizeIdForLog(id) {
 function getNodeByPath(path, djustId = null) {
     // Strategy 1: ID-based resolution (fast, reliable)
     if (djustId) {
-        const byId = document.querySelector(`[data-djust-id="${CSS.escape(djustId)}"]`);
+        const byId = document.querySelector(`[data-dj-id="${CSS.escape(djustId)}"]`);
         if (byId) {
             return byId;
         }
         // ID not found - fall through to path-based
         if (globalThis.djustDebug) {
-            console.log(`[LiveView] ID lookup failed for data-djust-id="${sanitizeIdForLog(djustId)}", trying path`);
+            console.log(`[LiveView] ID lookup failed for data-dj-id="${sanitizeIdForLog(djustId)}", trying path`);
         }
     }
 

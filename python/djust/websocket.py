@@ -100,7 +100,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Send connection acknowledgment
         await self.send_json(
             {
-                "type": "connected",
+                "type": "connect",
                 "session_id": self.session_id,
             }
         )
@@ -373,7 +373,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         html
                     )
 
-                    # Extract innerHTML of [data-liveview-root]
+                    # Extract innerHTML of [data-djust-root]
                     html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
 
             elif self.use_actors and self.actor_handle:
@@ -407,7 +407,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Strip comments and normalize whitespace to match Rust VDOM parser
                 html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
 
-                # Extract innerHTML of [data-liveview-root] for WebSocket client
+                # Extract innerHTML of [data-djust-root] for WebSocket client
                 # Client expects just the content to insert into existing container
                 html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
 
@@ -425,7 +425,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Send success response (HTML only if generated)
         logger.info(f"Successfully mounted view: {view_path}")
         response = {
-            "type": "mounted",
+            "type": "mount",
             "session_id": self.session_id,
             "view": view_path,
             "version": version,  # Include VDOM version for client sync
@@ -435,7 +435,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if html is not None:
             response["html"] = html
             # Flag indicating HTML has data-dj attributes for ID-based patching
-            response["has_ids"] = "data-dj=" in html
+            response["has_ids"] = "data-dj-id=" in html
 
         # Include cache configuration for handlers with @cache decorator
         cache_config = self._extract_cache_config()
@@ -761,7 +761,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(
                         html
                     )
-                    # Extract innerHTML to avoid nesting <div data-liveview-root> divs
+                    # Extract innerHTML to avoid nesting <div data-djust-root> divs
                     html_content = await sync_to_async(
                         self.view_instance._extract_liveview_content
                     )(html)
@@ -879,7 +879,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         hotreload_logger.debug(f"Cleared {caches_cleared} template caches")
         return caches_cleared
 
-    async def hotreload_message(self, event):
+    async def hotreload(self, event):
         """
         Handle hot reload broadcast messages from channel layer.
 
@@ -1031,7 +1031,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await channel_layer.group_send(
                 "djust_hotreload",
                 {
-                    "type": "hotreload.message",
+                    "type": "hotreload",
                     "file": file_path,
                 },
             )

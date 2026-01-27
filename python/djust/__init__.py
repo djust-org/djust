@@ -7,7 +7,7 @@ powered by Rust for maximum performance.
 
 from .utils import get_template_dirs, clear_template_dirs_cache
 from .live_view import LiveView, live_view
-from .component import Component, LiveComponent
+from .components.base import Component, LiveComponent
 from .decorators import (
     reactive,
     event_handler,
@@ -48,7 +48,7 @@ except ImportError:
     # Rust components not yet built - this is optional
     rust_components = None
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 def enable_hot_reload():

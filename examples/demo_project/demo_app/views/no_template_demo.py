@@ -346,8 +346,8 @@ class NoTemplateDemo(LiveView):
         # Get view path for WebSocket mounting
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
 
-        # Wrap with data-liveview-root container
-        liveview_content = f'<div data-liveview-root data-live-view="{view_path}">\n{inner_content}\n</div>'
+        # Wrap with data-djust-root container
+        liveview_content = f'<div data-djust-root data-djust-view="{view_path}">\n{inner_content}\n</div>'
 
         # Wrap with full HTML document structure
         wrapped_html = f"""<!DOCTYPE html>

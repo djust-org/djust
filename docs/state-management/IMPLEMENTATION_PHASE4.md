@@ -573,7 +573,7 @@ After initial Phase 4 completion, we added full WebSocket support for LiveCompon
 - `bcdeab6` - fix(phase4): Fix event log reactive boundary and remove debug logging
 
 **What We Fixed**:
-1. ✅ Auto-mounting LiveView via data-live-view attribute
+1. ✅ Auto-mounting LiveView via data-djust-view attribute
 2. ✅ Component event routing through WebSocket consumer
 3. ✅ Component-id injection into component root elements
 4. ✅ Event routing to component methods before parent handlers

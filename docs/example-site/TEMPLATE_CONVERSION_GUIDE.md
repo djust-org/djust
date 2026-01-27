@@ -49,7 +49,7 @@ We've created a unified `base.html` template with global navbar from a context p
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
 </head>
 <body>
-    <div data-liveview-root>
+    <div data-djust-root>
     <!-- Navbar Component -->
     {{ navbar.render }}
 
@@ -85,7 +85,7 @@ We've created a unified `base.html` template with global navbar from a context p
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
 {% endblock %}
 
-{% block body_start %}<div data-liveview-root>{% endblock %}
+{% block body_start %}<div data-djust-root>{% endblock %}
 
 {% block content %}
     <!-- Page Content Here -->
@@ -120,7 +120,7 @@ We've created a unified `base.html` template with global navbar from a context p
 - ✅ Any page-specific JS (in `{% block extra_js %}`)
 
 **Special case for LiveView:**
-- ✅ Add `{% block body_start %}<div data-liveview-root>{% endblock %}` at the top
+- ✅ Add `{% block body_start %}<div data-djust-root>{% endblock %}` at the top
 - ✅ Close the div at the end of `{% block content %}`
 
 ---
@@ -143,7 +143,7 @@ We've created a unified `base.html` template with global navbar from a context p
 - `extra_css`: Additional CSS files or inline styles
 - `syntax_highlighting`: Code highlighting CSS (e.g., highlight.js)
 - `extra_head`: Any other head content
-- `body_start`: Content at start of body (e.g., `<div data-liveview-root>`)
+- `body_start`: Content at start of body (e.g., `<div data-djust-root>`)
 - `navbar`: Navbar component (usually don't override this)
 - `content`: Main page content
 - `extra_js`: Additional JavaScript files or inline scripts
@@ -162,7 +162,7 @@ We've created a unified `base.html` template with global navbar from a context p
     <!-- ... 20 lines of CSS/JS imports ... -->
 </head>
 <body>
-    <div data-liveview-root>
+    <div data-djust-root>
     {{ navbar.render }}
     <!-- ... 15 lines of theme toggle ... -->
 
@@ -188,7 +188,7 @@ We've created a unified `base.html` template with global navbar from a context p
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
 {% endblock %}
 
-{% block body_start %}<div data-liveview-root>{% endblock %}
+{% block body_start %}<div data-djust-root>{% endblock %}
 
 {% block content %}
     <!-- Content starts here -->
@@ -232,7 +232,7 @@ For each template file:
 
 ### Analysis Phase:
 - [ ] Identify if template uses navbar (`{{ navbar }}` or `{{ navbar.render }}`)
-- [ ] Check if template has LiveView (`data-liveview-root`)
+- [ ] Check if template has LiveView (`data-djust-root`)
 - [ ] Note any page-specific CSS/JS
 - [ ] Note if syntax highlighting is used
 

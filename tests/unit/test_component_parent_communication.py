@@ -34,6 +34,10 @@ class TodoListComponent(LiveComponent):
         # Don't modify state directly - let parent handle it
         self.send_parent("todo_toggled", {"id": int(id)})
 
+    def get_context_data(self):
+        """Return context data for template rendering."""
+        return {"items": self.items}
+
 
 class UserListComponent(LiveComponent):
     """Test component for user list."""
@@ -53,6 +57,10 @@ class UserListComponent(LiveComponent):
 
     def select_user(self, id: str = None, **kwargs):
         self.send_parent("user_selected", {"user_id": int(id)})
+
+    def get_context_data(self):
+        """Return context data for template rendering."""
+        return {"users": self.users}
 
 
 class TodoDashboardView(LiveView):
@@ -311,6 +319,9 @@ class TestComponentPropUpdates:
                     self.title = title
                 if count is not None:
                     self.count = count
+
+            def get_context_data(self):
+                return {"title": self.title, "count": self.count}
 
         class ConfigView(LiveView):
             template = "{{ config.render }}"

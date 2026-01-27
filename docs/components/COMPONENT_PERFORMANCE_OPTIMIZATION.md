@@ -735,7 +735,7 @@ Lazy hydration is a client-side optimization that defers WebSocket connections u
 Instead of establishing WebSocket connections for all LiveView elements on page load, lazy hydration:
 
 1. Renders static HTML immediately (fast initial paint)
-2. Observes elements with `data-live-lazy` attribute
+2. Observes elements with `data-djust-lazy` attribute
 3. Triggers hydration when the specified condition is met
 4. Establishes WebSocket connection only when needed
 
@@ -751,22 +751,22 @@ Instead of establishing WebSocket connections for all LiveView elements on page 
 
 ```html
 <!-- Viewport-based (default) - hydrates when scrolled into view -->
-<div data-live-view="comments" data-live-lazy>
+<div data-djust-view="comments" data-djust-lazy>
     <div class="skeleton">Loading comments...</div>
 </div>
 
 <!-- Click-based - hydrates on first interaction -->
-<div data-live-view="editor" data-live-lazy="click">
+<div data-djust-view="editor" data-djust-lazy="click">
     <button>Click to edit</button>
 </div>
 
 <!-- Hover-based - hydrates when mouse enters -->
-<div data-live-view="preview" data-live-lazy="hover">
+<div data-djust-view="preview" data-djust-lazy="hover">
     <span>Hover for details</span>
 </div>
 
 <!-- Idle-based - hydrates during browser idle time -->
-<div data-live-view="analytics" data-live-lazy="idle">
+<div data-djust-view="analytics" data-djust-lazy="idle">
     <div>Loading analytics...</div>
 </div>
 ```
@@ -790,15 +790,15 @@ class DashboardView(LiveView):
 
     template_string = """
         <!-- Critical: Loads immediately -->
-        <div data-live-view="summary">{{ summary.render }}</div>
+        <div data-djust-view="summary">{{ summary.render }}</div>
 
         <!-- Hybrid component with lazy hydration -->
-        <div data-live-view="recent_orders" data-live-lazy>
+        <div data-djust-view="recent_orders" data-djust-lazy>
             {{ orders_skeleton }}
         </div>
 
         <!-- Rust component (fast rendering) with lazy hydration -->
-        <div data-live-view="notifications" data-live-lazy="hover">
+        <div data-djust-view="notifications" data-djust-lazy="hover">
             {{ notification_badges }}
         </div>
     """

@@ -194,7 +194,7 @@ class MyDemoView(LiveView):
 {% extends "base.html" %}
 
 {% block content %}
-<div data-liveview-root>
+<div data-djust-root>
     <!-- Use |safe filter to render HTML -->
     {{ hero|safe }}
 
