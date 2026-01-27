@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0-alpha.1] - 2026-01-26
+
 ### Changed
 
 - **BREAKING: Event Binding Syntax** - Standardized all event bindings to use `dj-` prefix instead of `@` prefix. This affects all event attributes: `@click` → `dj-click`, `@input` → `dj-input`, `@change` → `dj-change`, `@submit` → `dj-submit`, `@blur` → `dj-blur`, `@focus` → `dj-focus`, `@keydown` → `dj-keydown`, `@keyup` → `dj-keyup`, `@loading.*` → `dj-loading.*`. Benefits: namespaced attributes, no conflicts with Vue/Alpine, no CSS selector escaping required. ([#68](https://github.com/djust-org/djust/issues/68))
@@ -97,7 +99,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bug fixes and stability improvements
 
-[Unreleased]: https://github.com/djust-org/djust/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/djust-org/djust/compare/v0.2.0a1...HEAD
+[0.2.0-alpha.1]: https://github.com/djust-org/djust/compare/v0.1.8...v0.2.0a1
 [0.1.8]: https://github.com/djust-org/djust/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/djust-org/djust/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/djust-org/djust/compare/v0.1.5...v0.1.6
