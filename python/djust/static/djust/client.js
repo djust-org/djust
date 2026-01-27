@@ -176,7 +176,6 @@ function handleServerResponse(data, eventName, triggerElement) {
         if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
             console.log('[LiveView] Applying', data.patches.length, 'patches');
 
-
             // Store timing info globally for debug panel access
             window._lastPatchTiming = data.timing;
             // Store comprehensive performance data if available
