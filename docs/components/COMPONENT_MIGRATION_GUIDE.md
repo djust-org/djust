@@ -82,7 +82,7 @@ Run through each component and check:
    YES → LiveComponent
    NO → Continue
 
-2. Does it handle events? (@click, @change handlers)
+2. Does it handle events? (dj-click, dj-change handlers)
    YES → LiveComponent
    NO → Continue
 
