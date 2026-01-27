@@ -40,12 +40,15 @@ def patch_template_dirs(template_dir, settings):
     # Clear Django's template engine cache so it picks up the new settings
     # This is necessary because Django caches template engines on first use
     engines._engines = {}
+    # Also clear the cached_property 'templates' which caches settings.TEMPLATES
+    engines.__dict__.pop("templates", None)
 
     yield template_dir
 
     settings.TEMPLATES[0]["DIRS"] = original_dirs
     _get_template_dirs_cached.cache_clear()  # Reset cache after test
     engines._engines = {}  # Reset Django engines after test
+    engines.__dict__.pop("templates", None)  # Clear cached_property after test
 
 
 class TestLiveViewInclude:
