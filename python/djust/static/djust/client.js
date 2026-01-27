@@ -2107,6 +2107,171 @@ function isInSvgContext(element) {
 }
 
 /**
+ * Create an SVG element by tag name (security: only creates whitelisted tags)
+ * Uses a lookup object with factory functions to ensure only string literals
+ * are passed to createElementNS.
+ */
+const SVG_ELEMENT_FACTORIES = {
+    'svg': () => document.createElementNS(SVG_NAMESPACE, 'svg'),
+    'path': () => document.createElementNS(SVG_NAMESPACE, 'path'),
+    'circle': () => document.createElementNS(SVG_NAMESPACE, 'circle'),
+    'rect': () => document.createElementNS(SVG_NAMESPACE, 'rect'),
+    'line': () => document.createElementNS(SVG_NAMESPACE, 'line'),
+    'polyline': () => document.createElementNS(SVG_NAMESPACE, 'polyline'),
+    'polygon': () => document.createElementNS(SVG_NAMESPACE, 'polygon'),
+    'ellipse': () => document.createElementNS(SVG_NAMESPACE, 'ellipse'),
+    'g': () => document.createElementNS(SVG_NAMESPACE, 'g'),
+    'defs': () => document.createElementNS(SVG_NAMESPACE, 'defs'),
+    'use': () => document.createElementNS(SVG_NAMESPACE, 'use'),
+    'text': () => document.createElementNS(SVG_NAMESPACE, 'text'),
+    'tspan': () => document.createElementNS(SVG_NAMESPACE, 'tspan'),
+    'textPath': () => document.createElementNS(SVG_NAMESPACE, 'textPath'),
+    'clipPath': () => document.createElementNS(SVG_NAMESPACE, 'clipPath'),
+    'mask': () => document.createElementNS(SVG_NAMESPACE, 'mask'),
+    'pattern': () => document.createElementNS(SVG_NAMESPACE, 'pattern'),
+    'marker': () => document.createElementNS(SVG_NAMESPACE, 'marker'),
+    'symbol': () => document.createElementNS(SVG_NAMESPACE, 'symbol'),
+    'linearGradient': () => document.createElementNS(SVG_NAMESPACE, 'linearGradient'),
+    'radialGradient': () => document.createElementNS(SVG_NAMESPACE, 'radialGradient'),
+    'stop': () => document.createElementNS(SVG_NAMESPACE, 'stop'),
+    'image': () => document.createElementNS(SVG_NAMESPACE, 'image'),
+    'foreignObject': () => document.createElementNS(SVG_NAMESPACE, 'foreignObject'),
+    'switch': () => document.createElementNS(SVG_NAMESPACE, 'switch'),
+    'desc': () => document.createElementNS(SVG_NAMESPACE, 'desc'),
+    'title': () => document.createElementNS(SVG_NAMESPACE, 'title'),
+    'metadata': () => document.createElementNS(SVG_NAMESPACE, 'metadata'),
+};
+
+function createSvgElement(tagLower) {
+    const factory = SVG_ELEMENT_FACTORIES[tagLower];
+    return factory ? factory() : document.createElement('span');
+}
+
+/**
+ * Create an HTML element by tag name (security: only creates whitelisted tags)
+ * Uses a lookup object with factory functions to ensure only string literals
+ * are passed to createElement.
+ */
+const HTML_ELEMENT_FACTORIES = {
+    // Document structure
+    'html': () => document.createElement('html'),
+    'head': () => document.createElement('head'),
+    'body': () => document.createElement('body'),
+    'div': () => document.createElement('div'),
+    'span': () => document.createElement('span'),
+    'main': () => document.createElement('main'),
+    'section': () => document.createElement('section'),
+    'article': () => document.createElement('article'),
+    'aside': () => document.createElement('aside'),
+    'header': () => document.createElement('header'),
+    'footer': () => document.createElement('footer'),
+    'nav': () => document.createElement('nav'),
+    'figure': () => document.createElement('figure'),
+    'figcaption': () => document.createElement('figcaption'),
+    // Text content
+    'h1': () => document.createElement('h1'),
+    'h2': () => document.createElement('h2'),
+    'h3': () => document.createElement('h3'),
+    'h4': () => document.createElement('h4'),
+    'h5': () => document.createElement('h5'),
+    'h6': () => document.createElement('h6'),
+    'p': () => document.createElement('p'),
+    'pre': () => document.createElement('pre'),
+    'code': () => document.createElement('code'),
+    'blockquote': () => document.createElement('blockquote'),
+    'hr': () => document.createElement('hr'),
+    'br': () => document.createElement('br'),
+    'wbr': () => document.createElement('wbr'),
+    'address': () => document.createElement('address'),
+    // Inline text
+    'a': () => document.createElement('a'),
+    'abbr': () => document.createElement('abbr'),
+    'b': () => document.createElement('b'),
+    'bdi': () => document.createElement('bdi'),
+    'bdo': () => document.createElement('bdo'),
+    'cite': () => document.createElement('cite'),
+    'data': () => document.createElement('data'),
+    'dfn': () => document.createElement('dfn'),
+    'em': () => document.createElement('em'),
+    'i': () => document.createElement('i'),
+    'kbd': () => document.createElement('kbd'),
+    'mark': () => document.createElement('mark'),
+    'q': () => document.createElement('q'),
+    's': () => document.createElement('s'),
+    'samp': () => document.createElement('samp'),
+    'small': () => document.createElement('small'),
+    'strong': () => document.createElement('strong'),
+    'sub': () => document.createElement('sub'),
+    'sup': () => document.createElement('sup'),
+    'time': () => document.createElement('time'),
+    'u': () => document.createElement('u'),
+    'var': () => document.createElement('var'),
+    'del': () => document.createElement('del'),
+    'ins': () => document.createElement('ins'),
+    // Lists
+    'ul': () => document.createElement('ul'),
+    'ol': () => document.createElement('ol'),
+    'li': () => document.createElement('li'),
+    'dl': () => document.createElement('dl'),
+    'dt': () => document.createElement('dt'),
+    'dd': () => document.createElement('dd'),
+    'menu': () => document.createElement('menu'),
+    // Tables
+    'table': () => document.createElement('table'),
+    'thead': () => document.createElement('thead'),
+    'tbody': () => document.createElement('tbody'),
+    'tfoot': () => document.createElement('tfoot'),
+    'tr': () => document.createElement('tr'),
+    'th': () => document.createElement('th'),
+    'td': () => document.createElement('td'),
+    'caption': () => document.createElement('caption'),
+    'colgroup': () => document.createElement('colgroup'),
+    'col': () => document.createElement('col'),
+    // Forms
+    'form': () => document.createElement('form'),
+    'fieldset': () => document.createElement('fieldset'),
+    'legend': () => document.createElement('legend'),
+    'label': () => document.createElement('label'),
+    'input': () => document.createElement('input'),
+    'textarea': () => document.createElement('textarea'),
+    'select': () => document.createElement('select'),
+    'option': () => document.createElement('option'),
+    'optgroup': () => document.createElement('optgroup'),
+    'button': () => document.createElement('button'),
+    'datalist': () => document.createElement('datalist'),
+    'output': () => document.createElement('output'),
+    'progress': () => document.createElement('progress'),
+    'meter': () => document.createElement('meter'),
+    // Media
+    'img': () => document.createElement('img'),
+    'audio': () => document.createElement('audio'),
+    'video': () => document.createElement('video'),
+    'source': () => document.createElement('source'),
+    'track': () => document.createElement('track'),
+    'picture': () => document.createElement('picture'),
+    'canvas': () => document.createElement('canvas'),
+    'iframe': () => document.createElement('iframe'),
+    'embed': () => document.createElement('embed'),
+    'object': () => document.createElement('object'),
+    'param': () => document.createElement('param'),
+    'map': () => document.createElement('map'),
+    'area': () => document.createElement('area'),
+    // Interactive
+    'details': () => document.createElement('details'),
+    'summary': () => document.createElement('summary'),
+    'dialog': () => document.createElement('dialog'),
+    // Other
+    'template': () => document.createElement('template'),
+    'slot': () => document.createElement('slot'),
+    'noscript': () => document.createElement('noscript'),
+};
+
+function createHtmlElement(tagLower) {
+    const factory = HTML_ELEMENT_FACTORIES[tagLower];
+    return factory ? factory() : document.createElement('span');
+}
+
+/**
  * Create a DOM node from a virtual node (VDOM).
  * SECURITY NOTE: vnode data comes from the trusted server (Django templates
  * rendered server-side). This is the standard LiveView pattern where the
@@ -2118,28 +2283,29 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
     }
 
     // Validate tag name against whitelist (security: prevents script injection)
-    const tagLower = String(vnode.tag || 'span').toLowerCase();
+    // Convert to lowercase for consistent matching
+    const tagLower = String(vnode.tag || '').toLowerCase();
+
+    // Check if tag is in our whitelists
     const isSvgTag = SVG_TAGS.has(tagLower);
     const isAllowedHtml = ALLOWED_HTML_TAGS.has(tagLower);
 
-    // Security: Use validated tagLower (from whitelist) for element creation
-    // Blocked tags get replaced with span; only whitelisted tags pass through
-    const safeTag = (isSvgTag || isAllowedHtml) ? tagLower : 'span';
-
-    if (!isSvgTag && !isAllowedHtml) {
-        // Unknown tag - log warning (tag is already sanitized via toLowerCase + slice)
+    // Security: Only pass whitelisted string literals to createElement
+    // If not in whitelist, use 'span' as a safe fallback
+    let elem;
+    if (isSvgTag) {
+        // SVG tag: use switch for known values only
+        elem = createSvgElement(tagLower);
+    } else if (isAllowedHtml) {
+        // HTML tag: use switch for known values only
+        elem = createHtmlElement(tagLower);
+    } else {
+        // Unknown tag - use safe span placeholder
         if (globalThis.djustDebug) {
             console.warn('[LiveView] Blocked unknown tag, using span placeholder');
         }
+        elem = document.createElement('span');
     }
-
-    // Determine if we need SVG namespace
-    const useSvgNamespace = isSvgTag || inSvgContext;
-
-    // Create element using validated safe tag from whitelist
-    const elem = useSvgNamespace
-        ? document.createElementNS(SVG_NAMESPACE, safeTag)
-        : document.createElement(safeTag);
 
     if (vnode.attrs) {
         for (const [key, value] of Object.entries(vnode.attrs)) {
