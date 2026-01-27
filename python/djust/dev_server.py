@@ -146,9 +146,9 @@ class HotReloadServer:
         self.on_change_callback = on_change
         self.observer = Observer()
 
-        # Default excludes
+        # Default excludes (stored for future use; handler has built-in exclusions)
         if exclude_dirs is None:
-            exclude_dirs = {
+            exclude_dirs = {  # noqa: F841 - reserved for future handler extension
                 "node_modules",
                 ".git",
                 "__pycache__",

@@ -187,6 +187,7 @@ __all__ = [
     "throttle",
     "render_template",
     "diff_html",
+    "RustLiveView",
     "react_components",
     "register_react_component",
     "ReactMixin",

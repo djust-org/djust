@@ -48,7 +48,7 @@ try:
     from djust.live_view import (
         DjangoJSONEncoder,
         _get_model_hash,
-        clear_jit_cache,
+        clear_jit_cache,  # noqa: F401 - exported for external use
         _jit_serializer_cache,  # Shared cache - cleared by clear_jit_cache()
     )
 

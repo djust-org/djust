@@ -897,7 +897,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         import time
         from channels.db import database_sync_to_async
         from django.template import TemplateDoesNotExist
-        from json import JSONDecodeError
 
         file_path = event.get("file", "unknown")
 
@@ -964,11 +963,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 # Parse patches if they're a JSON string
                 try:
-                    import json as json_module
-
                     if isinstance(patches, str):
-                        patches = json_module.loads(patches)
-                except (JSONDecodeError, ValueError) as e:
+                        patches = json.loads(patches)
+                except (json.JSONDecodeError, ValueError) as e:
                     hotreload_logger.error(f"Failed to parse patches JSON: {e}")
                     await self.send_json(
                         {

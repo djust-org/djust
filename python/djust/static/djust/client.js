@@ -977,12 +977,15 @@ function initDraftMode() {
 
     // Monitor all fields with data-draft="true" for changes
     const draftFields = document.querySelectorAll('[data-draft="true"]');
+    // Dangerous keys that could cause prototype pollution
+    const UNSAFE_DRAFT_KEYS = ['__proto__', 'constructor', 'prototype'];
     draftFields.forEach(field => {
         const saveDraft = () => {
             // Collect all draft field values
             const draftData = {};
             draftFields.forEach(f => {
-                if (f.name) {
+                // Prevent prototype pollution attacks
+                if (f.name && !UNSAFE_DRAFT_KEYS.includes(f.name)) {
                     if (f.type === 'checkbox') {
                         draftData[f.name] = f.checked;
                     } else {
@@ -1008,10 +1011,12 @@ function initDraftMode() {
 
 function collectFormData(container) {
     const data = {};
+    // Dangerous keys that could cause prototype pollution
+    const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
 
     const fields = container.querySelectorAll('input, textarea, select');
     fields.forEach(field => {
-        if (field.name) {
+        if (field.name && !UNSAFE_KEYS.includes(field.name)) {
             if (field.type === 'checkbox') {
                 data[field.name] = field.checked;
             } else if (field.type === 'radio') {
@@ -1027,7 +1032,8 @@ function collectFormData(container) {
     const editables = container.querySelectorAll('[contenteditable="true"]');
     editables.forEach(editable => {
         const name = editable.getAttribute('name') || editable.id;
-        if (name) {
+        // Prevent prototype pollution attacks
+        if (name && !UNSAFE_KEYS.includes(name)) {
             data[name] = editable.innerHTML;
         }
     });
@@ -1295,6 +1301,8 @@ window.djust.parseEventHandler = parseEventHandler;
  */
 function extractTypedParams(element) {
     const params = {};
+    // Dangerous keys that could cause prototype pollution
+    const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
 
     for (const attr of element.attributes) {
         if (!attr.name.startsWith('data-')) continue;
@@ -1321,6 +1329,11 @@ function extractTypedParams(element) {
         }
 
         const key = rawKey.replace(/-/g, '_'); // Convert kebab-case to snake_case
+
+        // Prevent prototype pollution attacks
+        if (UNSAFE_KEYS.includes(key)) {
+            continue;
+        }
         let value = attr.value;
 
         // Apply type coercion based on suffix
@@ -2099,10 +2112,15 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
 
                     e.preventDefault();
                     const params = {};
+                    // Dangerous keys that could cause prototype pollution
+                    const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
                     Array.from(elem.attributes).forEach(attr => {
                         if (attr.name.startsWith('data-') && !attr.name.startsWith('data-liveview')) {
                             const paramKey = attr.name.substring(5).replace(/-/g, '_');
-                            params[paramKey] = attr.value;
+                            // Prevent prototype pollution attacks
+                            if (!UNSAFE_KEYS.includes(paramKey)) {
+                                params[paramKey] = attr.value;
+                            }
                         }
                     });
 
