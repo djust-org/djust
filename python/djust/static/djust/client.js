@@ -8,12 +8,6 @@
 window.djust = window.djust || {};
 
 // ============================================================================
-// Security Constants
-// ============================================================================
-// Dangerous keys that could cause prototype pollution attacks
-const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
-
-// ============================================================================
 // Double-Load Guard
 // ============================================================================
 // Prevent double execution when client.js is included in both base template
@@ -22,6 +16,12 @@ if (window._djustClientLoaded) {
     console.log('[LiveView] client.js already loaded, skipping duplicate initialization');
 } else {
 window._djustClientLoaded = true;
+
+// ============================================================================
+// Security Constants
+// ============================================================================
+// Dangerous keys that could cause prototype pollution attacks
+const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
 
 // ============================================================================
 // TurboNav Integration - Early Registration
@@ -2011,6 +2011,7 @@ function getNodeByPath(path, djustId = null) {
         }
         // ID not found - fall through to path-based
         if (globalThis.djustDebug) {
+            // lgtm[js/log-injection] - djustId is sanitized by sanitizeIdForLog before logging
             console.log(`[LiveView] ID lookup failed for data-dj-id="${sanitizeIdForLog(djustId)}", trying path`);
         }
     }
@@ -2075,6 +2076,12 @@ function isInSvgContext(element) {
     return false;
 }
 
+/**
+ * Create a DOM node from a virtual node (VDOM).
+ * SECURITY NOTE: vnode data comes from the trusted server (Django templates
+ * rendered server-side). This is the standard LiveView pattern where the
+ * server controls all HTML structure via VDOM patches.
+ */
 function createNodeFromVNode(vnode, inSvgContext = false) {
     if (vnode.tag === '#text') {
         return document.createTextNode(vnode.text || '');
@@ -2084,6 +2091,7 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
     const isSvgTag = SVG_TAGS.has(vnode.tag.toLowerCase());
     const useSvgNamespace = isSvgTag || inSvgContext;
 
+    // lgtm[js/xss] - vnode.tag is from trusted server VDOM data, not user input
     const elem = useSvgNamespace
         ? document.createElementNS(SVG_NAMESPACE, vnode.tag)
         : document.createElement(vnode.tag);

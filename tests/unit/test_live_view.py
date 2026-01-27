@@ -42,7 +42,8 @@ class TestLiveViewBasics:
                 self.count = 0
 
         view = CounterView()
-        _response = view.get(get_request)  # noqa: F841
+        # Call get() to trigger mount - response not needed for this test
+        view.get(get_request)
 
         assert view.mount_called is True
         assert hasattr(view, "count")

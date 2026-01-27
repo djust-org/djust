@@ -117,12 +117,16 @@ class LiveViewConfig:
         """Load configuration from Django settings if available"""
         try:
             from django.conf import settings
-            from django.core.exceptions import ImproperlyConfigured
 
             if hasattr(settings, "LIVEVIEW_CONFIG"):
                 self._config.update(settings.LIVEVIEW_CONFIG)
-        except (ImportError, ImproperlyConfigured):
-            # Django not installed, or settings not configured yet (e.g., during import)
+        except ImportError:
+            # Django not installed
+            pass
+        except Exception:
+            # Settings not configured yet (e.g., ImproperlyConfigured during import)
+            # We catch Exception here because the ImproperlyConfigured import might
+            # itself fail if Django is partially installed
             pass
 
     def get(self, key: str, default: Any = None) -> Any:
