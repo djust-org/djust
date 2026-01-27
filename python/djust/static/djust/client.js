@@ -176,6 +176,7 @@ function handleServerResponse(data, eventName, triggerElement) {
         if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
             console.log('[LiveView] Applying', data.patches.length, 'patches');
 
+
             // Store timing info globally for debug panel access
             window._lastPatchTiming = data.timing;
             // Store comprehensive performance data if available
@@ -2035,17 +2036,97 @@ function getNodeByPath(path, djustId = null) {
     return node;
 }
 
-function createNodeFromVNode(vnode) {
+// SVG elements that need to be created with the SVG namespace
+const SVG_ELEMENTS = new Set([
+    'svg', 'circle', 'ellipse', 'line', 'path', 'polygon', 'polyline', 'rect',
+    'g', 'defs', 'use', 'symbol', 'text', 'tspan', 'textPath',
+    'clipPath', 'mask', 'marker', 'pattern', 'linearGradient', 'radialGradient', 'stop',
+    'filter', 'feBlend', 'feColorMatrix', 'feComponentTransfer', 'feComposite',
+    'feConvolveMatrix', 'feDiffuseLighting', 'feDisplacementMap', 'feFlood',
+    'feGaussianBlur', 'feImage', 'feMerge', 'feMergeNode', 'feMorphology',
+    'feOffset', 'feSpecularLighting', 'feTile', 'feTurbulence',
+    'animate', 'animateMotion', 'animateTransform', 'set',
+    'foreignObject', 'switch', 'desc', 'title', 'metadata', 'image', 'a'
+]);
+
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+
+// SVG attributes that need camelCase (html5ever lowercases them)
+const SVG_ATTR_CASE_MAP = {
+    'viewbox': 'viewBox',
+    'preserveaspectratio': 'preserveAspectRatio',
+    'basefrequency': 'baseFrequency',
+    'baseprofile': 'baseProfile',
+    'calcmode': 'calcMode',
+    'clippathunits': 'clipPathUnits',
+    'diffuseconstant': 'diffuseConstant',
+    'edgemode': 'edgeMode',
+    'filterunits': 'filterUnits',
+    'glyphref': 'glyphRef',
+    'gradienttransform': 'gradientTransform',
+    'gradientunits': 'gradientUnits',
+    'kernelmatrix': 'kernelMatrix',
+    'kernelunitlength': 'kernelUnitLength',
+    'keypoints': 'keyPoints',
+    'keysplines': 'keySplines',
+    'keytimes': 'keyTimes',
+    'lengthadjust': 'lengthAdjust',
+    'limitingconeangle': 'limitingConeAngle',
+    'markerheight': 'markerHeight',
+    'markerunits': 'markerUnits',
+    'markerwidth': 'markerWidth',
+    'maskcontentunits': 'maskContentUnits',
+    'maskunits': 'maskUnits',
+    'numoctaves': 'numOctaves',
+    'pathlength': 'pathLength',
+    'patterncontentunits': 'patternContentUnits',
+    'patterntransform': 'patternTransform',
+    'patternunits': 'patternUnits',
+    'pointsatx': 'pointsAtX',
+    'pointsaty': 'pointsAtY',
+    'pointsatz': 'pointsAtZ',
+    'primitiveunits': 'primitiveUnits',
+    'refx': 'refX',
+    'refy': 'refY',
+    'repeatcount': 'repeatCount',
+    'repeatdur': 'repeatDur',
+    'requiredextensions': 'requiredExtensions',
+    'requiredfeatures': 'requiredFeatures',
+    'specularconstant': 'specularConstant',
+    'specularexponent': 'specularExponent',
+    'spreadmethod': 'spreadMethod',
+    'startoffset': 'startOffset',
+    'stddeviation': 'stdDeviation',
+    'stitchtiles': 'stitchTiles',
+    'surfacescale': 'surfaceScale',
+    'systemlanguage': 'systemLanguage',
+    'tablevalues': 'tableValues',
+    'targetx': 'targetX',
+    'targety': 'targetY',
+    'textlength': 'textLength',
+    'xchannelselector': 'xChannelSelector',
+    'ychannelselector': 'yChannelSelector',
+    'zoomandpan': 'zoomAndPan'
+};
+
+function createNodeFromVNode(vnode, parentIsSvg = false) {
     if (vnode.tag === '#text') {
         return document.createTextNode(vnode.text || '');
     }
 
-    const elem = document.createElement(vnode.tag);
+    const tagLower = vnode.tag.toLowerCase();
+    const isSvgElement = tagLower === 'svg' || (parentIsSvg && SVG_ELEMENTS.has(tagLower));
+
+    const elem = isSvgElement
+        ? document.createElementNS(SVG_NAMESPACE, vnode.tag)
+        : document.createElement(vnode.tag);
 
     if (vnode.attrs) {
         for (const [key, value] of Object.entries(vnode.attrs)) {
             if (key.startsWith('dj-')) {
                 const eventName = key.substring(3);
+                // Parse handler to extract function name and arguments (like bindLiveViewEvents does)
+                const parsed = parseEventHandler(value);
                 elem.addEventListener(eventName, (e) => {
                     e.preventDefault();
                     const params = {};
@@ -2056,6 +2137,12 @@ function createNodeFromVNode(vnode) {
                         }
                     });
 
+                    // Add positional arguments from handler syntax if present
+                    // e.g., dj-click="set_theme('light')" -> params._args = ['light']
+                    if (parsed.args.length > 0) {
+                        params._args = parsed.args;
+                    }
+
                     let currentElement = elem;
                     while (currentElement && currentElement !== document.body) {
                         if (currentElement.dataset.componentId) {
@@ -2065,20 +2152,24 @@ function createNodeFromVNode(vnode) {
                         currentElement = currentElement.parentElement;
                     }
 
-                    handleEvent(value, params);
+                    handleEvent(parsed.name, params);
                 });
             } else {
                 if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
                     elem.value = value;
                 }
-                elem.setAttribute(key, value);
+                // For SVG elements, use corrected camelCase attribute names
+                const attrName = isSvgElement && SVG_ATTR_CASE_MAP[key.toLowerCase()]
+                    ? SVG_ATTR_CASE_MAP[key.toLowerCase()]
+                    : key;
+                elem.setAttribute(attrName, value);
             }
         }
     }
 
     if (vnode.children) {
         for (const child of vnode.children) {
-            elem.appendChild(createNodeFromVNode(child));
+            elem.appendChild(createNodeFromVNode(child, isSvgElement));
         }
     }
 
@@ -2379,6 +2470,12 @@ function applySinglePatch(patch) {
                 break;
 
             case 'RemoveAttr':
+                // Never remove dj-* event handler attributes - these are framework-managed
+                // and should always be preserved. This protects against VDOM path mismatches
+                // when conditional rendering changes the DOM structure.
+                if (patch.key && patch.key.startsWith('dj-')) {
+                    break;
+                }
                 node.removeAttribute(patch.key);
                 break;
 
