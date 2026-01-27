@@ -2010,9 +2010,10 @@ function getNodeByPath(path, djustId = null) {
             return byId;
         }
         // ID not found - fall through to path-based
+        // CodeQL: djustId is sanitized by sanitizeIdForLog() which limits length and removes special chars
         if (globalThis.djustDebug) {
-            // lgtm[js/log-injection] - djustId is sanitized by sanitizeIdForLog before logging
-            console.log(`[LiveView] ID lookup failed for data-dj-id="${sanitizeIdForLog(djustId)}", trying path`);
+            const safeId = sanitizeIdForLog(djustId);  // Explicitly sanitize before use
+            console.log(`[LiveView] ID lookup failed for data-dj-id="${safeId}", trying path`);
         }
     }
 
@@ -2059,6 +2060,36 @@ const SVG_TAGS = new Set([
     'desc', 'title', 'metadata'
 ]);
 
+// Allowed HTML tags for VDOM element creation (security: prevents script injection)
+// This whitelist covers standard HTML elements; extend as needed
+const ALLOWED_HTML_TAGS = new Set([
+    // Document structure
+    'html', 'head', 'body', 'div', 'span', 'main', 'section', 'article',
+    'aside', 'header', 'footer', 'nav', 'figure', 'figcaption',
+    // Text content
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'pre', 'code', 'blockquote',
+    'hr', 'br', 'wbr', 'address',
+    // Inline text
+    'a', 'abbr', 'b', 'bdi', 'bdo', 'cite', 'data', 'dfn', 'em', 'i',
+    'kbd', 'mark', 'q', 's', 'samp', 'small', 'strong', 'sub', 'sup',
+    'time', 'u', 'var', 'del', 'ins',
+    // Lists
+    'ul', 'ol', 'li', 'dl', 'dt', 'dd', 'menu',
+    // Tables
+    'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption',
+    'colgroup', 'col',
+    // Forms
+    'form', 'fieldset', 'legend', 'label', 'input', 'textarea', 'select',
+    'option', 'optgroup', 'button', 'datalist', 'output', 'progress', 'meter',
+    // Media
+    'img', 'audio', 'video', 'source', 'track', 'picture', 'canvas',
+    'iframe', 'embed', 'object', 'param', 'map', 'area',
+    // Interactive
+    'details', 'summary', 'dialog',
+    // Other
+    'template', 'slot', 'noscript'
+]);
+
 /**
  * Check if a DOM element is within an SVG context.
  * Used when creating new elements during patch application.
@@ -2087,11 +2118,23 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
         return document.createTextNode(vnode.text || '');
     }
 
+    // Validate tag name against whitelist (security: prevents script injection)
+    const tagLower = vnode.tag.toLowerCase();
+    const isSvgTag = SVG_TAGS.has(tagLower);
+    const isAllowedHtml = ALLOWED_HTML_TAGS.has(tagLower);
+
+    if (!isSvgTag && !isAllowedHtml) {
+        // Unknown tag - create a safe span placeholder instead
+        console.warn(`[LiveView] Blocked unknown tag: ${tagLower.slice(0, 20)}`);
+        const placeholder = document.createElement('span');
+        placeholder.setAttribute('data-blocked-tag', tagLower.slice(0, 20));
+        return placeholder;
+    }
+
     // Determine if we need SVG namespace
-    const isSvgTag = SVG_TAGS.has(vnode.tag.toLowerCase());
     const useSvgNamespace = isSvgTag || inSvgContext;
 
-    // lgtm[js/xss] - vnode.tag is from trusted server VDOM data, not user input
+    // Tag is validated against whitelist - safe to create
     const elem = useSvgNamespace
         ? document.createElementNS(SVG_NAMESPACE, vnode.tag)
         : document.createElement(vnode.tag);
