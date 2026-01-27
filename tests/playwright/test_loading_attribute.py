@@ -93,7 +93,7 @@ async def test_loading_attribute():
             # Check for dj-loading attributes in DOM
             loading_elements = await page.evaluate("""
                 () => {
-                    const elements = document.querySelectorAll('[\\\\dj-loading\\\\.disable], [\\\\dj-loading\\\\.class], [\\\\dj-loading\\\\.show], [\\\\dj-loading\\\\.hide]');
+                    const elements = document.querySelectorAll('[dj-loading\\\\.disable], [dj-loading\\\\.class], [dj-loading\\\\.show], [dj-loading\\\\.hide]');
                     return elements.length;
                 }
             """)
@@ -101,7 +101,7 @@ async def test_loading_attribute():
 
             # Manual test: Click button and check disabled state
             print("\n🔍 Manual Button Disable Test:")
-            disable_button = await page.query_selector("button[\\dj-loading\\.disable]")
+            disable_button = await page.query_selector("button[dj-loading\\.disable]")
             if disable_button:
                 # Check initial state
                 is_disabled_before = await disable_button.is_disabled()
