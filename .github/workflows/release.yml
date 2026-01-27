@@ -75,12 +75,7 @@ jobs:
             python-version: '3.11'
           - os: macos-15-intel
             python-version: '3.12'
-          # macOS ARM - macOS 14 (for compatibility with older Macs)
-          - os: macos-14
-            python-version: '3.11'
-          - os: macos-14
-            python-version: '3.12'
-          # macOS ARM - macOS 15 (latest)
+          # macOS ARM - latest (macos-15)
           - os: macos-15
             python-version: '3.11'
           - os: macos-15
