@@ -24,6 +24,27 @@ window._djustClientLoaded = true;
 const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
 
 // ============================================================================
+// DOM Helper Functions
+// ============================================================================
+
+/**
+ * Find the closest parent component ID by walking up the DOM tree.
+ * Used by event handlers to determine which component an event originated from.
+ * @param {HTMLElement} element - Starting element
+ * @returns {string|null} - Component ID or null if not found
+ */
+function getComponentId(element) {
+    let currentElement = element;
+    while (currentElement && currentElement !== document.body) {
+        if (currentElement.dataset.componentId) {
+            return currentElement.dataset.componentId;
+        }
+        currentElement = currentElement.parentElement;
+    }
+    return null;
+}
+
+// ============================================================================
 // TurboNav Integration - Early Registration
 // ============================================================================
 // Register turbo:load handler early to ensure it's ready before TurboNav navigation.
@@ -1434,14 +1455,10 @@ function bindLiveViewEvents() {
                     params._args = parsed.args;
                 }
 
-                // Phase 4: Check if event is from a component (walk up DOM tree)
-                let currentElement = e.currentTarget;
-                while (currentElement && currentElement !== document.body) {
-                    if (currentElement.dataset.componentId) {
-                        params.component_id = currentElement.dataset.componentId;
-                        break;
-                    }
-                    currentElement = currentElement.parentElement;
+                /// Phase 4: Check if event is from a component
+                const componentId = getComponentId(e.currentTarget);
+                if (componentId) {
+                    params.component_id = componentId;
                 }
 
                 // Pass target element for optimistic updates (Phase 3)
@@ -1460,14 +1477,10 @@ function bindLiveViewEvents() {
                 const formData = new FormData(e.target);
                 const params = Object.fromEntries(formData.entries());
 
-                // Phase 4: Check if event is from a component (walk up DOM tree)
-                let currentElement = e.target;
-                while (currentElement && currentElement !== document.body) {
-                    if (currentElement.dataset.componentId) {
-                        params.component_id = currentElement.dataset.componentId;
-                        break;
-                    }
-                    currentElement = currentElement.parentElement;
+                /// Phase 4: Check if event is from a component
+                const componentId = getComponentId(e.target);
+                if (componentId) {
+                    params.component_id = componentId;
                 }
 
                 // Pass target element for optimistic updates (Phase 3)
@@ -1505,14 +1518,10 @@ function bindLiveViewEvents() {
                     field: fieldName
                 };
 
-                // Phase 4: Check if event is from a component (walk up DOM tree)
-                let currentElement = e.target;
-                while (currentElement && currentElement !== document.body) {
-                    if (currentElement.dataset.componentId) {
-                        params.component_id = currentElement.dataset.componentId;
-                        break;
-                    }
-                    currentElement = currentElement.parentElement;
+                /// Phase 4: Check if event is from a component
+                const componentId = getComponentId(e.target);
+                if (componentId) {
+                    params.component_id = componentId;
                 }
 
                 await handleEvent(changeHandler, params);
@@ -1544,14 +1553,10 @@ function bindLiveViewEvents() {
                     field: fieldName
                 };
 
-                // Phase 4: Check if event is from a component (walk up DOM tree)
-                let currentElement = e.target;
-                while (currentElement && currentElement !== document.body) {
-                    if (currentElement.dataset.componentId) {
-                        params.component_id = currentElement.dataset.componentId;
-                        break;
-                    }
-                    currentElement = currentElement.parentElement;
+                /// Phase 4: Check if event is from a component
+                const componentId = getComponentId(e.target);
+                if (componentId) {
+                    params.component_id = componentId;
                 }
 
                 await handleEvent(inputHandler, params);
@@ -1579,14 +1584,10 @@ function bindLiveViewEvents() {
                     field: fieldName
                 };
 
-                // Phase 4: Check if event is from a component (walk up DOM tree)
-                let currentElement = e.target;
-                while (currentElement && currentElement !== document.body) {
-                    if (currentElement.dataset.componentId) {
-                        params.component_id = currentElement.dataset.componentId;
-                        break;
-                    }
-                    currentElement = currentElement.parentElement;
+                /// Phase 4: Check if event is from a component
+                const componentId = getComponentId(e.target);
+                if (componentId) {
+                    params.component_id = componentId;
                 }
 
                 await handleEvent(blurHandler, params);
@@ -1604,14 +1605,10 @@ function bindLiveViewEvents() {
                     field: fieldName
                 };
 
-                // Phase 4: Check if event is from a component (walk up DOM tree)
-                let currentElement = e.target;
-                while (currentElement && currentElement !== document.body) {
-                    if (currentElement.dataset.componentId) {
-                        params.component_id = currentElement.dataset.componentId;
-                        break;
-                    }
-                    currentElement = currentElement.parentElement;
+                /// Phase 4: Check if event is from a component
+                const componentId = getComponentId(e.target);
+                if (componentId) {
+                    params.component_id = componentId;
                 }
 
                 await handleEvent(focusHandler, params);
@@ -1644,14 +1641,10 @@ function bindLiveViewEvents() {
                         field: fieldName
                     };
 
-                    // Phase 4: Check if event is from a component (walk up DOM tree)
-                    let currentElement = e.target;
-                    while (currentElement && currentElement !== document.body) {
-                        if (currentElement.dataset.componentId) {
-                            params.component_id = currentElement.dataset.componentId;
-                            break;
-                        }
-                        currentElement = currentElement.parentElement;
+                    /// Phase 4: Check if event is from a component
+                    const componentId = getComponentId(e.target);
+                    if (componentId) {
+                        params.component_id = componentId;
                     }
 
                     await handleEvent(handlerName, params);
@@ -2352,13 +2345,10 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                     // Pass target element for optimistic updates (Phase 3)
                     params._targetElement = e.currentTarget;
 
-                    let currentElement = elem;
-                    while (currentElement && currentElement !== document.body) {
-                        if (currentElement.dataset.componentId) {
-                            params.component_id = currentElement.dataset.componentId;
-                            break;
-                        }
-                        currentElement = currentElement.parentElement;
+                    // Check if event is from a component
+                    const componentId = getComponentId(elem);
+                    if (componentId) {
+                        params.component_id = componentId;
                     }
 
                     handleEvent(parsed.name, params);

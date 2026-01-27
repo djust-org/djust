@@ -10,6 +10,34 @@ from abc import ABC, abstractmethod
 from django.utils.safestring import mark_safe
 
 
+def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -> str:
+    """
+    Render a template string with Rust acceleration, falling back to Django templates.
+
+    Tries Rust template rendering first for performance. Falls back to Django's
+    Template engine if Rust is unavailable or encounters an error (e.g., for
+    {% include %} tags that Rust doesn't support).
+
+    Args:
+        template_str: Template string to render
+        context: Context dictionary for template variables
+
+    Returns:
+        Rendered HTML string (not marked as safe - caller should mark_safe if needed)
+    """
+    try:
+        from djust._rust import render_template
+
+        return render_template(template_str, context)
+    except (ImportError, AttributeError, RuntimeError):
+        # Rust not available or template error, fall back to Django templates
+        from django.template import Context, Template
+
+        template = Template(template_str)
+        django_context = Context(context)
+        return template.render(django_context)
+
+
 class Component(ABC):
     """
     Base class for stateless presentation components with automatic performance optimization.
@@ -89,6 +117,33 @@ class Component(ABC):
     # Class-level counter for auto-generating component keys
     _component_counter = 0
 
+    def _create_rust_instance(self, **props) -> None:
+        """
+        Create a Rust instance with fallback for missing framework parameter.
+
+        Attempts to create a Rust component instance with the configured CSS
+        framework. Falls back to creation without framework if the Rust
+        component doesn't accept that parameter.
+
+        Args:
+            **props: Properties to pass to the Rust constructor
+        """
+        if self._rust_impl_class is None:
+            return
+
+        try:
+            from djust.config import config
+
+            framework = config.get("css_framework", "bootstrap5")
+            try:
+                self._rust_instance = self._rust_impl_class(**props, framework=framework)
+            except TypeError:
+                # Rust component doesn't accept framework parameter
+                self._rust_instance = self._rust_impl_class(**props)
+        except Exception:
+            # Fall back to Python/hybrid implementation
+            self._rust_instance = None
+
     def __init__(self, _component_key: Optional[str] = None, id: Optional[str] = None, **kwargs):
         """
         Initialize component.
@@ -115,25 +170,7 @@ class Component(ABC):
             self._component_key = f"{self.__class__.__name__}_{Component._component_counter}"
 
         # Try to create Rust instance if implementation exists
-        if self._rust_impl_class is not None:
-            try:
-                # Import config here to avoid circular imports
-                from djust.config import config
-
-                # Pass framework from config to Rust (if Rust component supports it)
-                framework = config.get("css_framework", "bootstrap5")
-
-                # Try to create Rust instance with framework
-                try:
-                    self._rust_instance = self._rust_impl_class(**kwargs, framework=framework)
-                except TypeError:
-                    # Rust component doesn't accept framework, try without it
-                    self._rust_instance = self._rust_impl_class(**kwargs)
-
-            except Exception:
-                # Fall back to Python/hybrid implementation
-                # Silently fail - Rust might not be built, which is OK
-                self._rust_instance = None
+        self._create_rust_instance(**kwargs)
 
         # Store kwargs as attributes for Python/hybrid rendering
         if self._rust_instance is None:
@@ -165,36 +202,25 @@ class Component(ABC):
         """
         # Update Rust instance if exists
         if self._rust_impl_class is not None:
-            try:
-                from djust.config import config
+            # Get current properties by inspecting instance attributes
+            current_props = {}
+            for key, value in self.__dict__.items():
+                if not key.startswith("_"):
+                    current_props[key] = value
 
-                framework = config.get("css_framework", "bootstrap5")
+            # CRITICAL: Include the 'id' property value (it's a property, not in __dict__)
+            # This ensures Rust instance is created with the correct ID
+            if hasattr(self, "id"):
+                current_props["id"] = self.id
 
-                # Get current properties by inspecting instance attributes
-                current_props = {}
-                for key, value in self.__dict__.items():
-                    if not key.startswith("_"):
-                        current_props[key] = value
+            # Merge with updates
+            current_props.update(kwargs)
 
-                # CRITICAL: Include the 'id' property value (it's a property, not in __dict__)
-                # This ensures Rust instance is created with the correct ID
-                if hasattr(self, "id"):
-                    current_props["id"] = self.id
+            # Recreate Rust instance with updated properties
+            self._create_rust_instance(**current_props)
 
-                # Merge with updates
-                current_props.update(kwargs)
-
-                # Recreate Rust instance with updated properties
-                try:
-                    self._rust_instance = self._rust_impl_class(
-                        **current_props, framework=framework
-                    )
-                except TypeError:
-                    self._rust_instance = self._rust_impl_class(**current_props)
-
-            except Exception:
-                # Fall back to Python/hybrid - just update attributes
-                self._rust_instance = None
+            # If Rust instance creation failed, fall back to Python/hybrid
+            if self._rust_instance is None:
                 for key, value in kwargs.items():
                     setattr(self, key, value)
         else:
@@ -257,26 +283,11 @@ class Component(ABC):
         if self._rust_instance is not None:
             return mark_safe(self._rust_instance.render())
 
-        # 2. Try hybrid: template with Rust rendering (fast)
+        # 2. Try hybrid: template with Rust rendering (fast, with Django fallback)
         if self.template is not None:
-            try:
-                from djust._rust import render_template
-
-                # Get context and inject component key
-                context = self.get_context_data()
-                context["_component_key"] = self._component_key
-                return mark_safe(render_template(self.template, context))
-            except (ImportError, AttributeError, RuntimeError):
-                # Rust not available or template error (e.g., include not found),
-                # fall back to Django template rendering
-                from django.template import Context, Template
-
-                template = Template(self.template)
-                # Get context and inject component key
-                context_data = self.get_context_data()
-                context_data["_component_key"] = self._component_key
-                context = Context(context_data)
-                return mark_safe(template.render(context))
+            context = self.get_context_data()
+            context["_component_key"] = self._component_key
+            return mark_safe(_render_template_with_fallback(self.template, context))
 
         # 3. Fall back to custom Python rendering (flexible)
         return mark_safe(self._render_custom())
@@ -465,22 +476,11 @@ class LiveComponent(ABC):
         context = self.get_context_data()
         context["component_id"] = self.component_id
 
-        # Use inline template if available
+        # Use inline template if available (with Rust acceleration and Django fallback)
         if self.template:
-            try:
-                from djust._rust import render_template
-
-                html = render_template(self.template, context)
-                # Wrap with component ID for LiveComponent tracking
-                return mark_safe(f'<div data-component-id="{self.component_id}">{html}</div>')
-            except (ImportError, AttributeError, RuntimeError):
-                # Rust not available or template error, fall back to Django templates
-                from django.template import Context, Template
-
-                template = Template(self.template)
-                django_context = Context(context)
-                html = template.render(django_context)
-                return mark_safe(f'<div data-component-id="{self.component_id}">{html}</div>')
+            html = _render_template_with_fallback(self.template, context)
+            # Wrap with component ID for LiveComponent tracking
+            return mark_safe(f'<div data-component-id="{self.component_id}">{html}</div>')
 
         # Fall back to template_name (file-based template)
         if self.template_name:
