@@ -85,6 +85,85 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         self.use_binary = False  # Use JSON for now (MessagePack support TODO)
         self.use_actors = False  # Will be set based on view class
 
+    async def send_error(self, error: str, **context) -> None:
+        """
+        Send an error response to the client with consistent formatting.
+
+        Args:
+            error: Human-readable error message
+            **context: Additional context to include in the response
+                (e.g., validation_details, expected_params)
+        """
+        response: Dict[str, Any] = {"type": "error", "error": error}
+        response.update(context)
+        await self.send_json(response)
+
+    async def _send_update(
+        self,
+        patches: Optional[list] = None,
+        html: Optional[str] = None,
+        version: int = 0,
+        cache_request_id: Optional[str] = None,
+        reset_form: bool = False,
+        timing: Optional[Dict[str, Any]] = None,
+        performance: Optional[Dict[str, Any]] = None,
+        hotreload: bool = False,
+        file_path: Optional[str] = None,
+    ) -> None:
+        """
+        Send a patch or full HTML update to the client.
+
+        Handles both JSON and binary (MessagePack) modes, building the response
+        with all optional fields.
+
+        Args:
+            patches: VDOM patches to apply (if available, can be empty list)
+            html: Full HTML content (fallback when patches is None)
+            version: VDOM version for client sync
+            cache_request_id: Optional ID for client-side caching (@cache decorator)
+            reset_form: Whether to reset form state after update
+            timing: Basic timing data for backward compatibility
+            performance: Comprehensive performance data
+            hotreload: Whether this is a hot reload update
+            file_path: File path that triggered hot reload (if hotreload=True)
+        """
+        # Note: patches=[] (empty list) is valid and should be sent as "patch" type
+        # Only patches=None indicates we should send html_update
+        if patches is not None:
+            if self.use_binary:
+                patches_data = msgpack.packb(patches)
+                await self.send(bytes_data=patches_data)
+            else:
+                response: Dict[str, Any] = {
+                    "type": "patch",
+                    "patches": patches,
+                    "version": version,
+                }
+                if timing:
+                    response["timing"] = timing
+                if performance:
+                    response["performance"] = performance
+                if reset_form:
+                    response["reset_form"] = True
+                if cache_request_id:
+                    response["cache_request_id"] = cache_request_id
+                if hotreload:
+                    response["hotreload"] = True
+                    if file_path:
+                        response["file"] = file_path
+                await self.send_json(response)
+        else:
+            response = {
+                "type": "html_update",
+                "html": html,
+                "version": version,
+            }
+            if reset_form:
+                response["reset_form"] = True
+            if cache_request_id:
+                response["cache_request_id"] = cache_request_id
+            await self.send_json(response)
+
     async def connect(self):
         """Handle WebSocket connection"""
         await self.accept()
@@ -146,22 +225,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.send_json({"type": "pong"})
             else:
                 logger.warning(f"Unknown message type: {msg_type}")
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "error": f"Unknown message type: {msg_type}",
-                    }
-                )
+                await self.send_error(f"Unknown message type: {msg_type}")
 
         except json.JSONDecodeError as e:
             error_msg = f"Invalid JSON in WebSocket message: {str(e)}"
             logger.error(error_msg)
-            await self.send_json(
-                {
-                    "type": "error",
-                    "error": error_msg,
-                }
-            )
+            await self.send_error(error_msg)
         except Exception as e:
             # Handle exception: logs (with stack trace only in DEBUG) and returns safe response
             response = handle_exception(
@@ -189,12 +258,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         has_prerendered = data.get("has_prerendered", False)
 
         if not view_path:
-            await self.send_json(
-                {
-                    "type": "error",
-                    "error": "Missing view path in mount request",
-                }
-            )
+            await self.send_error("Missing view path in mount request")
             return
 
         # Security: Check if view is in allowed modules
@@ -205,12 +269,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 logger.warning(
                     f"Blocked attempt to mount view from unauthorized module: {view_path}"
                 )
-                await self.send_json(
-                    {
-                        "type": "error",
-                        "error": f"View {view_path} is not in allowed modules",
-                    }
-                )
+                await self.send_error(f"View {view_path} is not in allowed modules")
                 return
 
         # Import the view class
@@ -223,32 +282,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 f"Invalid view path format: {view_path}. Expected format: module.path.ClassName"
             )
             logger.error(error_msg)
-            await self.send_json(
-                {
-                    "type": "error",
-                    "error": error_msg,
-                }
-            )
+            await self.send_error(error_msg)
             return
         except ImportError as e:
             error_msg = f"Failed to import module {module_path}: {str(e)}"
             logger.error(error_msg)
-            await self.send_json(
-                {
-                    "type": "error",
-                    "error": error_msg,
-                }
-            )
+            await self.send_error(error_msg)
             return
         except AttributeError:
             error_msg = f"Class {class_name} not found in module {module_path}"
             logger.error(error_msg)
-            await self.send_json(
-                {
-                    "type": "error",
-                    "error": error_msg,
-                }
-            )
+            await self.send_error(error_msg)
             return
 
         # Instantiate the view
@@ -434,8 +478,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Only include HTML if it was generated (not skipped due to pre-rendering)
         if html is not None:
             response["html"] = html
-            # Flag indicating HTML has data-dj attributes for ID-based patching
-            response["has_ids"] = "data-dj-id=" in html
+            # Flag indicating HTML has data-dj-id attributes for ID-based patching
+            has_ids = "data-dj-id=" in html
+            response["has_ids"] = has_ids
 
         # Include cache configuration for handlers with @cache decorator
         cache_config = self._extract_cache_config()
@@ -472,12 +517,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         )
 
         if not self.view_instance:
-            await self.send_json(
-                {
-                    "type": "error",
-                    "error": "View not mounted. Please reload the page.",
-                }
-            )
+            await self.send_error("View not mounted. Please reload the page.")
             return
 
         # Handle the event
@@ -500,36 +540,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # Parse patches JSON string to list
                     if isinstance(patches, str):
                         patches = json.loads(patches)
-
-                    if self.use_binary:
-                        # Send as MessagePack
-                        patches_data = msgpack.packb(patches)
-                        await self.send(bytes_data=patches_data)
-                    else:
-                        # Send as JSON
-                        response = {
-                            "type": "patch",
-                            "patches": patches,
-                            "version": version,
-                        }
-                        # Include cache request ID if present (for @cache decorator)
-                        if cache_request_id:
-                            response["cache_request_id"] = cache_request_id
-                        await self.send_json(response)
                 else:
                     # No patches - send full HTML update
                     logger.info(
                         f"No patches from actor, sending full HTML update (length: {len(html) if html else 0})"
                     )
-                    response = {
-                        "type": "html_update",
-                        "html": html,
-                        "version": version,
-                    }
-                    # Include cache request ID if present (for @cache decorator)
-                    if cache_request_id:
-                        response["cache_request_id"] = cache_request_id
-                    await self.send_json(response)
+
+                await self._send_update(
+                    patches=patches,
+                    html=html,
+                    version=version,
+                    cache_request_id=cache_request_id,
+                )
 
             except Exception as e:
                 view_class_name = (
@@ -561,7 +583,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     if not component:
                         error_msg = f"Component not found: {component_id}"
                         logger.error(error_msg)
-                        await self.send_json({"type": "error", "error": error_msg})
+                        await self.send_error(error_msg)
                         return
 
                     # Get component's event handler
@@ -571,7 +593,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             f"Component {component.__class__.__name__} has no handler: {event_name}"
                         )
                         logger.error(error_msg)
-                        await self.send_json({"type": "error", "error": error_msg})
+                        await self.send_error(error_msg)
                         return
 
                     # Extract component_id and remove from params
@@ -590,16 +612,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     )
                     if not validation["valid"]:
                         logger.error(f"Parameter validation failed: {validation['error']}")
-                        await self.send_json(
-                            {
-                                "type": "error",
-                                "error": validation["error"],
-                                "validation_details": {
-                                    "expected_params": validation["expected"],
-                                    "provided_params": validation["provided"],
-                                    "type_errors": validation["type_errors"],
-                                },
-                            }
+                        await self.send_error(
+                            validation["error"],
+                            validation_details={
+                                "expected_params": validation["expected"],
+                                "provided_params": validation["provided"],
+                                "type_errors": validation["type_errors"],
+                            },
                         )
                         return
 
@@ -619,7 +638,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     if not handler or not callable(handler):
                         error_msg = f"No handler found for event: {event_name}"
                         logger.warning(error_msg)
-                        await self.send_json({"type": "error", "error": error_msg})
+                        await self.send_error(error_msg)
                         return
 
                     # Validate parameters before calling handler
@@ -630,16 +649,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     )
                     if not validation["valid"]:
                         logger.error(f"Parameter validation failed: {validation['error']}")
-                        await self.send_json(
-                            {
-                                "type": "error",
-                                "error": validation["error"],
-                                "validation_details": {
-                                    "expected_params": validation["expected"],
-                                    "provided_params": validation["provided"],
-                                    "type_errors": validation["type_errors"],
-                                },
-                            }
+                        await self.send_error(
+                            validation["error"],
+                            validation_details={
+                                "expected_params": validation["expected"],
+                                "provided_params": validation["provided"],
+                                "type_errors": validation["type_errors"],
+                            },
                         )
                         return
 
@@ -728,33 +744,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             patch_list = None
 
                 if patches and patch_list:
-                    if self.use_binary:
-                        # Send as MessagePack (reuse parsed patch_list)
-                        patches_data = msgpack.packb(patch_list)
-                        await self.send(bytes_data=patches_data)
-                    else:
-                        # Send as JSON
-                        timing["total"] = (
-                            time.perf_counter() - start_time
-                        ) * 1000  # Total server time
+                    # Calculate timing for JSON mode
+                    timing["total"] = (time.perf_counter() - start_time) * 1000  # Total server time
+                    perf_summary = tracker.get_summary()
 
-                        # Get comprehensive performance summary
-                        perf_summary = tracker.get_summary()
-
-                        response = {
-                            "type": "patch",
-                            "patches": patch_list,  # Reuse parsed patch_list
-                            "version": version,
-                            "timing": timing,  # Include basic timing for backward compatibility
-                            "performance": perf_summary,  # Include comprehensive performance data
-                        }
-                        # Include reset_form flag if set
-                        if should_reset_form:
-                            response["reset_form"] = True
-                        # Include cache request ID if present (for @cache decorator)
-                        if cache_request_id:
-                            response["cache_request_id"] = cache_request_id
-                        await self.send_json(response)
+                    await self._send_update(
+                        patches=patch_list,
+                        version=version,
+                        cache_request_id=cache_request_id,
+                        reset_form=should_reset_form,
+                        timing=timing,
+                        performance=perf_summary,
+                    )
                 else:
                     # No patches - send full HTML update for views with dynamic templates
                     # Strip comments and whitespace to match Rust VDOM parser
@@ -774,18 +775,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         f"[WebSocket] html_content length: {len(html_content)}, starts with: {html_content[:150]}...",
                         file=sys.stderr,
                     )
-                    response = {
-                        "type": "html_update",
-                        "html": html_content,
-                        "version": version,
-                    }
-                    # Include reset_form flag if set
-                    if should_reset_form:
-                        response["reset_form"] = True
-                    # Include cache request ID if present (for @cache decorator)
-                    if cache_request_id:
-                        response["cache_request_id"] = cache_request_id
-                    await self.send_json(response)
+
+                    await self._send_update(
+                        html=html_content,
+                        version=version,
+                        cache_request_id=cache_request_id,
+                        reset_form=should_reset_form,
+                    )
 
             except Exception as e:
                 view_class_name = (
@@ -976,14 +972,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     return
 
                 # Send the patches to the client
-                await self.send_json(
-                    {
-                        "type": "patch",
-                        "patches": patches,
-                        "version": version,
-                        "hotreload": True,
-                        "file": file_path,
-                    }
+                await self._send_update(
+                    patches=patches,
+                    version=version,
+                    hotreload=True,
+                    file_path=file_path,
                 )
 
                 total_time = (time.time() - start_time) * 1000
