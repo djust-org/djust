@@ -220,6 +220,8 @@ class TestTemplateInheritanceIntegration:
     def test_liveview_get_template_strips_comments(self, template_dirs):
         """Test that LiveView.get_template() returns stripped template."""
         from djust.live_view import LiveView
+        from django.template import engines
+        from djust.utils import _get_template_dirs_cached
 
         class ChildView(LiveView):
             template_name = "child.html"
@@ -228,6 +230,12 @@ class TestTemplateInheritanceIntegration:
         original_dirs = settings.TEMPLATES[0]["DIRS"]
         try:
             settings.TEMPLATES[0]["DIRS"] = template_dirs
+            # Clear Django's template engine cache so it picks up new settings
+            engines._engines = {}
+            # Also clear the cached_property 'templates' which caches settings.TEMPLATES
+            engines.__dict__.pop("templates", None)
+            # Clear djust's template dirs cache
+            _get_template_dirs_cached.cache_clear()
             view = ChildView()
 
             # Get template should return stripped version for VDOM
@@ -241,10 +249,15 @@ class TestTemplateInheritanceIntegration:
 
         finally:
             settings.TEMPLATES[0]["DIRS"] = original_dirs
+            engines._engines = {}  # Reset after test
+            engines.__dict__.pop("templates", None)  # Clear cached_property
+            _get_template_dirs_cached.cache_clear()  # Reset djust cache after test
 
     def test_websocket_mount_and_get_html_match(self, template_dirs):
         """Test that WebSocket mount HTML matches initial GET HTML structure."""
         from djust.live_view import LiveView
+        from django.template import engines
+        from djust.utils import _get_template_dirs_cached
 
         class ChildView(LiveView):
             template_name = "child.html"
@@ -255,6 +268,12 @@ class TestTemplateInheritanceIntegration:
         original_dirs = settings.TEMPLATES[0]["DIRS"]
         try:
             settings.TEMPLATES[0]["DIRS"] = template_dirs
+            # Clear Django's template engine cache so it picks up new settings
+            engines._engines = {}
+            # Also clear the cached_property 'templates' which caches settings.TEMPLATES
+            engines.__dict__.pop("templates", None)
+            # Clear djust's template dirs cache
+            _get_template_dirs_cached.cache_clear()
             view = ChildView()
 
             # Simulate WebSocket mount
@@ -287,6 +306,9 @@ class TestTemplateInheritanceIntegration:
 
         finally:
             settings.TEMPLATES[0]["DIRS"] = original_dirs
+            engines._engines = {}  # Reset after test
+            engines.__dict__.pop("templates", None)  # Clear cached_property
+            _get_template_dirs_cached.cache_clear()  # Reset djust cache after test
 
 
 class TestVDOMStructureMatching:
@@ -324,9 +346,10 @@ class TestVDOMStructureMatching:
         assert "<!--" not in vdom_template
         assert "<!--" not in rendered_html
 
-        # Structure should match (both have same div nesting)
-        assert vdom_template.count("<div") == rendered_html.count("<div")
-        assert vdom_template.count("</div>") == rendered_html.count("</div>")
+        # The data-djust-root wrapper is stripped in rendered output,
+        # so rendered_html has 1 less div than vdom_template
+        assert vdom_template.count("<div") == rendered_html.count("<div") + 1
+        assert vdom_template.count("</div>") == rendered_html.count("</div>") + 1
 
     def test_initial_render_no_patches(self):
         """Test that initial render returns no patches (establishes baseline)."""
