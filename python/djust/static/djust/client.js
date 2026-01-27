@@ -2108,9 +2108,20 @@ const SVG_ATTR_CASE_MAP = {
     'zoomandpan': 'zoomAndPan'
 };
 
+// Valid HTML/SVG tag name pattern (letters, digits, hyphens - must start with letter)
+const VALID_TAG_PATTERN = /^[a-zA-Z][a-zA-Z0-9-]*$/;
+
 function createNodeFromVNode(vnode, parentIsSvg = false) {
     if (vnode.tag === '#text') {
         return document.createTextNode(vnode.text || '');
+    }
+
+    // Validate tag name to prevent XSS via malicious tag injection.
+    // Note: vnode.tag comes from server-side VDOM (trusted), but we validate
+    // as defense-in-depth in case of server compromise or protocol issues.
+    if (!VALID_TAG_PATTERN.test(vnode.tag)) {
+        console.error('[LiveView] Invalid tag name rejected:', vnode.tag);
+        return document.createTextNode('');
     }
 
     const tagLower = vnode.tag.toLowerCase();
