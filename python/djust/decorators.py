@@ -29,6 +29,32 @@ def _add_decorator_metadata(func: Callable, key: str, value: Any) -> None:
     func._djust_decorators[key] = value  # type: ignore
 
 
+def _make_metadata_decorator(key: str, value: Any) -> Callable[[F], F]:
+    """
+    Create a decorator that adds metadata without modifying execution.
+
+    Factory for @debounce, @throttle, @cache, @client_state which only add
+    metadata for client-side processing, not runtime behavior.
+
+    Args:
+        key: Metadata key to add to _djust_decorators
+        value: Metadata value (typically a dict with config)
+
+    Returns:
+        Decorator function that adds metadata to the wrapped function
+    """
+
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            return func(*args, **kwargs)
+
+        _add_decorator_metadata(wrapper, key, value)
+        return cast(F, wrapper)
+
+    return decorator
+
+
 def event_handler(
     params: Optional[List[str]] = None,
     description: str = "",
@@ -289,25 +315,7 @@ def debounce(wait: float = 0.3, max_wait: Optional[float] = None) -> Callable[[F
     Returns:
         Decorator function
     """
-
-    def decorator(func: F) -> F:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
-
-        # Add standardized metadata using helper
-        _add_decorator_metadata(
-            wrapper,
-            "debounce",
-            {
-                "wait": wait,
-                "max_wait": max_wait,
-            },
-        )
-
-        return cast(F, wrapper)
-
-    return decorator
+    return _make_metadata_decorator("debounce", {"wait": wait, "max_wait": max_wait})
 
 
 def throttle(
@@ -339,26 +347,9 @@ def throttle(
     Returns:
         Decorator function
     """
-
-    def decorator(func: F) -> F:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
-
-        # Add standardized metadata using helper
-        _add_decorator_metadata(
-            wrapper,
-            "throttle",
-            {
-                "interval": interval,
-                "leading": leading,
-                "trailing": trailing,
-            },
-        )
-
-        return cast(F, wrapper)
-
-    return decorator
+    return _make_metadata_decorator(
+        "throttle", {"interval": interval, "leading": leading, "trailing": trailing}
+    )
 
 
 def optimistic(func: F) -> F:
@@ -423,25 +414,7 @@ def cache(ttl: int = 60, key_params: Optional[List[str]] = None) -> Callable[[F]
     Returns:
         Decorator function
     """
-
-    def decorator(func: F) -> F:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
-
-        # Add standardized metadata using helper
-        _add_decorator_metadata(
-            wrapper,
-            "cache",
-            {
-                "ttl": ttl,
-                "key_params": key_params or [],
-            },
-        )
-
-        return cast(F, wrapper)
-
-    return decorator
+    return _make_metadata_decorator("cache", {"ttl": ttl, "key_params": key_params or []})
 
 
 def client_state(keys: List[str]) -> Callable[[F], F]:
@@ -483,18 +456,7 @@ def client_state(keys: List[str]) -> Callable[[F], F]:
     """
     if not keys:
         raise ValueError("At least one key must be specified for @client_state decorator")
-
-    def decorator(func: F) -> F:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
-
-        # Add standardized metadata using helper
-        _add_decorator_metadata(wrapper, "client_state", {"keys": keys})
-
-        return cast(F, wrapper)
-
-    return decorator
+    return _make_metadata_decorator("client_state", {"keys": keys})
 
 
 __all__ = [

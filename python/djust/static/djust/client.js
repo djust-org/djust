@@ -1507,23 +1507,30 @@ function bindLiveViewEvents() {
             return null;
         }
 
+        /**
+         * Build standard form event params with component context.
+         * Used by change, input, blur, focus event handlers.
+         * @param {HTMLElement} element - Form element that triggered the event
+         * @param {any} value - Current value of the field
+         * @returns {Object} - Params object with value, field, and optional component_id
+         */
+        function buildFormEventParams(element, value) {
+            const fieldName = getFieldName(element);
+            const params = { value, field: fieldName };
+            const componentId = getComponentId(element);
+            if (componentId) {
+                params.component_id = componentId;
+            }
+            return params;
+        }
+
         // Handle dj-change events
         const changeHandler = element.getAttribute('dj-change');
         if (changeHandler && !element.dataset.liveviewChangeBound) {
             element.dataset.liveviewChangeBound = 'true';
             element.addEventListener('change', async (e) => {
-                const fieldName = getFieldName(e.target);
-                const params = {
-                    value: e.target.type === 'checkbox' ? e.target.checked : e.target.value,
-                    field: fieldName
-                };
-
-                // Phase 4: Check if event is from a component
-                const componentId = getComponentId(e.target);
-                if (componentId) {
-                    params.component_id = componentId;
-                }
-
+                const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+                const params = buildFormEventParams(e.target, value);
                 await handleEvent(changeHandler, params);
             });
         }
@@ -1547,18 +1554,7 @@ function bindLiveViewEvents() {
             }
 
             const handler = async (e) => {
-                const fieldName = getFieldName(e.target);
-                const params = {
-                    value: e.target.value,
-                    field: fieldName
-                };
-
-                // Phase 4: Check if event is from a component
-                const componentId = getComponentId(e.target);
-                if (componentId) {
-                    params.component_id = componentId;
-                }
-
+                const params = buildFormEventParams(e.target, e.target.value);
                 await handleEvent(inputHandler, params);
             };
 
@@ -1578,18 +1574,7 @@ function bindLiveViewEvents() {
         if (blurHandler && !element.dataset.liveviewBlurBound) {
             element.dataset.liveviewBlurBound = 'true';
             element.addEventListener('blur', async (e) => {
-                const fieldName = getFieldName(e.target);
-                const params = {
-                    value: e.target.value,
-                    field: fieldName
-                };
-
-                // Phase 4: Check if event is from a component
-                const componentId = getComponentId(e.target);
-                if (componentId) {
-                    params.component_id = componentId;
-                }
-
+                const params = buildFormEventParams(e.target, e.target.value);
                 await handleEvent(blurHandler, params);
             });
         }
@@ -1599,18 +1584,7 @@ function bindLiveViewEvents() {
         if (focusHandler && !element.dataset.liveviewFocusBound) {
             element.dataset.liveviewFocusBound = 'true';
             element.addEventListener('focus', async (e) => {
-                const fieldName = getFieldName(e.target);
-                const params = {
-                    value: e.target.value,
-                    field: fieldName
-                };
-
-                // Phase 4: Check if event is from a component
-                const componentId = getComponentId(e.target);
-                if (componentId) {
-                    params.component_id = componentId;
-                }
-
+                const params = buildFormEventParams(e.target, e.target.value);
                 await handleEvent(focusHandler, params);
             });
         }
