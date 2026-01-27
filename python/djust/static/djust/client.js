@@ -1455,7 +1455,7 @@ function bindLiveViewEvents() {
                     params._args = parsed.args;
                 }
 
-                /// Phase 4: Check if event is from a component
+                // Phase 4: Check if event is from a component
                 const componentId = getComponentId(e.currentTarget);
                 if (componentId) {
                     params.component_id = componentId;
@@ -1477,7 +1477,7 @@ function bindLiveViewEvents() {
                 const formData = new FormData(e.target);
                 const params = Object.fromEntries(formData.entries());
 
-                /// Phase 4: Check if event is from a component
+                // Phase 4: Check if event is from a component
                 const componentId = getComponentId(e.target);
                 if (componentId) {
                     params.component_id = componentId;
@@ -1518,7 +1518,7 @@ function bindLiveViewEvents() {
                     field: fieldName
                 };
 
-                /// Phase 4: Check if event is from a component
+                // Phase 4: Check if event is from a component
                 const componentId = getComponentId(e.target);
                 if (componentId) {
                     params.component_id = componentId;
@@ -1553,7 +1553,7 @@ function bindLiveViewEvents() {
                     field: fieldName
                 };
 
-                /// Phase 4: Check if event is from a component
+                // Phase 4: Check if event is from a component
                 const componentId = getComponentId(e.target);
                 if (componentId) {
                     params.component_id = componentId;
@@ -1584,7 +1584,7 @@ function bindLiveViewEvents() {
                     field: fieldName
                 };
 
-                /// Phase 4: Check if event is from a component
+                // Phase 4: Check if event is from a component
                 const componentId = getComponentId(e.target);
                 if (componentId) {
                     params.component_id = componentId;
@@ -1605,7 +1605,7 @@ function bindLiveViewEvents() {
                     field: fieldName
                 };
 
-                /// Phase 4: Check if event is from a component
+                // Phase 4: Check if event is from a component
                 const componentId = getComponentId(e.target);
                 if (componentId) {
                     params.component_id = componentId;
@@ -1641,7 +1641,7 @@ function bindLiveViewEvents() {
                         field: fieldName
                     };
 
-                    /// Phase 4: Check if event is from a component
+                    // Phase 4: Check if event is from a component
                     const componentId = getComponentId(e.target);
                     if (componentId) {
                         params.component_id = componentId;

@@ -94,7 +94,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             **context: Additional context to include in the response
                 (e.g., validation_details, expected_params)
         """
-        response = {"type": "error", "error": error}
+        response: Dict[str, Any] = {"type": "error", "error": error}
         response.update(context)
         await self.send_json(response)
 
