@@ -2035,12 +2035,45 @@ function getNodeByPath(path, djustId = null) {
     return node;
 }
 
-function createNodeFromVNode(vnode) {
+// SVG namespace and tags for proper element creation
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+const SVG_TAGS = new Set([
+    'svg', 'path', 'circle', 'rect', 'line', 'polyline', 'polygon',
+    'ellipse', 'g', 'defs', 'use', 'text', 'tspan', 'textPath',
+    'clipPath', 'mask', 'pattern', 'marker', 'symbol', 'linearGradient',
+    'radialGradient', 'stop', 'image', 'foreignObject', 'switch',
+    'desc', 'title', 'metadata'
+]);
+
+/**
+ * Check if a DOM element is within an SVG context.
+ * Used when creating new elements during patch application.
+ */
+function isInSvgContext(element) {
+    if (!element) return false;
+    // Check if element itself or any ancestor is an SVG element
+    let current = element;
+    while (current && current !== document.body) {
+        if (current.namespaceURI === SVG_NAMESPACE) {
+            return true;
+        }
+        current = current.parentElement;
+    }
+    return false;
+}
+
+function createNodeFromVNode(vnode, inSvgContext = false) {
     if (vnode.tag === '#text') {
         return document.createTextNode(vnode.text || '');
     }
 
-    const elem = document.createElement(vnode.tag);
+    // Determine if we need SVG namespace
+    const isSvgTag = SVG_TAGS.has(vnode.tag.toLowerCase());
+    const useSvgNamespace = isSvgTag || inSvgContext;
+
+    const elem = useSvgNamespace
+        ? document.createElementNS(SVG_NAMESPACE, vnode.tag)
+        : document.createElement(vnode.tag);
 
     if (vnode.attrs) {
         for (const [key, value] of Object.entries(vnode.attrs)) {
@@ -2102,8 +2135,9 @@ function createNodeFromVNode(vnode) {
     }
 
     if (vnode.children) {
+        // Pass SVG context to children so nested SVG elements are created correctly
         for (const child of vnode.children) {
-            elem.appendChild(createNodeFromVNode(child));
+            elem.appendChild(createNodeFromVNode(child, useSvgNamespace));
         }
     }
 
@@ -2384,7 +2418,7 @@ function applySinglePatch(patch) {
     try {
         switch (patch.type) {
             case 'Replace':
-                const newNode = createNodeFromVNode(patch.node);
+                const newNode = createNodeFromVNode(patch.node, isInSvgContext(node.parentNode));
                 node.parentNode.replaceChild(newNode, node);
                 break;
 
@@ -2408,7 +2442,7 @@ function applySinglePatch(patch) {
                 break;
 
             case 'InsertChild': {
-                const newChild = createNodeFromVNode(patch.node);
+                const newChild = createNodeFromVNode(patch.node, isInSvgContext(node));
                 const children = getSignificantChildren(node);
                 const refChild = children[patch.index];
                 if (refChild) {
@@ -2523,8 +2557,9 @@ function applyPatches(patches) {
                 if (parentNode) {
                     try {
                         const fragment = document.createDocumentFragment();
+                        const svgContext = isInSvgContext(parentNode);
                         for (const patch of consecutiveGroup) {
-                            const newChild = createNodeFromVNode(patch.node);
+                            const newChild = createNodeFromVNode(patch.node, svgContext);
                             fragment.appendChild(newChild);
                             successCount++;
                         }
