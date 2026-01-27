@@ -2010,10 +2010,9 @@ function getNodeByPath(path, djustId = null) {
             return byId;
         }
         // ID not found - fall through to path-based
-        // CodeQL: djustId is sanitized by sanitizeIdForLog() which limits length and removes special chars
         if (globalThis.djustDebug) {
-            const safeId = sanitizeIdForLog(djustId);  // Explicitly sanitize before use
-            console.log(`[LiveView] ID lookup failed for data-dj-id="${safeId}", trying path`);
+            // Log without user data to avoid log injection
+            console.log('[LiveView] ID lookup failed, trying path fallback');
         }
     }
 
@@ -2119,25 +2118,28 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
     }
 
     // Validate tag name against whitelist (security: prevents script injection)
-    const tagLower = vnode.tag.toLowerCase();
+    const tagLower = String(vnode.tag || 'span').toLowerCase();
     const isSvgTag = SVG_TAGS.has(tagLower);
     const isAllowedHtml = ALLOWED_HTML_TAGS.has(tagLower);
 
+    // Security: Use validated tagLower (from whitelist) for element creation
+    // Blocked tags get replaced with span; only whitelisted tags pass through
+    const safeTag = (isSvgTag || isAllowedHtml) ? tagLower : 'span';
+
     if (!isSvgTag && !isAllowedHtml) {
-        // Unknown tag - create a safe span placeholder instead
-        console.warn(`[LiveView] Blocked unknown tag: ${tagLower.slice(0, 20)}`);
-        const placeholder = document.createElement('span');
-        placeholder.setAttribute('data-blocked-tag', tagLower.slice(0, 20));
-        return placeholder;
+        // Unknown tag - log warning (tag is already sanitized via toLowerCase + slice)
+        if (globalThis.djustDebug) {
+            console.warn('[LiveView] Blocked unknown tag, using span placeholder');
+        }
     }
 
     // Determine if we need SVG namespace
     const useSvgNamespace = isSvgTag || inSvgContext;
 
-    // Tag is validated against whitelist - safe to create
+    // Create element using validated safe tag from whitelist
     const elem = useSvgNamespace
-        ? document.createElementNS(SVG_NAMESPACE, vnode.tag)
-        : document.createElement(vnode.tag);
+        ? document.createElementNS(SVG_NAMESPACE, safeTag)
+        : document.createElement(safeTag);
 
     if (vnode.attrs) {
         for (const [key, value] of Object.entries(vnode.attrs)) {
