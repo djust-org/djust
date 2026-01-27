@@ -1507,8 +1507,13 @@ function bindLiveViewEvents() {
             return null;
         }
 
-        // Helper: Build standard form event params with component context.
-        // Used by change, input, blur, focus event handlers.
+        /**
+         * Build standard form event params with component context.
+         * Used by change, input, blur, focus event handlers.
+         * @param {HTMLElement} element - Form element that triggered the event
+         * @param {any} value - Current value of the field
+         * @returns {Object} - Params object with value, field, and optional component_id
+         */
         function buildFormEventParams(element, value) {
             const fieldName = getFieldName(element);
             const params = { value, field: fieldName };
