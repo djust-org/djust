@@ -29,17 +29,23 @@ def template_dir(tmp_path):
 def patch_template_dirs(template_dir, settings):
     """Patch Django settings to use our temp template directory."""
     from djust.utils import _get_template_dirs_cached
+    from django.template import engines
 
     original_dirs = settings.TEMPLATES[0]["DIRS"]
     settings.TEMPLATES[0]["DIRS"] = [str(template_dir)]
 
-    # Clear cache so it picks up the new settings
+    # Clear djust's template dirs cache
     _get_template_dirs_cached.cache_clear()
+
+    # Clear Django's template engine cache so it picks up the new settings
+    # This is necessary because Django caches template engines on first use
+    engines._engines = {}
 
     yield template_dir
 
     settings.TEMPLATES[0]["DIRS"] = original_dirs
     _get_template_dirs_cached.cache_clear()  # Reset cache after test
+    engines._engines = {}  # Reset Django engines after test
 
 
 class TestLiveViewInclude:
