@@ -2290,6 +2290,9 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
     const isSvgTag = SVG_TAGS.has(tagLower);
     const isAllowedHtml = ALLOWED_HTML_TAGS.has(tagLower);
 
+    // Determine SVG context for child element creation
+    const useSvgNamespace = isSvgTag || inSvgContext;
+
     // Security: Only pass whitelisted string literals to createElement
     // If not in whitelist, use 'span' as a safe fallback
     let elem;
