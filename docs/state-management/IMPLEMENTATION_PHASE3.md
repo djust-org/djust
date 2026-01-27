@@ -456,7 +456,7 @@ class OptimisticTodoView(LiveView):
                     <input
                         type="checkbox"
                         class="form-check-input"
-                        @change="toggle_todo"
+                        dj-change="toggle_todo"
                         data-id="{{ todo.id }}"
                         {% if todo.completed %}checked{% endif %}
                     >
@@ -528,12 +528,12 @@ class OptimisticCounterView(LiveView):
                 <div class="btn-group">
                     <button
                         class="btn btn-danger btn-lg"
-                        @click="decrement"
+                        dj-click="decrement"
                         data-loading-text="..."
                     >-</button>
                     <button
                         class="btn btn-success btn-lg"
-                        @click="increment"
+                        dj-click="increment"
                         data-loading-text="..."
                     >+</button>
                 </div>

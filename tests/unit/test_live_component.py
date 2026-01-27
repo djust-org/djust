@@ -12,7 +12,7 @@ class TodoListComponent(LiveComponent):
     template = """
         <div class="todo-list">
             {% for item in items %}
-            <div @click="toggle_todo" data-id="{{ item.id }}">
+            <div dj-click="toggle_todo" data-id="{{ item.id }}">
                 <input type="checkbox" {% if item.completed %}checked{% endif %}>
                 {{ item.text }}
             </div>
@@ -50,7 +50,7 @@ class CounterComponent(LiveComponent):
     template = """
         <div>
             <span>{{ count }}</span>
-            <button @click="increment">+</button>
+            <button dj-click="increment">+</button>
         </div>
     """
 
@@ -174,9 +174,7 @@ class TestLiveComponentParentCommunication:
 
     def test_send_parent_with_custom_data(self):
         """Test send_parent() with custom event data."""
-        component = TodoListComponent(
-            items=[{"id": 1, "text": "Test", "completed": False}]
-        )
+        component = TodoListComponent(items=[{"id": 1, "text": "Test", "completed": False}])
         events = []
 
         def parent_callback(event_data):

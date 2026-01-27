@@ -96,7 +96,7 @@
                                     <p class="mb-3">Managed server-side with LiveView</p>
                                     <div class="counter-display">{{ server_count }}</div>
                                     <div class="text-center">
-                                        <button @click="increment_server" class="btn-primary-modern">
+                                        <button dj-click="increment_server" class="btn-primary-modern">
                                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
                                             </svg>
@@ -151,7 +151,7 @@
                                     <TodoItem text="{{ todo.text }}" completed="{{ todo.done }}" />
                                     {% endfor %}
                                 </div>
-                                <form @submit="add_todo_item" class="flex gap-2 mt-3">
+                                <form dj-submit="add_todo_item" class="flex gap-2 mt-3">
                                     <input
                                         type="text"
                                         name="text"
@@ -275,7 +275,7 @@ class Button(ReactComponent):
                                     <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-html">&lt;!-- Server Counter (LiveView) --&gt;
 &lt;div&gt;
   &lt;h3&gt;Server Count: &#123;&#123; server_count &#125;&#125;&lt;/h3&gt;
-  &lt;button @click="increment_server"&gt;
+  &lt;button dj-click="increment_server"&gt;
     Increment Server
   &lt;/button&gt;
 &lt;/div&gt;

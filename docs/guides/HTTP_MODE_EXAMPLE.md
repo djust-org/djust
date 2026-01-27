@@ -93,8 +93,8 @@ class CounterView(LiveView):
 <body>
     <div data-liveview-root>
         <h1>Counter: {{ count }}</h1>
-        <button @click="increment">+</button>
-        <button @click="decrement">-</button>
+        <button dj-click="increment">+</button>
+        <button dj-click="decrement">-</button>
     </div>
 </body>
 </html>

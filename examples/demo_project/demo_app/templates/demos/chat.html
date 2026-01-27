@@ -88,7 +88,7 @@
                             </div>
 
                             <!-- Message Input Form -->
-                            <form @submit="send_message" class="flex gap-2">
+                            <form dj-submit="send_message" class="flex gap-2">
                                 <input
                                     type="text"
                                     name="message"
@@ -180,7 +180,7 @@ class ChatView(LiveView):
 &lt;/div&gt;
 
 &lt;!-- Message Input --&gt;
-&lt;form @submit="send_message"&gt;
+&lt;form dj-submit="send_message"&gt;
   &lt;input type="text"
          name="message"
          placeholder="Type a message..."

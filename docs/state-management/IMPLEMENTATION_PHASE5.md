@@ -444,12 +444,12 @@ export class DraftMode {
 
 **Example (HTML)**:
 ```html
-<button @click="submit_form" @loading @loading-text="Saving...">
+<button dj-click="submit_form" @loading @loading-text="Saving...">
     Save
 </button>
 
 <!-- Becomes during loading: -->
-<button @click="submit_form" @loading @loading-text="Saving..." disabled>
+<button dj-click="submit_form" @loading @loading-text="Saving..." disabled>
     Saving...
 </button>
 ```

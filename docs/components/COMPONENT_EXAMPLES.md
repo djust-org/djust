@@ -47,7 +47,7 @@ class TodoListComponent(LiveComponent):
                            placeholder="Add new todo..."
                            id="new-todo-{{ component_id }}"
                            @keyup.enter="add_todo">
-                    <button class="btn btn-primary" @click="add_todo">
+                    <button class="btn btn-primary" dj-click="add_todo">
                         Add
                     </button>
                 </div>
@@ -56,19 +56,19 @@ class TodoListComponent(LiveComponent):
                 <ul class="nav nav-pills mb-3">
                     <li class="nav-item">
                         <button class="nav-link {% if filter == 'all' %}active{% endif %}"
-                                @click="set_filter" data-filter="all">
+                                dj-click="set_filter" data-filter="all">
                             All ({{ total_count }})
                         </button>
                     </li>
                     <li class="nav-item">
                         <button class="nav-link {% if filter == 'active' %}active{% endif %}"
-                                @click="set_filter" data-filter="active">
+                                dj-click="set_filter" data-filter="active">
                             Active ({{ active_count }})
                         </button>
                     </li>
                     <li class="nav-item">
                         <button class="nav-link {% if filter == 'completed' %}active{% endif %}"
-                                @click="set_filter" data-filter="completed">
+                                dj-click="set_filter" data-filter="completed">
                             Completed ({{ completed_count }})
                         </button>
                     </li>
@@ -82,14 +82,14 @@ class TodoListComponent(LiveComponent):
                             <input class="form-check-input"
                                    type="checkbox"
                                    {% if item.completed %}checked{% endif %}
-                                   @change="toggle_todo"
+                                   dj-change="toggle_todo"
                                    data-id="{{ item.id }}">
                             <label class="form-check-label {% if item.completed %}text-decoration-line-through text-muted{% endif %}">
                                 {{ item.text }}
                             </label>
                         </div>
                         <button class="btn btn-sm btn-danger"
-                                @click="delete_todo"
+                                dj-click="delete_todo"
                                 data-id="{{ item.id }}">
                             ×
                         </button>
@@ -104,7 +104,7 @@ class TodoListComponent(LiveComponent):
                 <!-- Clear completed button -->
                 {% if completed_count > 0 %}
                 <div class="mt-3">
-                    <button class="btn btn-outline-danger btn-sm" @click="clear_completed">
+                    <button class="btn btn-outline-danger btn-sm" dj-click="clear_completed">
                         Clear Completed ({{ completed_count }})
                     </button>
                 </div>
@@ -236,7 +236,7 @@ class TodoAppView(LiveView):
                         {% if last_action %}
                         <div class="alert alert-success alert-dismissible fade show">
                             {{ last_action }}
-                            <button type="button" class="btn-close" @click="dismiss_alert"></button>
+                            <button type="button" class="btn-close" dj-click="dismiss_alert"></button>
                         </div>
                         {% endif %}
 
@@ -321,13 +321,13 @@ class UserListComponent(LiveComponent):
                        class="form-control mb-3"
                        placeholder="Search users..."
                        value="{{ search_term }}"
-                       @input="search">
+                       dj-input="search">
 
                 <!-- User list -->
                 <div class="list-group">
                     {% for user in filtered_users %}
                     <button class="list-group-item list-group-item-action {% if user.id == selected_id %}active{% endif %}"
-                            @click="select_user"
+                            dj-click="select_user"
                             data-user-id="{{ user.id }}">
                         <div class="d-flex w-100 justify-content-between">
                             <h6 class="mb-1">{{ user.name }}</h6>
@@ -444,10 +444,10 @@ class UserDetailComponent(LiveComponent):
 
                 <hr>
                 <div class="d-flex gap-2">
-                    <button class="btn btn-primary" @click="edit_user">
+                    <button class="btn btn-primary" dj-click="edit_user">
                         Edit
                     </button>
-                    <button class="btn btn-danger" @click="delete_user">
+                    <button class="btn btn-danger" dj-click="delete_user">
                         Delete
                     </button>
                 </div>
@@ -612,7 +612,7 @@ class ProductGridComponent(LiveComponent):
                     <div class="row">
                         <div class="col-md-4">
                             <label>Category</label>
-                            <select class="form-select" @change="filter_category">
+                            <select class="form-select" dj-change="filter_category">
                                 <option value="">All Categories</option>
                                 {% for cat in categories %}
                                 <option value="{{ cat }}" {% if cat == category_filter %}selected{% endif %}>
@@ -623,7 +623,7 @@ class ProductGridComponent(LiveComponent):
                         </div>
                         <div class="col-md-4">
                             <label>Price Range</label>
-                            <select class="form-select" @change="filter_price">
+                            <select class="form-select" dj-change="filter_price">
                                 <option value="">Any Price</option>
                                 <option value="0-50">Under $50</option>
                                 <option value="50-100">$50-$100</option>
@@ -635,7 +635,7 @@ class ProductGridComponent(LiveComponent):
                             <input type="text"
                                    class="form-control"
                                    placeholder="Search products..."
-                                   @input="search">
+                                   dj-input="search">
                         </div>
                     </div>
                 </div>
@@ -651,7 +651,7 @@ class ProductGridComponent(LiveComponent):
                             <p class="card-text text-muted">{{ product.category }}</p>
                             <h4 class="text-primary">${{ product.price }}</h4>
                             <button class="btn btn-primary w-100"
-                                    @click="add_to_cart"
+                                    dj-click="add_to_cart"
                                     data-product-id="{{ product.id }}">
                                 Add to Cart
                             </button>

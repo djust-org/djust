@@ -95,7 +95,7 @@ function reinitLiveViewForTurboNav() {
     // Re-bind events
     bindLiveViewEvents();
 
-    // Re-scan @loading attributes
+    // Re-scan dj-loading attributes
     globalLoadingManager.scanAndRegister();
 
     console.log('[LiveView:TurboNav] Reinitialization complete');
@@ -1403,8 +1403,8 @@ function bindLiveViewEvents() {
     // Find all interactive elements
     const allElements = document.querySelectorAll('*');
     allElements.forEach(element => {
-        // Handle @click events
-        const clickHandler = element.getAttribute('@click');
+        // Handle dj-click events
+        const clickHandler = element.getAttribute('dj-click');
         if (clickHandler && !element.dataset.liveviewClickBound) {
             element.dataset.liveviewClickBound = 'true';
             // Parse handler string to extract function name and arguments
@@ -1416,7 +1416,7 @@ function bindLiveViewEvents() {
                 const params = extractTypedParams(element);
 
                 // Add positional arguments from handler syntax if present
-                // e.g., @click="set_period('month')" -> params._args = ['month']
+                // e.g., dj-click="set_period('month')" -> params._args = ['month']
                 if (parsed.args.length > 0) {
                     params._args = parsed.args;
                 }
@@ -1438,8 +1438,8 @@ function bindLiveViewEvents() {
             });
         }
 
-        // Handle @submit events on forms
-        const submitHandler = element.getAttribute('@submit');
+        // Handle dj-submit events on forms
+        const submitHandler = element.getAttribute('dj-submit');
         if (submitHandler && !element.dataset.liveviewSubmitBound) {
             element.dataset.liveviewSubmitBound = 'true';
             element.addEventListener('submit', async (e) => {
@@ -1481,8 +1481,8 @@ function bindLiveViewEvents() {
             return null;
         }
 
-        // Handle @change events
-        const changeHandler = element.getAttribute('@change');
+        // Handle dj-change events
+        const changeHandler = element.getAttribute('dj-change');
         if (changeHandler && !element.dataset.liveviewChangeBound) {
             element.dataset.liveviewChangeBound = 'true';
             element.addEventListener('change', async (e) => {
@@ -1506,8 +1506,8 @@ function bindLiveViewEvents() {
             });
         }
 
-        // Handle @input events (with smart debouncing/throttling)
-        const inputHandler = element.getAttribute('@input');
+        // Handle dj-input events (with smart debouncing/throttling)
+        const inputHandler = element.getAttribute('dj-input');
         if (inputHandler && !element.dataset.liveviewInputBound) {
             element.dataset.liveviewInputBound = 'true';
 
@@ -1555,8 +1555,8 @@ function bindLiveViewEvents() {
             element.addEventListener('input', wrappedHandler);
         }
 
-        // Handle @blur events
-        const blurHandler = element.getAttribute('@blur');
+        // Handle dj-blur events
+        const blurHandler = element.getAttribute('dj-blur');
         if (blurHandler && !element.dataset.liveviewBlurBound) {
             element.dataset.liveviewBlurBound = 'true';
             element.addEventListener('blur', async (e) => {
@@ -1580,8 +1580,8 @@ function bindLiveViewEvents() {
             });
         }
 
-        // Handle @focus events
-        const focusHandler = element.getAttribute('@focus');
+        // Handle dj-focus events
+        const focusHandler = element.getAttribute('dj-focus');
         if (focusHandler && !element.dataset.liveviewFocusBound) {
             element.dataset.liveviewFocusBound = 'true';
             element.addEventListener('focus', async (e) => {
@@ -1605,13 +1605,13 @@ function bindLiveViewEvents() {
             });
         }
 
-        // Handle @keydown / @keyup events
+        // Handle dj-keydown / dj-keyup events
         ['keydown', 'keyup'].forEach(eventType => {
-            const keyHandler = element.getAttribute(`@${eventType}`);
+            const keyHandler = element.getAttribute(`dj-${eventType}`);
             if (keyHandler && !element.dataset[`liveview${eventType}Bound`]) {
                 element.dataset[`liveview${eventType}Bound`] = 'true';
                 element.addEventListener(eventType, async (e) => {
-                    // Check for key modifiers (e.g. @keydown.enter)
+                    // Check for key modifiers (e.g. dj-keydown.enter)
                     const modifiers = keyHandler.split('.');
                     const handlerName = modifiers[0];
                     const requiredKey = modifiers.length > 1 ? modifiers[1] : null;
@@ -1689,20 +1689,20 @@ function clearOptimisticState(eventName) {
 }
 
 // Global Loading Manager (Phase 5)
-// Handles @loading.disable, @loading.class, @loading.show, @loading.hide attributes
+// Handles dj-loading.disable, dj-loading.class, dj-loading.show, dj-loading.hide attributes
 const globalLoadingManager = {
     // Map of element -> { originalState, modifiers }
     registeredElements: new Map(),
     pendingEvents: new Set(),
 
-    // Register an element with @loading attributes
+    // Register an element with dj-loading attributes
     register(element, eventName) {
         const modifiers = [];
         const originalState = {};
 
-        // Parse @loading.* attributes
+        // Parse dj-loading.* attributes
         Array.from(element.attributes).forEach(attr => {
-            const match = attr.name.match(/^@loading\.(.+)$/);
+            const match = attr.name.match(/^dj-loading\.(.+)$/);
             if (match) {
                 const modifier = match[1];
                 if (modifier === 'disable') {
@@ -1713,7 +1713,7 @@ const globalLoadingManager = {
                     // Store original inline display to restore when loading stops
                     originalState.display = element.style.display;
                     // Determine display value to use when showing:
-                    // 1. Use attribute value if specified (e.g., @loading.show="flex")
+                    // 1. Use attribute value if specified (e.g., dj-loading.show="flex")
                     // 2. Otherwise default to 'block'
                     originalState.visibleDisplay = attr.value || 'block';
                 } else if (modifier === 'hide') {
@@ -1738,22 +1738,21 @@ const globalLoadingManager = {
         }
     },
 
-    // Scan and register all elements with @loading attributes
+    // Scan and register all elements with dj-loading attributes
     scanAndRegister() {
         // Use targeted attribute selectors for better performance on large pages
-        // Note: CSS attribute selectors need escaped @ symbol
         const selectors = [
-            '[\\@loading\\.disable]',
-            '[\\@loading\\.show]',
-            '[\\@loading\\.hide]',
-            '[\\@loading\\.class]'
+            '[dj-loading\\.disable]',
+            '[dj-loading\\.show]',
+            '[dj-loading\\.hide]',
+            '[dj-loading\\.class]'
         ].join(',');
 
         const loadingElements = document.querySelectorAll(selectors);
         loadingElements.forEach(element => {
-            // Find the associated event from @click, @submit, etc.
+            // Find the associated event from dj-click, dj-submit, etc.
             const eventAttr = Array.from(element.attributes).find(
-                attr => attr.name.startsWith('@') && !attr.name.startsWith('@loading')
+                attr => attr.name.startsWith('dj-') && !attr.name.startsWith('dj-loading')
             );
             const eventName = eventAttr ? eventAttr.value : null;
             if (eventName) {
@@ -1761,7 +1760,7 @@ const globalLoadingManager = {
             }
         });
         if (globalThis.djustDebug) {
-            console.log(`[Loading] Scanned ${this.registeredElements.size} elements with @loading attributes`);
+            console.log(`[Loading] Scanned ${this.registeredElements.size} elements with dj-loading attributes`);
         }
     },
 
@@ -1772,11 +1771,11 @@ const globalLoadingManager = {
         if (triggerElement) {
             triggerElement.classList.add('djust-loading');
 
-            // Check if trigger element has @loading.disable
-            const hasDisable = triggerElement.hasAttribute('@loading.disable');
+            // Check if trigger element has dj-loading.disable
+            const hasDisable = triggerElement.hasAttribute('dj-loading.disable');
             if (globalThis.djustDebug) {
                 console.log(`[Loading] triggerElement:`, triggerElement);
-                console.log(`[Loading] hasAttribute('@loading.disable'):`, hasDisable);
+                console.log(`[Loading] hasAttribute('dj-loading.disable'):`, hasDisable);
             }
             if (hasDisable) {
                 triggerElement.disabled = true;
@@ -1803,8 +1802,8 @@ const globalLoadingManager = {
         // Remove loading state from trigger element
         if (triggerElement) {
             triggerElement.classList.remove('djust-loading');
-            // Check if trigger element has @loading.disable
-            const hasDisable = triggerElement.hasAttribute('@loading.disable');
+            // Check if trigger element has dj-loading.disable
+            const hasDisable = triggerElement.hasAttribute('dj-loading.disable');
             if (hasDisable) {
                 triggerElement.disabled = false;
             }
@@ -1829,7 +1828,7 @@ const globalLoadingManager = {
             if (modifier.type === 'disable') {
                 element.disabled = true;
             } else if (modifier.type === 'show') {
-                // Use stored visible display value (supports @loading.show="flex" etc.)
+                // Use stored visible display value (supports dj-loading.show="flex" etc.)
                 element.style.display = config.originalState.visibleDisplay || 'block';
             } else if (modifier.type === 'hide') {
                 element.style.display = 'none';
@@ -2045,8 +2044,8 @@ function createNodeFromVNode(vnode) {
 
     if (vnode.attrs) {
         for (const [key, value] of Object.entries(vnode.attrs)) {
-            if (key.startsWith('@')) {
-                const eventName = key.substring(1);
+            if (key.startsWith('dj-')) {
+                const eventName = key.substring(3);
                 elem.addEventListener(eventName, (e) => {
                     e.preventDefault();
                     const params = {};
@@ -2795,7 +2794,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize Draft Mode
     initDraftMode();
 
-    // Scan and register @loading attributes
+    // Scan and register dj-loading attributes
     globalLoadingManager.scanAndRegister();
 
     // Mark as initialized so turbo:load handler knows we're ready

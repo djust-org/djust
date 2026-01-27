@@ -410,7 +410,7 @@ class TabsComponent(LiveComponent):
             **kwargs: Additional event data
 
         Example template:
-            <button @click="switch_tab" data-tab="{{ tab.id }}">
+            <button dj-click="switch_tab" data-tab="{{ tab.id }}">
         """
         if tab:
             self.active_tab = tab
@@ -418,17 +418,17 @@ class TabsComponent(LiveComponent):
 ```
 
 **Event Handler Signature:**
-- Method name matches event name in template (`@click="switch_tab"`)
+- Method name matches event name in template (`dj-click="switch_tab"`)
 - Parameters come from `data-*` attributes
 - `**kwargs` captures additional data
 
 **Template Binding:**
 ```html
 <!-- Triggers: component.switch_tab(tab="profile") -->
-<button @click="switch_tab" data-tab="profile">Profile</button>
+<button dj-click="switch_tab" data-tab="profile">Profile</button>
 
 <!-- Triggers: component.page_changed(page="2", size="10") -->
-<button @click="page_changed" data-page="2" data-size="10">Next</button>
+<button dj-click="page_changed" data-page="2" data-size="10">Next</button>
 ```
 
 ### Parent Communication
@@ -493,7 +493,7 @@ class TabsComponent(LiveComponent):
                 <li class="nav-item">
                     <button
                         class="nav-link {% if tab.id == active_tab %}active{% endif %}"
-                        @click="switch_tab"
+                        dj-click="switch_tab"
                         data-tab="{{ tab.id }}"
                         {% if tab.disabled %}disabled{% endif %}>
                         {{ tab.label }}

@@ -4,7 +4,7 @@ End-to-End tests for Phase 5 State Management decorators.
 Tests the complete integration of:
 - @cache decorator (client-side response caching)
 - @client_state decorator (StateBus coordination)
-- @loading HTML attributes (loading indicators)
+- dj-loading HTML attributes (loading indicators)
 
 These tests verify the full Python → Rust → WebSocket → JavaScript flow.
 
@@ -32,7 +32,7 @@ class TestCacheDecoratorE2E:
             template = """
             <html>
             <body>
-                <input @input="search" />
+                <input dj-input="search" />
             </body>
             </html>
             """
@@ -111,7 +111,7 @@ class TestClientStateDecoratorE2E:
             template = """
             <html>
             <body>
-                <input @input="set_filter" />
+                <input dj-input="set_filter" />
             </body>
             </html>
             """
@@ -168,16 +168,16 @@ class TestClientStateDecoratorE2E:
 
 
 class TestLoadingAttributeE2E:
-    """End-to-end tests for @loading HTML attributes."""
+    """End-to-end tests for dj-loading HTML attributes."""
 
     def test_loading_disable_in_template(self):
-        """Test @loading.disable attribute renders correctly."""
+        """Test dj-loading.disable attribute renders correctly."""
 
         class SaveFormView(LiveView):
             template = """
             <html>
             <body>
-                <button @click="save_data" @loading.disable>Save</button>
+                <button dj-click="save_data" dj-loading.disable>Save</button>
             </body>
             </html>
             """
@@ -196,17 +196,17 @@ class TestLoadingAttributeE2E:
         view.mount(request)
         html = view.render()
 
-        # Verify @loading.disable is preserved in HTML
-        assert '@loading.disable' in html
+        # Verify dj-loading.disable is preserved in HTML
+        assert "dj-loading.disable" in html
 
     def test_loading_class_in_template(self):
-        """Test @loading.class attribute renders correctly."""
+        """Test dj-loading.class attribute renders correctly."""
 
         class SaveFormView(LiveView):
             template = """
             <html>
             <body>
-                <button @click="save" @loading.class="opacity-50">Save</button>
+                <button dj-click="save" dj-loading.class="opacity-50">Save</button>
             </body>
             </html>
             """
@@ -225,19 +225,19 @@ class TestLoadingAttributeE2E:
         view.mount(request)
         html = view.render()
 
-        # Verify @loading.class is preserved in HTML
-        assert '@loading.class="opacity-50"' in html
+        # Verify dj-loading.class is preserved in HTML
+        assert 'dj-loading.class="opacity-50"' in html
 
     def test_loading_show_hide_in_template(self):
-        """Test @loading.show and @loading.hide attributes render correctly."""
+        """Test dj-loading.show and dj-loading.hide attributes render correctly."""
 
         class SaveFormView(LiveView):
             template = """
             <html>
             <body>
-                <button @click="save">Save</button>
-                <div @loading.show style="display: none;">Saving...</div>
-                <div @loading.hide>Form content</div>
+                <button dj-click="save">Save</button>
+                <div dj-loading.show style="display: none;">Saving...</div>
+                <div dj-loading.hide>Form content</div>
             </body>
             </html>
             """
@@ -256,16 +256,16 @@ class TestLoadingAttributeE2E:
         view.mount(request)
         html = view.render()
 
-        # Verify @loading.show and @loading.hide are preserved
-        assert '@loading.show' in html
-        assert '@loading.hide' in html
+        # Verify dj-loading.show and dj-loading.hide are preserved
+        assert "dj-loading.show" in html
+        assert "dj-loading.hide" in html
 
     def test_loading_multiple_modifiers(self):
-        """Test multiple @loading modifiers on same element."""
+        """Test multiple dj-loading modifiers on same element."""
 
         class SaveFormView(LiveView):
             template = """
-            <button @click="save" @loading.disable @loading.class="loading">
+            <button dj-click="save" dj-loading.disable dj-loading.class="loading">
                 Save
             </button>
             """
@@ -285,8 +285,8 @@ class TestLoadingAttributeE2E:
         html = view.render()
 
         # Verify both modifiers are preserved
-        assert '@loading.disable' in html
-        assert '@loading.class="loading"' in html
+        assert "dj-loading.disable" in html
+        assert 'dj-loading.class="loading"' in html
 
 
 class TestIntegrationScenarios:
@@ -299,8 +299,8 @@ class TestIntegrationScenarios:
             template = """
             <html>
             <body>
-                <input @input="search" placeholder="Search products..." />
-                <div @loading.show style="display: none;">Searching...</div>
+                <input dj-input="search" placeholder="Search products..." />
+                <div dj-loading.show style="display: none;">Searching...</div>
                 <div id="results">{{ results|length }} results</div>
             </body>
             </html>
@@ -329,8 +329,8 @@ class TestIntegrationScenarios:
         # Verify all features are present
         assert '"debounce"' in html
         assert '"cache"' in html
-        assert '@loading.show' in html
-        assert '@input="search"' in html
+        assert "dj-loading.show" in html
+        assert 'dj-input="search"' in html
 
     def test_dashboard_with_client_state(self):
         """Test dashboard with client state coordination."""
@@ -339,15 +339,15 @@ class TestIntegrationScenarios:
             template = """
             <html>
             <body>
-                <select @change="set_filter">
+                <select dj-change="set_filter">
                     <option value="all">All</option>
                     <option value="active">Active</option>
                 </select>
-                <select @change="set_sort">
+                <select dj-change="set_sort">
                     <option value="name">Name</option>
                     <option value="date">Date</option>
                 </select>
-                <button @click="refresh" @loading.disable>Refresh</button>
+                <button dj-click="refresh" dj-loading.disable>Refresh</button>
             </body>
             </html>
             """
@@ -379,7 +379,7 @@ class TestIntegrationScenarios:
         assert '"set_sort"' in html
         assert '"client_state"' in html
         assert '"keys": ["filter", "sort"]' in html
-        assert '@loading.disable' in html
+        assert "dj-loading.disable" in html
 
 
 class TestMetadataJSONFormat:

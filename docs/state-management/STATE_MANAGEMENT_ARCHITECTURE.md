@@ -274,7 +274,7 @@ def search(self, query: str = "", **kwargs):
 **User Interaction:**
 
 1. User types "laptop" in search box
-2. Client intercepts `@input="search"` event
+2. Client intercepts `dj-input="search"` event
 3. Client checks `window.handlerMetadata["search"]`
 4. Client applies decorators:
    - `@optimistic`: Update DOM instantly (no server round-trip)

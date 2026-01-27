@@ -5,10 +5,10 @@ This document tracks potential enhancements to the @loading attribute system (Ph
 ## Current Implementation
 
 The @loading attribute system provides Phoenix LiveView-style loading indicators with:
-- `@loading.disable` - Disable element during loading
-- `@loading.class="class-name"` - Add CSS class during loading
-- `@loading.show` - Show element during loading
-- `@loading.hide` - Hide element during loading
+- `dj-loading.disable` - Disable element during loading
+- `dj-loading.class="class-name"` - Add CSS class during loading
+- `dj-loading.show` - Show element during loading
+- `dj-loading.hide` - Hide element during loading
 
 **Scoping**: Loading states are scoped to prevent cross-button contamination using grouping containers (`d-flex`, `btn-group`, etc.).
 
@@ -70,13 +70,13 @@ Allow explicit event name targeting for more flexible grouping:
 ```html
 <!-- Current: Relies on parent container grouping -->
 <div class="d-flex">
-    <button @click="save_article">Save</button>
-    <div @loading.show>Saving...</div>
+    <button dj-click="save_article">Save</button>
+    <div dj-loading.show>Saving...</div>
 </div>
 
 <!-- Future: Explicit event targeting -->
-<button @click="save_article">Save</button>
-<div @loading.show="save_article">Saving...</div>
+<button dj-click="save_article">Save</button>
+<div dj-loading.show="save_article">Saving...</div>
 ```
 
 **Benefits**:
@@ -91,7 +91,7 @@ Allow explicit event name targeting for more flexible grouping:
 Prevent flashing spinners on fast operations (Phoenix LiveView feature):
 
 ```html
-<div @loading.show @loading.delay="200">Loading...</div>
+<div dj-loading.show @loading.delay="200">Loading...</div>
 ```
 
 **Behavior**:
@@ -179,7 +179,7 @@ if (globalLoadingManager.isLoading('save_article')) {
 Add CSS animation support for smoother transitions:
 
 ```html
-<div @loading.show @loading.animate="fade-in">Loading...</div>
+<div dj-loading.show @loading.animate="fade-in">Loading...</div>
 ```
 
 **Behavior**:

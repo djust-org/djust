@@ -24,7 +24,7 @@ from djust.decorators import debounce
 class ProductSearchView(LiveView):
     template_string = """
     <div>
-        <input @input="search" placeholder="Search products..." />
+        <input dj-input="search" placeholder="Search products..." />
         <div>
             {% for product in results %}
                 <div>{{ product.name }} - ${{ product.price }}</div>

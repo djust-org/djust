@@ -20,7 +20,7 @@
             </div>
           </label>
           <input type="text"
-                 @input="search"
+                 dj-input="search"
                  value="{{ search_query }}"
                  placeholder="Search by property or tenant..."
                  class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
@@ -34,7 +34,7 @@
               Status
             </div>
           </label>
-          <select @change="filter_by_status"
+          <select dj-change="filter_by_status"
                   class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
             <option value="all" {% if filter_status == 'all' %}selected{% endif %}>All Statuses</option>
             {% for val, label in status_choices %}
@@ -51,7 +51,7 @@
               Sort By
             </div>
           </label>
-          <select @change="sort_leases"
+          <select dj-change="sort_leases"
                   class="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent">
             <option value="end_date" {% if sort_by == 'end_date' %}selected{% endif %}>End Date</option>
             <option value="start_date" {% if sort_by == 'start_date' %}selected{% endif %}>Start Date</option>

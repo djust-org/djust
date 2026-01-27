@@ -24,7 +24,7 @@
                     {% if success_message %}
                     <div class="alert alert-success alert-dismissible fade show" role="alert">
                         {{ success_message }}
-                        <button type="button" class="btn-close" @click="clear_message"></button>
+                        <button type="button" class="btn-close" dj-click="clear_message"></button>
                     </div>
                     {% endif %}
 
@@ -34,7 +34,7 @@
                     </div>
                     {% endif %}
 
-                    <form @submit="submit_form" class="needs-validation" novalidate>
+                    <form dj-submit="submit_form" class="needs-validation" novalidate>
                         <div class="row">
                             <!-- Name -->
                             <div class="col-md-6 mb-3">
@@ -45,7 +45,7 @@
                                     id="name"
                                     class="form-control {% if field_errors.name %}is-invalid{% endif %}"
                                     value="{{ form_data.name }}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="name"
                                     required
                                 />
@@ -65,7 +65,7 @@
                                     id="email"
                                     class="form-control {% if field_errors.email %}is-invalid{% endif %}"
                                     value="{{ form_data.email }}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="email"
                                     required
                                 />
@@ -84,7 +84,7 @@
                                 name="subject"
                                 id="subject"
                                 class="form-control {% if field_errors.subject %}is-invalid{% endif %}"
-                                @change="validate_field"
+                                dj-change="validate_field"
                                 data-field="subject"
                                 required
                             >
@@ -108,25 +108,25 @@
                             <div class="form-check">
                                 <input class="form-check-input" type="radio" name="priority" id="priority_low" value="low"
                                        {% if form_data.priority == "low" %}checked{% endif %}
-                                       @change="validate_field" data-field="priority">
+                                       dj-change="validate_field" data-field="priority">
                                 <label class="form-check-label" for="priority_low">Low</label>
                             </div>
                             <div class="form-check">
                                 <input class="form-check-input" type="radio" name="priority" id="priority_medium" value="medium"
                                        {% if form_data.priority == "medium" or not form_data.priority %}checked{% endif %}
-                                       @change="validate_field" data-field="priority">
+                                       dj-change="validate_field" data-field="priority">
                                 <label class="form-check-label" for="priority_medium">Medium</label>
                             </div>
                             <div class="form-check">
                                 <input class="form-check-input" type="radio" name="priority" id="priority_high" value="high"
                                        {% if form_data.priority == "high" %}checked{% endif %}
-                                       @change="validate_field" data-field="priority">
+                                       dj-change="validate_field" data-field="priority">
                                 <label class="form-check-label" for="priority_high">High</label>
                             </div>
                             <div class="form-check">
                                 <input class="form-check-input" type="radio" name="priority" id="priority_urgent" value="urgent"
                                        {% if form_data.priority == "urgent" %}checked{% endif %}
-                                       @change="validate_field" data-field="priority">
+                                       dj-change="validate_field" data-field="priority">
                                 <label class="form-check-label" for="priority_urgent">Urgent</label>
                             </div>
                         </div>
@@ -139,7 +139,7 @@
                                 id="message"
                                 class="form-control {% if field_errors.message %}is-invalid{% endif %}"
                                 rows="5"
-                                @change="validate_field"
+                                dj-change="validate_field"
                                 data-field="message"
                                 required
                             >{{ form_data.message }}</textarea>
@@ -159,7 +159,7 @@
                                 id="subscribe_newsletter"
                                 class="form-check-input"
                                 {% if form_data.subscribe_newsletter %}checked{% endif %}
-                                @change="validate_field"
+                                dj-change="validate_field"
                                 data-field="subscribe_newsletter"
                             />
                             <label class="form-check-label" for="subscribe_newsletter">
@@ -172,7 +172,7 @@
                             <button type="submit" class="btn btn-success btn-lg">
                                 Send Message
                             </button>
-                            <button type="button" class="btn btn-outline-secondary" @click="reset_form">
+                            <button type="button" class="btn btn-outline-secondary" dj-click="reset_form">
                                 Reset Form
                             </button>
                         </div>

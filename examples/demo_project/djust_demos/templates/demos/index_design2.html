@@ -669,9 +669,9 @@
                 <div class="showcase-demo">
                     <div class="counter-display">{{ counter }}</div>
                     <div class="counter-controls">
-                        <button @click="decrement" class="counter-btn secondary">Decrement</button>
-                        <button @click="reset" class="counter-btn secondary">Reset</button>
-                        <button @click="increment" class="counter-btn primary">Increment</button>
+                        <button dj-click="decrement" class="counter-btn secondary">Decrement</button>
+                        <button dj-click="reset" class="counter-btn secondary">Reset</button>
+                        <button dj-click="increment" class="counter-btn primary">Increment</button>
                     </div>
                 </div>
             </div>
@@ -703,14 +703,14 @@
                 <div class="showcase-demo">
                     <div class="showcase-dropdown">
                         <div class="dropdown">
-                            <button @click="toggle_dropdown" class="dropdown-toggle">
+                            <button dj-click="toggle_dropdown" class="dropdown-toggle">
                                 <span>{{ selected_item }}</span>
                                 <span>{% if dropdown_open %}▲{% else %}▼{% endif %}</span>
                             </button>
                             {% if dropdown_open %}
                             <div class="dropdown-menu">
                                 {% for item in dropdown_items %}
-                                <div @click="select_item" data-item="{{ item }}" class="dropdown-item">
+                                <div dj-click="select_item" data-item="{{ item }}" class="dropdown-item">
                                     {{ item }}
                                 </div>
                                 {% endfor %}
@@ -749,7 +749,7 @@
                     <input
                         type="text"
                         class="search-input"
-                        @input="debounce_search"
+                        dj-input="debounce_search"
                         placeholder="Type something rapidly..."
                         value="{{ debounce_query }}"
                     >
@@ -796,7 +796,7 @@
                     <input
                         type="text"
                         class="search-input"
-                        @input="cache_search"
+                        dj-input="cache_search"
                         placeholder="Try: laptop, mouse, keyboard..."
                         value="{{ cache_query }}"
                     >

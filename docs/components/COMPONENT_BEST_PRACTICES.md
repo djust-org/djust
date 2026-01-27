@@ -22,7 +22,7 @@
 class MyView(LiveView):
     template_string = """
         <h1>{{ title }}</h1>
-        <button @click="increment">{{ count }}</button>
+        <button dj-click="increment">{{ count }}</button>
     """
 
     def mount(self, request):
@@ -84,7 +84,7 @@ Ask these questions in order:
 # ✅ Best: Just use template syntax
 template_string = """
     <span class="badge bg-primary">{{ count }}</span>
-    <button class="btn btn-success" @click="save">Save</button>
+    <button class="btn btn-success" dj-click="save">Save</button>
 """
 
 # ⚠️ OK: Simple component if reused everywhere
@@ -137,7 +137,7 @@ template_string = """
         {% for item in items %}
         <li class="{% if item.done %}completed{% endif %}">
             {{ item.text }}
-            <button @click="toggle_item" data-id="{{ item.id }}">✓</button>
+            <button dj-click="toggle_item" data-id="{{ item.id }}">✓</button>
         </li>
         {% endfor %}
     </ul>
@@ -161,7 +161,7 @@ class TabsComponent(LiveComponent):
         <ul class="nav nav-tabs">
             {% for tab in tabs %}
             <li class="nav-item">
-                <button @click="switch_tab" data-tab="{{ tab.id }}"
+                <button dj-click="switch_tab" data-tab="{{ tab.id }}"
                         class="nav-link {% if tab.id == active %}active{% endif %}">
                     {{ tab.label }}
                 </button>

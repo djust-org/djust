@@ -2,9 +2,7 @@
 Tests for parent-child component communication in LiveView.
 """
 
-import pytest
 from djust import LiveView, LiveComponent
-from unittest.mock import Mock
 
 
 class TodoListComponent(LiveComponent):
@@ -13,7 +11,7 @@ class TodoListComponent(LiveComponent):
     template = """
         <div class="todo-list">
             {% for item in items %}
-            <div @click="toggle_todo" data-id="{{ item.id }}">
+            <div dj-click="toggle_todo" data-id="{{ item.id }}">
                 {{ item.text }}
             </div>
             {% endfor %}
@@ -43,7 +41,7 @@ class UserListComponent(LiveComponent):
     template = """
         <div>
             {% for user in users %}
-            <div @click="select_user" data-id="{{ user.id }}">
+            <div dj-click="select_user" data-id="{{ user.id }}">
                 {{ user.name }}
             </div>
             {% endfor %}
@@ -125,7 +123,7 @@ class TestParentChildCommunication:
         view.mount(request)
 
         # Get context to trigger component registration
-        context = view.get_context_data()
+        view.get_context_data()
 
         # Simulate component event
         view.todo_list.toggle_todo(id="1")

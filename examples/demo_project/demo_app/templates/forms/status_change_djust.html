@@ -71,11 +71,11 @@
         </div>
         {% endif %}
 
-        <form @submit="submit_form">
+        <form dj-submit="submit_form">
 
             <!-- Employee Information Section -->
             <div class="card section-card">
-                <div class="section-header" @click="toggle_section('employee_info')">
+                <div class="section-header" dj-click="toggle_section('employee_info')">
                     <i class="fas fa-user"></i>
                     <h5 class="mb-0 flex-grow-1">Employee Information</h5>
                     <i class="fas fa-chevron-{{ sections_expanded.employee_info|yesno:'up,down' }}"></i>
@@ -90,7 +90,7 @@
                             <div class="invalid-feedback d-block">{{ form.employee.errors }}</div>
                             {% endif %}
                             {# Fire event when employee changes #}
-                            <select @change="on_employee_change" style="display:none"></select>
+                            <select dj-change="on_employee_change" style="display:none"></select>
                         </div>
 
                         <div class="col-md-6">
@@ -100,7 +100,7 @@
                             <div class="invalid-feedback d-block">{{ form.business_line.errors }}</div>
                             {% endif %}
                             {# Fire event when business line changes to filter executive approvers #}
-                            <select @change="on_business_line_change" style="display:none"></select>
+                            <select dj-change="on_business_line_change" style="display:none"></select>
                         </div>
 
                         <div class="col-md-6">
@@ -122,7 +122,7 @@
 
             <!-- Company Changes Section (ToFrom Pattern) -->
             <div class="card section-card">
-                <div class="section-header" @click="toggle_section('company_changes')">
+                <div class="section-header" dj-click="toggle_section('company_changes')">
                     <i class="fas fa-building"></i>
                     <h5 class="mb-0 flex-grow-1">Change Company</h5>
                     <i class="fas fa-chevron-{{ sections_expanded.company_changes|yesno:'up,down' }}"></i>
@@ -160,7 +160,7 @@
 
             <!-- Supervisor Changes Section (ToFrom Pattern) -->
             <div class="card section-card">
-                <div class="section-header" @click="toggle_section('supervisor_changes')">
+                <div class="section-header" dj-click="toggle_section('supervisor_changes')">
                     <i class="fas fa-users"></i>
                     <h5 class="mb-0 flex-grow-1">Change Supervisor</h5>
                     <i class="fas fa-chevron-{{ sections_expanded.supervisor_changes|yesno:'up,down' }}"></i>
@@ -198,7 +198,7 @@
 
             <!-- Project Information Section (Needs Pattern) -->
             <div class="card section-card">
-                <div class="section-header" @click="toggle_section('project_info')">
+                <div class="section-header" dj-click="toggle_section('project_info')">
                     <i class="fas fa-clipboard-list"></i>
                     <h5 class="mb-0 flex-grow-1">Add Project Information</h5>
                     <i class="fas fa-chevron-{{ sections_expanded.project_info|yesno:'up,down' }}"></i>
@@ -225,7 +225,7 @@
                             <label class="form-label">Project Duration</label>
                             {{ form.project_duration }}
                             {# Fire event when duration changes to show/hide expected_end_date #}
-                            <select @change="on_project_duration_change" style="display:none"></select>
+                            <select dj-change="on_project_duration_change" style="display:none"></select>
                         </div>
 
                         {% if show_expected_end_date %}
@@ -248,7 +248,7 @@
 
             <!-- Meals Per Diem Section (Needs Pattern with Calculations) -->
             <div class="card section-card">
-                <div class="section-header" @click="toggle_section('meals_per_diem')">
+                <div class="section-header" dj-click="toggle_section('meals_per_diem')">
                     <i class="fas fa-utensils"></i>
                     <h5 class="mb-0 flex-grow-1">Add Meals Per Diem</h5>
                     <i class="fas fa-chevron-{{ sections_expanded.meals_per_diem|yesno:'up,down' }}"></i>
@@ -270,14 +270,14 @@
                             <label class="form-label">Days Per Month on Jobsite</label>
                             {{ form.days_per_month_on_job_site }}
                             {# Fire calculation when this changes #}
-                            <input type="text" @input="calculate_monthly_per_diem" style="display:none">
+                            <input type="text" dj-input="calculate_monthly_per_diem" style="display:none">
                         </div>
 
                         <div class="col-md-6">
                             <label class="form-label">Per Diem Rate for Area</label>
                             {{ form.new_meals_per_diem_amount }}
                             {# Fire calculation when this changes #}
-                            <input type="text" @input="calculate_monthly_per_diem" style="display:none">
+                            <input type="text" dj-input="calculate_monthly_per_diem" style="display:none">
                         </div>
 
                         <div class="col-md-12">

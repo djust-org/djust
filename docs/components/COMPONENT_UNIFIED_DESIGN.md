@@ -340,10 +340,10 @@ class LiveComponent(Component):
         class TodoListComponent(LiveComponent):
             template_string = '''
                 <div class="todo-list">
-                    <input type="text" @input="on_filter" value="{{ filter }}" />
+                    <input type="text" dj-input="on_filter" value="{{ filter }}" />
                     {% for item in filtered_items %}
                     <div>
-                        <input type="checkbox" @change="toggle_todo" data-id="{{ item.id }}">
+                        <input type="checkbox" dj-change="toggle_todo" data-id="{{ item.id }}">
                         {{ item.text }}
                     </div>
                     {% endfor %}

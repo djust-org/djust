@@ -56,7 +56,7 @@ class TodoList(LiveComponent):
         <ul>
         {% for item in items %}
             <li>
-                <input type="checkbox" @change="toggle" data-id="{{ item.id }}">
+                <input type="checkbox" dj-change="toggle" data-id="{{ item.id }}">
                 {{ item.text }}
             </li>
         {% endfor %}
@@ -399,11 +399,11 @@ class FilterWidget(LiveComponent):
         <div class="filter-widget">
             <input
                 type="text"
-                @input="on_search"
+                dj-input="on_search"
                 value="{{ search_query }}"
                 placeholder="Search..."
             />
-            <select @change="on_category_change">
+            <select dj-change="on_category_change">
                 <option value="">All Categories</option>
                 {% for cat in categories %}
                 <option value="{{ cat }}" {% if cat == selected_category %}selected{% endif %}>
@@ -546,7 +546,7 @@ class MyView(LiveView):
 ```python
 # ✅ Start with inline template
 class SimpleView(LiveView):
-    template_string = '<button @click="increment">{{ count }}</button>'
+    template_string = '<button dj-click="increment">{{ count }}</button>'
 
     def mount(self, request):
         self.count = 0
@@ -564,7 +564,7 @@ class CounterButton(Component):
 
 # ✅ Upgrade to LiveComponent when you need state + interactivity
 class CounterWidget(LiveComponent):
-    template_string = '<button @click="increment">{{ count }}</button>'
+    template_string = '<button dj-click="increment">{{ count }}</button>'
 
     def mount(self, initial_count=0):
         self.count = initial_count
@@ -744,7 +744,7 @@ class StatusBadge(Component):
 # LiveComponent (stateful, for interactivity)
 class FilterWidget(LiveComponent):
     template_string = """
-        <input @input="on_search" value="{{ query }}" />
+        <input dj-input="on_search" value="{{ query }}" />
         <p>{{ results_count }} results</p>
     """
 

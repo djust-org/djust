@@ -48,19 +48,19 @@
 
                             <!-- Buttons -->
                             <div class="flex gap-3 flex-wrap justify-center" style="width: 100%;">
-                                <button @click="increment" class="btn-primary-modern">
+                                <button dj-click="increment" class="btn-primary-modern">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
                                     </svg>
                                     <span>Increment</span>
                                 </button>
-                                <button @click="decrement" class="btn-secondary-modern">
+                                <button dj-click="decrement" class="btn-secondary-modern">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"></path>
                                     </svg>
                                     <span>Decrement</span>
                                 </button>
-                                <button @click="reset" class="btn-secondary-modern" style="border-color: var(--color-error); color: var(--color-error);">
+                                <button dj-click="reset" class="btn-secondary-modern" style="border-color: var(--color-error); color: var(--color-error);">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
                                     </svg>
@@ -121,15 +121,15 @@ class CounterView(LiveView):
                                     <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-html">&lt;div&gt;
   &lt;h2&gt;Count: &#123;&#123; count &#125;&#125;&lt;/h2&gt;
 
-  &lt;button @click="increment"&gt;
+  &lt;button dj-click="increment"&gt;
     Increment
   &lt;/button&gt;
 
-  &lt;button @click="decrement"&gt;
+  &lt;button dj-click="decrement"&gt;
     Decrement
   &lt;/button&gt;
 
-  &lt;button @click="reset"&gt;
+  &lt;button dj-click="reset"&gt;
     Reset
   &lt;/button&gt;
 &lt;/div&gt;</code></pre>

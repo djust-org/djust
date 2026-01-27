@@ -32,8 +32,8 @@ class CounterView(LiveView):
     template_string = """
     <div>
         <h1>Count: {{ count }}</h1>
-        <button @click="increment">+</button>
-        <button @click="decrement">-</button>
+        <button dj-click="increment">+</button>
+        <button dj-click="decrement">-</button>
     </div>
     """
 
@@ -276,9 +276,9 @@ djust supports Django template syntax with event binding:
 {% include "partials/header.html" %}
 
 <!-- Event binding -->
-<button @click="increment">Click me</button>
-<input @input="on_search" type="text" />
-<form @submit="submit_form">
+<button dj-click="increment">Click me</button>
+<input dj-input="on_search" type="text" />
+<form dj-submit="submit_form">
     <input name="email" />
     <button type="submit">Submit</button>
 </form>
@@ -286,10 +286,10 @@ djust supports Django template syntax with event binding:
 
 ### Supported Events
 
-- `@click` - Click events
-- `@input` - Input events (passes `value`)
-- `@change` - Change events (passes `value`)
-- `@submit` - Form submission (passes form data as dict)
+- `dj-click` - Click events
+- `dj-input` - Input events (passes `value`)
+- `dj-change` - Change events (passes `value`)
+- `dj-submit` - Form submission (passes form data as dict)
 
 ### Reusable Components
 
@@ -359,7 +359,7 @@ from djust import Component, register_component
 
 @register_component('my-button')
 class Button(Component):
-    template = '<button @click="on_click">{{ label }}</button>'
+    template = '<button dj-click="on_click">{{ label }}</button>'
 
     def __init__(self, label="Click"):
         super().__init__()
@@ -450,7 +450,7 @@ from djust.decorators import debounce
 
 class ProductSearchView(LiveView):
     template_string = """
-    <input @input="search" placeholder="Search products..." />
+    <input dj-input="search" placeholder="Search products..." />
     <div>{% for p in results %}<div>{{ p.name }}</div>{% endfor %}</div>
     """
 
@@ -539,7 +539,7 @@ def search(self, value: str = "", **kwargs):
     self.search_query = value
 ```
 
-**Parameter Convention**: Use `value` for form inputs (`@input`, `@change` events):
+**Parameter Convention**: Use `value` for form inputs (`dj-input`, `dj-change` events):
 
 ```python
 # ✅ Correct - matches what form events send

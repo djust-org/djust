@@ -32,7 +32,7 @@
         <div class="flex flex-wrap gap-2">
           {% for val, label in status_choices %}
           <button
-            @click="update_status"
+            dj-click="update_status"
             data-status="{{ val }}"
             class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors border
             {% if request.status == val %}
@@ -73,7 +73,7 @@
         <div class="flex flex-wrap gap-2">
           {% for val, label in priority_choices %}
           <button
-            @click="update_priority"
+            dj-click="update_priority"
             data-priority="{{ val }}"
             class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors border
             {% if request.priority == val %}
@@ -97,7 +97,7 @@
       </div>
 
       <!-- Update Details Form -->
-      <form @submit="update_details" class="space-y-4 pt-6 border-t border-border">
+      <form dj-submit="update_details" class="space-y-4 pt-6 border-t border-border">
         <div class="flex items-center gap-2 mb-3">
           <i data-lucide="file-edit" class="w-5 h-5 text-primary"></i>
           <h3 class="text-lg font-semibold text-card-foreground">Update Details</h3>

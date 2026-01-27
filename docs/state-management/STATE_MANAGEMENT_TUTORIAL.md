@@ -140,7 +140,7 @@ class ProductSearchView(LiveView):
         <div class="search-box">
             <input
                 type="text"
-                @input="search"
+                dj-input="search"
                 value="{{ query }}"
                 placeholder="Search products..."
                 class="form-control"
@@ -474,7 +474,7 @@ User searches "laptop" again
         <div class="search-box" @loading>
             <input
                 type="text"
-                @input="search"
+                dj-input="search"
                 value="{{ query }}"
                 placeholder="Search products..."
                 class="form-control"
@@ -631,7 +631,7 @@ class ProductSearchView(LiveView):
         <div class="search-box" @loading>
             <input
                 type="text"
-                @input="search"
+                dj-input="search"
                 value="{{ query }}"
                 placeholder="Search products..."
                 class="form-control"
@@ -642,7 +642,7 @@ class ProductSearchView(LiveView):
         <!-- Add category filter -->
         <div class="filters">
             <label>Category:</label>
-            <select @change="update_category" class="form-select">
+            <select dj-change="update_category" class="form-select">
                 {% for value, label in categories %}
                 <option value="{{ value }}" {% if value == category %}selected{% endif %}>
                     {{ label }}
@@ -850,7 +850,7 @@ class ProductSearchView(LiveView):
         <div class="search-box" @loading>
             <input
                 type="text"
-                @input="search"
+                dj-input="search"
                 value="{{ query }}"
                 placeholder="Search products..."
             />
@@ -860,7 +860,7 @@ class ProductSearchView(LiveView):
         <div class="filters">
             <div>
                 <label>Category:</label>
-                <select @change="update_category">
+                <select dj-change="update_category">
                     {% for value, label in categories %}
                     <option value="{{ value }}" {% if value == category %}selected{% endif %}>
                         {{ label }}
@@ -871,7 +871,7 @@ class ProductSearchView(LiveView):
 
             <div>
                 <label>Sort by:</label>
-                <select @change="update_sort">
+                <select dj-change="update_sort">
                     <option value="name" {% if sort == "name" %}selected{% endif %}>Name</option>
                     <option value="price" {% if sort == "price" %}selected{% endif %}>Price: Low to High</option>
                     <option value="-price" {% if sort == "-price" %}selected{% endif %}>Price: High to Low</option>
@@ -879,7 +879,7 @@ class ProductSearchView(LiveView):
             </div>
 
             <div>
-                <button @click="clear_filters" class="clear-btn">Clear Filters</button>
+                <button dj-click="clear_filters" class="clear-btn">Clear Filters</button>
             </div>
         </div>
 

@@ -174,8 +174,8 @@ class MyFormView(FormMixin, LiveView):
         self.error_message = "Please fix errors"</code></pre>
 
                     <h5 class="mt-4">Template Usage</h5>
-                    <pre class="bg-light p-3 rounded"><code>&lt;form @submit="submit_form"&gt;
-    &lt;input name="name" @change="validate_field" data-field="name" /&gt;
+                    <pre class="bg-light p-3 rounded"><code>&lt;form dj-submit="submit_form"&gt;
+    &lt;input name="name" dj-change="validate_field" data-field="name" /&gt;
     {% templatetag openblock %} if field_errors.name {% templatetag closeblock %}
         &lt;div class="error"&gt;{% templatetag openvariable %} field_errors.name {% templatetag closevariable %}&lt;/div&gt;
     {% templatetag openblock %} endif {% templatetag closeblock %}

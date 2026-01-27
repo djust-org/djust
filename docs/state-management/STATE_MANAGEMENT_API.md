@@ -91,7 +91,7 @@ djust's State Management API provides Python-only abstractions for common client
    → DraftModeMixin
 
 ❓ Show loading spinner/disable button?
-   → @loading.disable, @loading.show HTML attributes
+   → dj-loading.disable, dj-loading.show HTML attributes
 ```
 
 ### Common Combinations
@@ -178,7 +178,7 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
 | **Debouncing** | Search input, text fields | `@debounce(0.5)` | - |
 | **Throttling** | Scroll, resize, mouse move | `@throttle(0.1)` | - |
 | **Optimistic Updates** | Counters, toggles, sliders | `@optimistic` | - |
-| **Loading States** | Button disable, spinners, overlays | - | `@loading.disable`, `@loading.show`, `@loading.hide`, `@loading.class` |
+| **Loading States** | Button disable, spinners, overlays | - | `dj-loading.disable`, `dj-loading.show`, `dj-loading.hide`, `dj-loading.class` |
 | **Loading Text** | Button text replacement | - | `@loading-text="Saving..."` (deprecated) |
 | **Client State** | Multi-component coordination | `@client_state(keys=["temp"])` | - |
 | **Caching** | Autocomplete, API calls | `@cache(ttl=300)` | - |
@@ -222,7 +222,7 @@ from djust.decorators import debounce
 class SearchView(LiveView):
     template_string = """
     <input type="text"
-           @input="on_search"
+           dj-input="on_search"
            placeholder="Search products..." />
 
     <div>Found {{ result_count }} products</div>
@@ -388,7 +388,7 @@ class CounterView(LiveView):
     template_string = """
     <div>
         <h1>Count: {{ count }}</h1>
-        <button @click="increment">+1</button>
+        <button dj-click="increment">+1</button>
     </div>
     """
 
@@ -527,7 +527,7 @@ class DashboardView(LiveView):
         <input type="range"
                min="0" max="120"
                value="{{ temperature }}"
-               @input="update_temperature" />
+               dj-input="update_temperature" />
 
         <!-- Display listens to 'temperature' state -->
         <div id="temp-display">{{ temperature }}°F</div>
@@ -675,7 +675,7 @@ from djust.decorators import cache, debounce
 class AutocompleteView(LiveView):
     template_string = """
     <input type="text"
-           @input="search"
+           dj-input="search"
            placeholder="Search languages..." />
 
     <ul>
@@ -748,10 +748,10 @@ def search(self, query: str = "", page: int = 1, **kwargs):
 
 ```html
 <!-- ✅ Correct: name="query" matches key_params=["query"] -->
-<input type="text" name="query" @input="search" />
+<input type="text" name="query" dj-input="search" />
 
 <!-- ❌ Wrong: Missing name attribute -->
-<input type="text" @input="search" />
+<input type="text" dj-input="search" />
 ```
 
 The `name` attribute is used to extract parameter values for cache key generation. Without it, the cache key will be incomplete (e.g., `"search:"` instead of `"search:python"`), causing all searches to share the same cache entry.
@@ -882,7 +882,7 @@ class CommentFormView(DraftModeMixin, LiveView):
      data-draft-enabled="{{ draft_enabled }}"
      data-draft-key="{{ draft_key }}">
 
-    <form @submit="save_comment">
+    <form dj-submit="save_comment">
         <!-- Fields with data-draft="true" are auto-saved -->
         <textarea name="comment_text"
                   placeholder="Write your comment..."
@@ -896,7 +896,7 @@ class CommentFormView(DraftModeMixin, LiveView):
                value="{{ author_name }}" />
 
         <button type="submit">Post Comment</button>
-        <button @click="discard_draft">Discard Draft</button>
+        <button dj-click="discard_draft">Discard Draft</button>
     </form>
 </div>
 ```
@@ -982,8 +982,8 @@ class AdvancedFormView(DraftModeMixin, LiveView):
 
     <textarea name="content" data-draft="true">{{ content }}</textarea>
 
-    <button @click="save_content">Save</button>
-    <button @click="discard_draft">Discard Draft</button>
+    <button dj-click="save_content">Save</button>
+    <button dj-click="discard_draft">Discard Draft</button>
 </div>
 ```
 
@@ -1107,10 +1107,10 @@ Phoenix LiveView-style loading attributes for showing/hiding elements and adding
 
 #### Supported Modifiers
 
-- `@loading.disable` - Disable element during loading
-- `@loading.class="class-name"` - Add class during loading
-- `@loading.show` - Show element during loading (display: block)
-- `@loading.hide` - Hide element during loading (display: none)
+- `dj-loading.disable` - Disable element during loading
+- `dj-loading.class="class-name"` - Add class during loading
+- `dj-loading.show` - Show element during loading (display: block)
+- `dj-loading.hide` - Hide element during loading (display: none)
 
 Multiple modifiers can be combined on the same element.
 
@@ -1118,19 +1118,19 @@ Multiple modifiers can be combined on the same element.
 
 ```html
 <!-- Disable button during event -->
-<button @loading.disable>Button Text</button>
+<button dj-loading.disable>Button Text</button>
 
 <!-- Add loading class -->
-<button @loading.class="opacity-50">Button Text</button>
+<button dj-loading.class="opacity-50">Button Text</button>
 
 <!-- Show element during loading -->
-<div @loading.show style="display: none;">Loading...</div>
+<div dj-loading.show style="display: none;">Loading...</div>
 
 <!-- Hide element during loading -->
-<div @loading.hide>Content</div>
+<div dj-loading.hide>Content</div>
 
 <!-- Combine multiple modifiers -->
-<button @loading.disable @loading.class="loading">Save</button>
+<button dj-loading.disable dj-loading.class="loading">Save</button>
 ```
 
 #### Example
@@ -1138,26 +1138,26 @@ Multiple modifiers can be combined on the same element.
 ```python
 class SaveFormView(LiveView):
     template_string = """
-    <form @submit="save_data">
+    <form dj-submit="save_data">
         <input type="text" name="title" />
 
         <!-- Disable and add class during save -->
-        <button type="submit" @loading.disable @loading.class="opacity-50">
+        <button type="submit" dj-loading.disable dj-loading.class="opacity-50">
             Save Article
         </button>
 
         <!-- Show spinner during save -->
-        <div @loading.show style="display: none;">
+        <div dj-loading.show style="display: none;">
             <i class="fas fa-spinner fa-spin"></i> Saving...
         </div>
 
         <!-- Hide form content during save -->
-        <div @loading.hide>
+        <div dj-loading.hide>
             <textarea name="content"></textarea>
         </div>
 
         <!-- Hide cancel button during save -->
-        <button type="button" @loading.hide>Cancel</button>
+        <button type="button" dj-loading.hide>Cancel</button>
     </form>
     """
 
@@ -1179,10 +1179,10 @@ class SaveFormView(LiveView):
 
 1. **User submits form** → Event sent to server
 2. **Loading starts** → `globalLoadingManager.startLoading(eventName, triggerElement)`
-   - Elements with `@loading.disable` become disabled
-   - Elements with `@loading.class` get the class added
-   - Elements with `@loading.show` become visible
-   - Elements with `@loading.hide` become hidden
+   - Elements with `dj-loading.disable` become disabled
+   - Elements with `dj-loading.class` get the class added
+   - Elements with `dj-loading.show` become visible
+   - Elements with `dj-loading.hide` become hidden
 3. **Handler executes** → Processing on server
 4. **Response received** → `globalLoadingManager.stopLoading(eventName, triggerElement)`
    - All original states restored automatically
@@ -1206,9 +1206,9 @@ Loading states are scoped to prevent cross-button contamination when multiple bu
 ```html
 <div class="card-body">
     <!-- These buttons operate INDEPENDENTLY even with same event -->
-    <button @click="save" @loading.disable>Save A</button>
-    <button @click="save" @loading.class="opacity-25">Save B</button>
-    <button @click="save" @loading.disable @loading.class="opacity-25">Save C</button>
+    <button dj-click="save" dj-loading.disable>Save A</button>
+    <button dj-click="save" dj-loading.class="opacity-25">Save B</button>
+    <button dj-click="save" dj-loading.disable dj-loading.class="opacity-25">Save C</button>
 </div>
 ```
 ✅ Clicking "Save A" only affects "Save A" (no grouping container)
@@ -1217,8 +1217,8 @@ Loading states are scoped to prevent cross-button contamination when multiple bu
 ```html
 <div class="d-flex align-items-center gap-3">
     <!-- These are grouped together because of d-flex parent -->
-    <button @click="save">Save</button>
-    <div @loading.show style="display: none;">Saving...</div>
+    <button dj-click="save">Save</button>
+    <div dj-loading.show style="display: none;">Saving...</div>
 </div>
 ```
 ✅ Clicking "Save" affects both button and spinner (d-flex grouping)
@@ -1226,22 +1226,22 @@ Loading states are scoped to prevent cross-button contamination when multiple bu
 **Example: Wrong - No Grouping**
 ```html
 <!-- ❌ Spinner won't show - no grouping container -->
-<button @click="save">Save</button>
-<div @loading.show style="display: none;">Saving...</div>
+<button dj-click="save">Save</button>
+<div dj-loading.show style="display: none;">Saving...</div>
 ```
 
 **Visual Effects:**
-- **@loading.disable**: Bootstrap applies `opacity: 0.65` automatically to disabled buttons
-- **@loading.class="opacity-25"**: Much more transparent (0.25), button stays enabled
+- **dj-loading.disable**: Bootstrap applies `opacity: 0.65` automatically to disabled buttons
+- **dj-loading.class="opacity-25"**: Much more transparent (0.25), button stays enabled
 - **Combined**: Button disabled (cursor: not-allowed) AND very transparent
 
 #### Custom Display Value
 
-Use `data-loading-display` to customize the display value for `@loading.show`:
+Use `data-loading-display` to customize the display value for `dj-loading.show`:
 
 ```html
 <!-- Show as inline-block instead of block -->
-<span @loading.show data-loading-display="inline-block" style="display: none;">
+<span dj-loading.show data-loading-display="inline-block" style="display: none;">
     Loading...
 </span>
 ```
@@ -1249,7 +1249,7 @@ Use `data-loading-display` to customize the display value for `@loading.show`:
 #### Complete Form Example
 
 ```html
-<form @submit="save_article">
+<form dj-submit="save_article">
     <!-- Form fields -->
     <input type="text" name="title" />
     <textarea name="content"></textarea>
@@ -1257,23 +1257,23 @@ Use `data-loading-display` to customize the display value for `@loading.show`:
     <!-- Multi-state loading UX -->
     <div class="form-actions">
         <!-- Disable and dim save button -->
-        <button type="submit" @loading.disable @loading.class="opacity-50">
+        <button type="submit" dj-loading.disable dj-loading.class="opacity-50">
             Save Article
         </button>
 
         <!-- Hide cancel during save -->
-        <button type="button" @loading.hide>
+        <button type="button" dj-loading.hide>
             Cancel
         </button>
 
         <!-- Show inline spinner -->
-        <span @loading.show style="display: none;" data-loading-display="inline">
+        <span dj-loading.show style="display: none;" data-loading-display="inline">
             <i class="spinner"></i> Saving...
         </span>
     </div>
 
     <!-- Show overlay during save -->
-    <div @loading.show @loading.class="overlay" style="display: none;">
+    <div dj-loading.show dj-loading.class="overlay" style="display: none;">
         Processing your request...
     </div>
 </form>
@@ -1341,7 +1341,7 @@ See `tests/js/loading.test.js` for 30 comprehensive unit tests covering all modi
 
 ### @loading-text
 
-**Status:** 🚧 Not Yet Implemented (use @loading.class instead)
+**Status:** 🚧 Not Yet Implemented (use dj-loading.class instead)
 
 Temporarily replaces button text during event processing. Simpler alternative to `@loading` for basic button text changes.
 
@@ -1358,7 +1358,7 @@ Temporarily replaces button text during event processing. Simpler alternative to
 ```python
 class UploadView(LiveView):
     template_string = """
-    <form @submit="upload_file">
+    <form dj-submit="upload_file">
         <input type="file" name="file" />
 
         <button type="submit" @loading-text="Uploading...">
@@ -1386,7 +1386,7 @@ class UploadView(LiveView):
 #### With Icons
 
 ```html
-<button @click="save" @loading-text="⏳ Saving...">
+<button dj-click="save" @loading-text="⏳ Saving...">
     💾 Save
 </button>
 
@@ -1396,7 +1396,7 @@ class UploadView(LiveView):
 #### Disable Button During Loading
 
 ```html
-<button @click="save"
+<button dj-click="save"
         @loading-text="Saving..."
         @loading-disabled>
     Save

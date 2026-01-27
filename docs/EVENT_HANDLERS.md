@@ -18,13 +18,13 @@ This guide explains how to write effective event handlers in djust LiveView appl
 
 ### Always use `value` for form input events
 
-Form elements (`<input>`, `<select>`, `<textarea>`) send their value using the `value` parameter when using `@input` or `@change` events.
+Form elements (`<input>`, `<select>`, `<textarea>`) send their value using the `value` parameter when using `dj-input` or `dj-change` events.
 
 **✅ Correct:**
 ```python
 @event_handler()
 def search(self, value: str = "", **kwargs):
-    """value matches what @input/@change sends"""
+    """value matches what dj-input/dj-change sends"""
     self.search_query = value
     self._refresh_properties()
 
@@ -39,7 +39,7 @@ def filter_by_status(self, value: str = "all", **kwargs):
 ```python
 @event_handler()
 def search(self, query: str = "", **kwargs):
-    """Won't work! @input sends 'value', not 'query'"""
+    """Won't work! dj-input sends 'value', not 'query'"""
     self.search_query = query  # Will always be "" (default)
 ```
 
@@ -57,7 +57,7 @@ def delete_property(self, property_id: int, **kwargs):
 
 Template usage:
 ```html
-<button @click="delete_property" data-property-id="{{ property.id }}">
+<button dj-click="delete_property" data-property-id="{{ property.id }}">
     Delete
 </button>
 ```
@@ -70,10 +70,10 @@ You can pass arguments directly in the handler attribute using function-call syn
 
 ```html
 <!-- Instead of using data-* attributes -->
-<button @click="set_period" data-value="month">30 Days</button>
+<button dj-click="set_period" data-value="month">30 Days</button>
 
 <!-- You can use inline arguments -->
-<button @click="set_period('month')">30 Days</button>
+<button dj-click="set_period('month')">30 Days</button>
 ```
 
 Both approaches call the same handler:
@@ -105,8 +105,8 @@ Inline arguments are automatically parsed into their appropriate types:
 Pass multiple arguments separated by commas:
 
 ```html
-<button @click="sort_by('name', true)">Sort by Name (Ascending)</button>
-<button @click="filter('status', 'active', 1)">Active Items</button>
+<button dj-click="sort_by('name', true)">Sort by Name (Ascending)</button>
+<button dj-click="filter('status', 'active', 1)">Active Items</button>
 ```
 
 ```python
@@ -128,7 +128,7 @@ def filter(self, field: str, value: str, page: int = 1, **kwargs):
 You can combine inline arguments with `data-*` attributes. Inline arguments map to parameters by position, while `data-*` attributes map by name:
 
 ```html
-<button @click="update_item('delete')"
+<button dj-click="update_item('delete')"
         data-item-id="{{ item.id }}"
         data-confirm="true">
     Delete Item
@@ -162,19 +162,19 @@ def update_item(self, action: str, item_id: int = 0, confirm: bool = False, **kw
 #### Tab Selection
 ```html
 <div class="tabs">
-    <button @click="select_tab(0)">Overview</button>
-    <button @click="select_tab(1)">Details</button>
-    <button @click="select_tab(2)">Settings</button>
+    <button dj-click="select_tab(0)">Overview</button>
+    <button dj-click="select_tab(1)">Details</button>
+    <button dj-click="select_tab(2)">Settings</button>
 </div>
 ```
 
 #### Period Selector
 ```html
 <div class="period-selector">
-    <button @click="set_period('day')">Today</button>
-    <button @click="set_period('week')">This Week</button>
-    <button @click="set_period('month')">This Month</button>
-    <button @click="set_period('year')">This Year</button>
+    <button dj-click="set_period('day')">Today</button>
+    <button dj-click="set_period('week')">This Week</button>
+    <button dj-click="set_period('month')">This Month</button>
+    <button dj-click="set_period('year')">This Year</button>
 </div>
 ```
 
@@ -183,8 +183,8 @@ def update_item(self, action: str, item_id: int = 0, confirm: bool = False, **kw
 {% for item in items %}
 <div class="item-row">
     <span>{{ item.name }}</span>
-    <button @click="item_action('edit')" data-item-id="{{ item.id }}">Edit</button>
-    <button @click="item_action('delete')" data-item-id="{{ item.id }}">Delete</button>
+    <button dj-click="item_action('edit')" data-item-id="{{ item.id }}">Edit</button>
+    <button dj-click="item_action('delete')" data-item-id="{{ item.id }}">Delete</button>
 </div>
 {% endfor %}
 ```
@@ -506,7 +506,7 @@ def search(self, value: str = "", **kwargs):
 Template:
 ```html
 <input type="text"
-       @input="search"
+       dj-input="search"
        value="{{ search_query }}"
        placeholder="Search...">
 ```
@@ -523,7 +523,7 @@ def filter_by_status(self, value: str = "all", **kwargs):
 
 Template:
 ```html
-<select @change="filter_by_status">
+<select dj-change="filter_by_status">
     <option value="all" {% if filter_status == "all" %}selected{% endif %}>All</option>
     <option value="active" {% if filter_status == "active" %}selected{% endif %}>Active</option>
     <option value="inactive" {% if filter_status == "inactive" %}selected{% endif %}>Inactive</option>
@@ -589,7 +589,7 @@ def save_property(
 
 Template:
 ```html
-<form @submit="save_property">
+<form dj-submit="save_property">
     <input type="text" name="name" value="{{ property.name }}">
     <input type="text" name="address" value="{{ property.address }}">
     <input type="number" name="price" value="{{ property.price }}">
@@ -614,7 +614,7 @@ Template:
 
 **Checklist**:
 1. ✅ Is handler decorated with `@event_handler()`?
-2. ✅ Is event name correct in template (`@click="handler_name"`)?
+2. ✅ Is event name correct in template (`dj-click="handler_name"`)?
 3. ✅ Check browser console for JavaScript errors
 4. ✅ Check debug panel Event History for validation errors
 
@@ -622,7 +622,7 @@ Template:
 
 **Symptoms**: Handler receives default value instead of form value
 
-**Solution**: Use `value` parameter for form inputs:
+**Solution**: Use `value` parameter for form inputs (dj-input, dj-change events):
 
 ```python
 # ❌ Wrong
@@ -660,7 +660,7 @@ def handler(self, value: str = "", **kwargs):
 
 ```python
 # Template sends invalid string for int
-<button @click="delete_item" data-item-id="not_a_number">Delete</button>
+<button dj-click="delete_item" data-item-id="not_a_number">Delete</button>
 
 # ❌ This will fail - "not_a_number" can't be coerced to int
 @event_handler()
@@ -668,7 +668,7 @@ def delete_item(self, item_id: int):
     pass
 
 # ✅ Correct - template sends valid integer string
-<button @click="delete_item" data-item-id="{{ item.id }}">Delete</button>
+<button dj-click="delete_item" data-item-id="{{ item.id }}">Delete</button>
 
 # Handler receives item_id as int (automatically coerced)
 @event_handler()

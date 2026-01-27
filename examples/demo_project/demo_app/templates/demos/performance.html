@@ -196,25 +196,25 @@
                         <div class="p-4" style="background: var(--color-bg-elevated);">
                             <!-- Add Items Controls -->
                             <div class="flex gap-2 flex-wrap mb-4">
-                                <button @click="add_items_10" class="btn-primary-modern">
+                                <button dj-click="add_items_10" class="btn-primary-modern">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
                                     </svg>
                                     <span>Add 10 Items</span>
                                 </button>
-                                <button @click="add_items_100" class="btn-primary-modern">
+                                <button dj-click="add_items_100" class="btn-primary-modern">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
                                     </svg>
                                     <span>Add 100 Items</span>
                                 </button>
-                                <button @click="add_items_1000" class="btn-secondary-modern" style="border-color: var(--color-warning); color: var(--color-warning);">
+                                <button dj-click="add_items_1000" class="btn-secondary-modern" style="border-color: var(--color-warning); color: var(--color-warning);">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                                     </svg>
                                     <span>Add 1000 Items</span>
                                 </button>
-                                <button @click="clear_all" class="btn-secondary-modern" style="border-color: var(--color-error); color: var(--color-error);">
+                                <button dj-click="clear_all" class="btn-secondary-modern" style="border-color: var(--color-error); color: var(--color-error);">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
                                     </svg>
@@ -227,10 +227,10 @@
                                 <input type="text"
                                        placeholder="Filter items..."
                                        value="{{ filter_text }}"
-                                       @change="filter_items"
+                                       dj-change="filter_items"
                                        class="filter-input" />
 
-                                <select @change="sort_items" class="sort-select">
+                                <select dj-change="sort_items" class="sort-select">
                                     <option value="name" {% if sort_by == 'name' %}selected{% endif %}>Sort by Name</option>
                                     <option value="priority" {% if sort_by == 'priority' %}selected{% endif %}>Sort by Priority</option>
                                     <option value="timestamp" {% if sort_by == 'timestamp' %}selected{% endif %}>Sort by Time</option>
@@ -239,16 +239,16 @@
 
                             <!-- Batch Operations -->
                             <div class="flex gap-2 flex-wrap mb-4">
-                                <button @click="select_all" class="btn-secondary-modern">
+                                <button dj-click="select_all" class="btn-secondary-modern">
                                     <span>Select All</span>
                                 </button>
-                                <button @click="deselect_all" class="btn-secondary-modern">
+                                <button dj-click="deselect_all" class="btn-secondary-modern">
                                     <span>Deselect All</span>
                                 </button>
-                                <button @click="delete_selected" class="btn-secondary-modern" style="border-color: var(--color-error); color: var(--color-error);">
+                                <button dj-click="delete_selected" class="btn-secondary-modern" style="border-color: var(--color-error); color: var(--color-error);">
                                     <span>Delete Selected</span>
                                 </button>
-                                <button @click="toggle_priority_selected" class="btn-secondary-modern" style="border-color: var(--color-warning); color: var(--color-warning);">
+                                <button dj-click="toggle_priority_selected" class="btn-secondary-modern" style="border-color: var(--color-warning); color: var(--color-warning);">
                                     <span>Toggle Priority</span>
                                 </button>
                             </div>
@@ -262,7 +262,7 @@
                                         <input type="checkbox"
                                                class="item-checkbox"
                                                {% if item.selected %}checked{% endif %}
-                                               @change="toggle_item"
+                                               dj-change="toggle_item"
                                                data-id="{{ item.id }}" />
                                         <div class="item-content">
                                             <span class="item-name">{{ item.name }}</span>
@@ -272,11 +272,11 @@
                                             {% if item.priority %}
                                             <span class="priority-badge">High Priority</span>
                                             {% endif %}
-                                            <button @click="toggle_priority"
+                                            <button dj-click="toggle_priority"
                                                     data-id="{{ item.id }}"
                                                     class="btn-secondary-modern"
                                                     style="padding: 0.25rem 0.5rem; font-size: 0.875rem;">★</button>
-                                            <button @click="delete_item"
+                                            <button dj-click="delete_item"
                                                     data-id="{{ item.id }}"
                                                     class="btn-secondary-modern"
                                                     style="padding: 0.25rem 0.5rem; font-size: 1rem; border-color: var(--color-error); color: var(--color-error);">×</button>
@@ -361,21 +361,21 @@ class PerformanceTestView(LiveView):
                                 </div>
                                 <div class="code-block-modern">
                                     <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-html">&lt;!-- Add Items --&gt;
-&lt;button @click="add_items_100"&gt;
+&lt;button dj-click="add_items_100"&gt;
   Add 100 Items
 &lt;/button&gt;
 
 &lt;!-- Filter --&gt;
 &lt;input type="text"
        placeholder="Filter..."
-       @change="filter_items" /&gt;
+       dj-change="filter_items" /&gt;
 
 &lt;!-- Items List --&gt;
 &#123;% for item in items %&#125;
   &lt;div class="performance-item"&gt;
     &lt;input type="checkbox"
            &#123;% if item.selected %&#125;checked&#123;% endif %&#125;
-           @change="toggle_item"
+           dj-change="toggle_item"
            data-id="&#123;&#123; item.id &#125;&#125;" /&gt;
     &lt;span&gt;&#123;&#123; item.name &#125;&#125;&lt;/span&gt;
   &lt;/div&gt;

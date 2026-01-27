@@ -15,18 +15,18 @@
             {% if success_message %}
             <div class="alert alert-success">
                 {{ success_message }}
-                <button type="button" class="btn-close float-end" @click="clear_message"></button>
+                <button type="button" class="btn-close float-end" dj-click="clear_message"></button>
             </div>
             {% endif %}
 
             {% if error_message %}
             <div class="alert alert-danger">
                 {{ error_message }}
-                <button type="button" class="btn-close float-end" @click="clear_message"></button>
+                <button type="button" class="btn-close float-end" dj-click="clear_message"></button>
             </div>
             {% endif %}
 
-            <form @submit="submit_form" onsubmit="return false;">
+            <form dj-submit="submit_form" onsubmit="return false;">
                 {% csrf_token %}
 
                 <!-- Auto-rendered form using as_live() method -->
@@ -34,7 +34,7 @@
 
                 <div class="d-grid gap-2 mt-3">
                     <button type="submit" class="btn btn-primary">Send Message</button>
-                    <button type="button" class="btn btn-secondary" @click="reset_form">Reset</button>
+                    <button type="button" class="btn btn-secondary" dj-click="reset_form">Reset</button>
                 </div>
             </form>
 
@@ -50,7 +50,7 @@
 
                 <h5>Template Code:</h5>
                 <pre class="bg-light p-3 small"><code>{% templatetag openblock %} load live_tags {% templatetag closeblock %}
-&lt;form @submit="submit_form"&gt;
+&lt;form dj-submit="submit_form"&gt;
     {% templatetag openblock %} csrf_token {% templatetag closeblock %}
     {% templatetag openvariable %} live_form view {% templatetag closevariable %}
     &lt;button type="submit"&gt;Submit&lt;/button&gt;

@@ -41,18 +41,18 @@
             {% if success_message %}
             <div class="alert alert-success">
                 {{ success_message }}
-                <button type="button" class="btn-close float-end" @click="clear_message"></button>
+                <button type="button" class="btn-close float-end" dj-click="clear_message"></button>
             </div>
             {% endif %}
 
             {% if error_message %}
             <div class="alert alert-danger">
                 {{ error_message }}
-                <button type="button" class="btn-close float-end" @click="clear_message"></button>
+                <button type="button" class="btn-close float-end" dj-click="clear_message"></button>
             </div>
             {% endif %}
 
-            <form @submit="submit_form" onsubmit="return false;">
+            <form dj-submit="submit_form" onsubmit="return false;">
                 {% csrf_token %}
                 <!-- Name Field -->
                 <div class="mb-3">
@@ -63,7 +63,7 @@
                         id="name"
                         name="name"
                         value="{{ form_data.name }}"
-                        @change="validate_field"
+                        dj-change="validate_field"
                         data-field="name"
                         required
                     >
@@ -85,7 +85,7 @@
                         id="email"
                         name="email"
                         value="{{ form_data.email }}"
-                        @change="validate_field"
+                        dj-change="validate_field"
                         data-field="email"
                         required
                     >
@@ -106,7 +106,7 @@
                         id="message"
                         name="message"
                         rows="4"
-                        @change="validate_field"
+                        dj-change="validate_field"
                         data-field="message"
                         required
                     >{{ form_data.message }}</textarea>
@@ -121,7 +121,7 @@
 
                 <div class="d-grid gap-2">
                     <button type="submit" class="btn btn-primary">Send Message</button>
-                    <button type="button" class="btn btn-secondary" @click="reset_form">Reset</button>
+                    <button type="button" class="btn btn-secondary" dj-click="reset_form">Reset</button>
                 </div>
             </form>
 
