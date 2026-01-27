@@ -156,13 +156,13 @@ class PaginationComponent(LiveComponent):
         # First page button
         if self.show_first_last:
             disabled = " disabled" if self.current_page == 1 else ""
-            click_attr = ' @click="first_page"' if self.current_page != 1 else ""
+            click_attr = ' dj-click="first_page"' if self.current_page != 1 else ""
             html += f'<li class="page-item{disabled}"><a class="page-link" href="#"{click_attr}>&laquo;&laquo;</a></li>'
 
         # Previous page button
         if self.show_prev_next:
             disabled = " disabled" if self.current_page == 1 else ""
-            click_attr = ' @click="previous_page"' if self.current_page != 1 else ""
+            click_attr = ' dj-click="previous_page"' if self.current_page != 1 else ""
             html += f'<li class="page-item{disabled}"><a class="page-link" href="#"{click_attr}>&laquo;</a></li>'
 
         # Page numbers
@@ -175,7 +175,7 @@ class PaginationComponent(LiveComponent):
         for page in visible_pages:
             active = " active" if page == self.current_page else ""
             click_attr = (
-                f' @click="go_to_page" data-page="{page}"' if page != self.current_page else ""
+                f' dj-click="go_to_page" data-page="{page}"' if page != self.current_page else ""
             )
             html += f'<li class="page-item{active}"><a class="page-link" href="#"{click_attr}>{page}</a></li>'
 
@@ -186,13 +186,13 @@ class PaginationComponent(LiveComponent):
         # Next page button
         if self.show_prev_next:
             disabled = " disabled" if self.current_page == self.total_pages else ""
-            click_attr = ' @click="next_page"' if self.current_page != self.total_pages else ""
+            click_attr = ' dj-click="next_page"' if self.current_page != self.total_pages else ""
             html += f'<li class="page-item{disabled}"><a class="page-link" href="#"{click_attr}>&raquo;</a></li>'
 
         # Last page button
         if self.show_first_last:
             disabled = " disabled" if self.current_page == self.total_pages else ""
-            click_attr = ' @click="last_page"' if self.current_page != self.total_pages else ""
+            click_attr = ' dj-click="last_page"' if self.current_page != self.total_pages else ""
             html += f'<li class="page-item{disabled}"><a class="page-link" href="#"{click_attr}>&raquo;&raquo;</a></li>'
 
         html += "</ul></nav></div>"
@@ -232,7 +232,7 @@ class PaginationComponent(LiveComponent):
             disabled_class = (
                 "opacity-50 cursor-not-allowed" if self.current_page == 1 else "hover:bg-gray-100"
             )
-            click_attr = ' @click="first_page"' if self.current_page != 1 else ""
+            click_attr = ' dj-click="first_page"' if self.current_page != 1 else ""
             html += f"""<li>
                 <a href="#" class="{size_class} ml-0 leading-tight text-gray-500 bg-white border border-gray-300 rounded-l-lg {disabled_class}"{click_attr}>
                     &laquo;&laquo;
@@ -244,7 +244,7 @@ class PaginationComponent(LiveComponent):
             disabled_class = (
                 "opacity-50 cursor-not-allowed" if self.current_page == 1 else "hover:bg-gray-100"
             )
-            click_attr = ' @click="previous_page"' if self.current_page != 1 else ""
+            click_attr = ' dj-click="previous_page"' if self.current_page != 1 else ""
             first_class = "rounded-l-lg" if not self.show_first_last else ""
             html += f"""<li>
                 <a href="#" class="{size_class} leading-tight text-gray-500 bg-white border border-gray-300 {first_class} {disabled_class}"{click_attr}>
@@ -268,7 +268,7 @@ class PaginationComponent(LiveComponent):
                 )
 
             click_attr = (
-                f' @click="go_to_page" data-page="{page}"' if page != self.current_page else ""
+                f' dj-click="go_to_page" data-page="{page}"' if page != self.current_page else ""
             )
             html += f'<li><a href="#" class="{size_class} leading-tight border {active_class}"{click_attr}>{page}</a></li>'
 
@@ -283,7 +283,7 @@ class PaginationComponent(LiveComponent):
                 if self.current_page == self.total_pages
                 else "hover:bg-gray-100"
             )
-            click_attr = ' @click="next_page"' if self.current_page != self.total_pages else ""
+            click_attr = ' dj-click="next_page"' if self.current_page != self.total_pages else ""
             last_class = "rounded-r-lg" if not self.show_first_last else ""
             html += f"""<li>
                 <a href="#" class="{size_class} leading-tight text-gray-500 bg-white border border-gray-300 {last_class} {disabled_class}"{click_attr}>
@@ -298,7 +298,7 @@ class PaginationComponent(LiveComponent):
                 if self.current_page == self.total_pages
                 else "hover:bg-gray-100"
             )
-            click_attr = ' @click="last_page"' if self.current_page != self.total_pages else ""
+            click_attr = ' dj-click="last_page"' if self.current_page != self.total_pages else ""
             html += f"""<li>
                 <a href="#" class="{size_class} leading-tight text-gray-500 bg-white border border-gray-300 rounded-r-lg {disabled_class}"{click_attr}>
                     &raquo;&raquo;
@@ -322,13 +322,13 @@ class PaginationComponent(LiveComponent):
         # First page button
         if self.show_first_last:
             disabled = " disabled" if self.current_page == 1 else ""
-            click_attr = ' @click="first_page"' if self.current_page != 1 else ""
+            click_attr = ' dj-click="first_page"' if self.current_page != 1 else ""
             html += f'<a href="#" class="pagination-link{disabled}"{click_attr}>&laquo;&laquo;</a>'
 
         # Previous page button
         if self.show_prev_next:
             disabled = " disabled" if self.current_page == 1 else ""
-            click_attr = ' @click="previous_page"' if self.current_page != 1 else ""
+            click_attr = ' dj-click="previous_page"' if self.current_page != 1 else ""
             html += f'<a href="#" class="pagination-link{disabled}"{click_attr}>&laquo;</a>'
 
         # Page numbers
@@ -341,7 +341,7 @@ class PaginationComponent(LiveComponent):
         for page in visible_pages:
             active = " active" if page == self.current_page else ""
             click_attr = (
-                f' @click="go_to_page" data-page="{page}"' if page != self.current_page else ""
+                f' dj-click="go_to_page" data-page="{page}"' if page != self.current_page else ""
             )
             html += f'<a href="#" class="pagination-link{active}"{click_attr}>{page}</a>'
 
@@ -352,13 +352,13 @@ class PaginationComponent(LiveComponent):
         # Next page button
         if self.show_prev_next:
             disabled = " disabled" if self.current_page == self.total_pages else ""
-            click_attr = ' @click="next_page"' if self.current_page != self.total_pages else ""
+            click_attr = ' dj-click="next_page"' if self.current_page != self.total_pages else ""
             html += f'<a href="#" class="pagination-link{disabled}"{click_attr}>&raquo;</a>'
 
         # Last page button
         if self.show_first_last:
             disabled = " disabled" if self.current_page == self.total_pages else ""
-            click_attr = ' @click="last_page"' if self.current_page != self.total_pages else ""
+            click_attr = ' dj-click="last_page"' if self.current_page != self.total_pages else ""
             html += f'<a href="#" class="pagination-link{disabled}"{click_attr}>&raquo;&raquo;</a>'
 
         html += "</div></div>"

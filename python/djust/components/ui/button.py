@@ -125,7 +125,7 @@ class ButtonComponent(LiveComponent):
         disabled_attr = " disabled" if self.disabled else ""
 
         # Click handler
-        click_attr = f' @click="{self.on_click}"' if self.on_click else ""
+        click_attr = f' dj-click="{self.on_click}"' if self.on_click else ""
 
         # Icon and label
         if self.icon:
@@ -191,7 +191,7 @@ class ButtonComponent(LiveComponent):
         disabled_attr = " disabled" if self.disabled else ""
 
         # Click handler
-        click_attr = f' @click="{self.on_click}"' if self.on_click else ""
+        click_attr = f' dj-click="{self.on_click}"' if self.on_click else ""
 
         # Icon and label
         if self.icon:
@@ -211,7 +211,7 @@ class ButtonComponent(LiveComponent):
         disabled_attr = " disabled" if self.disabled else ""
 
         # Click handler
-        click_attr = f' @click="{self.on_click}"' if self.on_click else ""
+        click_attr = f' dj-click="{self.on_click}"' if self.on_click else ""
 
         # Classes
         classes = f"button button-{self.variant} button-{self.size}"

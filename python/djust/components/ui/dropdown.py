@@ -156,7 +156,7 @@ class DropdownComponent(LiveComponent):
                 item_variant = item.get("variant", "")
                 data = item.get("data", {})
 
-                click_attr = f' @click="{action}"' if action else ""
+                click_attr = f' dj-click="{action}"' if action else ""
                 variant_class = f" text-{item_variant}" if item_variant else ""
 
                 # Add data-* attributes for event parameters
@@ -199,7 +199,7 @@ class DropdownComponent(LiveComponent):
 
         # Button
         button_class = f"{size_class} {variant_class} font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2"
-        html += f'<button type="button" class="{button_class}" @click="open = !open">{self.label}'
+        html += f'<button type="button" class="{button_class}" dj-click="open = !open">{self.label}'
         html += """<svg class="-mr-1 ml-2 h-5 w-5 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
             <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
         </svg></button>"""
@@ -219,7 +219,7 @@ class DropdownComponent(LiveComponent):
                 data = item.get("data", {})
 
                 click_attr = (
-                    f' @click="{action}; open = false"' if action else ' @click="open = false"'
+                    f' dj-click="{action}; open = false"' if action else ' dj-click="open = false"'
                 )
                 variant_class = " text-red-600" if item_variant == "danger" else " text-gray-700"
 
@@ -256,7 +256,7 @@ class DropdownComponent(LiveComponent):
                 icon = item.get("icon", "")
                 data = item.get("data", {})
 
-                click_attr = f' @click="{action}"' if action else ""
+                click_attr = f' dj-click="{action}"' if action else ""
 
                 # Add data-* attributes for event parameters
                 data_attrs = ""

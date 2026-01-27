@@ -8,6 +8,12 @@
 window.djust = window.djust || {};
 
 // ============================================================================
+// Security Constants
+// ============================================================================
+// Dangerous keys that could cause prototype pollution attacks
+const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
+
+// ============================================================================
 // Double-Load Guard
 // ============================================================================
 // Prevent double execution when client.js is included in both base template
@@ -977,15 +983,13 @@ function initDraftMode() {
 
     // Monitor all fields with data-draft="true" for changes
     const draftFields = document.querySelectorAll('[data-draft="true"]');
-    // Dangerous keys that could cause prototype pollution
-    const UNSAFE_DRAFT_KEYS = ['__proto__', 'constructor', 'prototype'];
     draftFields.forEach(field => {
         const saveDraft = () => {
             // Collect all draft field values
             const draftData = {};
             draftFields.forEach(f => {
                 // Prevent prototype pollution attacks
-                if (f.name && !UNSAFE_DRAFT_KEYS.includes(f.name)) {
+                if (f.name && !UNSAFE_KEYS.includes(f.name)) {
                     if (f.type === 'checkbox') {
                         draftData[f.name] = f.checked;
                     } else {
@@ -1011,8 +1015,6 @@ function initDraftMode() {
 
 function collectFormData(container) {
     const data = {};
-    // Dangerous keys that could cause prototype pollution
-    const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
 
     const fields = container.querySelectorAll('input, textarea, select');
     fields.forEach(field => {
@@ -1301,8 +1303,6 @@ window.djust.parseEventHandler = parseEventHandler;
  */
 function extractTypedParams(element) {
     const params = {};
-    // Dangerous keys that could cause prototype pollution
-    const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
 
     for (const attr of element.attributes) {
         if (!attr.name.startsWith('data-')) continue;
@@ -2112,8 +2112,6 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
 
                     e.preventDefault();
                     const params = {};
-                    // Dangerous keys that could cause prototype pollution
-                    const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
                     Array.from(elem.attributes).forEach(attr => {
                         if (attr.name.startsWith('data-') && !attr.name.startsWith('data-liveview')) {
                             const paramKey = attr.name.substring(5).replace(/-/g, '_');

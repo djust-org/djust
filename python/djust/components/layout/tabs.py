@@ -142,7 +142,7 @@ class TabsComponent(LiveComponent):
             badge_html = f' <span class="badge bg-secondary">{badge}</span>' if badge else ""
 
             html += f"""<li class="nav-item" role="presentation">
-                <button class="nav-link{active_class}{disabled_class}" @click="{self.action}" data-tab="{tab_id}"
+                <button class="nav-link{active_class}{disabled_class}" dj-click="{self.action}" data-tab="{tab_id}"
                         type="button" role="tab">{label}{badge_html}</button>
             </li>"""
 
@@ -207,7 +207,7 @@ class TabsComponent(LiveComponent):
                 else ""
             )
 
-            click_attr = f' @click="{self.action}" data-tab="{tab_id}"' if not disabled else ""
+            click_attr = f' dj-click="{self.action}" data-tab="{tab_id}"' if not disabled else ""
 
             html += (
                 f'<button class="{base_classes} {classes}"{click_attr}>{label}{badge_html}</button>'
@@ -246,7 +246,7 @@ class TabsComponent(LiveComponent):
 
             badge_html = f' <span class="badge">{badge}</span>' if badge else ""
 
-            html += f'<button class="tab{active_class}{disabled_class}" @click="{self.action}" data-tab="{tab_id}">{label}{badge_html}</button>'
+            html += f'<button class="tab{active_class}{disabled_class}" dj-click="{self.action}" data-tab="{tab_id}">{label}{badge_html}</button>'
 
         html += "</div>"
 
