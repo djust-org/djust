@@ -3,7 +3,7 @@ Tests for LiveComponent class - stateful components with lifecycle methods.
 """
 
 import pytest
-from djust.component import LiveComponent
+from djust.components.base import LiveComponent
 
 
 class TodoListComponent(LiveComponent):
@@ -43,6 +43,13 @@ class TodoListComponent(LiveComponent):
         self.unmount_called = True
         super().unmount()
 
+    def get_context_data(self):
+        """Return context data for template rendering."""
+        return {
+            "items": self.items,
+            "filter": self.filter,
+        }
+
 
 class CounterComponent(LiveComponent):
     """Simple counter component."""
@@ -67,6 +74,10 @@ class CounterComponent(LiveComponent):
         """Increment counter."""
         self.count += 1
         self.send_parent("count_changed", {"count": self.count})
+
+    def get_context_data(self):
+        """Return context data for template rendering."""
+        return {"count": self.count}
 
 
 class TestLiveComponentLifecycle:
@@ -259,6 +270,9 @@ class TestLiveComponentRendering:
             def mount(self):
                 pass
 
+            def get_context_data(self):
+                return {}
+
         component = NoTemplateComponent()
 
         with pytest.raises(ValueError, match="must define 'template' attribute"):
@@ -285,7 +299,8 @@ class TestLiveComponentContextData:
 
         assert "_mounted" not in context
         assert "_parent_callback" not in context
-        assert "component_id" in context  # public
+        # Note: component_id is added by render(), not get_context_data()
+        assert "count" in context
 
     def test_get_context_data_excludes_methods(self):
         """Test get_context_data() excludes methods."""

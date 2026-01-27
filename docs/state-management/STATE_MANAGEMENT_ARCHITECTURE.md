@@ -913,17 +913,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Set up event listeners
   document.addEventListener('click', (e) => {
-    const target = e.target.closest('[\\@click]');
+    const target = e.target.closest('[dj-click]');
     if (target) {
-      const eventName = target.getAttribute('@click');
+      const eventName = target.getAttribute('dj-click');
       handleEvent(eventName, {});
     }
   });
 
   document.addEventListener('input', (e) => {
     const target = e.target;
-    if (target.hasAttribute('@input')) {
-      const eventName = target.getAttribute('@input');
+    if (target.hasAttribute('dj-input')) {
+      const eventName = target.getAttribute('dj-input');
       handleEvent(eventName, { value: target.value });
     }
   });

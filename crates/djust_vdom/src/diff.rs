@@ -1,7 +1,7 @@
 //! Fast virtual DOM diffing algorithm
 //!
 //! Uses a keyed diffing algorithm for efficient list updates.
-//! Includes compact djust_id (data-dj) in patches for O(1) client-side resolution.
+//! Includes compact djust_id (data-dj-id) in patches for O(1) client-side resolution.
 
 use crate::{Patch, VNode};
 use std::collections::HashMap;
@@ -59,8 +59,8 @@ fn diff_attrs(old: &VNode, new: &VNode, path: &[usize], target_id: &Option<Strin
 
     // Find removed and changed attributes
     for (key, old_value) in &old.attrs {
-        // Skip data-dj attribute - it's managed by the parser and shouldn't generate patches
-        if key == "data-dj" {
+        // Skip data-dj-id attribute - it's managed by the parser and shouldn't generate patches
+        if key == "data-dj-id" {
             continue;
         }
 
@@ -86,8 +86,8 @@ fn diff_attrs(old: &VNode, new: &VNode, path: &[usize], target_id: &Option<Strin
 
     // Find added attributes
     for (key, new_value) in &new.attrs {
-        // Skip data-dj attribute
-        if key == "data-dj" {
+        // Skip data-dj-id attribute
+        if key == "data-dj-id" {
             continue;
         }
 
@@ -555,23 +555,23 @@ mod tests {
 
     #[test]
     fn test_data_d_attr_not_diffed() {
-        // Ensure that data-dj attribute changes don't generate patches
-        // (the parser handles data-dj, diffing should ignore it)
+        // Ensure that data-dj-id attribute changes don't generate patches
+        // (the parser handles data-dj-id, diffing should ignore it)
         let old = VNode::element("div")
             .with_djust_id("old")
-            .with_attr("data-dj", "old")
+            .with_attr("data-dj-id", "old")
             .with_attr("class", "same");
         let new = VNode::element("div")
             .with_djust_id("new")
-            .with_attr("data-dj", "new")
+            .with_attr("data-dj-id", "new")
             .with_attr("class", "same");
 
         let patches = diff_nodes(&old, &new, &[]);
 
-        // Should be empty - no attribute changes (data-dj is ignored)
+        // Should be empty - no attribute changes (data-dj-id is ignored)
         assert!(
             patches.is_empty(),
-            "data-dj changes should not generate patches"
+            "data-dj-id changes should not generate patches"
         );
     }
 }

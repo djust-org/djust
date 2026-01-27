@@ -146,7 +146,8 @@ class HotReloadServer:
         self.on_change_callback = on_change
         self.observer = Observer()
 
-        # Default excludes
+        # Store exclude dirs for potential future handler extension
+        # Currently the handler has built-in exclusions
         if exclude_dirs is None:
             exclude_dirs = {
                 "node_modules",
@@ -159,6 +160,7 @@ class HotReloadServer:
                 ".pytest_cache",
                 ".mypy_cache",
             }
+        self.exclude_dirs = exclude_dirs
 
         # Set up file change handler
         event_handler = DjustFileChangeHandler(on_change_callback=on_change)

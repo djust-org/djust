@@ -154,7 +154,7 @@ impl VNode {
     }
 
     /// Serialize the VNode back to HTML string.
-    /// This includes data-dj attributes for reliable patch targeting.
+    /// This includes data-dj-id attributes for reliable patch targeting.
     pub fn to_html(&self) -> String {
         if self.is_text() {
             // Text nodes: escape HTML entities

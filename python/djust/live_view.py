@@ -91,7 +91,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
     def _default_impl(self, obj):
         # Handle Component and LiveComponent instances (render to HTML)
         # Import from both old and new locations for compatibility
-        from .component import Component, LiveComponent
+        from .components.base import Component, LiveComponent
         from .components.base import Component as BaseComponent, LiveComponent as BaseLiveComponent
 
         if isinstance(obj, (Component, LiveComponent, BaseComponent, BaseLiveComponent)):
@@ -787,7 +787,7 @@ class LiveView(View):
         Supports template inheritance via {% extends %} and {% block %} tags.
         Templates are resolved using Rust template inheritance for performance.
 
-        For templates with inheritance, extracts only [data-liveview-root] content
+        For templates with inheritance, extracts only [data-djust-root] content
         for VDOM tracking to avoid tracking the entire document.
         """
         if self.template:
@@ -975,7 +975,7 @@ class LiveView(View):
                 user_id=selected_id
             )
         """
-        from .component import LiveComponent
+        from .components.base import LiveComponent
 
         component = self._components.get(component_id)
         if component and isinstance(component, LiveComponent):
@@ -990,7 +990,7 @@ class LiveView(View):
         Args:
             component: LiveComponent instance to register
         """
-        from .component import LiveComponent
+        from .components.base import LiveComponent
 
         if isinstance(component, LiveComponent):
             # Register component by ID
@@ -1220,7 +1220,7 @@ class LiveView(View):
             - 80%+ reduction in database queries
             - <1ms serialization overhead after first call
         """
-        from .component import Component, LiveComponent
+        from .components.base import Component, LiveComponent
         from django.db.models import QuerySet
 
         context = {}
@@ -1473,7 +1473,7 @@ class LiveView(View):
                     print("[LiveView] Cache MISS! Will create new RustLiveView", file=sys.stderr)
 
             # Create new RustLiveView with the template
-            # The template includes <div data-liveview-root> which matches what the client patches
+            # The template includes <div data-djust-root> which matches what the client patches
             # get_template() returns child blocks (with wrapper) for inheritance,
             # or raw template for non-inheritance
             template_source = self.get_template()
@@ -1499,7 +1499,7 @@ class LiveView(View):
     def _sync_state_to_rust(self):
         """Sync Python state to Rust backend"""
         if self._rust_view:
-            from .component import Component, LiveComponent
+            from .components.base import Component, LiveComponent
             from django import forms
 
             context = self.get_context_data()
@@ -1719,19 +1719,19 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
     def _extract_liveview_content(self, html: str) -> str:
         """
-        Extract the inner content of [data-liveview-root] from full HTML.
+        Extract the inner content of [data-djust-root] from full HTML.
 
         This ensures the HTML sent over WebSocket matches what the client expects:
-        just the content to insert into the existing [data-liveview-root] container.
+        just the content to insert into the existing [data-djust-root] container.
         """
         import re
 
-        # Find the opening tag for [data-liveview-root]
-        # Match data-liveview-root anywhere in the div tag attributes
-        opening_match = re.search(r"<div\s+[^>]*data-liveview-root[^>]*>", html, re.IGNORECASE)
+        # Find the opening tag for [data-djust-root]
+        # Match data-djust-root anywhere in the div tag attributes
+        opening_match = re.search(r"<div\s+[^>]*data-djust-root[^>]*>", html, re.IGNORECASE)
 
         if not opening_match:
-            # No [data-liveview-root] found - return full HTML
+            # No [data-djust-root] found - return full HTML
             return html
 
         start_pos = opening_match.end()
@@ -1768,27 +1768,27 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
     def _extract_liveview_root_with_wrapper(self, template: str) -> str:
         """
-        Extract the <div data-liveview-root>...</div> section from a template (WITH the wrapper div).
+        Extract the <div data-djust-root>...</div> section from a template (WITH the wrapper div).
 
         This is used to ensure server VDOM and client VDOM track the same structure:
-        - Client's getNodeByPath([]) returns the div[data-liveview-root] element
-        - Server VDOM must also track div[data-liveview-root] as the root
+        - Client's getNodeByPath([]) returns the div[data-djust-root] element
+        - Server VDOM must also track div[data-djust-root] as the root
         - This ensures paths match between server patches and client DOM
 
         Args:
             template: Template string (may include DOCTYPE, html, head, body, etc.)
 
         Returns:
-            Template with just the <div data-liveview-root>...</div> section (WITH wrapper)
+            Template with just the <div data-djust-root>...</div> section (WITH wrapper)
         """
         import re
 
-        # Find the opening tag for [data-liveview-root]
-        # Match data-liveview-root anywhere in the div tag attributes
-        opening_match = re.search(r"<div\s+[^>]*data-liveview-root[^>]*>", template, re.IGNORECASE)
+        # Find the opening tag for [data-djust-root]
+        # Match data-djust-root anywhere in the div tag attributes
+        opening_match = re.search(r"<div\s+[^>]*data-djust-root[^>]*>", template, re.IGNORECASE)
 
         if not opening_match:
-            # No [data-liveview-root] found - return template as-is
+            # No [data-djust-root] found - return template as-is
             return template
 
         start_pos = opening_match.start()  # Start of <div tag, not end
@@ -1827,7 +1827,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
     def _extract_liveview_template_content(self, template: str) -> str:
         """
-        Extract the innerHTML of [data-liveview-root] from a TEMPLATE (not rendered HTML).
+        Extract the innerHTML of [data-djust-root] from a TEMPLATE (not rendered HTML).
 
         This is used to establish VDOM baseline with only the innerHTML portion of the template,
         ensuring patches are calculated for the correct structure.
@@ -1840,12 +1840,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         """
         import re
 
-        # Find the opening tag for [data-liveview-root]
-        # Match data-liveview-root anywhere in the div tag attributes
-        opening_match = re.search(r"<div\s+[^>]*data-liveview-root[^>]*>", template, re.IGNORECASE)
+        # Find the opening tag for [data-djust-root]
+        # Match data-djust-root anywhere in the div tag attributes
+        opening_match = re.search(r"<div\s+[^>]*data-djust-root[^>]*>", template, re.IGNORECASE)
 
         if not opening_match:
-            # No [data-liveview-root] found - return template as-is
+            # No [data-djust-root] found - return template as-is
             return template
 
         start_pos = opening_match.end()
@@ -1883,7 +1883,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
     def _strip_liveview_root_in_html(self, html: str) -> str:
         """
-        Strip comments and whitespace from [data-liveview-root] div in full HTML page.
+        Strip comments and whitespace from [data-djust-root] div in full HTML page.
 
         This ensures the liveview-root div structure matches the stripped template used
         by the server VDOM, while preserving the rest of the page (DOCTYPE, head, body, etc.)
@@ -1898,11 +1898,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         import re
 
         # Find the liveview-root div (WITH wrapper)
-        # Match data-liveview-root anywhere in the div tag attributes
-        opening_match = re.search(r"<div\s+[^>]*data-liveview-root[^>]*>", html, re.IGNORECASE)
+        # Match data-djust-root anywhere in the div tag attributes
+        opening_match = re.search(r"<div\s+[^>]*data-djust-root[^>]*>", html, re.IGNORECASE)
 
         if not opening_match:
-            # No [data-liveview-root] found - return HTML as-is
+            # No [data-djust-root] found - return HTML as-is
             return html
 
         start_pos = opening_match.start()  # Start of <div tag
@@ -1977,7 +1977,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 json_compatible_context = serialized_context
             else:
                 # Sync state to this temporary view
-                from .component import Component, LiveComponent
+                from .components.base import Component, LiveComponent
 
                 context = self.get_context_data()
                 # Apply context processors (for GOOGLE_ANALYTICS_ID, user, messages, etc.)
@@ -2015,7 +2015,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         Render the view and compute diff from last render.
 
         Args:
-            extract_liveview_root: If True, extract innerHTML of [data-liveview-root]
+            extract_liveview_root: If True, extract innerHTML of [data-djust-root]
                                   before establishing VDOM. This ensures Rust VDOM
                                   tracks exactly what the client's innerHTML contains.
 
@@ -2052,12 +2052,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             file=sys.stderr,
         )
 
-        # Extract [data-liveview-root] innerHTML if requested
+        # Extract [data-djust-root] innerHTML if requested
         # This ensures Rust VDOM tracks exactly what the client's innerHTML contains
         if extract_liveview_root:
             html = self._extract_liveview_content(html)
             print(
-                f"[LiveView] Extracted [data-liveview-root] content ({len(html)} chars)",
+                f"[LiveView] Extracted [data-djust-root] content ({len(html)} chars)",
                 file=sys.stderr,
             )
 
@@ -2165,7 +2165,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         This makes HTTP mode work seamlessly with VDOM diffing, as IDs remain consistent
         across requests without needing session storage.
         """
-        from .component import Component, LiveComponent
+        from .components.base import Component, LiveComponent
 
         for key, value in self.__dict__.items():
             if isinstance(value, (Component, LiveComponent)) and not key.startswith("_"):
@@ -2184,7 +2184,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             request: Django request object
             context: Context dictionary containing components
         """
-        from .component import Component, LiveComponent
+        from .components.base import Component, LiveComponent
 
         view_key = f"liveview_{request.path}"
         component_state = {}
@@ -2218,7 +2218,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         Returns:
             JSON-compatible context dictionary
         """
-        from .component import Component, LiveComponent
+        from .components.base import Component, LiveComponent
         from django.db.models import Model
         from datetime import datetime, date, time
         from decimal import Decimal
@@ -2310,15 +2310,19 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         t_get_context = (time.perf_counter() - t0) * 1000
 
         # Serialize state for rendering (but don't store in session)
-        from .component import LiveComponent
+        from .components.base import LiveComponent
 
         state = {k: v for k, v in context.items() if not isinstance(v, LiveComponent)}
 
         t0 = time.perf_counter()
-        # OPTIMIZATION: JIT-serialized data is already JSON-compatible!
-        # Don't re-serialize it with serialize_context() as that destroys the nested structure
-        # The JIT serializer already created perfect nested dictionaries with method results
-        # Just use the context directly after JIT serialization
+        # IMPORTANT: Serialize any Model instances that weren't JIT-serialized
+        # This handles cases where subclasses add Model instances (like 'user')
+        # AFTER calling super().get_context_data(), which bypasses JIT serialization
+        for key, value in list(state.items()):
+            if isinstance(value, models.Model):
+                state[key] = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+
+        # JIT-serialized data and the above loop ensure JSON-compatibility
         state_serializable = state
         t_json = (time.perf_counter() - t0) * 1000
 
@@ -2379,9 +2383,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
             wrapper = loader.get_template(self.wrapper_template)
             html = wrapper.render({"liveview_content": liveview_content}, request)
-            # Inject LiveView content into [data-liveview-root] placeholder
-            # Note: liveview_content already includes <div data-liveview-root>...</div>
-            html = html.replace("<div data-liveview-root></div>", liveview_content)
+            # Inject LiveView content into [data-djust-root] placeholder
+            # Note: liveview_content already includes <div data-djust-root>...</div>
+            html = html.replace("<div data-djust-root></div>", liveview_content)
         else:
             # No wrapper, return LiveView content directly
             html = liveview_content
@@ -2414,10 +2418,10 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     f.write(form_html)
                     print(f"[LiveView] Saved form HTML to {f.name}", file=sys.stderr)
 
-        # Inject view path into data-liveview-root for WebSocket mounting
+        # Inject view path into data-djust-root for WebSocket mounting
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
         html = html.replace(
-            "<div data-liveview-root>", f'<div data-liveview-root data-live-view="{view_path}">'
+            "<div data-djust-root>", f'<div data-djust-root data-djust-view="{view_path}">'
         )
 
         # Inject LiveView client script
@@ -2427,7 +2431,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
     def post(self, request, *args, **kwargs):
         """Handle POST requests - event handling"""
-        from .component import Component, LiveComponent
+        from .components.base import Component, LiveComponent
         import logging
 
         logger = logging.getLogger(__name__)
@@ -2646,8 +2650,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             except AttributeError:
                 continue
 
-            # Collect event handlers
-            if callable(attr) and hasattr(attr, "_is_event_handler"):
+            # Collect event handlers (using _djust_decorators metadata)
+            if (
+                callable(attr)
+                and hasattr(attr, "_djust_decorators")
+                and "event_handler" in getattr(attr, "_djust_decorators", {})
+            ):
                 sig_info = get_handler_signature_info(attr)
 
                 handlers[name] = {

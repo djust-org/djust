@@ -55,7 +55,7 @@ class ThrottleScrollView(LiveView):
         </style>
     </head>
     <body>
-        <div data-liveview-root>
+        <div data-djust-root>
             <!-- Fixed Stats Panel -->
             <div class="fixed-stats">
                 <div class="card border-0">

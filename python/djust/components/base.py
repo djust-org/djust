@@ -266,8 +266,9 @@ class Component(ABC):
                 context = self.get_context_data()
                 context["_component_key"] = self._component_key
                 return mark_safe(render_template(self.template, context))
-            except (ImportError, AttributeError):
-                # Rust not available, fall back to Django template rendering
+            except (ImportError, AttributeError, RuntimeError):
+                # Rust not available or template error (e.g., include not found),
+                # fall back to Django template rendering
                 from django.template import Context, Template
 
                 template = Template(self.template)
@@ -376,7 +377,7 @@ class LiveComponent(ABC):
             def dismiss(self):
                 self.visible = False
 
-            def get_context(self):
+            def get_context_data(self):
                 return {
                     'message': self.message,
                     'type': self.type,
@@ -389,6 +390,7 @@ class LiveComponent(ABC):
 
     # Component configuration
     template_name: Optional[str] = None
+    template: Optional[str] = None  # Inline template string
     component_id: Optional[str] = None
 
     def __init__(self, component_id: Optional[str] = None, **kwargs):
@@ -402,6 +404,7 @@ class LiveComponent(ABC):
         self.component_id = component_id or self._generate_id()
         self._mounted = False
         self._parent = None
+        self._parent_callback = None  # For parent-child communication
 
         # Mount with provided kwargs
         self.mount(**kwargs)
@@ -427,7 +430,7 @@ class LiveComponent(ABC):
         pass
 
     @abstractmethod
-    def get_context(self) -> Dict[str, Any]:
+    def get_context_data(self) -> Dict[str, Any]:
         """
         Get template context for rendering.
 
@@ -451,18 +454,43 @@ class LiveComponent(ABC):
             HTML string (marked as safe for Django templates)
 
         Raises:
-            ValueError: If template_name is not set
+            ValueError: If template or template_name is not set
+            RuntimeError: If component has been unmounted
         """
-        if not self.template_name:
-            raise ValueError(f"{self.__class__.__name__} must set template_name")
+        if not self._mounted:
+            raise RuntimeError("Cannot render unmounted component")
 
-        from django.template.loader import render_to_string
         from django.utils.safestring import mark_safe
 
-        context = self.get_context()
+        context = self.get_context_data()
         context["component_id"] = self.component_id
 
-        return mark_safe(render_to_string(self.template_name, context))
+        # Use inline template if available
+        if self.template:
+            try:
+                from djust._rust import render_template
+
+                html = render_template(self.template, context)
+                # Wrap with component ID for LiveComponent tracking
+                return mark_safe(f'<div data-component-id="{self.component_id}">{html}</div>')
+            except (ImportError, AttributeError, RuntimeError):
+                # Rust not available or template error, fall back to Django templates
+                from django.template import Context, Template
+
+                template = Template(self.template)
+                django_context = Context(context)
+                html = template.render(django_context)
+                return mark_safe(f'<div data-component-id="{self.component_id}">{html}</div>')
+
+        # Fall back to template_name (file-based template)
+        if self.template_name:
+            from django.template.loader import render_to_string
+
+            return mark_safe(render_to_string(self.template_name, context))
+
+        raise ValueError(
+            f"{self.__class__.__name__} must define 'template' attribute or set 'template_name'"
+        )
 
     def set_parent(self, parent):
         """
@@ -482,6 +510,41 @@ class LiveComponent(ABC):
         """
         if self._parent and hasattr(self._parent, "_trigger_update"):
             self._parent._trigger_update()
+
+    def _set_parent_callback(self, callback):
+        """
+        Set the callback function for communicating with parent LiveView.
+
+        Args:
+            callback: Function to call when sending events to parent
+        """
+        self._parent_callback = callback
+
+    def send_parent(self, event: str, data: Optional[Dict[str, Any]] = None):
+        """
+        Send an event to the parent LiveView.
+
+        Args:
+            event: Event name
+            data: Optional event data dictionary
+        """
+        if self._parent_callback:
+            self._parent_callback(
+                {
+                    "component_id": self.component_id,
+                    "event": event,
+                    "data": data or {},
+                }
+            )
+
+    def unmount(self):
+        """
+        Clean up component when it's being removed.
+
+        Override this method to perform cleanup actions.
+        """
+        self._mounted = False
+        self._parent_callback = None
 
     def __str__(self):
         """Allow {{ component }} in templates and JSON serialization"""

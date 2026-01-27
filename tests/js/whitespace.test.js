@@ -158,7 +158,7 @@ describe('innerHTML hydration preserves newlines', () => {
         // Simulate the exact WebSocket message flow
         const jsonMessage = JSON.stringify({
             type: 'mount',
-            html: '<div data-liveview-root><pre><code>def foo():\n    return 42</code></pre></div>'
+            html: '<div data-djust-root><pre><code>def foo():\n    return 42</code></pre></div>'
         });
 
         // Parse JSON (this should convert \\n to \n)
@@ -166,7 +166,7 @@ describe('innerHTML hydration preserves newlines', () => {
 
         // Verify JSON parsing preserved the newline
         expect(data.html).toContain('\n');
-        expect(data.html).toBe('<div data-liveview-root><pre><code>def foo():\n    return 42</code></pre></div>');
+        expect(data.html).toBe('<div data-djust-root><pre><code>def foo():\n    return 42</code></pre></div>');
 
         // Now set innerHTML like the client does
         const container = document.createElement('div');

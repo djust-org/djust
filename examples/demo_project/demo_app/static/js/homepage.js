@@ -145,10 +145,10 @@
     // ============================================
     function initLiveViewDemos() {
         // Connect to WebSocket for live demos if not already connected
-        const demoElements = document.querySelectorAll('[data-live-view]');
+        const demoElements = document.querySelectorAll('[data-djust-view]');
 
         demoElements.forEach(element => {
-            const viewId = element.getAttribute('data-live-view');
+            const viewId = element.getAttribute('data-djust-view');
             // The LiveView client will automatically handle this
             console.log('LiveView demo initialized:', viewId);
         });

@@ -58,7 +58,7 @@ class Button(Component):
         </div>
         # Then add @click in template:
         # Or better, use in LiveView with @click:
-        # <button @click="handle_click">{{ button_text }}</button>
+        # <button dj-click="handle_click">{{ button_text }}</button>
 
         # All variants
         primary = Button("Primary", variant="primary")

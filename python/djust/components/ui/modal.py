@@ -109,13 +109,13 @@ class ModalComponent(LiveComponent):
                 <div class="modal-content">
                     <div class="modal-header">
                         <h5 class="modal-title">{self.title}</h5>
-                        <button type="button" class="btn-close" @click="dismiss" data-component-id="{self.component_id}" aria-label="Close"></button>
+                        <button type="button" class="btn-close" dj-click="dismiss" data-component-id="{self.component_id}" aria-label="Close"></button>
                     </div>
                     <div class="modal-body">
                         {self.body}
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" @click="dismiss" data-component-id="{self.component_id}">Close</button>
+                        <button type="button" class="btn btn-secondary" dj-click="dismiss" data-component-id="{self.component_id}">Close</button>
                     </div>
                 </div>
             </div>
@@ -137,7 +137,7 @@ class ModalComponent(LiveComponent):
         html = f"""
         <div class="fixed inset-0 z-10 overflow-y-auto" id="{self.component_id}">
             <div class="flex min-h-screen items-end justify-center px-4 pt-4 pb-20 text-center sm:block sm:p-0">
-                <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" @click="dismiss" data-component-id="{self.component_id}"></div>
+                <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" dj-click="dismiss" data-component-id="{self.component_id}"></div>
                 <span class="hidden sm:inline-block sm:h-screen sm:align-middle">&#8203;</span>
                 <div class="inline-block {size_class} w-full transform overflow-hidden rounded-lg bg-white text-left align-bottom shadow-xl transition-all sm:align-middle">
                     <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
@@ -151,7 +151,7 @@ class ModalComponent(LiveComponent):
                         </div>
                     </div>
                     <div class="bg-gray-50 px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
-                        <button type="button" @click="dismiss" data-component-id="{self.component_id}" class="mt-3 inline-flex w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 sm:mt-0 sm:w-auto sm:text-sm">
+                        <button type="button" dj-click="dismiss" data-component-id="{self.component_id}" class="mt-3 inline-flex w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 sm:mt-0 sm:w-auto sm:text-sm">
                             Close
                         </button>
                     </div>
@@ -169,13 +169,13 @@ class ModalComponent(LiveComponent):
                 <div class="modal-content">
                     <div class="modal-header">
                         <h3>{self.title}</h3>
-                        <button type="button" @click="dismiss" data-component-id="{self.component_id}">×</button>
+                        <button type="button" dj-click="dismiss" data-component-id="{self.component_id}">×</button>
                     </div>
                     <div class="modal-body">
                         {self.body}
                     </div>
                     <div class="modal-footer">
-                        <button type="button" @click="dismiss" data-component-id="{self.component_id}">Close</button>
+                        <button type="button" dj-click="dismiss" data-component-id="{self.component_id}">Close</button>
                     </div>
                 </div>
             </div>

@@ -205,7 +205,7 @@ class TestRedisBackend:
         """Create Redis backend for testing (parallel-safe)."""
         try:
             # Get worker ID for parallel test isolation
-            worker_id = getattr(request.config, 'workerinput', {}).get('workerid', 'master')
+            worker_id = getattr(request.config, "workerinput", {}).get("workerid", "master")
             key_prefix = f"djust:test:{worker_id}:"
 
             backend = RedisStateBackend(
@@ -356,8 +356,8 @@ class TestRedisBackend:
         # Do another update to verify VDOM diffing works
         view2.update_state({"count": 3})
         html4, patches, version = view2.render_with_diff()
-        # VDOM adds data-dj tracking attributes
-        assert html4 == '<div data-dj="0">3</div>'
+        # VDOM adds data-dj-id tracking attributes
+        assert html4 == '<div data-dj-id="0">3</div>'
         # Version should be preserved/incremented from serialization
         assert version >= 1
 
@@ -518,9 +518,7 @@ class TestHealthCheck:
         # Verify test key was cleaned up (should not exist in cache)
         assert "__health_check__" not in backend._cache
 
-    @pytest.mark.skipif(
-        os.environ.get("REDIS_URL") is None, reason="Redis not available"
-    )
+    @pytest.mark.skipif(os.environ.get("REDIS_URL") is None, reason="Redis not available")
     def test_redis_health_check_healthy(self):
         """Test Redis backend reports healthy status."""
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/15")
@@ -542,9 +540,7 @@ class TestHealthCheck:
         details = result["details"]
         assert "redis_version" in details or len(details) == 0
 
-    @pytest.mark.skipif(
-        os.environ.get("REDIS_URL") is None, reason="Redis not available"
-    )
+    @pytest.mark.skipif(os.environ.get("REDIS_URL") is None, reason="Redis not available")
     def test_redis_health_check_measures_latency(self):
         """Test Redis health check measures latency."""
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/15")
@@ -565,9 +561,7 @@ class TestHealthCheck:
         try:
             # Try to connect to non-existent Redis server
             # This will fail in __init__'s ping() call
-            backend = RedisStateBackend(
-                redis_url="redis://localhost:9999/0", default_ttl=3600
-            )
+            backend = RedisStateBackend(redis_url="redis://localhost:9999/0", default_ttl=3600)
             pytest.fail("Expected ConnectionError but initialization succeeded")
         except Exception:
             # Expected - can't create backend without valid connection

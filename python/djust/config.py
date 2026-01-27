@@ -121,6 +121,12 @@ class LiveViewConfig:
             if hasattr(settings, "LIVEVIEW_CONFIG"):
                 self._config.update(settings.LIVEVIEW_CONFIG)
         except ImportError:
+            # Django not installed
+            pass
+        except Exception:
+            # Settings not configured yet (e.g., ImproperlyConfigured during import)
+            # We catch Exception here because the ImproperlyConfigured import might
+            # itself fail if Django is partially installed
             pass
 
     def get(self, key: str, default: Any = None) -> Any:

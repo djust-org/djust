@@ -14,7 +14,7 @@ from django.contrib.sessions.middleware import SessionMiddleware
 class SimpleCounterView(LiveView):
     """Simple counter view for testing VDOM patching"""
 
-    template = """<div data-liveview-root>
+    template = """<div data-djust-root>
     <div class="container">
         <h1>Counter Demo</h1>
         <p>Count: <strong>{{ count }}</strong></p>
@@ -54,7 +54,7 @@ def test_vdom_patching_generates_patches():
 
     # Verify initial render
     assert "Count: <strong>0</strong>" in initial_html
-    assert "data-liveview-root" in initial_html
+    assert "data-djust-root" in initial_html
 
     print("\n[TEST] Initial HTML rendered")
     print(f"[TEST] Session key: {get_request.session.session_key}")
@@ -160,18 +160,18 @@ def test_vdom_root_alignment():
     response = view.get(get_request)
     html = response.content.decode("utf-8")
 
-    # Count occurrences of data-liveview-root
-    root_count = html.count("data-liveview-root")
+    # Count occurrences of data-djust-root
+    root_count = html.count("data-djust-root")
 
     # Should have exactly 2 occurrences (opening tag + JavaScript selector)
-    assert root_count >= 1, "Should have at least one data-liveview-root"
+    assert root_count >= 1, "Should have at least one data-djust-root"
 
     # Verify structure starts with the root div
-    assert "data-liveview-root" in html
+    assert "data-djust-root" in html
 
     # Get the Rust VDOM structure
     template = view.get_template()
-    assert "data-liveview-root" in template, "Rust template should include root div"
+    assert "data-djust-root" in template, "Rust template should include root div"
 
     print("\n[TEST] ✅ Root element alignment verified!")
 

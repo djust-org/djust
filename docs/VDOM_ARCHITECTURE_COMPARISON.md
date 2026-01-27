@@ -19,7 +19,7 @@ Current djust VDOM patching uses **index-based paths** (e.g., `[1, 2, 0, 3]`) to
 
 ### How It Works
 
-1. **Server-side:** Assign unique `data-djust-id` to each element during VDOM construction
+1. **Server-side:** Assign unique `data-dj-id` to each element during VDOM construction
 2. **Patches:** Include target element ID alongside index-based path
 3. **Client-side:** Resolve by ID first, fall back to index path
 
@@ -31,7 +31,7 @@ Current djust VDOM patching uses **index-based paths** (e.g., `[1, 2, 0, 3]`) to
 ├─────────────────────────────────────────────────────────────┤
 │  HTML Template                                               │
 │       ↓                                                      │
-│  Rust VDOM Parser (assigns data-djust-id="dj-1", "dj-2"...) │
+│  Rust VDOM Parser (assigns data-dj-id="dj-1", "dj-2"...) │
 │       ↓                                                      │
 │  VDOM Diff Algorithm                                         │
 │       ↓                                                      │
@@ -43,7 +43,7 @@ Current djust VDOM patching uses **index-based paths** (e.g., `[1, 2, 0, 3]`) to
 ├─────────────────────────────────────────────────────────────┤
 │  Receive Patch                                               │
 │       ↓                                                      │
-│  Try: document.querySelector('[data-djust-id="dj-5"]')      │
+│  Try: document.querySelector('[data-dj-id="dj-5"]')      │
 │       ↓ (if found)                                          │
 │  Apply patch to element                                      │
 │       ↓ (if not found)                                      │
@@ -73,7 +73,7 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
             // Generate unique ID for this element
             let djust_id = generate_djust_id();
             vnode.djust_id = Some(djust_id.clone());
-            vnode.attrs.insert("data-djust-id".to_string(), djust_id);
+            vnode.attrs.insert("data-dj-id".to_string(), djust_id);
 
             // ... rest of parsing
         }
@@ -119,7 +119,7 @@ function getNodeByPath(path, patchContext = null) {
     // Strategy 1: Try ID-based resolution first (most reliable)
     if (patchContext && patchContext.targetId) {
         const byId = document.querySelector(
-            `[data-djust-id="${CSS.escape(patchContext.targetId)}"]`
+            `[data-dj-id="${CSS.escape(patchContext.targetId)}"]`
         );
         if (byId) {
             return byId;
@@ -141,7 +141,7 @@ function getNodeByPath(path, patchContext = null) {
 
 | Metric | Value | Notes |
 |--------|-------|-------|
-| HTML size increase | +15-25% | `data-djust-id="dj-123"` on every element |
+| HTML size increase | +15-25% | `data-dj-id="dj-123"` on every element |
 | Client lookup | O(1) | querySelector by attribute is fast |
 | Memory (server) | +8 bytes/element | String ID storage |
 | Memory (client) | Negligible | Browser handles attributes efficiently |
@@ -168,13 +168,13 @@ IDs must be **deterministic** across renders for the same logical element:
 
 ```html
 <!-- Render 1 -->
-<div data-djust-id="dj-1">
-  <span data-djust-id="dj-2">Hello</span>
+<div data-dj-id="dj-1">
+  <span data-dj-id="dj-2">Hello</span>
 </div>
 
 <!-- Render 2 (after state change) - IDs must match! -->
-<div data-djust-id="dj-1">
-  <span data-djust-id="dj-2">World</span>  <!-- Same ID, text changed -->
+<div data-dj-id="dj-1">
+  <span data-dj-id="dj-2">World</span>  <!-- Same ID, text changed -->
 </div>
 ```
 
@@ -496,7 +496,7 @@ def handle_event(self, event_name, params, request=None):
 
 - [ ] Add `djust_id` field to VNode struct
 - [ ] Generate stable IDs during parsing
-- [ ] Add `data-djust-id` attribute to rendered HTML
+- [ ] Add `data-dj-id` attribute to rendered HTML
 - [ ] Include `target_id` in Patch variants
 - [ ] Update client `getNodeByPath` to try ID first
 - [ ] Add tests for ID-based resolution

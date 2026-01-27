@@ -19,7 +19,7 @@ class InboxView(LiveView):
     - Flat mode (when sender_id is set): shows flat list of emails from one sender
     """
 
-    template = """<div data-liveview-root data-live-view="InboxView">
+    template = """<div data-djust-root data-djust-view="InboxView">
     <main class="content">
         {% if filter_mode == 'sender' %}
         <!-- FLAT MODE: Single sender's emails -->

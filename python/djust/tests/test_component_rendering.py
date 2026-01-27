@@ -1,8 +1,8 @@
 """
-Regression tests for component rendering and JSON serialization.
+Tests for component rendering and JSON serialization.
 
-These tests ensure that components from both old and new locations
-can be properly rendered in templates and serialized to JSON.
+These tests ensure that components can be properly rendered in templates
+and serialized to JSON.
 
 Regression: Components were not being JSON serialized correctly, causing
 TypeError when adding NavbarComponent to context.
@@ -41,8 +41,7 @@ from django.test import RequestFactory
 from django.contrib.sessions.middleware import SessionMiddleware
 
 from djust.live_view import LiveView, DjangoJSONEncoder
-from djust.component import Component as OldComponent, LiveComponent as OldLiveComponent
-from djust.components.base import Component as NewComponent, LiveComponent as NewLiveComponent
+from djust.components.base import Component, LiveComponent
 from djust.components.layout import NavbarComponent, NavItem
 
 
@@ -54,29 +53,10 @@ def add_session_to_request(request):
     return request
 
 
-class DemoOldComponent(OldComponent):
-    """Demo component using old Component base class"""
+class DemoComponent(Component):
+    """Demo component using Component base class"""
 
-    template = '<div class="old-component">{{ message }}</div>'
-
-    def __init__(self, message="Test"):
-        super().__init__()
-        self.message = message
-
-
-class DemoOldLiveComponent(OldLiveComponent):
-    """Demo component using old LiveComponent base class"""
-
-    template = '<div class="old-live">{{ count }}</div>'
-
-    def mount(self, count=0):
-        self.count = count
-
-
-class DemoNewComponent(NewComponent):
-    """Demo component using new Component base class"""
-
-    template = '<span class="new-component">{{ text }}</span>'
+    template = '<span class="demo-component">{{ text }}</span>'
 
     def __init__(self, text="Hello"):
         super().__init__(text=text)
@@ -86,36 +66,25 @@ class DemoNewComponent(NewComponent):
         return {"text": self.text}
 
 
-class DemoNewLiveComponent(NewLiveComponent):
-    """Demo component using new LiveComponent base class"""
+class DemoLiveComponent(LiveComponent):
+    """Demo component using LiveComponent base class"""
 
-    template_name = "not_used"  # Will be overridden by render()
+    template = '<button class="demo-live-component">{{ label }}</button>'
 
     def mount(self, label="Click"):
         self.label = label
 
-    def get_context(self):
+    def get_context_data(self):
         return {"label": self.label}
-
-    def render(self):
-        """Override render to use template string instead of template_name"""
-        from django.utils.safestring import mark_safe
-        from djust._rust import render_template
-
-        context = self.get_context()
-        html = render_template('<button class="new-live">{{ label }}</button>', context)
-        return mark_safe(html)
 
 
 class ComponentRenderingView(LiveView):
     """Test view that uses components in context"""
 
     template = """
-    <div data-liveview-root>
-        {{ old_component }}
-        {{ old_live }}
-        {{ new_component }}
-        {{ new_live }}
+    <div data-djust-root>
+        {{ component }}
+        {{ live_component }}
         {{ navbar }}
     </div>
     """
@@ -126,18 +95,12 @@ class ComponentRenderingView(LiveView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
-        # Add components from all sources
-        context["old_component"] = DemoOldComponent("Old component").render()
+        # Add components - pre-rendered to HTML strings
+        context["component"] = DemoComponent("Test component").render()
 
-        old_live = DemoOldLiveComponent()
-        old_live.mount(count=42)
-        context["old_live"] = old_live.render()
-
-        context["new_component"] = DemoNewComponent("New component").render()
-
-        new_live = DemoNewLiveComponent()
-        new_live.mount(label="Click me")
-        context["new_live"] = new_live.render()
+        live = DemoLiveComponent()
+        live.mount(label="Click me")
+        context["live_component"] = live.render()
 
         # Add NavbarComponent (the original regression case)
         navbar = NavbarComponent(
@@ -153,46 +116,27 @@ class ComponentRenderingView(LiveView):
 
 
 class TestComponentJSONSerialization:
-    """Test that all component types can be JSON serialized"""
+    """Test that component types can be JSON serialized"""
 
-    def test_old_component_json_serializable(self):
-        """Old Component instances should serialize to HTML string"""
-        component = DemoOldComponent("Test message")
+    def test_component_json_serializable(self):
+        """Component instances should serialize to HTML string"""
+        component = DemoComponent("Test message")
 
         # Should serialize without error
         result = json.dumps(component, cls=DjangoJSONEncoder)
 
         # Should contain the rendered HTML
-        assert "old-component" in result
+        assert "demo-component" in result
         assert "Test message" in result
 
-    def test_old_livecomponent_json_serializable(self):
-        """Old LiveComponent instances should serialize to HTML string"""
-        component = DemoOldLiveComponent()
-        component.mount(count=99)
-
-        result = json.dumps(component, cls=DjangoJSONEncoder)
-
-        assert "old-live" in result
-        assert "99" in result
-
-    def test_new_component_json_serializable(self):
-        """New Component instances should serialize to HTML string"""
-        component = DemoNewComponent("New text")
-
-        result = json.dumps(component, cls=DjangoJSONEncoder)
-
-        assert "new-component" in result
-        assert "New text" in result
-
-    def test_new_livecomponent_json_serializable(self):
-        """New LiveComponent instances should serialize to HTML string"""
-        component = DemoNewLiveComponent()
+    def test_livecomponent_json_serializable(self):
+        """LiveComponent instances should serialize to HTML string"""
+        component = DemoLiveComponent()
         component.mount(label="Press me")
 
         result = json.dumps(component, cls=DjangoJSONEncoder)
 
-        assert "new-live" in result
+        assert "demo-live-component" in result
         assert "Press me" in result
 
     def test_navbar_component_json_serializable(self):
@@ -215,23 +159,18 @@ class TestComponentJSONSerialization:
     def test_mixed_components_in_dict(self):
         """Multiple component types in a dict should all serialize"""
         data = {
-            "old": DemoOldComponent("old"),
-            "old_live": DemoOldLiveComponent(),
-            "new": DemoNewComponent("new"),
-            "new_live": DemoNewLiveComponent(),
+            "component": DemoComponent("test"),
+            "live_component": DemoLiveComponent(),
         }
 
         # Initialize LiveComponents
-        data["old_live"].mount(count=1)
-        data["new_live"].mount(label="test")
+        data["live_component"].mount(label="test")
 
         # Should serialize without error
         result = json.dumps(data, cls=DjangoJSONEncoder)
 
-        assert "old-component" in result
-        assert "old-live" in result
-        assert "new-component" in result
-        assert "new-live" in result
+        assert "demo-component" in result
+        assert "demo-live-component" in result
 
 
 class TestComponentRendering:
@@ -252,10 +191,9 @@ class TestComponentRendering:
         html = response.content.decode("utf-8")
 
         # All components should be rendered as HTML
-        assert '<div class="old-component">Old component</div>' in html
-        assert 'class="old-live">42</div>' in html  # May include data-component-id attribute
-        assert '<span class="new-component">New component</span>' in html
-        assert '<button class="new-live">Click me</button>' in html
+        assert '<span class="demo-component">Test component</span>' in html
+        assert "demo-live-component" in html
+        assert "Click me" in html
 
         # Navbar should render
         assert "navbar" in html.lower()
@@ -277,8 +215,8 @@ class TestComponentRendering:
 
         # Should NOT contain Python object representations
         assert "object at 0x" not in html
-        assert "DemoOldComponent" not in html
-        assert "DemoNewComponent" not in html
+        assert "DemoComponent" not in html
+        assert "DemoLiveComponent" not in html
         assert "NavbarComponent" not in html
 
     def test_navbar_renders_with_badge(self):
@@ -313,36 +251,27 @@ class TestComponentContextData:
         context = view.get_context_data()
 
         # All context items should be HTML strings
-        assert isinstance(context["old_component"], str)
-        assert isinstance(context["old_live"], str)
-        assert isinstance(context["new_component"], str)
-        assert isinstance(context["new_live"], str)
+        assert isinstance(context["component"], str)
+        assert isinstance(context["live_component"], str)
         assert isinstance(context["navbar"], str)
 
         # Should contain HTML, not repr
-        assert '<div class="old-component">' in context["old_component"]
+        assert '<span class="demo-component">' in context["component"]
         assert "object at 0x" not in context["navbar"]
 
     def test_component_render_called_explicitly(self):
         """Calling .render() explicitly should return HTML string"""
-        old_comp = DemoOldComponent("test")
-        old_live = DemoOldLiveComponent()
-        old_live.mount(count=1)
-        new_comp = DemoNewComponent("test")
-        new_live = DemoNewLiveComponent()
-        new_live.mount(label="test")
+        comp = DemoComponent("test")
+        live = DemoLiveComponent()
+        live.mount(label="test")
 
         # All should return HTML strings
-        assert isinstance(old_comp.render(), str)
-        assert isinstance(old_live.render(), str)
-        assert isinstance(new_comp.render(), str)
-        assert isinstance(new_live.render(), str)
+        assert isinstance(comp.render(), str)
+        assert isinstance(live.render(), str)
 
         # Should contain expected content
-        assert "old-component" in old_comp.render()
-        assert "old-live" in old_live.render()
-        assert "new-component" in new_comp.render()
-        assert "new-live" in new_live.render()
+        assert "demo-component" in comp.render()
+        assert "demo-live-component" in live.render()
 
 
 class TestRustTemplateRenderer:
@@ -363,9 +292,8 @@ class TestRustTemplateRenderer:
         html = response.content.decode("utf-8")
 
         # Rust should render the HTML string, not the Python object
-        assert '<div class="old-component">' in html
-        assert '<span class="new-component">' in html
-        assert "DemoOldComponent object at" not in html
+        assert '<span class="demo-component">' in html
+        assert "DemoComponent object at" not in html
         assert "NavbarComponent object at" not in html
 
     @pytest.mark.django_db
@@ -388,5 +316,5 @@ class TestRustTemplateRenderer:
         assert all(
             isinstance(v, str)
             for k, v in context.items()
-            if k in ["old_component", "old_live", "new_component", "new_live", "navbar"]
+            if k in ["component", "live_component", "navbar"]
         )

@@ -23,6 +23,9 @@ class TestTemplateAttributeStandardization:
             def mount(self, name="World"):
                 self.name = name
 
+            def get_context_data(self):
+                return {"name": self.name}
+
         # Should not raise any errors
         component = SimpleComponent()
 
@@ -37,6 +40,9 @@ class TestTemplateAttributeStandardization:
         class NoTemplateComponent(LiveComponent):
             def mount(self):
                 pass
+
+            def get_context_data(self):
+                return {}
 
         component = NoTemplateComponent()
 
@@ -60,6 +66,9 @@ class TestComponentBaseClass:
             def __init__(self, label="Button"):
                 super().__init__()
                 self.label = label
+
+            def get_context_data(self):
+                return {"label": self.label}
 
         component = SimpleComponent()
         html = component.render()
@@ -95,6 +104,9 @@ class TestTemplateWithVariousContent:
                 self.items = items or []
                 self.show_items = len(self.items) > 0
 
+            def get_context_data(self):
+                return {"items": self.items, "show_items": self.show_items}
+
         component = ComplexComponent(items=[{"name": "test", "active": True}])
         html = component.render()
 
@@ -115,6 +127,9 @@ class TestTemplateWithVariousContent:
             def mount(self, title="Test", description="Description"):
                 self.title = title
                 self.description = description
+
+            def get_context_data(self):
+                return {"title": self.title, "description": self.description}
 
         component = MultilineComponent()
         html = component.render()

@@ -14,7 +14,7 @@ from django.test import RequestFactory, override_settings
 class AnalyticsView(LiveView):
     """Test view that uses context processor variables."""
 
-    template = """<div data-liveview-root>
+    template = """<div data-djust-root>
     {% if GOOGLE_ANALYTICS_ID %}
     <script>gtag('config', '{{ GOOGLE_ANALYTICS_ID }}')</script>
     {% endif %}

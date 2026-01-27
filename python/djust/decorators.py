@@ -112,10 +112,6 @@ def event_handler(
             },
         )
 
-        # Keep existing markers for backward compatibility
-        func._is_event_handler = True  # type: ignore
-        func._event_name = func.__name__  # type: ignore
-
         return cast(F, func)
 
     # Support both @event_handler and @event_handler() syntaxes
@@ -309,10 +305,6 @@ def debounce(wait: float = 0.3, max_wait: Optional[float] = None) -> Callable[[F
             },
         )
 
-        # Backward compatibility (will be removed in future version)
-        wrapper._debounce_seconds = wait  # type: ignore
-        wrapper._debounce_ms = int(wait * 1000)  # type: ignore
-
         return cast(F, wrapper)
 
     return decorator
@@ -363,10 +355,6 @@ def throttle(
                 "trailing": trailing,
             },
         )
-
-        # Backward compatibility (will be removed in future version)
-        wrapper._throttle_seconds = interval  # type: ignore
-        wrapper._throttle_ms = int(interval * 1000)  # type: ignore
 
         return cast(F, wrapper)
 

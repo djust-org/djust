@@ -18,6 +18,12 @@ if (window._djustClientLoaded) {
 window._djustClientLoaded = true;
 
 // ============================================================================
+// Security Constants
+// ============================================================================
+// Dangerous keys that could cause prototype pollution attacks
+const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
+
+// ============================================================================
 // TurboNav Integration - Early Registration
 // ============================================================================
 // Register turbo:load handler early to ensure it's ready before TurboNav navigation.
@@ -414,7 +420,7 @@ class LiveViewWebSocket {
                 }
 
                 // OPTIMIZATION: Skip HTML replacement if content was pre-rendered via HTTP GET
-                // BUT: Force hydration if server HTML has data-djust-id attributes for reliable patching
+                // BUT: Force hydration if server HTML has data-dj-id attributes for reliable patching
                 // Server sends has_ids flag to avoid client-side string search
                 const hasDataDjAttrs = data.has_ids === true;
                 if (this.skipMountHtml && !hasDataDjAttrs) {
@@ -423,9 +429,9 @@ class LiveViewWebSocket {
                     bindLiveViewEvents(); // Bind events to existing content
                 } else if (data.html) {
                     // Replace page content with server-rendered HTML
-                    // This is required when using ID-based patch targeting (data-djust-id attributes)
+                    // This is required when using ID-based patch targeting (data-dj-id attributes)
                     if (hasDataDjAttrs) {
-                        console.log('[LiveView] Hydrating DOM with data-djust-id attributes for reliable patching');
+                        console.log('[LiveView] Hydrating DOM with data-dj-id attributes for reliable patching');
                     }
                     let container = document.querySelector('[data-djust-view]');
                     if (!container) {
@@ -539,7 +545,7 @@ class LiveViewWebSocket {
         }
 
         if (container) {
-            const viewPath = container.dataset.liveView;
+            const viewPath = container.dataset.djustView;
             if (viewPath) {
                 // OPTIMIZATION: Check if content was already rendered by HTTP GET
                 // We still send mount message (server needs to initialize session),
@@ -982,7 +988,8 @@ function initDraftMode() {
             // Collect all draft field values
             const draftData = {};
             draftFields.forEach(f => {
-                if (f.name) {
+                // Prevent prototype pollution attacks
+                if (f.name && !UNSAFE_KEYS.includes(f.name)) {
                     if (f.type === 'checkbox') {
                         draftData[f.name] = f.checked;
                     } else {
@@ -1011,7 +1018,7 @@ function collectFormData(container) {
 
     const fields = container.querySelectorAll('input, textarea, select');
     fields.forEach(field => {
-        if (field.name) {
+        if (field.name && !UNSAFE_KEYS.includes(field.name)) {
             if (field.type === 'checkbox') {
                 data[field.name] = field.checked;
             } else if (field.type === 'radio') {
@@ -1027,7 +1034,8 @@ function collectFormData(container) {
     const editables = container.querySelectorAll('[contenteditable="true"]');
     editables.forEach(editable => {
         const name = editable.getAttribute('name') || editable.id;
-        if (name) {
+        // Prevent prototype pollution attacks
+        if (name && !UNSAFE_KEYS.includes(name)) {
             data[name] = editable.innerHTML;
         }
     });
@@ -1321,6 +1329,11 @@ function extractTypedParams(element) {
         }
 
         const key = rawKey.replace(/-/g, '_'); // Convert kebab-case to snake_case
+
+        // Prevent prototype pollution attacks
+        if (UNSAFE_KEYS.includes(key)) {
+            continue;
+        }
         let value = attr.value;
 
         // Apply type coercion based on suffix
@@ -1982,7 +1995,7 @@ function sanitizeIdForLog(id) {
  * Resolve a DOM node using ID-based lookup (primary) or path traversal (fallback).
  *
  * Resolution strategy:
- * 1. If djustId is provided, try querySelector('[data-djust-id="..."]') - O(1), reliable
+ * 1. If djustId is provided, try querySelector('[data-dj-id="..."]') - O(1), reliable
  * 2. Fall back to index-based path traversal
  *
  * @param {Array<number>} path - Index-based path (fallback)
@@ -1992,13 +2005,14 @@ function sanitizeIdForLog(id) {
 function getNodeByPath(path, djustId = null) {
     // Strategy 1: ID-based resolution (fast, reliable)
     if (djustId) {
-        const byId = document.querySelector(`[data-djust-id="${CSS.escape(djustId)}"]`);
+        const byId = document.querySelector(`[data-dj-id="${CSS.escape(djustId)}"]`);
         if (byId) {
             return byId;
         }
         // ID not found - fall through to path-based
         if (globalThis.djustDebug) {
-            console.log(`[LiveView] ID lookup failed for data-djust-id="${sanitizeIdForLog(djustId)}", trying path`);
+            // Log without user data to avoid log injection
+            console.log('[LiveView] ID lookup failed, trying path fallback');
         }
     }
 
@@ -2035,12 +2049,266 @@ function getNodeByPath(path, djustId = null) {
     return node;
 }
 
-function createNodeFromVNode(vnode) {
+// SVG namespace and tags for proper element creation
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+const SVG_TAGS = new Set([
+    'svg', 'path', 'circle', 'rect', 'line', 'polyline', 'polygon',
+    'ellipse', 'g', 'defs', 'use', 'text', 'tspan', 'textPath',
+    'clipPath', 'mask', 'pattern', 'marker', 'symbol', 'linearGradient',
+    'radialGradient', 'stop', 'image', 'foreignObject', 'switch',
+    'desc', 'title', 'metadata'
+]);
+
+// Allowed HTML tags for VDOM element creation (security: prevents script injection)
+// This whitelist covers standard HTML elements; extend as needed
+const ALLOWED_HTML_TAGS = new Set([
+    // Document structure
+    'html', 'head', 'body', 'div', 'span', 'main', 'section', 'article',
+    'aside', 'header', 'footer', 'nav', 'figure', 'figcaption',
+    // Text content
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'pre', 'code', 'blockquote',
+    'hr', 'br', 'wbr', 'address',
+    // Inline text
+    'a', 'abbr', 'b', 'bdi', 'bdo', 'cite', 'data', 'dfn', 'em', 'i',
+    'kbd', 'mark', 'q', 's', 'samp', 'small', 'strong', 'sub', 'sup',
+    'time', 'u', 'var', 'del', 'ins',
+    // Lists
+    'ul', 'ol', 'li', 'dl', 'dt', 'dd', 'menu',
+    // Tables
+    'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption',
+    'colgroup', 'col',
+    // Forms
+    'form', 'fieldset', 'legend', 'label', 'input', 'textarea', 'select',
+    'option', 'optgroup', 'button', 'datalist', 'output', 'progress', 'meter',
+    // Media
+    'img', 'audio', 'video', 'source', 'track', 'picture', 'canvas',
+    'iframe', 'embed', 'object', 'param', 'map', 'area',
+    // Interactive
+    'details', 'summary', 'dialog',
+    // Other
+    'template', 'slot', 'noscript'
+]);
+
+/**
+ * Check if a DOM element is within an SVG context.
+ * Used when creating new elements during patch application.
+ */
+function isInSvgContext(element) {
+    if (!element) return false;
+    // Check if element itself or any ancestor is an SVG element
+    let current = element;
+    while (current && current !== document.body) {
+        if (current.namespaceURI === SVG_NAMESPACE) {
+            return true;
+        }
+        current = current.parentElement;
+    }
+    return false;
+}
+
+/**
+ * Create an SVG element by tag name (security: only creates whitelisted tags)
+ * Uses a lookup object with factory functions to ensure only string literals
+ * are passed to createElementNS.
+ */
+const SVG_ELEMENT_FACTORIES = {
+    'svg': () => document.createElementNS(SVG_NAMESPACE, 'svg'),
+    'path': () => document.createElementNS(SVG_NAMESPACE, 'path'),
+    'circle': () => document.createElementNS(SVG_NAMESPACE, 'circle'),
+    'rect': () => document.createElementNS(SVG_NAMESPACE, 'rect'),
+    'line': () => document.createElementNS(SVG_NAMESPACE, 'line'),
+    'polyline': () => document.createElementNS(SVG_NAMESPACE, 'polyline'),
+    'polygon': () => document.createElementNS(SVG_NAMESPACE, 'polygon'),
+    'ellipse': () => document.createElementNS(SVG_NAMESPACE, 'ellipse'),
+    'g': () => document.createElementNS(SVG_NAMESPACE, 'g'),
+    'defs': () => document.createElementNS(SVG_NAMESPACE, 'defs'),
+    'use': () => document.createElementNS(SVG_NAMESPACE, 'use'),
+    'text': () => document.createElementNS(SVG_NAMESPACE, 'text'),
+    'tspan': () => document.createElementNS(SVG_NAMESPACE, 'tspan'),
+    'textPath': () => document.createElementNS(SVG_NAMESPACE, 'textPath'),
+    'clipPath': () => document.createElementNS(SVG_NAMESPACE, 'clipPath'),
+    'mask': () => document.createElementNS(SVG_NAMESPACE, 'mask'),
+    'pattern': () => document.createElementNS(SVG_NAMESPACE, 'pattern'),
+    'marker': () => document.createElementNS(SVG_NAMESPACE, 'marker'),
+    'symbol': () => document.createElementNS(SVG_NAMESPACE, 'symbol'),
+    'linearGradient': () => document.createElementNS(SVG_NAMESPACE, 'linearGradient'),
+    'radialGradient': () => document.createElementNS(SVG_NAMESPACE, 'radialGradient'),
+    'stop': () => document.createElementNS(SVG_NAMESPACE, 'stop'),
+    'image': () => document.createElementNS(SVG_NAMESPACE, 'image'),
+    'foreignObject': () => document.createElementNS(SVG_NAMESPACE, 'foreignObject'),
+    'switch': () => document.createElementNS(SVG_NAMESPACE, 'switch'),
+    'desc': () => document.createElementNS(SVG_NAMESPACE, 'desc'),
+    'title': () => document.createElementNS(SVG_NAMESPACE, 'title'),
+    'metadata': () => document.createElementNS(SVG_NAMESPACE, 'metadata'),
+};
+
+function createSvgElement(tagLower) {
+    const factory = SVG_ELEMENT_FACTORIES[tagLower];
+    return factory ? factory() : document.createElement('span');
+}
+
+/**
+ * Create an HTML element by tag name (security: only creates whitelisted tags)
+ * Uses a lookup object with factory functions to ensure only string literals
+ * are passed to createElement.
+ */
+const HTML_ELEMENT_FACTORIES = {
+    // Document structure
+    'html': () => document.createElement('html'),
+    'head': () => document.createElement('head'),
+    'body': () => document.createElement('body'),
+    'div': () => document.createElement('div'),
+    'span': () => document.createElement('span'),
+    'main': () => document.createElement('main'),
+    'section': () => document.createElement('section'),
+    'article': () => document.createElement('article'),
+    'aside': () => document.createElement('aside'),
+    'header': () => document.createElement('header'),
+    'footer': () => document.createElement('footer'),
+    'nav': () => document.createElement('nav'),
+    'figure': () => document.createElement('figure'),
+    'figcaption': () => document.createElement('figcaption'),
+    // Text content
+    'h1': () => document.createElement('h1'),
+    'h2': () => document.createElement('h2'),
+    'h3': () => document.createElement('h3'),
+    'h4': () => document.createElement('h4'),
+    'h5': () => document.createElement('h5'),
+    'h6': () => document.createElement('h6'),
+    'p': () => document.createElement('p'),
+    'pre': () => document.createElement('pre'),
+    'code': () => document.createElement('code'),
+    'blockquote': () => document.createElement('blockquote'),
+    'hr': () => document.createElement('hr'),
+    'br': () => document.createElement('br'),
+    'wbr': () => document.createElement('wbr'),
+    'address': () => document.createElement('address'),
+    // Inline text
+    'a': () => document.createElement('a'),
+    'abbr': () => document.createElement('abbr'),
+    'b': () => document.createElement('b'),
+    'bdi': () => document.createElement('bdi'),
+    'bdo': () => document.createElement('bdo'),
+    'cite': () => document.createElement('cite'),
+    'data': () => document.createElement('data'),
+    'dfn': () => document.createElement('dfn'),
+    'em': () => document.createElement('em'),
+    'i': () => document.createElement('i'),
+    'kbd': () => document.createElement('kbd'),
+    'mark': () => document.createElement('mark'),
+    'q': () => document.createElement('q'),
+    's': () => document.createElement('s'),
+    'samp': () => document.createElement('samp'),
+    'small': () => document.createElement('small'),
+    'strong': () => document.createElement('strong'),
+    'sub': () => document.createElement('sub'),
+    'sup': () => document.createElement('sup'),
+    'time': () => document.createElement('time'),
+    'u': () => document.createElement('u'),
+    'var': () => document.createElement('var'),
+    'del': () => document.createElement('del'),
+    'ins': () => document.createElement('ins'),
+    // Lists
+    'ul': () => document.createElement('ul'),
+    'ol': () => document.createElement('ol'),
+    'li': () => document.createElement('li'),
+    'dl': () => document.createElement('dl'),
+    'dt': () => document.createElement('dt'),
+    'dd': () => document.createElement('dd'),
+    'menu': () => document.createElement('menu'),
+    // Tables
+    'table': () => document.createElement('table'),
+    'thead': () => document.createElement('thead'),
+    'tbody': () => document.createElement('tbody'),
+    'tfoot': () => document.createElement('tfoot'),
+    'tr': () => document.createElement('tr'),
+    'th': () => document.createElement('th'),
+    'td': () => document.createElement('td'),
+    'caption': () => document.createElement('caption'),
+    'colgroup': () => document.createElement('colgroup'),
+    'col': () => document.createElement('col'),
+    // Forms
+    'form': () => document.createElement('form'),
+    'fieldset': () => document.createElement('fieldset'),
+    'legend': () => document.createElement('legend'),
+    'label': () => document.createElement('label'),
+    'input': () => document.createElement('input'),
+    'textarea': () => document.createElement('textarea'),
+    'select': () => document.createElement('select'),
+    'option': () => document.createElement('option'),
+    'optgroup': () => document.createElement('optgroup'),
+    'button': () => document.createElement('button'),
+    'datalist': () => document.createElement('datalist'),
+    'output': () => document.createElement('output'),
+    'progress': () => document.createElement('progress'),
+    'meter': () => document.createElement('meter'),
+    // Media
+    'img': () => document.createElement('img'),
+    'audio': () => document.createElement('audio'),
+    'video': () => document.createElement('video'),
+    'source': () => document.createElement('source'),
+    'track': () => document.createElement('track'),
+    'picture': () => document.createElement('picture'),
+    'canvas': () => document.createElement('canvas'),
+    'iframe': () => document.createElement('iframe'),
+    'embed': () => document.createElement('embed'),
+    'object': () => document.createElement('object'),
+    'param': () => document.createElement('param'),
+    'map': () => document.createElement('map'),
+    'area': () => document.createElement('area'),
+    // Interactive
+    'details': () => document.createElement('details'),
+    'summary': () => document.createElement('summary'),
+    'dialog': () => document.createElement('dialog'),
+    // Other
+    'template': () => document.createElement('template'),
+    'slot': () => document.createElement('slot'),
+    'noscript': () => document.createElement('noscript'),
+};
+
+function createHtmlElement(tagLower) {
+    const factory = HTML_ELEMENT_FACTORIES[tagLower];
+    return factory ? factory() : document.createElement('span');
+}
+
+/**
+ * Create a DOM node from a virtual node (VDOM).
+ * SECURITY NOTE: vnode data comes from the trusted server (Django templates
+ * rendered server-side). This is the standard LiveView pattern where the
+ * server controls all HTML structure via VDOM patches.
+ */
+function createNodeFromVNode(vnode, inSvgContext = false) {
     if (vnode.tag === '#text') {
         return document.createTextNode(vnode.text || '');
     }
 
-    const elem = document.createElement(vnode.tag);
+    // Validate tag name against whitelist (security: prevents script injection)
+    // Convert to lowercase for consistent matching
+    const tagLower = String(vnode.tag || '').toLowerCase();
+
+    // Check if tag is in our whitelists
+    const isSvgTag = SVG_TAGS.has(tagLower);
+    const isAllowedHtml = ALLOWED_HTML_TAGS.has(tagLower);
+
+    // Determine SVG context for child element creation
+    const useSvgNamespace = isSvgTag || inSvgContext;
+
+    // Security: Only pass whitelisted string literals to createElement
+    // If not in whitelist, use 'span' as a safe fallback
+    let elem;
+    if (isSvgTag) {
+        // SVG tag: use switch for known values only
+        elem = createSvgElement(tagLower);
+    } else if (isAllowedHtml) {
+        // HTML tag: use switch for known values only
+        elem = createHtmlElement(tagLower);
+    } else {
+        // Unknown tag - use safe span placeholder
+        if (globalThis.djustDebug) {
+            console.warn('[LiveView] Blocked unknown tag, using span placeholder');
+        }
+        elem = document.createElement('span');
+    }
 
     if (vnode.attrs) {
         for (const [key, value] of Object.entries(vnode.attrs)) {
@@ -2069,7 +2337,10 @@ function createNodeFromVNode(vnode) {
                     Array.from(elem.attributes).forEach(attr => {
                         if (attr.name.startsWith('data-') && !attr.name.startsWith('data-liveview')) {
                             const paramKey = attr.name.substring(5).replace(/-/g, '_');
-                            params[paramKey] = attr.value;
+                            // Prevent prototype pollution attacks
+                            if (!UNSAFE_KEYS.includes(paramKey)) {
+                                params[paramKey] = attr.value;
+                            }
                         }
                     });
 
@@ -2102,8 +2373,9 @@ function createNodeFromVNode(vnode) {
     }
 
     if (vnode.children) {
+        // Pass SVG context to children so nested SVG elements are created correctly
         for (const child of vnode.children) {
-            elem.appendChild(createNodeFromVNode(child));
+            elem.appendChild(createNodeFromVNode(child, useSvgNamespace));
         }
     }
 
@@ -2384,7 +2656,7 @@ function applySinglePatch(patch) {
     try {
         switch (patch.type) {
             case 'Replace':
-                const newNode = createNodeFromVNode(patch.node);
+                const newNode = createNodeFromVNode(patch.node, isInSvgContext(node.parentNode));
                 node.parentNode.replaceChild(newNode, node);
                 break;
 
@@ -2408,7 +2680,7 @@ function applySinglePatch(patch) {
                 break;
 
             case 'InsertChild': {
-                const newChild = createNodeFromVNode(patch.node);
+                const newChild = createNodeFromVNode(patch.node, isInSvgContext(node));
                 const children = getSignificantChildren(node);
                 const refChild = children[patch.index];
                 if (refChild) {
@@ -2523,8 +2795,9 @@ function applyPatches(patches) {
                 if (parentNode) {
                     try {
                         const fragment = document.createDocumentFragment();
+                        const svgContext = isInSvgContext(parentNode);
                         for (const patch of consecutiveGroup) {
-                            const newChild = createNodeFromVNode(patch.node);
+                            const newChild = createNodeFromVNode(patch.node, svgContext);
                             fragment.appendChild(newChild);
                             successCount++;
                         }

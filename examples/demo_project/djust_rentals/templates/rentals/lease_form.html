@@ -3,7 +3,7 @@
 {% block title %}{% if is_edit %}Edit{% else %}Create{% endif %} Lease{% endblock %}
 
 {% block content %}
-<div class="py-6" data-liveview-root data-live-view="djust_rentals.views.leases.LeaseFormView">
+<div class="py-6" data-djust-root data-djust-view="djust_rentals.views.leases.LeaseFormView">
   <div class="container mx-auto px-4 max-w-3xl">
     <!-- Page Header -->
     {{ page_header|safe }}

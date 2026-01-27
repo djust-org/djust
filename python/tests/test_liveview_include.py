@@ -29,17 +29,26 @@ def template_dir(tmp_path):
 def patch_template_dirs(template_dir, settings):
     """Patch Django settings to use our temp template directory."""
     from djust.utils import _get_template_dirs_cached
+    from django.template import engines
 
     original_dirs = settings.TEMPLATES[0]["DIRS"]
     settings.TEMPLATES[0]["DIRS"] = [str(template_dir)]
 
-    # Clear cache so it picks up the new settings
+    # Clear djust's template dirs cache
     _get_template_dirs_cached.cache_clear()
+
+    # Clear Django's template engine cache so it picks up the new settings
+    # This is necessary because Django caches template engines on first use
+    engines._engines = {}
+    # Also clear the cached_property 'templates' which caches settings.TEMPLATES
+    engines.__dict__.pop("templates", None)
 
     yield template_dir
 
     settings.TEMPLATES[0]["DIRS"] = original_dirs
     _get_template_dirs_cached.cache_clear()  # Reset cache after test
+    engines._engines = {}  # Reset Django engines after test
+    engines.__dict__.pop("templates", None)  # Clear cached_property after test
 
 
 class TestLiveViewInclude:
@@ -51,7 +60,7 @@ class TestLiveViewInclude:
 
         class MyView(LiveView):
             template = """
-            <div data-liveview-root>
+            <div data-djust-root>
                 {% include "_header.html" %}
                 <main>{{ content }}</main>
             </div>
@@ -75,7 +84,7 @@ class TestLiveViewInclude:
 
         class MyView(LiveView):
             template = """
-            <div data-liveview-root>
+            <div data-djust-root>
                 {% include "_header.html" %}
                 {% include "_footer.html" %}
             </div>
@@ -99,7 +108,7 @@ class TestComponentInclude:
 
     def test_component_with_include(self, patch_template_dirs):
         """Test that Component can render templates with {% include %}."""
-        from djust.component import Component
+        from djust.components.base import Component
 
         class Card(Component):
             template = """
@@ -108,6 +117,9 @@ class TestComponentInclude:
                 <div class="card-body">{{ body }}</div>
             </div>
             """
+
+            def get_context_data(self):
+                return {"site_name": self.site_name, "body": self.body}
 
         card = Card(site_name="Card Header", body="Card content")
         html = card.render()
@@ -121,7 +133,7 @@ class TestLiveComponentInclude:
 
     def test_live_component_with_include(self, patch_template_dirs):
         """Test that LiveComponent can render templates with {% include %}."""
-        from djust.component import LiveComponent
+        from djust.components.base import LiveComponent
 
         class Widget(LiveComponent):
             template = """
@@ -134,6 +146,9 @@ class TestLiveComponentInclude:
             def mount(self, site_name="Default", message="Hello"):
                 self.site_name = site_name
                 self.message = message
+
+            def get_context_data(self):
+                return {"site_name": self.site_name, "message": self.message}
 
         widget = Widget(site_name="Widget Title", message="Widget content")
         html = widget.render()
@@ -213,7 +228,7 @@ class TestUnsupportedTagWarning:
 
         class MyView(LiveView):
             template = """
-            <div data-liveview-root>
+            <div data-djust-root>
                 {% spaceless %}content{% endspaceless %}
             </div>
             """

@@ -1,6 +1,6 @@
 //! HTML parser for converting HTML strings to virtual DOM
 //!
-//! Generates compact `data-dj` IDs on each element for reliable patch targeting.
+//! Generates compact `data-dj-id` IDs on each element for reliable patch targeting.
 
 use crate::{next_djust_id, reset_id_counter, VNode};
 use djust_core::{DjangoRustError, Result};
@@ -138,7 +138,7 @@ fn is_svg_element(tag_name: &str) -> bool {
 
 /// Parse HTML into a virtual DOM with compact IDs for patch targeting.
 ///
-/// Each element receives a `data-dj` attribute with a base62-encoded unique ID.
+/// Each element receives a `data-dj-id` attribute with a base62-encoded unique ID.
 /// These IDs enable O(1) querySelector lookup on the client, avoiding fragile
 /// index-based path traversal.
 ///
@@ -148,9 +148,9 @@ fn is_svg_element(tag_name: &str) -> bool {
 ///
 /// Example output:
 /// ```html
-/// <div data-dj="0">
-///   <span data-dj="1">Hello</span>
-///   <span data-dj="2">World</span>
+/// <div data-dj-id="0">
+///   <span data-dj-id="1">Hello</span>
+///   <span data-dj-id="2">World</span>
 /// </div>
 /// ```
 pub fn parse_html(html: &str) -> Result<VNode> {
@@ -231,8 +231,8 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
             let mut attributes = HashMap::new();
             let mut key: Option<String> = None;
 
-            // Add data-dj attribute for client-side querySelector lookup
-            attributes.insert("data-dj".to_string(), djust_id);
+            // Add data-dj-id attribute for client-side querySelector lookup
+            attributes.insert("data-dj-id".to_string(), djust_id);
 
             for attr in attrs.borrow().iter() {
                 let attr_name_lower = attr.name.local.to_string();
@@ -249,8 +249,8 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                     key = Some(attr_value.clone());
                 }
 
-                // Don't overwrite our generated data-dj if template already has one
-                if attr_name_lower == "data-dj" {
+                // Don't overwrite our generated data-dj-id if template already has one
+                if attr_name_lower == "data-dj-id" {
                     continue;
                 }
 

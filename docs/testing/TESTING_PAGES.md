@@ -182,7 +182,7 @@ Automated testing for the @my_decorator feature
 {% endblock %}
 
 {% block content %}
-<div data-liveview-root>
+<div data-djust-root>
     <!-- Test Status Summary -->
     <div class="alert {% if all_tests_passed %}alert-success{% else %}alert-danger{% endif %} mb-4">
         <h5 class="mb-2">
@@ -447,7 +447,7 @@ See `views/test_index.py` for implementation details.
 1. Check `window.djustDebug = true` is set
 2. Verify setTimeout delay (2000ms) is sufficient for WebSocket connection
 3. Check browser console for JavaScript errors
-4. Ensure `data-liveview-root` attribute is present
+4. Ensure `data-djust-root` attribute is present
 
 ### Test Results Not Updating
 

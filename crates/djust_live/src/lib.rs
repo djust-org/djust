@@ -202,7 +202,7 @@ impl RustLiveViewBackend {
                 None
             };
 
-        // Serialize VDOM back to HTML with data-dj attributes for reliable patch targeting
+        // Serialize VDOM back to HTML with data-dj-id attributes for reliable patch targeting
         let hydrated_html = new_vdom.to_html();
 
         self.last_vdom = Some(new_vdom);
@@ -250,7 +250,7 @@ impl RustLiveViewBackend {
             None
         };
 
-        // Serialize VDOM back to HTML with data-dj attributes for reliable patch targeting
+        // Serialize VDOM back to HTML with data-dj-id attributes for reliable patch targeting
         let hydrated_html = new_vdom.to_html();
 
         self.last_vdom = Some(new_vdom);

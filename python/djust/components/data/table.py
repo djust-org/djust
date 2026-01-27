@@ -128,7 +128,7 @@ class TableComponent(LiveComponent):
                 if self.sort_column == key:
                     sort_icon = " ▲" if self.sort_direction == "asc" else " ▼"
 
-                html += f'<th style="cursor: pointer" @click="sort_by" data-column="{key}">{label}{sort_icon}</th>'
+                html += f'<th style="cursor: pointer" dj-click="sort_by" data-column="{key}">{label}{sort_icon}</th>'
             else:
                 html += f"<th>{label}</th>"
 
@@ -186,7 +186,7 @@ class TableComponent(LiveComponent):
                 if self.sort_column == key:
                     sort_icon = " ▲" if self.sort_direction == "asc" else " ▼"
 
-                html += f'<th class="{th_class} cursor-pointer" @click="sort_by" data-column="{key}">{label}{sort_icon}</th>'
+                html += f'<th class="{th_class} cursor-pointer" dj-click="sort_by" data-column="{key}">{label}{sort_icon}</th>'
             else:
                 html += f'<th class="{th_class}">{label}</th>'
 
@@ -262,7 +262,7 @@ class TableComponent(LiveComponent):
                 if self.sort_column == key:
                     sort_icon = " ▲" if self.sort_direction == "asc" else " ▼"
 
-                html += f'<th @click="sort_by" data-column="{key}">{label}{sort_icon}</th>'
+                html += f'<th dj-click="sort_by" data-column="{key}">{label}{sort_icon}</th>'
             else:
                 html += f"<th>{label}</th>"
 
