@@ -138,7 +138,12 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+          # Skip files that already exist (handles partial uploads/retries)
+          skip-existing: true
 
       - name: Publish to PyPI
         if: github.event.inputs.test_pypi != 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Skip files that already exist (handles partial uploads/retries)
+          skip-existing: true

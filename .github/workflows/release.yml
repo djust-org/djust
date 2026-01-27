@@ -207,3 +207,5 @@ jobs:
           # Uses trusted publishing - configure at pypi.org
           # No API token needed when using OIDC
           packages-dir: dist/
+          # Skip files that already exist (handles partial uploads/retries)
+          skip-existing: true
