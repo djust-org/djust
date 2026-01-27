@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-01-26
+## [0.2.0a2] - 2026-01-27
+
+### Changed
+
+- **Internal: DRY Refactoring** - Reduced ~275 lines of duplicate code across the codebase through helper function extraction. These are internal improvements that don't affect the public API. ([#93](https://github.com/djust-org/djust/pull/93), [#94](https://github.com/djust-org/djust/pull/94))
+  - `getComponentId()` - DOM traversal for component ID lookup (client.js)
+  - `buildFormEventParams()` - Form event parameter building (client.js)
+  - `send_error()` - WebSocket error response helper (websocket.py)
+  - `_send_update()` - WebSocket patch/HTML response helper (websocket.py)
+  - `_create_rust_instance()` - Rust component instantiation (base.py)
+  - `_render_template_with_fallback()` - Template rendering with Rust→Django fallback (base.py)
+  - `_make_metadata_decorator()` - Decorator factory for metadata-only decorators (decorators.py)
+
+## [0.2.0a1] - 2026-01-26
 
 ### Changed
 
