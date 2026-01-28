@@ -1,6 +1,14 @@
 //! HTML parser for converting HTML strings to virtual DOM
 //!
 //! Generates compact `data-dj-id` IDs on each element for reliable patch targeting.
+//!
+//! ## Debugging
+//!
+//! Set `DJUST_VDOM_TRACE=1` environment variable to enable detailed tracing
+//! of the parsing process. This logs:
+//! - ID assignment to each element
+//! - Element structure being parsed
+//! - Child filtering decisions
 
 use crate::{next_djust_id, reset_id_counter, VNode};
 use djust_core::{DjangoRustError, Result};
@@ -8,6 +16,22 @@ use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use std::collections::HashMap;
+use std::sync::OnceLock;
+
+/// Check if VDOM tracing is enabled via environment variable.
+fn should_trace() -> bool {
+    static SHOULD_TRACE: OnceLock<bool> = OnceLock::new();
+    *SHOULD_TRACE.get_or_init(|| std::env::var("DJUST_VDOM_TRACE").is_ok())
+}
+
+/// Trace macro for parser logging
+macro_rules! parser_trace {
+    ($($arg:tt)*) => {
+        if should_trace() {
+            eprintln!("[PARSER TRACE] {}", format!($($arg)*));
+        }
+    };
+}
 
 /// SVG attributes that require camelCase preservation.
 /// html5ever lowercases all attributes per HTML5 spec, but SVG is case-sensitive.
@@ -154,9 +178,22 @@ fn is_svg_element(tag_name: &str) -> bool {
 /// </div>
 /// ```
 pub fn parse_html(html: &str) -> Result<VNode> {
+    parser_trace!(
+        "parse_html() - resetting ID counter and parsing {} bytes",
+        html.len()
+    );
     // Reset ID counter for this parse session
     reset_id_counter();
-    parse_html_continue(html)
+    let result = parse_html_continue(html);
+    if let Ok(ref vnode) = result {
+        parser_trace!(
+            "parse_html() complete - root=<{}> id={:?} children={}",
+            vnode.tag,
+            vnode.djust_id,
+            vnode.children.len()
+        );
+    }
+    result
 }
 
 /// Parse HTML without resetting the ID counter.
@@ -166,6 +203,10 @@ pub fn parse_html(html: &str) -> Result<VNode> {
 ///
 /// The ID counter continues from where the previous parse left off.
 pub fn parse_html_continue(html: &str) -> Result<VNode> {
+    parser_trace!(
+        "parse_html_continue() - parsing {} bytes (counter NOT reset)",
+        html.len()
+    );
     // Don't reset - continue from current counter value
 
     let dom = parse_document(RcDom::default(), Default::default())
@@ -225,11 +266,13 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
 
             // Generate compact unique ID for this element
             let djust_id = next_djust_id();
+            parser_trace!("Assigned ID '{}' to <{}>", djust_id, tag);
             vnode.djust_id = Some(djust_id.clone());
 
             // Convert attributes and extract data-key for keyed diffing
             let mut attributes = HashMap::new();
             let mut key: Option<String> = None;
+            let mut id_attr: Option<String> = None;
 
             // Add data-dj-id attribute for client-side querySelector lookup
             attributes.insert("data-dj-id".to_string(), djust_id);
@@ -244,9 +287,14 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                 };
                 let attr_value = attr.value.to_string();
 
-                // Extract data-key for efficient list diffing
+                // Extract data-key for efficient list diffing (highest priority)
                 if attr_name_lower == "data-key" && !attr_value.is_empty() {
                     key = Some(attr_value.clone());
+                }
+
+                // Extract id attribute as fallback key (if no data-key)
+                if attr_name_lower == "id" && !attr_value.is_empty() {
+                    id_attr = Some(attr_value.clone());
                 }
 
                 // Don't overwrite our generated data-dj-id if template already has one
@@ -257,7 +305,13 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                 attributes.insert(attr_name, attr_value);
             }
             vnode.attrs = attributes;
-            vnode.key = key;
+
+            // Use data-key if present, otherwise fall back to id attribute
+            // This allows existing code patterns with id="..." to benefit from keyed diffing
+            vnode.key = key.or(id_attr);
+            if vnode.key.is_some() {
+                parser_trace!("  Element <{}> has key: {:?}", tag, vnode.key);
+            }
 
             // Convert children
             let mut children = Vec::new();
@@ -517,6 +571,56 @@ mod tests {
         assert_eq!(vnode.key, Some("parent".to_string()));
         assert_eq!(vnode.children.len(), 1);
         assert_eq!(vnode.children[0].key, Some("child".to_string()));
+    }
+
+    #[test]
+    fn test_id_attribute_used_as_key() {
+        // Test that id attribute is automatically used as key for keyed diffing
+        let html = r#"<div id="message-123">Content</div>"#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.tag, "div");
+        assert_eq!(vnode.key, Some("message-123".to_string()));
+        // id should still be in attrs
+        assert_eq!(vnode.attrs.get("id"), Some(&"message-123".to_string()));
+    }
+
+    #[test]
+    fn test_data_key_takes_priority_over_id() {
+        // Test that data-key takes priority over id when both are present
+        let html = r#"<div id="dom-id" data-key="diff-key">Content</div>"#;
+        let vnode = parse_html(html).unwrap();
+
+        // data-key should be used, not id
+        assert_eq!(vnode.key, Some("diff-key".to_string()));
+    }
+
+    #[test]
+    fn test_id_key_in_list() {
+        // Test that id attributes work for keyed diffing in lists
+        let html = r#"
+            <ul>
+                <li id="item-1">First</li>
+                <li id="item-2">Second</li>
+                <li id="item-3">Third</li>
+            </ul>
+        "#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.tag, "ul");
+        assert_eq!(vnode.children.len(), 3);
+        assert_eq!(vnode.children[0].key, Some("item-1".to_string()));
+        assert_eq!(vnode.children[1].key, Some("item-2".to_string()));
+        assert_eq!(vnode.children[2].key, Some("item-3".to_string()));
+    }
+
+    #[test]
+    fn test_empty_id_not_used_as_key() {
+        // Test that empty id values are not used as keys
+        let html = r#"<div id="">Content</div>"#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.key, None);
     }
 
     #[test]
