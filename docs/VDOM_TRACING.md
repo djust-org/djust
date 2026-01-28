@@ -41,21 +41,21 @@ When `DJUST_VDOM_TRACE=1` is set, the following information is logged:
 [VDOM TRACE] diff_indexed_children: old_len=4 new_len=4 common=4
 ```
 
-### 4. Keyed Diffing
+### 3. Keyed Diffing
 ```
 [VDOM TRACE] diff_keyed_children: old_keys=["msg-1", "msg-2"] new_keys=["msg-1", "msg-2", "msg-3"]
 [VDOM TRACE]   INSERT key=msg-3 at new_idx=2
 [VDOM TRACE]   DIFF unkeyed by relative position: old_idx=0 <-> new_idx=0
 ```
 
-### 5. Mixed Keyed/Unkeyed Warning
+### 4. Mixed Keyed/Unkeyed Warning
 ```
 [VDOM TRACE] WARNING: Mixed keyed and unkeyed children detected at path=[1, 0]. Consider adding key= to all children for predictable updates.
 ```
 
 This warning appears when a parent element has both keyed and unkeyed children, which can lead to unexpected diffing behavior. Adding `key` attributes to all sibling elements is recommended.
 
-### 6. Patch Generation
+### 5. Patch Generation
 ```
 [VDOM TRACE]     InsertChild index=1 tag=<div> parent_id=Some("2B")
 [VDOM TRACE]     RemoveChild index=2 parent_id=Some("2B")
