@@ -176,6 +176,22 @@ fn diff_children(
     );
 
     if has_keys {
+        // Warn about mixed keyed/unkeyed children — a common source of suboptimal diffs.
+        // Keyed siblings should ideally ALL have keys for best diffing performance.
+        if !new.children.iter().all(|n| n.key.is_some()) {
+            let keyed_count = new.children.iter().filter(|n| n.key.is_some()).count();
+            let total = new.children.len();
+            vdom_trace!(
+                "  WARNING: Mixed keyed/unkeyed children ({}/{} keyed). \
+                 For optimal diffing, add keys to all siblings or none. \
+                 Parent tag=<{}> id={:?}",
+                keyed_count,
+                total,
+                new.tag,
+                parent_id
+            );
+        }
+
         vdom_trace!("  Using KEYED diffing");
         patches.extend(diff_keyed_children(
             &old.children,
