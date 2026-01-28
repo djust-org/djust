@@ -215,7 +215,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 data = json.loads(text_data)
 
             msg_type = data.get("type")
-            print(f"[WebSocket] Message type: {msg_type}, data: {data}", file=sys.stderr)
 
             if msg_type == "event":
                 await self.handle_event(data)
@@ -336,14 +335,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             factory = RequestFactory()
             # Include URL query params (e.g., ?sender=80) in the request
             query_string = urlencode(params) if params else ""
-            path_with_query = f"/?{query_string}" if query_string else "/"
+            # Use the actual page URL from the client, not hardcoded "/"
+            page_url = data.get("url", "/")
+            path_with_query = f"{page_url}?{query_string}" if query_string else page_url
             request = factory.get(path_with_query)
 
             # Add session from WebSocket scope
+            # NOTE: session_key is an ATTRIBUTE of the session object, not a dict key
             from django.contrib.sessions.backends.db import SessionStore
 
-            session_key = self.scope.get("session", {}).get("session_key")
-            if session_key:
+            scope_session = self.scope.get("session")
+            if scope_session and hasattr(scope_session, "session_key"):
+                session_key = scope_session.session_key
                 request.session = SessionStore(session_key=session_key)
             else:
                 request.session = SessionStore()
@@ -692,8 +695,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                         self.view_instance.render_with_diff
                                     )()
                                 patch_list = None  # Initialize for later use
-                                if patches:
-                                    patch_list = json.loads(patches)
+                                # patches can be: JSON string with patches, "[]" for empty, or None
+                                if patches is not None:
+                                    patch_list = json.loads(patches) if patches else []
                                     tracker.track_patches(len(patch_list), patch_list)
                                     profiler.record(profiler.OP_DIFF, 0)  # Mark diff occurred
                         timing["render"] = (
@@ -743,7 +747,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             patches = None
                             patch_list = None
 
-                if patches and patch_list:
+                # Note: patch_list can be [] (empty list) which is valid - means no changes needed
+                # Only send full HTML if patches is None (not just falsy)
+                if patches is not None and patch_list is not None:
                     # Calculate timing for JSON mode
                     timing["total"] = (time.perf_counter() - start_time) * 1000  # Total server time
                     perf_summary = tracker.get_summary()
@@ -757,7 +763,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         performance=perf_summary,
                     )
                 else:
-                    # No patches - send full HTML update for views with dynamic templates
+                    # patches=None means VDOM diff failed or was skipped - send full HTML
                     # Strip comments and whitespace to match Rust VDOM parser
                     html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(
                         html

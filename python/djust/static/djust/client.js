@@ -515,6 +515,7 @@ class LiveViewWebSocket {
             type: 'mount',
             view: viewPath,
             params: params,
+            url: window.location.pathname,
             has_prerendered: this.skipMountHtml || false  // Tell server we have pre-rendered content
         });
         return true;
@@ -1331,6 +1332,8 @@ function extractTypedParams(element) {
         // Skip djust internal attributes
         if (attr.name.startsWith('data-liveview') ||
             attr.name.startsWith('data-live-') ||
+            attr.name.startsWith('data-djust') ||
+            attr.name === 'data-dj-id' ||
             attr.name === 'data-loading' ||
             attr.name === 'data-component-id') {
             continue;
@@ -1531,6 +1534,11 @@ function bindLiveViewEvents() {
             element.addEventListener('change', async (e) => {
                 const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
                 const params = buildFormEventParams(e.target, value);
+                // Add target element for loading state (consistent with other handlers)
+                params._targetElement = e.target;
+                if (globalThis.djustDebug) {
+                    console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
+                }
                 await handleEvent(changeHandler, params);
             });
         }
@@ -2301,15 +2309,27 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
 
                     e.preventDefault();
                     const params = {};
-                    Array.from(elem.attributes).forEach(attr => {
-                        if (attr.name.startsWith('data-') && !attr.name.startsWith('data-liveview')) {
-                            const paramKey = attr.name.substring(5).replace(/-/g, '_');
-                            // Prevent prototype pollution attacks
-                            if (!UNSAFE_KEYS.includes(paramKey)) {
-                                params[paramKey] = attr.value;
+
+                    // For form element events (change, input, blur, focus), extract value
+                    if (['change', 'input', 'blur', 'focus'].includes(eventType)) {
+                        const target = e.target;
+                        params.value = target.type === 'checkbox' ? target.checked : target.value;
+                        params.field = target.name || target.id || null;
+                    } else {
+                        // For other events, extract data-* attributes (but skip internal ones)
+                        Array.from(elem.attributes).forEach(attr => {
+                            if (attr.name.startsWith('data-') &&
+                                !attr.name.startsWith('data-liveview') &&
+                                !attr.name.startsWith('data-djust') &&
+                                attr.name !== 'data-dj-id') {
+                                const paramKey = attr.name.substring(5).replace(/-/g, '_');
+                                // Prevent prototype pollution attacks
+                                if (!UNSAFE_KEYS.includes(paramKey)) {
+                                    params[paramKey] = attr.value;
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
 
                     // Add positional arguments from handler syntax if present
                     if (parsed.args.length > 0) {
@@ -2341,6 +2361,11 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
         for (const child of vnode.children) {
             elem.appendChild(createNodeFromVNode(child, useSvgNamespace));
         }
+    }
+
+    // For textareas, set .value from text content (textContent alone doesn't set displayed value)
+    if (elem.tagName === 'TEXTAREA') {
+        elem.value = elem.textContent || '';
     }
 
     return elem;
@@ -2617,6 +2642,14 @@ function applySinglePatch(patch) {
         return false;
     }
 
+    // Debug: trace textarea-related operations
+    const isTextarea = node.tagName === 'TEXTAREA';
+    const parentIsTextarea = node.parentNode && node.parentNode.tagName === 'TEXTAREA';
+    if (isTextarea || parentIsTextarea) {
+        console.log(`[DEBUG TEXTAREA] Patch type: ${patch.type}, node: ${node.tagName}, parent: ${node.parentNode?.tagName}`);
+        console.log(`[DEBUG TEXTAREA] Current value: "${isTextarea ? node.value : node.parentNode?.value}"`);
+    }
+
     try {
         switch (patch.type) {
             case 'Replace':
@@ -2626,6 +2659,13 @@ function applySinglePatch(patch) {
 
             case 'SetText':
                 node.textContent = patch.text;
+                // If this is a text node inside a textarea, also update the textarea's .value
+                // (textContent alone doesn't update what's displayed in the textarea)
+                if (node.parentNode && node.parentNode.tagName === 'TEXTAREA') {
+                    if (document.activeElement !== node.parentNode) {
+                        node.parentNode.value = patch.text;
+                    }
+                }
                 break;
 
             case 'SetAttr':
@@ -2652,14 +2692,38 @@ function applySinglePatch(patch) {
                 } else {
                     node.appendChild(newChild);
                 }
+                // If inserting a text node into a textarea, also update its .value
+                if (newChild.nodeType === Node.TEXT_NODE && node.tagName === 'TEXTAREA') {
+                    if (document.activeElement !== node) {
+                        node.value = newChild.textContent || '';
+                    }
+                }
                 break;
             }
 
             case 'RemoveChild': {
+                console.log(`[DEBUG RemoveChild] node.tagName=${node.tagName}, d=${patch.d}, index=${patch.index}`);
                 const children = getSignificantChildren(node);
+                console.log(`[DEBUG RemoveChild] significant children count: ${children.length}`);
                 const child = children[patch.index];
                 if (child) {
+                    const wasTextNode = child.nodeType === Node.TEXT_NODE;
+                    const parentTag = node.tagName;
+                    console.log(`[DEBUG RemoveChild] Removing child: nodeType=${child.nodeType}, TEXT_NODE=${Node.TEXT_NODE}, parentTag=${parentTag}`);
                     node.removeChild(child);
+                    // If removing a text node from a textarea, also clear its .value
+                    // (removing textContent alone doesn't update what's displayed)
+                    if (wasTextNode && parentTag === 'TEXTAREA') {
+                        console.log(`[DEBUG TEXTAREA] RemoveChild: clearing textarea.value (was "${node.value}")`);
+                        if (document.activeElement !== node) {
+                            node.value = '';
+                            console.log(`[DEBUG TEXTAREA] RemoveChild: textarea.value now "${node.value}"`);
+                        } else {
+                            console.log(`[DEBUG TEXTAREA] RemoveChild: SKIPPED - textarea is focused`);
+                        }
+                    }
+                } else {
+                    console.log(`[DEBUG RemoveChild] No child found at index ${patch.index}`);
                 }
                 break;
             }
