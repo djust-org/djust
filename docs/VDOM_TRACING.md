@@ -4,7 +4,19 @@ This document explains how to enable and use VDOM tracing to debug diffing issue
 
 ## Quick Start
 
-Enable VDOM tracing by setting the environment variable:
+**Option 1: Django configuration (recommended)**
+
+In your `settings.py`:
+
+```python
+LIVEVIEW_CONFIG = {
+    'debug_vdom': True,
+}
+```
+
+This automatically sets `DJUST_VDOM_TRACE=1` for the Rust VDOM layer.
+
+**Option 2: Environment variable**
 
 ```bash
 export DJUST_VDOM_TRACE=1
@@ -23,30 +35,25 @@ When `DJUST_VDOM_TRACE=1` is set, the following information is logged:
 [VDOM TRACE] new_root: <div> id=Some("1H") children=2
 ```
 
-### 2. Button Counting (for debugging)
-```
-[VDOM diff] Entry: old has 10 buttons, new has 11 buttons
-```
-
-### 3. Model-Config Element Search
-```
-[VDOM diff] Searching for model-config element...
-[VDOM diff] OLD model-config at path [1, 0, 1, 3]: class='model-config', 1 children
-[VDOM diff] NEW model-config at path [1, 0, 1, 3]: class='model-config', 2 children
-```
-
-### 4. Child Diffing Details
+### 2. Child Diffing Details
 ```
 [VDOM TRACE] diff_children: path=[1, 0, 1] parent_id=Some("2A") old_children=4 new_children=4 has_keys=false
 [VDOM TRACE] diff_indexed_children: old_len=4 new_len=4 common=4
 ```
 
-### 5. Keyed Diffing
+### 4. Keyed Diffing
 ```
 [VDOM TRACE] diff_keyed_children: old_keys=["msg-1", "msg-2"] new_keys=["msg-1", "msg-2", "msg-3"]
 [VDOM TRACE]   INSERT key=msg-3 at new_idx=2
-[VDOM TRACE]   DIFF unkeyed at index 0
+[VDOM TRACE]   DIFF unkeyed by relative position: old_idx=0 <-> new_idx=0
 ```
+
+### 5. Mixed Keyed/Unkeyed Warning
+```
+[VDOM TRACE] WARNING: Mixed keyed and unkeyed children detected at path=[1, 0]. Consider adding key= to all children for predictable updates.
+```
+
+This warning appears when a parent element has both keyed and unkeyed children, which can lead to unexpected diffing behavior. Adding `key` attributes to all sibling elements is recommended.
 
 ### 6. Patch Generation
 ```
@@ -91,7 +98,7 @@ DJUST_VDOM_TRACE=1 pytest path/to/test.py -v -s
 2. Look for the element that should change (e.g., "model-config")
 3. Check if old and new child counts differ
 4. If counts differ but no InsertChild/RemoveChild, check if parent uses keyed diffing (`has_keys=true`)
-5. Keyed diffing may skip unkeyed children - this was a known bug fixed in v0.2.0a2
+5. Keyed diffing matches unkeyed children by relative position among unkeyed siblings
 
 ### 2. Wrong elements being patched
 
@@ -111,7 +118,7 @@ DJUST_VDOM_TRACE=1 pytest path/to/test.py -v -s
 1. Check trace for `has_keys=true/false`
 2. If `has_keys=true`, verify all list items have `key` attribute
 3. Check `old_keys` and `new_keys` in trace output
-4. Unkeyed children in keyed parent are now diffed by index (fixed in v0.2.0a2)
+4. Unkeyed children in keyed parent are diffed by relative position (not absolute index) to avoid mismatches when keyed children shift positions
 
 ## Understanding Paths
 
@@ -174,8 +181,6 @@ To add custom tracing in Rust code:
 // In crates/djust_vdom/src/diff.rs
 vdom_trace!("Custom message: value={}", some_value);
 
-// For always-on debug output (even without DJUST_VDOM_TRACE)
-eprintln!("[VDOM DEBUG] Important: {}", message);
 ```
 
-The `vdom_trace!` macro only outputs when `DJUST_VDOM_TRACE` is set.
+The `vdom_trace!` macro only outputs when `DJUST_VDOM_TRACE` is set (or when `debug_vdom: True` is configured in Django's `LIVEVIEW_CONFIG`).
