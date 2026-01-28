@@ -11,10 +11,29 @@ use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 pub mod diff;
 pub mod parser;
 pub mod patch;
+
+/// Check if VDOM tracing is enabled via environment variable.
+/// Cached for performance (only checks env var once).
+pub(crate) fn should_trace() -> bool {
+    static SHOULD_TRACE: OnceLock<bool> = OnceLock::new();
+    *SHOULD_TRACE.get_or_init(|| std::env::var("DJUST_VDOM_TRACE").is_ok())
+}
+
+/// Trace macro for VDOM debugging. Only prints when `DJUST_VDOM_TRACE=1` is set.
+macro_rules! vdom_trace {
+    ($($arg:tt)*) => {
+        if $crate::should_trace() {
+            eprintln!("[VDOM TRACE] {}", format!($($arg)*));
+        }
+    };
+}
+
+pub(crate) use vdom_trace;
 
 // ============================================================================
 // Compact ID Generation (Base62)
@@ -68,22 +87,28 @@ pub fn next_djust_id() -> String {
     ID_COUNTER.with(|counter| {
         let id = counter.get();
         counter.set(id + 1);
-        to_base62(id)
+        let djust_id = to_base62(id);
+        vdom_trace!("next_djust_id() -> {} (counter was {})", djust_id, id);
+        djust_id
     })
 }
 
 /// Reset the ID counter (call before parsing a new document)
 pub fn reset_id_counter() {
+    vdom_trace!("reset_id_counter() - resetting to 0");
     ID_COUNTER.with(|counter| counter.set(0));
 }
 
 /// Get the current ID counter value (for session persistence)
 pub fn get_id_counter() -> u64 {
-    ID_COUNTER.with(|counter| counter.get())
+    let value = ID_COUNTER.with(|counter| counter.get());
+    vdom_trace!("get_id_counter() -> {}", value);
+    value
 }
 
 /// Set the ID counter to a specific value (for session restoration)
 pub fn set_id_counter(value: u64) {
+    vdom_trace!("set_id_counter({})", value);
     ID_COUNTER.with(|counter| counter.set(value));
 }
 
@@ -288,17 +313,45 @@ pub enum Patch {
 
 /// Compute the difference between two virtual DOM trees
 pub fn diff(old: &VNode, new: &VNode) -> Vec<Patch> {
-    diff::diff_nodes(old, new, &[])
+    vdom_trace!("===== DIFF START =====");
+    vdom_trace!(
+        "old_root: <{}> id={:?} children={}",
+        old.tag,
+        old.djust_id,
+        old.children.len()
+    );
+    vdom_trace!(
+        "new_root: <{}> id={:?} children={}",
+        new.tag,
+        new.djust_id,
+        new.children.len()
+    );
+
+    let patches = diff::diff_nodes(old, new, &[]);
+
+    vdom_trace!(
+        "===== DIFF COMPLETE: {} patches generated =====",
+        patches.len()
+    );
+    if should_trace() {
+        for (i, patch) in patches.iter().enumerate() {
+            eprintln!("[VDOM TRACE] Patch[{}]: {:?}", i, patch);
+        }
+    }
+
+    patches
 }
 
 /// Parse HTML into a virtual DOM (resets ID counter)
 pub fn parse_html(html: &str) -> Result<VNode> {
+    vdom_trace!("parse_html() called - will reset ID counter");
     parser::parse_html(html)
 }
 
 /// Parse HTML into a virtual DOM without resetting ID counter.
 /// Use this for subsequent renders within the same session.
 pub fn parse_html_continue(html: &str) -> Result<VNode> {
+    vdom_trace!("parse_html_continue() called - keeping ID counter");
     parser::parse_html_continue(html)
 }
 
