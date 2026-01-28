@@ -19,19 +19,21 @@ pub mod patch;
 
 /// Check if VDOM tracing is enabled via environment variable.
 /// Cached for performance (only checks env var once).
-fn should_trace() -> bool {
+pub(crate) fn should_trace() -> bool {
     static SHOULD_TRACE: OnceLock<bool> = OnceLock::new();
     *SHOULD_TRACE.get_or_init(|| std::env::var("DJUST_VDOM_TRACE").is_ok())
 }
 
-/// Trace macro for ID generation and main diff entry
+/// Trace macro for VDOM debugging. Only prints when `DJUST_VDOM_TRACE=1` is set.
 macro_rules! vdom_trace {
     ($($arg:tt)*) => {
-        if should_trace() {
+        if $crate::should_trace() {
             eprintln!("[VDOM TRACE] {}", format!($($arg)*));
         }
     };
 }
+
+pub(crate) use vdom_trace;
 
 // ============================================================================
 // Compact ID Generation (Base62)

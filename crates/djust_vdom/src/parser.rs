@@ -10,19 +10,12 @@
 //! - Element structure being parsed
 //! - Child filtering decisions
 
-use crate::{next_djust_id, reset_id_counter, VNode};
+use crate::{next_djust_id, reset_id_counter, should_trace, VNode};
 use djust_core::{DjangoRustError, Result};
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use std::collections::HashMap;
-use std::sync::OnceLock;
-
-/// Check if VDOM tracing is enabled via environment variable.
-fn should_trace() -> bool {
-    static SHOULD_TRACE: OnceLock<bool> = OnceLock::new();
-    *SHOULD_TRACE.get_or_init(|| std::env::var("DJUST_VDOM_TRACE").is_ok())
-}
 
 /// Trace macro for parser logging
 macro_rules! parser_trace {

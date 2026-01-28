@@ -2642,14 +2642,6 @@ function applySinglePatch(patch) {
         return false;
     }
 
-    // Debug: trace textarea-related operations
-    const isTextarea = node.tagName === 'TEXTAREA';
-    const parentIsTextarea = node.parentNode && node.parentNode.tagName === 'TEXTAREA';
-    if (isTextarea || parentIsTextarea) {
-        console.log(`[DEBUG TEXTAREA] Patch type: ${patch.type}, node: ${node.tagName}, parent: ${node.parentNode?.tagName}`);
-        console.log(`[DEBUG TEXTAREA] Current value: "${isTextarea ? node.value : node.parentNode?.value}"`);
-    }
-
     try {
         switch (patch.type) {
             case 'Replace':
@@ -2702,28 +2694,17 @@ function applySinglePatch(patch) {
             }
 
             case 'RemoveChild': {
-                console.log(`[DEBUG RemoveChild] node.tagName=${node.tagName}, d=${patch.d}, index=${patch.index}`);
                 const children = getSignificantChildren(node);
-                console.log(`[DEBUG RemoveChild] significant children count: ${children.length}`);
                 const child = children[patch.index];
                 if (child) {
                     const wasTextNode = child.nodeType === Node.TEXT_NODE;
                     const parentTag = node.tagName;
-                    console.log(`[DEBUG RemoveChild] Removing child: nodeType=${child.nodeType}, TEXT_NODE=${Node.TEXT_NODE}, parentTag=${parentTag}`);
                     node.removeChild(child);
                     // If removing a text node from a textarea, also clear its .value
                     // (removing textContent alone doesn't update what's displayed)
-                    if (wasTextNode && parentTag === 'TEXTAREA') {
-                        console.log(`[DEBUG TEXTAREA] RemoveChild: clearing textarea.value (was "${node.value}")`);
-                        if (document.activeElement !== node) {
-                            node.value = '';
-                            console.log(`[DEBUG TEXTAREA] RemoveChild: textarea.value now "${node.value}"`);
-                        } else {
-                            console.log(`[DEBUG TEXTAREA] RemoveChild: SKIPPED - textarea is focused`);
-                        }
+                    if (wasTextNode && parentTag === 'TEXTAREA' && document.activeElement !== node) {
+                        node.value = '';
                     }
-                } else {
-                    console.log(`[DEBUG RemoveChild] No child found at index ${patch.index}`);
                 }
                 break;
             }

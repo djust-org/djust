@@ -12,25 +12,8 @@
 //! - Child diffing decisions
 //! - Generated patches
 
-use crate::{Patch, VNode};
+use crate::{vdom_trace, Patch, VNode};
 use std::collections::HashMap;
-use std::sync::OnceLock;
-
-/// Check if VDOM tracing is enabled via environment variable.
-/// Cached for performance (only checks env var once).
-fn should_trace() -> bool {
-    static SHOULD_TRACE: OnceLock<bool> = OnceLock::new();
-    *SHOULD_TRACE.get_or_init(|| std::env::var("DJUST_VDOM_TRACE").is_ok())
-}
-
-/// Trace macro that only prints when DJUST_VDOM_TRACE is set
-macro_rules! vdom_trace {
-    ($($arg:tt)*) => {
-        if should_trace() {
-            eprintln!("[VDOM TRACE] {}", format!($($arg)*));
-        }
-    };
-}
 
 /// Diff two VNodes and generate patches.
 ///
@@ -307,6 +290,7 @@ fn diff_keyed_children(
                 && !processed_old_indices.contains(&new_idx)
             {
                 // There's a corresponding unkeyed child in old at the same index
+                processed_old_indices.insert(new_idx);
                 vdom_trace!("  DIFF unkeyed at index {}", new_idx);
                 let mut child_path = path.to_vec();
                 child_path.push(new_idx);
@@ -1087,5 +1071,72 @@ mod tests {
             .filter(|p| matches!(p, Patch::RemoveChild { .. }))
             .count();
         assert_eq!(remove_count, 2, "Should remove both old children");
+    }
+
+    #[test]
+    fn test_interleaved_keyed_and_unkeyed_children() {
+        // Keyed children reorder while unkeyed children change content
+        // old: [keyed-A, unkeyed-X, keyed-B]
+        // new: [keyed-B, unkeyed-Y, keyed-A]
+        let old = VNode::element("div")
+            .with_djust_id("parent")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_key("a")
+                    .with_djust_id("a")
+                    .with_child(VNode::text("A content")),
+                VNode::element("div")
+                    .with_djust_id("x")
+                    .with_child(VNode::text("X content")),
+                VNode::element("div")
+                    .with_key("b")
+                    .with_djust_id("b")
+                    .with_child(VNode::text("B content")),
+            ]);
+
+        let new = VNode::element("div")
+            .with_djust_id("parent")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_key("b")
+                    .with_djust_id("b2")
+                    .with_child(VNode::text("B content")),
+                VNode::element("div")
+                    .with_djust_id("y")
+                    .with_child(VNode::text("Y content")),
+                VNode::element("div")
+                    .with_key("a")
+                    .with_djust_id("a2")
+                    .with_child(VNode::text("A content")),
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        // Should have patches for:
+        // - Moving keyed children (a and b swapped)
+        // - Diffing the unkeyed child (X -> Y text change)
+        assert!(!patches.is_empty(), "Should generate patches");
+
+        // The unkeyed child text should change from X to Y
+        let has_text_change = patches
+            .iter()
+            .any(|p| matches!(p, Patch::SetText { text, .. } if text == "Y content"));
+        assert!(
+            has_text_change,
+            "Should update unkeyed child text from X to Y. Patches: {:?}",
+            patches
+        );
+
+        // Should NOT have duplicate patches for the same node
+        // (i.e., no RemoveChild for the unkeyed node that was already diffed)
+        let remove_count = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
+            .count();
+        assert_eq!(
+            remove_count, 0,
+            "Should not remove any children (all matched). Patches: {:?}",
+            patches
+        );
     }
 }
