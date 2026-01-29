@@ -7,7 +7,7 @@ consumes one token. Burst capacity allows short bursts of activity.
 
 import time
 import logging
-from typing import Optional
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ class ConnectionRateLimiter:
         max_warnings: int = 3,
     ):
         self.global_bucket = TokenBucket(rate, burst)
-        self.handler_buckets: dict[str, TokenBucket] = {}
+        self.handler_buckets: Dict[str, TokenBucket] = {}
         self.warnings = 0
         self.max_warnings = max_warnings
 

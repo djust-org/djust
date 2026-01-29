@@ -62,7 +62,6 @@ class TestEventGuard:
             "stream_insert",
             "stream_delete",
             "stream_reset",
-            "update",
         ]
         for name in blocked:
             assert is_safe_event_name(name) is False, f"{name} should be blocked"
@@ -168,3 +167,120 @@ class TestRateLimiter:
             pass
 
         assert get_rate_limit_settings(handler) is None
+
+
+class TestEventSecurityHelper:
+    """Tests for _check_event_security helper."""
+
+    def test_strict_mode_blocks_undecorated(self):
+        from unittest.mock import patch
+
+        from djust.websocket import _check_event_security
+
+        class FakeView:
+            pass
+
+        def plain_handler(self):
+            pass
+
+        view = FakeView()
+
+        with patch("djust.websocket.djust_config") as mock_config:
+            mock_config.get.return_value = "strict"
+            result = _check_event_security(plain_handler, view, "plain_handler")
+            assert result is not None
+            assert "not decorated" in result
+
+    def test_strict_mode_allows_decorated(self):
+        from unittest.mock import patch
+
+        from djust.decorators import event
+        from djust.websocket import _check_event_security
+
+        class FakeView:
+            pass
+
+        @event
+        def my_handler(self):
+            pass
+
+        view = FakeView()
+
+        with patch("djust.websocket.djust_config") as mock_config:
+            mock_config.get.return_value = "strict"
+            result = _check_event_security(my_handler, view, "my_handler")
+            assert result is None
+
+    def test_strict_mode_allows_via_allowed_events(self):
+        from unittest.mock import patch
+
+        from djust.websocket import _check_event_security
+
+        class FakeView:
+            _allowed_events = {"bulk_update", "refresh"}
+
+        def bulk_update(self):
+            pass
+
+        view = FakeView()
+
+        with patch("djust.websocket.djust_config") as mock_config:
+            mock_config.get.return_value = "strict"
+            result = _check_event_security(bulk_update, view, "bulk_update")
+            assert result is None
+
+    def test_open_mode_allows_everything(self):
+        from unittest.mock import patch
+
+        from djust.websocket import _check_event_security
+
+        class FakeView:
+            pass
+
+        def plain_handler(self):
+            pass
+
+        view = FakeView()
+
+        with patch("djust.websocket.djust_config") as mock_config:
+            mock_config.get.return_value = "open"
+            result = _check_event_security(plain_handler, view, "plain_handler")
+            assert result is None
+
+    def test_warn_mode_allows_but_logs(self):
+        from unittest.mock import patch
+
+        from djust.websocket import _check_event_security
+
+        class FakeView:
+            pass
+
+        def plain_handler(self):
+            pass
+
+        view = FakeView()
+
+        with patch("djust.websocket.djust_config") as mock_config:
+            mock_config.get.return_value = "warn"
+            result = _check_event_security(plain_handler, view, "plain_handler")
+            assert result is None  # warn mode doesn't block
+
+
+class TestMessageSizeLimit:
+    """Tests for message size config."""
+
+    def test_max_message_size_default(self):
+        from djust.config import LiveViewConfig
+
+        cfg = LiveViewConfig()
+        assert cfg.get("max_message_size") == 65536
+
+    def test_rate_limit_config_defaults(self):
+        from djust.config import LiveViewConfig
+
+        cfg = LiveViewConfig()
+        rl = cfg.get("rate_limit")
+        assert isinstance(rl, dict)
+        assert rl["rate"] == 100
+        assert rl["burst"] == 20
+        assert rl["max_warnings"] == 3

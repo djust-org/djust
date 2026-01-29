@@ -8,6 +8,8 @@ internal methods (Django View internals, LiveView lifecycle, private methods).
 import re
 import logging
 
+from .log_sanitizer import sanitize_for_log
+
 logger = logging.getLogger(__name__)
 
 # Only allow lowercase alphanumeric + underscore, starting with a letter
@@ -44,8 +46,6 @@ BLOCKED_EVENT_NAMES: frozenset = frozenset(
         "stream_insert",
         "stream_delete",
         "stream_reset",
-        # Object internals
-        "update",
     }
 )
 
@@ -65,9 +65,9 @@ def is_safe_event_name(name: str) -> bool:
         True if safe to call via getattr, False otherwise.
     """
     if not _EVENT_NAME_PATTERN.match(name):
-        logger.warning("Blocked event with invalid name pattern: %s", name[:100])
+        logger.warning("Blocked event with invalid name pattern: %s", sanitize_for_log(name))
         return False
     if name in BLOCKED_EVENT_NAMES:
-        logger.warning("Blocked event targeting internal method: %s", name)
+        logger.warning("Blocked event targeting internal method: %s", sanitize_for_log(name))
         return False
     return True

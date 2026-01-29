@@ -43,6 +43,36 @@ def get_handler_coerce_setting(handler: Callable) -> bool:
     return True
 
 
+def _check_event_security(handler, owner_instance, event_name: str) -> Optional[str]:
+    """
+    Check the event_security policy for a handler.
+
+    Returns None if allowed, or an error message string if blocked in strict mode.
+    Logs a deprecation warning in warn mode for undecorated handlers.
+    """
+    mode = djust_config.get("event_security", "warn")
+    if mode not in ("warn", "strict"):
+        return None
+
+    allowed_events = getattr(owner_instance, "_allowed_events", None)
+    is_allowed = is_event_handler(handler) or (
+        isinstance(allowed_events, (set, frozenset)) and event_name in allowed_events
+    )
+    if is_allowed:
+        return None
+
+    if mode == "strict":
+        return f"Event '{event_name}' is not decorated with @event or listed in _allowed_events"
+
+    logger.warning(
+        "Deprecation: handler '%s' on %s is not decorated with @event. "
+        "This will be blocked in strict mode.",
+        event_name,
+        type(owner_instance).__name__,
+    )
+    return None
+
+
 async def _call_handler(handler: Callable, params: Optional[Dict[str, Any]] = None):
     """
     Call an event handler, handling both sync and async handlers.
@@ -180,11 +210,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_add("djust_hotreload", self.channel_name)
 
         # Initialize per-connection rate limiter
-        rl_cfg = djust_config.get("rate_limit", {})
+        rl_cfg = djust_config.get("rate_limit") or {}
         self._rate_limiter = ConnectionRateLimiter(
-            rate=rl_cfg.get("rate", 100),
-            burst=rl_cfg.get("burst", 20),
-            max_warnings=rl_cfg.get("max_warnings", 3),
+            rate=rl_cfg.get("rate", 100) if isinstance(rl_cfg, dict) else 100,
+            burst=rl_cfg.get("burst", 20) if isinstance(rl_cfg, dict) else 20,
+            max_warnings=rl_cfg.get("max_warnings", 3) if isinstance(rl_cfg, dict) else 3,
         )
 
         # Send connection acknowledgment
@@ -634,26 +664,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         await self.send_error(error_msg)
                         return
 
-                    # Check event_security mode (decorator allowlist) for components
-                    _event_sec = djust_config.get("event_security", "warn")
-                    if _event_sec in ("warn", "strict"):
-                        _allowed = getattr(component, "_allowed_events", None)
-                        _is_allowed = is_event_handler(handler) or (
-                            isinstance(_allowed, (set, frozenset)) and event_name in _allowed
-                        )
-                        if not _is_allowed:
-                            if _event_sec == "strict":
-                                error_msg = f"Event '{event_name}' is not decorated with @event or listed in _allowed_events"
-                                logger.warning(error_msg)
-                                await self.send_error(error_msg)
-                                return
-                            else:
-                                logger.warning(
-                                    "Deprecation: handler '%s' on %s is not decorated with @event. "
-                                    "This will be blocked in strict mode.",
-                                    event_name,
-                                    type(component).__name__,
-                                )
+                    # Check event_security mode (decorator allowlist)
+                    security_error = _check_event_security(handler, component, event_name)
+                    if security_error:
+                        logger.warning(security_error)
+                        await self.send_error(security_error)
+                        return
+
+                    # Register per-handler rate limit from @rate_limit decorator (once)
+                    if event_name not in self._rate_limiter.handler_buckets:
+                        rl_settings = get_rate_limit_settings(handler)
+                        if rl_settings:
+                            self._rate_limiter.register_handler_limit(
+                                event_name, rl_settings["rate"], rl_settings["burst"]
+                            )
 
                     # Extract component_id and remove from params
                     event_data = params.copy()
@@ -708,25 +732,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         return
 
                     # Check event_security mode (decorator allowlist)
-                    _event_sec = djust_config.get("event_security", "warn")
-                    if _event_sec in ("warn", "strict"):
-                        _allowed = getattr(self.view_instance, "_allowed_events", None)
-                        _is_allowed = is_event_handler(handler) or (
-                            isinstance(_allowed, (set, frozenset)) and event_name in _allowed
-                        )
-                        if not _is_allowed:
-                            if _event_sec == "strict":
-                                error_msg = f"Event '{event_name}' is not decorated with @event or listed in _allowed_events"
-                                logger.warning(error_msg)
-                                await self.send_error(error_msg)
-                                return
-                            else:
-                                logger.warning(
-                                    "Deprecation: handler '%s' on %s is not decorated with @event. "
-                                    "This will be blocked in strict mode.",
-                                    event_name,
-                                    type(self.view_instance).__name__,
-                                )
+                    security_error = _check_event_security(handler, self.view_instance, event_name)
+                    if security_error:
+                        logger.warning(security_error)
+                        await self.send_error(security_error)
+                        return
 
                     # Register per-handler rate limit from @rate_limit decorator (once)
                     if event_name not in self._rate_limiter.handler_buckets:
