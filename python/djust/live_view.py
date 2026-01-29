@@ -2321,6 +2321,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         for key, value in list(state.items()):
             if isinstance(value, models.Model):
                 state[key] = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+            elif isinstance(value, list) and value and isinstance(value[0], models.Model):
+                state[key] = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
 
         # JIT-serialized data and the above loop ensure JSON-compatibility
         state_serializable = state
