@@ -412,3 +412,19 @@ class TestConfigValidation:
                 }
             )
         assert caplog.text == ""
+
+    def test_open_mode_warns_in_production(self, caplog, settings):
+        import logging
+
+        settings.DEBUG = False
+        with caplog.at_level(logging.WARNING, logger="djust.config"):
+            self._make_config({"event_security": "open"})
+        assert "event_security is 'open'" in caplog.text
+
+    def test_zero_message_size_warns_in_production(self, caplog, settings):
+        import logging
+
+        settings.DEBUG = False
+        with caplog.at_level(logging.WARNING, logger="djust.config"):
+            self._make_config({"max_message_size": 0})
+        assert "max_message_size is 0" in caplog.text

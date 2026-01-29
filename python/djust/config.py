@@ -152,7 +152,7 @@ class LiveViewConfig:
 
     def _validate_config(self):
         """Validate security-critical config values on startup."""
-        valid_modes = {"open", "warn", "strict"}
+        valid_modes = ("open", "warn", "strict")
         mode = self._config.get("event_security")
         if mode not in valid_modes:
             logger.warning(
