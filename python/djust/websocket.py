@@ -271,8 +271,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 raw_size = len(bytes_data)
             elif text_data:
                 char_len = len(text_data)
-                # UTF-8 is at most 4x char length; skip encode if clearly under limit
-                raw_size = char_len if char_len <= max_msg_size else len(text_data.encode("utf-8"))
+                # Only skip encode when even worst-case (4 bytes/char) is under limit
+                raw_size = (
+                    char_len if char_len * 4 <= max_msg_size else len(text_data.encode("utf-8"))
+                )
             else:
                 raw_size = 0
             if max_msg_size and raw_size > max_msg_size:
