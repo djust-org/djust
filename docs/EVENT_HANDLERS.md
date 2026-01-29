@@ -681,7 +681,7 @@ def delete_item(self, item_id: int):
 
 ### Best Practices Checklist
 
-- [ ] All event handlers have `@event_handler()` decorator
+- [ ] All event handlers have `@event_handler()` or `@event` decorator (or are listed in `_allowed_events`)
 - [ ] Form input handlers use `value` parameter
 - [ ] Type hints specified for all parameters
 - [ ] Required vs optional parameters clearly distinguished
