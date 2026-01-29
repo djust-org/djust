@@ -151,7 +151,13 @@ Per-connection token bucket rate limiting prevents event flooding:
 ```python
 # In settings.py
 LIVEVIEW_CONFIG = {
-    "rate_limit": {"rate": 100, "burst": 20, "max_warnings": 3},
+    "rate_limit": {
+        "rate": 100,
+        "burst": 20,
+        "max_warnings": 3,
+        "max_connections_per_ip": 10,   # Max concurrent WebSocket connections per IP
+        "reconnect_cooldown": 5,        # Seconds before a rate-limited IP can reconnect
+    },
     "max_message_size": 65536,  # 64KB
 }
 ```
@@ -170,6 +176,12 @@ class MyView(LiveView):
 ```
 
 Violations trigger warnings. After `max_warnings` violations, the connection is closed with code `4429`.
+
+#### Per-IP Connection Limits
+
+A process-level `IPConnectionTracker` prevents a single IP from opening excessive WebSocket connections. When the limit is reached, new connections are immediately rejected with close code `4429`. After a rate-limit disconnect, the IP enters a cooldown period during which all reconnection attempts are rejected.
+
+The tracker supports `X-Forwarded-For` headers for deployments behind reverse proxies. Note that this is per-process; multi-process deployments would need an external store (e.g., Redis) for cross-process tracking.
 
 ### JavaScript Security Utilities
 

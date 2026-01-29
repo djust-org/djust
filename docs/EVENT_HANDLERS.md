@@ -766,8 +766,14 @@ LIVEVIEW_CONFIG = {
     # "strict" (default), "warn", or "open"
     "event_security": "strict",
 
-    # Global rate limit (token bucket)
-    "rate_limit": {"rate": 100, "burst": 20, "max_warnings": 3},
+    # Global rate limit (token bucket) and per-IP connection limits
+    "rate_limit": {
+        "rate": 100,
+        "burst": 20,
+        "max_warnings": 3,
+        "max_connections_per_ip": 10,
+        "reconnect_cooldown": 5,
+    },
 
     # Max WebSocket message size in bytes (0 = no limit)
     "max_message_size": 65536,
