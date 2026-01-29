@@ -101,6 +101,13 @@ fn diff_attrs(old: &VNode, new: &VNode, path: &[usize], target_id: &Option<Strin
 
         match new.attrs.get(key) {
             None => {
+                // Never remove dj-* event handler attributes — these must be preserved
+                // to protect against VDOM path mismatches when conditional rendering
+                // changes the DOM structure (e.g., {% if conversation %} adds elements,
+                // shifting indices so diff incorrectly matches unrelated elements).
+                if key.starts_with("dj-") {
+                    continue;
+                }
                 patches.push(Patch::RemoveAttr {
                     path: path.to_vec(),
                     d: target_id.clone(),
@@ -1382,6 +1389,84 @@ mod tests {
             insert_count, 0,
             "Should not insert any children. Patches: {:?}",
             patches
+        );
+    }
+
+    #[test]
+    fn test_dj_event_attrs_never_removed() {
+        // When conditional rendering shifts DOM indices, the diff may incorrectly match
+        // old elements with new elements that lack dj-* attrs. RemoveAttr must be suppressed.
+        let old = VNode::element("button")
+            .with_djust_id("0")
+            .with_attr("class", "theme-btn")
+            .with_attr("dj-click", "set_theme('light')");
+        let new = VNode::element("button")
+            .with_djust_id("0")
+            .with_attr("class", "export-btn");
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        assert!(
+            patches.iter().any(
+                |p| matches!(p, Patch::SetAttr { key, value, .. } if key == "class" && value == "export-btn")
+            ),
+            "Should update class attribute"
+        );
+        assert!(
+            !patches
+                .iter()
+                .any(|p| matches!(p, Patch::RemoveAttr { key, .. } if key == "dj-click")),
+            "dj-click attribute should never be removed"
+        );
+    }
+
+    #[test]
+    fn test_dj_attrs_preserved_across_all_event_types() {
+        let old = VNode::element("input")
+            .with_djust_id("0")
+            .with_attr("dj-input", "search(value)")
+            .with_attr("dj-change", "on_change")
+            .with_attr("dj-blur", "validate")
+            .with_attr("dj-keydown.enter", "submit");
+        let new = VNode::element("input").with_djust_id("0");
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        for patch in &patches {
+            if let Patch::RemoveAttr { key, .. } = patch {
+                assert!(
+                    !key.starts_with("dj-"),
+                    "Should not remove dj-* attribute: {}",
+                    key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_regular_attrs_still_removed() {
+        let old = VNode::element("div")
+            .with_djust_id("0")
+            .with_attr("class", "old-class")
+            .with_attr("title", "old-title")
+            .with_attr("dj-click", "handler");
+        let new = VNode::element("div")
+            .with_djust_id("0")
+            .with_attr("class", "new-class");
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        assert!(
+            patches
+                .iter()
+                .any(|p| matches!(p, Patch::RemoveAttr { key, .. } if key == "title")),
+            "Regular attributes should still be removed"
+        );
+        assert!(
+            !patches
+                .iter()
+                .any(|p| matches!(p, Patch::RemoveAttr { key, .. } if key == "dj-click")),
+            "dj-click should be preserved"
         );
     }
 }

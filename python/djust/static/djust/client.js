@@ -2726,6 +2726,11 @@ function applySinglePatch(patch) {
                 break;
 
             case 'RemoveAttr':
+                // Never remove dj-* event handler attributes — defense in depth
+                // against VDOM path mismatches from conditional rendering
+                if (patch.key && patch.key.startsWith('dj-')) {
+                    break;
+                }
                 node.removeAttribute(patch.key);
                 break;
 
