@@ -101,6 +101,47 @@ def _ensure_handler_rate_limit(
             )
 
 
+async def _validate_event_security(
+    ws,
+    event_name: str,
+    owner_instance,
+    rate_limiter: "ConnectionRateLimiter",
+) -> Optional[Callable]:
+    """Validate event name, handler existence, decorator allowlist, and per-handler rate limit.
+
+    Shared by actor, component, and view paths. Returns the handler if all
+    checks pass, or None after sending the appropriate error/close.
+    """
+    if not is_safe_event_name(event_name):
+        error_msg = f"Blocked unsafe event name: {sanitize_for_log(event_name)}"
+        logger.warning(error_msg)
+        await ws.send_error(_safe_error(error_msg))
+        return None
+
+    handler = getattr(owner_instance, event_name, None)
+    if not handler or not callable(handler):
+        error_msg = f"No handler found for event: {event_name}"
+        logger.warning(error_msg)
+        await ws.send_error(_safe_error(error_msg))
+        return None
+
+    security_error = _check_event_security(handler, owner_instance, event_name)
+    if security_error:
+        logger.warning(security_error)
+        await ws.send_error(_safe_error(security_error))
+        return None
+
+    _ensure_handler_rate_limit(rate_limiter, event_name, handler)
+    if not rate_limiter.check_handler(event_name):
+        if rate_limiter.should_disconnect():
+            await ws.close(code=4429)
+            return None
+        await ws.send_error("Rate limit exceeded, event dropped")
+        return None
+
+    return handler
+
+
 async def _call_handler(handler: Callable, params: Optional[Dict[str, Any]] = None):
     """
     Call an event handler, handling both sync and async handlers.
@@ -628,32 +669,28 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 logger.info(f"Handling event '{event_name}' with actor system")
 
-                # Security checks (same as non-actor path)
-                if not is_safe_event_name(event_name):
-                    error_msg = f"Blocked unsafe event name: {sanitize_for_log(event_name)}"
-                    logger.warning(error_msg)
-                    await self.send_error(_safe_error(error_msg))
+                # Security checks (shared with non-actor paths)
+                handler = await _validate_event_security(
+                    self, event_name, self.view_instance, self._rate_limiter
+                )
+                if handler is None:
                     return
 
-                handler = getattr(self.view_instance, event_name, None)
-                if not handler or not callable(handler):
-                    error_msg = f"No handler found for event: {event_name}"
-                    logger.warning(error_msg)
-                    await self.send_error(_safe_error(error_msg))
-                    return
-
-                security_error = _check_event_security(handler, self.view_instance, event_name)
-                if security_error:
-                    logger.warning(security_error)
-                    await self.send_error(_safe_error(security_error))
-                    return
-
-                _ensure_handler_rate_limit(self._rate_limiter, event_name, handler)
-                if not self._rate_limiter.check_handler(event_name):
-                    if self._rate_limiter.should_disconnect():
-                        await self.close(code=4429)
-                        return
-                    await self.send_error("Rate limit exceeded, event dropped")
+                # Validate parameters before sending to actor
+                coerce = get_handler_coerce_setting(handler)
+                validation = validate_handler_params(
+                    handler, params, event_name, coerce=coerce, positional_args=positional_args
+                )
+                if not validation["valid"]:
+                    logger.error(f"Parameter validation failed: {validation['error']}")
+                    await self.send_error(
+                        validation["error"],
+                        validation_details={
+                            "expected_params": validation["expected"],
+                            "provided_params": validation["provided"],
+                            "type_errors": validation["type_errors"],
+                        },
+                    )
                     return
 
                 # Call actor event handler (will call Python handler internally)
@@ -714,37 +751,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         await self.send_error(error_msg)
                         return
 
-                    # Validate event name before getattr
-                    if not is_safe_event_name(event_name):
-                        error_msg = f"Blocked unsafe event name: {sanitize_for_log(event_name)}"
-                        logger.warning(error_msg)
-                        await self.send_error(_safe_error(error_msg))
-                        return
-
-                    # Get component's event handler
-                    handler = getattr(component, event_name, None)
-                    if not handler or not callable(handler):
-                        error_msg = (
-                            f"Component {component.__class__.__name__} has no handler: {event_name}"
-                        )
-                        logger.error(error_msg)
-                        await self.send_error(_safe_error(error_msg))
-                        return
-
-                    # Check event_security mode (decorator allowlist)
-                    security_error = _check_event_security(handler, component, event_name)
-                    if security_error:
-                        logger.warning(security_error)
-                        await self.send_error(_safe_error(security_error))
-                        return
-
-                    # Register and check per-handler rate limit
-                    _ensure_handler_rate_limit(self._rate_limiter, event_name, handler)
-                    if not self._rate_limiter.check_handler(event_name):
-                        if self._rate_limiter.should_disconnect():
-                            await self.close(code=4429)
-                            return
-                        await self.send_error("Rate limit exceeded, event dropped")
+                    # Security checks (shared with actor and view paths)
+                    handler = await _validate_event_security(
+                        self, event_name, component, self._rate_limiter
+                    )
+                    if handler is None:
                         return
 
                     # Extract component_id and remove from params
@@ -784,35 +795,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         time.perf_counter() - handler_start
                     ) * 1000  # Convert to ms
                 else:
-                    # Validate event name before getattr
-                    if not is_safe_event_name(event_name):
-                        error_msg = f"Blocked unsafe event name: {sanitize_for_log(event_name)}"
-                        logger.warning(error_msg)
-                        await self.send_error(_safe_error(error_msg))
-                        return
-
-                    # Regular event: route to handler method
-                    handler = getattr(self.view_instance, event_name, None)
-                    if not handler or not callable(handler):
-                        error_msg = f"No handler found for event: {event_name}"
-                        logger.warning(error_msg)
-                        await self.send_error(_safe_error(error_msg))
-                        return
-
-                    # Check event_security mode (decorator allowlist)
-                    security_error = _check_event_security(handler, self.view_instance, event_name)
-                    if security_error:
-                        logger.warning(security_error)
-                        await self.send_error(_safe_error(security_error))
-                        return
-
-                    # Register and check per-handler rate limit
-                    _ensure_handler_rate_limit(self._rate_limiter, event_name, handler)
-                    if not self._rate_limiter.check_handler(event_name):
-                        if self._rate_limiter.should_disconnect():
-                            await self.close(code=4429)
-                            return
-                        await self.send_error("Rate limit exceeded, event dropped")
+                    # Security checks (shared with actor and component paths)
+                    handler = await _validate_event_security(
+                        self, event_name, self.view_instance, self._rate_limiter
+                    )
+                    if handler is None:
                         return
 
                     # Validate parameters before calling handler
