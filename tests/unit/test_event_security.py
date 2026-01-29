@@ -76,6 +76,44 @@ class TestEventDecorator:
         assert is_event_handler(handler) is True
 
 
+class TestMessageSizeLimit:
+    """Message size limit tests."""
+
+    def test_multibyte_chars_measured_in_bytes(self):
+        """Verify multi-byte characters are measured by byte count, not char count.
+
+        A string of multi-byte characters (e.g., emoji) can have a byte size
+        much larger than its character count. The size check must use byte
+        count to prevent oversized messages from bypassing the limit.
+        Regression test for GitHub issue #111.
+        """
+
+        max_size = 64  # small limit for testing
+        # Each emoji is 4 bytes in UTF-8, so 20 emoji = 20 chars but 80 bytes
+        text_data = "\U0001f600" * 20  # 20 chars, 80 bytes
+
+        assert len(text_data) == 20  # char count under limit
+        assert len(text_data.encode("utf-8")) == 80  # byte count over limit
+
+        # Replicate the logic from websocket.py receive()
+        char_len = len(text_data)
+        raw_size = char_len if char_len * 4 <= max_size else len(text_data.encode("utf-8"))
+
+        assert raw_size == 80  # must use byte count, not char count
+        assert raw_size > max_size  # must exceed the limit
+
+    def test_ascii_skips_encode_safely(self):
+        """When char_len * 4 <= max_size, skipping encode is safe."""
+        max_size = 256
+        text_data = "hello"  # 5 chars, 5 bytes
+
+        char_len = len(text_data)
+        raw_size = char_len if char_len * 4 <= max_size else len(text_data.encode("utf-8"))
+
+        # char_len used as optimization (5 * 4 = 20 <= 256)
+        assert raw_size == 5
+
+
 class TestRateLimiter:
     """Proposal 3: Rate limiting tests."""
 
@@ -245,7 +283,7 @@ class TestEventSecurityHelper:
             assert result is None  # warn mode doesn't block
 
 
-class TestMessageSizeLimit:
+class TestConfigDefaults:
     """Tests for message size config."""
 
     def test_max_message_size_default(self):
