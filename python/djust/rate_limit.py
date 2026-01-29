@@ -75,7 +75,7 @@ class ConnectionRateLimiter:
         if not self.global_bucket.consume():
             self.warnings += 1
             logger.warning(
-                "Rate limit exceeded for event '%s' (warning %d/%d)",
+                "Rate limit exceeded for message '%s' (warning %d/%d)",
                 sanitize_for_log(event_name),
                 self.warnings,
                 self.max_warnings,

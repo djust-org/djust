@@ -300,3 +300,35 @@ class TestRateLimitIntegration:
         assert limiter.check_handler("once") is True
         # Second immediately rejected (burst=1, rate=0.1/s)
         assert limiter.check_handler("once") is False
+
+
+class TestGlobalRateLimit:
+    """Issue #107: All message types must be rate-limited, not just events."""
+
+    def test_non_event_messages_are_rate_limited(self):
+        """After exhausting burst, mount and ping messages should be rejected."""
+        from djust.rate_limit import ConnectionRateLimiter
+
+        limiter = ConnectionRateLimiter(rate=100, burst=3, max_warnings=10)
+        # Exhaust burst with any message types
+        assert limiter.check("ping") is True
+        assert limiter.check("mount") is True
+        assert limiter.check("event") is True
+        # Burst exhausted — all types should now be rejected
+        assert limiter.check("ping") is False
+        assert limiter.check("mount") is False
+        assert limiter.check("event") is False
+
+    def test_ping_flood_triggers_disconnect(self):
+        """Repeated ping messages should eventually trigger disconnect."""
+        from djust.rate_limit import ConnectionRateLimiter
+
+        limiter = ConnectionRateLimiter(rate=100, burst=2, max_warnings=2)
+        # Exhaust burst
+        limiter.check("ping")
+        limiter.check("ping")
+        # Two more pings exceed max_warnings
+        assert limiter.check("ping") is False
+        assert limiter.should_disconnect() is False
+        assert limiter.check("ping") is False
+        assert limiter.should_disconnect() is True
