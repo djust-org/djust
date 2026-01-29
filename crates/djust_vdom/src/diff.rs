@@ -176,6 +176,22 @@ fn diff_children(
     );
 
     if has_keys {
+        // Warn about mixed keyed/unkeyed children — a common source of suboptimal diffs.
+        // Keyed siblings should ideally ALL have keys for best diffing performance.
+        if !new.children.iter().all(|n| n.key.is_some()) {
+            let keyed_count = new.children.iter().filter(|n| n.key.is_some()).count();
+            let total = new.children.len();
+            vdom_trace!(
+                "  WARNING: Mixed keyed/unkeyed children ({}/{} keyed). \
+                 For optimal diffing, add keys to all siblings or none. \
+                 Parent tag=<{}> id={:?}",
+                keyed_count,
+                total,
+                new.tag,
+                parent_id
+            );
+        }
+
         vdom_trace!("  Using KEYED diffing");
         patches.extend(diff_keyed_children(
             &old.children,
@@ -280,47 +296,65 @@ fn diff_keyed_children(
         }
     }
 
-    // IMPORTANT: Also diff unkeyed children by index position
-    // This fixes the bug where unkeyed children were being skipped entirely
-    for (new_idx, new_node) in new.iter().enumerate() {
-        if new_node.key.is_none() && !processed_new_indices.contains(&new_idx) {
-            // This is an unkeyed child in new
-            if new_idx < old.len()
-                && old[new_idx].key.is_none()
-                && !processed_old_indices.contains(&new_idx)
-            {
-                // There's a corresponding unkeyed child in old at the same index
-                processed_old_indices.insert(new_idx);
-                vdom_trace!("  DIFF unkeyed at index {}", new_idx);
-                let mut child_path = path.to_vec();
-                child_path.push(new_idx);
-                patches.extend(diff_nodes(&old[new_idx], new_node, &child_path));
-            } else {
-                // No corresponding unkeyed child in old - insert it
-                vdom_trace!("  INSERT unkeyed at index {}", new_idx);
-                patches.push(Patch::InsertChild {
-                    path: path.to_vec(),
-                    d: parent_id.clone(),
-                    index: new_idx,
-                    node: new_node.clone(),
-                });
-            }
-        }
+    // Collect unkeyed children by their relative order (not absolute index)
+    // This ensures correct matching when keyed children shift positions
+    let old_unkeyed: Vec<usize> = old
+        .iter()
+        .enumerate()
+        .filter(|(i, n)| n.key.is_none() && !processed_old_indices.contains(i))
+        .map(|(i, _)| i)
+        .collect();
+
+    let new_unkeyed: Vec<usize> = new
+        .iter()
+        .enumerate()
+        .filter(|(i, n)| n.key.is_none() && !processed_new_indices.contains(i))
+        .map(|(i, _)| i)
+        .collect();
+
+    vdom_trace!(
+        "  Unkeyed children: old={:?} new={:?}",
+        old_unkeyed,
+        new_unkeyed
+    );
+
+    // Diff common unkeyed children by relative position
+    let common_len = old_unkeyed.len().min(new_unkeyed.len());
+    for i in 0..common_len {
+        let old_idx = old_unkeyed[i];
+        let new_idx = new_unkeyed[i];
+        processed_old_indices.insert(old_idx);
+        processed_new_indices.insert(new_idx);
+        vdom_trace!(
+            "  DIFF unkeyed: old[{}] <-> new[{}] (relative pos {})",
+            old_idx,
+            new_idx,
+            i
+        );
+        let mut child_path = path.to_vec();
+        child_path.push(new_idx);
+        patches.extend(diff_nodes(&old[old_idx], &new[new_idx], &child_path));
     }
 
-    // Remove unkeyed children from old that don't have corresponding children in new
-    for (old_idx, old_node) in old.iter().enumerate() {
-        if old_node.key.is_none()
-            && !processed_old_indices.contains(&old_idx)
-            && (old_idx >= new.len() || new[old_idx].key.is_some())
-        {
-            vdom_trace!("  REMOVE unkeyed at index {}", old_idx);
-            patches.push(Patch::RemoveChild {
-                path: path.to_vec(),
-                d: parent_id.clone(),
-                index: old_idx,
-            });
-        }
+    // Insert extra new unkeyed children
+    for &new_idx in &new_unkeyed[common_len..] {
+        vdom_trace!("  INSERT unkeyed at index {}", new_idx);
+        patches.push(Patch::InsertChild {
+            path: path.to_vec(),
+            d: parent_id.clone(),
+            index: new_idx,
+            node: new[new_idx].clone(),
+        });
+    }
+
+    // Remove extra old unkeyed children
+    for &old_idx in &old_unkeyed[common_len..] {
+        vdom_trace!("  REMOVE unkeyed at index {}", old_idx);
+        patches.push(Patch::RemoveChild {
+            path: path.to_vec(),
+            d: parent_id.clone(),
+            index: old_idx,
+        });
     }
 
     patches
@@ -1136,6 +1170,217 @@ mod tests {
         assert_eq!(
             remove_count, 0,
             "Should not remove any children (all matched). Patches: {:?}",
+            patches
+        );
+    }
+
+    #[test]
+    fn test_adversarial_interleaved_keyed_unkeyed() {
+        // Adversarial pattern: keyed and unkeyed children alternate and reorder
+        // old: [unkeyed-X, keyed-A, unkeyed-Y, keyed-B]
+        // new: [keyed-B, unkeyed-Y2, keyed-A, unkeyed-X2]
+        let old = VNode::element("div")
+            .with_djust_id("parent")
+            .with_children(vec![
+                VNode::element("span")
+                    .with_djust_id("x")
+                    .with_child(VNode::text("X")),
+                VNode::element("div")
+                    .with_key("a")
+                    .with_djust_id("a")
+                    .with_child(VNode::text("A")),
+                VNode::element("span")
+                    .with_djust_id("y")
+                    .with_child(VNode::text("Y")),
+                VNode::element("div")
+                    .with_key("b")
+                    .with_djust_id("b")
+                    .with_child(VNode::text("B")),
+            ]);
+
+        let new = VNode::element("div")
+            .with_djust_id("parent")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_key("b")
+                    .with_djust_id("b2")
+                    .with_child(VNode::text("B")),
+                VNode::element("span")
+                    .with_djust_id("y2")
+                    .with_child(VNode::text("Y2")),
+                VNode::element("div")
+                    .with_key("a")
+                    .with_djust_id("a2")
+                    .with_child(VNode::text("A")),
+                VNode::element("span")
+                    .with_djust_id("x2")
+                    .with_child(VNode::text("X2")),
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        // Both unkeyed children should be diffed in-place (text changes X->X2, Y->Y2)
+        let text_patches: Vec<_> = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::SetText { .. }))
+            .collect();
+
+        // Should have exactly 2 text changes (X->something, Y->something)
+        assert_eq!(
+            text_patches.len(),
+            2,
+            "Should diff both unkeyed children. Patches: {:?}",
+            patches
+        );
+
+        // Should NOT generate insert+remove pairs for unkeyed children
+        let insert_count = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::InsertChild { .. }))
+            .count();
+        let remove_count = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
+            .count();
+        assert_eq!(
+            insert_count, 0,
+            "Should not insert unkeyed children (should diff in place). Patches: {:?}",
+            patches
+        );
+        assert_eq!(
+            remove_count, 0,
+            "Should not remove unkeyed children (should diff in place). Patches: {:?}",
+            patches
+        );
+    }
+
+    #[test]
+    fn test_unkeyed_count_changes_in_keyed_context() {
+        // old: [keyed-A, unkeyed-X, keyed-B]
+        // new: [keyed-A, unkeyed-X, unkeyed-Y, keyed-B]
+        // One unkeyed child added between keyed children
+        let old = VNode::element("div")
+            .with_djust_id("parent")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_key("a")
+                    .with_djust_id("a")
+                    .with_child(VNode::text("A")),
+                VNode::element("span")
+                    .with_djust_id("x")
+                    .with_child(VNode::text("X")),
+                VNode::element("div")
+                    .with_key("b")
+                    .with_djust_id("b")
+                    .with_child(VNode::text("B")),
+            ]);
+
+        let new = VNode::element("div")
+            .with_djust_id("parent")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_key("a")
+                    .with_djust_id("a2")
+                    .with_child(VNode::text("A")),
+                VNode::element("span")
+                    .with_djust_id("x2")
+                    .with_child(VNode::text("X")),
+                VNode::element("span")
+                    .with_djust_id("y2")
+                    .with_child(VNode::text("Y")),
+                VNode::element("div")
+                    .with_key("b")
+                    .with_djust_id("b2")
+                    .with_child(VNode::text("B")),
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        // The existing unkeyed child X should be diffed (no text change)
+        // A new unkeyed child Y should be inserted
+        let insert_count = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::InsertChild { .. }))
+            .count();
+        assert_eq!(
+            insert_count, 1,
+            "Should insert exactly one new unkeyed child. Patches: {:?}",
+            patches
+        );
+
+        // No removals
+        let remove_count = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
+            .count();
+        assert_eq!(
+            remove_count, 0,
+            "Should not remove any children. Patches: {:?}",
+            patches
+        );
+    }
+
+    #[test]
+    fn test_unkeyed_count_decreases_in_keyed_context() {
+        // old: [keyed-A, unkeyed-X, unkeyed-Y, keyed-B]
+        // new: [keyed-A, unkeyed-X, keyed-B]
+        // One unkeyed child removed
+        let old = VNode::element("div")
+            .with_djust_id("parent")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_key("a")
+                    .with_djust_id("a")
+                    .with_child(VNode::text("A")),
+                VNode::element("span")
+                    .with_djust_id("x")
+                    .with_child(VNode::text("X")),
+                VNode::element("span")
+                    .with_djust_id("y")
+                    .with_child(VNode::text("Y")),
+                VNode::element("div")
+                    .with_key("b")
+                    .with_djust_id("b")
+                    .with_child(VNode::text("B")),
+            ]);
+
+        let new = VNode::element("div")
+            .with_djust_id("parent")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_key("a")
+                    .with_djust_id("a2")
+                    .with_child(VNode::text("A")),
+                VNode::element("span")
+                    .with_djust_id("x2")
+                    .with_child(VNode::text("X")),
+                VNode::element("div")
+                    .with_key("b")
+                    .with_djust_id("b2")
+                    .with_child(VNode::text("B")),
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        // Should remove exactly one unkeyed child (Y)
+        let remove_count = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
+            .count();
+        assert_eq!(
+            remove_count, 1,
+            "Should remove exactly one unkeyed child. Patches: {:?}",
+            patches
+        );
+
+        // No inserts
+        let insert_count = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::InsertChild { .. }))
+            .count();
+        assert_eq!(
+            insert_count, 0,
+            "Should not insert any children. Patches: {:?}",
             patches
         );
     }

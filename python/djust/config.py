@@ -129,6 +129,12 @@ class LiveViewConfig:
             # itself fail if Django is partially installed
             pass
 
+        # Bridge debug_vdom to Rust VDOM tracing so developers only need one setting
+        if self._config.get("debug_vdom", False):
+            import os
+
+            os.environ.setdefault("DJUST_VDOM_TRACE", "1")
+
     def get(self, key: str, default: Any = None) -> Any:
         """
         Get a configuration value.
