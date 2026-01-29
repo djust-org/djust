@@ -36,7 +36,7 @@ def _safe_error(detailed_msg: str, generic_msg: str = "Event rejected") -> str:
         if settings.DEBUG:
             return detailed_msg
     except Exception:
-        pass
+        pass  # Django not configured; fall back to generic (safe default)
     return generic_msg
 
 
