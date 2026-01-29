@@ -50,7 +50,7 @@ def _check_event_security(handler, owner_instance, event_name: str) -> Optional[
     Returns None if allowed, or an error message string if blocked in strict mode.
     Logs a deprecation warning in warn mode for undecorated handlers.
     """
-    mode = djust_config.get("event_security", "warn")
+    mode = djust_config.get("event_security", "strict")
     if mode not in ("warn", "strict"):
         return None
 
@@ -78,7 +78,7 @@ def _ensure_handler_rate_limit(
 ) -> None:
     """Register per-handler rate limit from @rate_limit decorator metadata (once per event).
 
-    Must be called BEFORE the global rate_limiter.check() so the first
+    Must be called BEFORE check_handler() so the first
     invocation is also subject to the per-handler bucket.
     """
     if event_name not in rate_limiter.handler_buckets:
