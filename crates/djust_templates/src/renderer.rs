@@ -1375,4 +1375,59 @@ mod tests {
         context.set("a".to_string(), Value::List(vec![Value::Integer(1)]));
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
     }
+
+    #[test]
+    fn test_if_mixed_and_or_precedence() {
+        // "and" binds tighter than "or": a or b and c == a or (b and c)
+        let tokens = tokenize("{% if a or b and c %}yes{% endif %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+
+        // a=false, b=true, c=false -> false or (true and false) -> false
+        let mut context = Context::new();
+        context.set("a".to_string(), Value::Bool(false));
+        context.set("b".to_string(), Value::Bool(true));
+        context.set("c".to_string(), Value::Bool(false));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+
+        // a=true, b=false, c=false -> true or (false and false) -> true
+        context.set("a".to_string(), Value::Bool(true));
+        context.set("b".to_string(), Value::Bool(false));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "yes");
+    }
+
+    #[test]
+    fn test_if_chained_and() {
+        let tokens = tokenize("{% if a and b and c %}yes{% endif %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("a".to_string(), Value::Bool(true));
+        context.set("b".to_string(), Value::Bool(true));
+        context.set("c".to_string(), Value::Bool(true));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "yes");
+
+        context.set("b".to_string(), Value::Bool(false));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+    }
+
+    #[test]
+    fn test_if_not_with_or() {
+        // not a or b == (not a) or b
+        let tokens = tokenize("{% if not a or b %}yes{% endif %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+
+        // a=true, b=false -> (not true) or false -> false
+        let mut context = Context::new();
+        context.set("a".to_string(), Value::Bool(true));
+        context.set("b".to_string(), Value::Bool(false));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+
+        // a=true, b=true -> (not true) or true -> true
+        context.set("b".to_string(), Value::Bool(true));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "yes");
+
+        // a=false, b=false -> (not false) or false -> true
+        context.set("a".to_string(), Value::Bool(false));
+        context.set("b".to_string(), Value::Bool(false));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "yes");
+    }
 }
