@@ -6,8 +6,8 @@ Showcases all available Django Rust Live components with interactive examples.
 
 from django.http import HttpRequest
 from demo_app.views.navbar_example import BaseViewWithNavbar
-from djust.components import (
 from djust.decorators import event
+from djust.components import (
     # UI Components
     AlertComponent,
     BadgeComponent,

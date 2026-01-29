@@ -7,8 +7,8 @@ No HTML in the template - everything is composed from reusable components.
 
 from djust import LiveView
 from djust.components.layout import NavbarComponent, NavItem, TabsComponent, TabItem
-from djust.components.ui import (
 from djust.decorators import event
+from djust.components.ui import (
     AlertComponent,
     BadgeComponent,
     ButtonComponent,

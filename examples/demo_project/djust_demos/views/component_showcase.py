@@ -3,8 +3,8 @@ Comprehensive Component Showcase - All 26 djust components in one interactive pa
 """
 
 from djust import LiveView
-from djust.components.ui import (
 from djust.decorators import event
+from djust.components.ui import (
     # Display Components
     Alert, Avatar, Badge, Button, Card, Spinner, Progress, Tooltip, Toast, Divider, Icon,
     # Form Components

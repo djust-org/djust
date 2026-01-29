@@ -7,8 +7,8 @@ Demonstrates both:
 """
 
 from djust import LiveView
-from djust.components.ui import (
 from djust.decorators import event
+from djust.components.ui import (
     Dropdown,  # Stateless
     DropdownComponent,  # Stateful
     Alert,
