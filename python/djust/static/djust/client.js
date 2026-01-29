@@ -441,16 +441,22 @@ class LiveViewWebSocket {
                 }
 
                 // OPTIMIZATION: Skip HTML replacement if content was pre-rendered via HTTP GET
-                // BUT: Force hydration if server HTML has data-dj-id attributes for reliable patching
                 // Server sends has_ids flag to avoid client-side string search
                 const hasDataDjAttrs = data.has_ids === true;
-                if (this.skipMountHtml && !hasDataDjAttrs) {
-                    console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
-                    this.skipMountHtml = false; // Reset flag
-                    bindLiveViewEvents(); // Bind events to existing content
+                if (this.skipMountHtml) {
+                    // Content already rendered by HTTP GET - don't replace innerHTML
+                    // If server HTML has data-dj-id attributes, stamp them onto existing DOM
+                    // This preserves whitespace (e.g. in code blocks) that innerHTML would destroy
+                    if (hasDataDjAttrs && data.html) {
+                        console.log('[LiveView] Stamping data-dj-id attributes onto pre-rendered DOM');
+                        _stampDjIds(data.html);
+                    } else {
+                        console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
+                    }
+                    this.skipMountHtml = false;
+                    bindLiveViewEvents();
                 } else if (data.html) {
-                    // Replace page content with server-rendered HTML
-                    // This is required when using ID-based patch targeting (data-dj-id attributes)
+                    // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
                         console.log('[LiveView] Hydrating DOM with data-dj-id attributes for reliable patching');
                     }
@@ -462,7 +468,7 @@ class LiveViewWebSocket {
                         container.innerHTML = data.html;
                         bindLiveViewEvents();
                     }
-                    this.skipMountHtml = false; // Reset flag
+                    this.skipMountHtml = false;
                 }
                 break;
 
@@ -2538,6 +2544,53 @@ function applyDjUpdateElements(existingRoot, newRoot) {
 }
 
 /**
+ * Stamp data-dj-id attributes from server HTML onto existing pre-rendered DOM.
+ * This avoids replacing innerHTML (which destroys whitespace in code blocks).
+ * Walks both trees in parallel and copies data-dj-id from server elements to DOM elements.
+ * Note: serverHtml is trusted (comes from our own WebSocket mount response).
+ */
+function _stampDjIds(serverHtml, container) {
+    if (!container) {
+        container = document.querySelector('[data-djust-view]') ||
+                    document.querySelector('[data-djust-root]');
+    }
+    if (!container) return;
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString('<div>' + serverHtml + '</div>', 'text/html');
+    const serverRoot = doc.body.firstChild;
+
+    function stampRecursive(domNode, serverNode) {
+        if (!domNode || !serverNode) return;
+        if (serverNode.nodeType !== Node.ELEMENT_NODE || domNode.nodeType !== Node.ELEMENT_NODE) return;
+
+        // Bail out if structure diverges (e.g. browser extension injected elements)
+        if (domNode.tagName !== serverNode.tagName) return;
+
+        const djId = serverNode.getAttribute('data-dj-id');
+        if (djId) {
+            domNode.setAttribute('data-dj-id', djId);
+        }
+
+        // Walk children in parallel (element nodes only)
+        const domChildren = Array.from(domNode.children);
+        const serverChildren = Array.from(serverNode.children);
+        const len = Math.min(domChildren.length, serverChildren.length);
+        for (let i = 0; i < len; i++) {
+            stampRecursive(domChildren[i], serverChildren[i]);
+        }
+    }
+
+    // Walk container children vs server root children
+    const domChildren = Array.from(container.children);
+    const serverChildren = Array.from(serverRoot.children);
+    const len = Math.min(domChildren.length, serverChildren.length);
+    for (let i = 0; i < len; i++) {
+        stampRecursive(domChildren[i], serverChildren[i]);
+    }
+}
+
+/**
  * Get significant children (elements and non-whitespace text nodes).
  * Preserves all whitespace inside <pre>, <code>, and <textarea> elements.
  */
@@ -2574,6 +2627,7 @@ function isWhitespacePreserving(node) {
 
 // Export for testing
 window.djust.getSignificantChildren = getSignificantChildren;
+window.djust._stampDjIds = _stampDjIds;
 
 /**
  * Group patches by their parent path for batching.

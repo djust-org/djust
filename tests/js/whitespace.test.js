@@ -22,7 +22,7 @@ const dom = new JSDOM('<!DOCTYPE html><html><body><div id="test"></div></body></
 dom.window.eval(clientCode);
 
 // Get exposed functions
-const { getSignificantChildren } = dom.window.djust;
+const { getSignificantChildren, _stampDjIds } = dom.window.djust;
 
 describe('getSignificantChildren', () => {
     let document;
@@ -226,5 +226,87 @@ describe('innerHTML hydration preserves newlines', () => {
 
         const pre = container.querySelector('pre');
         expect(pre.textContent).toBe('line1\nline2');
+    });
+});
+
+describe('_stampDjIds', () => {
+    let document;
+
+    beforeEach(() => {
+        document = dom.window.document;
+    });
+
+    afterEach(() => {
+        // Clean up any containers added to body
+        const container = document.querySelector('[data-djust-root]');
+        if (container) container.remove();
+    });
+
+    it('should stamp data-dj-id attributes onto existing DOM elements', () => {
+        const container = document.createElement('div');
+        container.setAttribute('data-djust-root', '');
+        container.innerHTML = '<main><div><span>Hello</span></div></main>';
+        document.body.appendChild(container);
+
+        const serverHtml = '<main data-dj-id="1"><div data-dj-id="2"><span data-dj-id="3">Hello</span></div></main>';
+        _stampDjIds(serverHtml);
+
+        expect(container.querySelector('main').getAttribute('data-dj-id')).toBe('1');
+        expect(container.querySelector('div').getAttribute('data-dj-id')).toBe('2');
+        expect(container.querySelector('span').getAttribute('data-dj-id')).toBe('3');
+    });
+
+    it('should preserve whitespace in code blocks while stamping IDs', () => {
+        const container = document.createElement('div');
+        container.setAttribute('data-djust-root', '');
+        container.innerHTML = '<pre><code><span class="w">\u00a0\u00a0\u00a0\u00a0</span><span class="k">return</span></code></pre>';
+        const originalText = container.querySelector('code').textContent;
+        document.body.appendChild(container);
+
+        const serverHtml = '<pre data-dj-id="1"><code data-dj-id="2"><span data-dj-id="3"></span><span data-dj-id="4">return</span></code></pre>';
+        _stampDjIds(serverHtml);
+
+        // Whitespace must be preserved from original DOM
+        expect(container.querySelector('code').textContent).toBe(originalText);
+        // IDs should be stamped
+        expect(container.querySelector('pre').getAttribute('data-dj-id')).toBe('1');
+    });
+
+    it('should handle mismatched child counts gracefully', () => {
+        const container = document.createElement('div');
+        container.setAttribute('data-djust-root', '');
+        container.innerHTML = '<div><span>A</span><span>B</span><span>C</span></div>';
+        document.body.appendChild(container);
+
+        const serverHtml = '<div data-dj-id="1"><span data-dj-id="2">A</span><span data-dj-id="3">B</span></div>';
+        _stampDjIds(serverHtml);
+
+        const spans = container.querySelectorAll('span');
+        expect(spans[0].getAttribute('data-dj-id')).toBe('2');
+        expect(spans[1].getAttribute('data-dj-id')).toBe('3');
+        expect(spans[2].getAttribute('data-dj-id')).toBeNull();
+    });
+
+    it('should bail out on tag-name mismatch', () => {
+        const container = document.createElement('div');
+        container.setAttribute('data-djust-root', '');
+        container.innerHTML = '<div><span>A</span></div>';
+        document.body.appendChild(container);
+
+        // Server has a <p> where DOM has <span> — should not stamp
+        const serverHtml = '<div data-dj-id="1"><p data-dj-id="2">A</p></div>';
+        _stampDjIds(serverHtml);
+
+        expect(container.querySelector('div').getAttribute('data-dj-id')).toBe('1');
+        expect(container.querySelector('span').getAttribute('data-dj-id')).toBeNull();
+    });
+
+    it('should handle no container in DOM gracefully', () => {
+        // Remove any existing containers
+        const existing = document.querySelector('[data-djust-root]');
+        if (existing) existing.remove();
+
+        // Should not throw
+        expect(() => _stampDjIds('<div data-dj-id="1">test</div>')).not.toThrow();
     });
 });
