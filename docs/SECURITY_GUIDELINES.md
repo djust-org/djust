@@ -96,6 +96,81 @@ await self.send_json(response)
 - Never includes user parameters
 - Generic messages in production
 
+### 4. WebSocket Event Security
+
+djust provides three layers of protection for WebSocket event dispatch. These are enabled by default — no configuration needed.
+
+#### Layer 1: Event Name Guard
+
+A regex pattern filter runs before `getattr()` to block dangerous method names:
+
+```python
+# Only allows: lowercase letters, digits, underscores, starting with a letter
+# Blocks: _private, __dunder__, CamelCase, dots, dashes, spaces, empty strings
+from djust.security import is_safe_event_name
+
+is_safe_event_name("increment")    # True
+is_safe_event_name("__class__")    # False
+is_safe_event_name("_private")     # False
+```
+
+#### Layer 2: `@event` Decorator Allowlist
+
+Only methods explicitly marked as event handlers are callable via WebSocket. This is controlled by the `event_security` setting (default: `"strict"`):
+
+```python
+from djust import LiveView, event
+
+class MyView(LiveView):
+    @event
+    def increment(self):
+        """This IS callable via WebSocket"""
+        self.count += 1
+
+    def internal_helper(self):
+        """This is NOT callable via WebSocket (not decorated)"""
+        pass
+```
+
+**Modes:**
+- `"strict"` (default) — only `@event`/`@event_handler` decorated methods or those in `_allowed_events`
+- `"warn"` — allows undecorated methods but logs deprecation warnings
+- `"open"` — no decorator check (legacy behavior, not recommended)
+
+**Escape hatch** for bulk allowlisting without decorating each method:
+
+```python
+class MyView(LiveView):
+    _allowed_events = frozenset({"bulk_update", "refresh", "export"})
+```
+
+#### Layer 3: Server-Side Rate Limiting
+
+Per-connection token bucket rate limiting prevents event flooding:
+
+```python
+# In settings.py
+LIVEVIEW_CONFIG = {
+    "rate_limit": {"rate": 100, "burst": 20, "max_warnings": 3},
+    "max_message_size": 65536,  # 64KB
+}
+```
+
+For expensive handlers, use the `@rate_limit` decorator:
+
+```python
+from djust import event, rate_limit
+
+class MyView(LiveView):
+    @rate_limit(rate=5, burst=3)
+    @event
+    def expensive_operation(self, **kwargs):
+        """Limited to 5/sec sustained, 3 burst"""
+        ...
+```
+
+Violations trigger warnings. After `max_warnings` violations, the connection is closed with code `4429`.
+
 ### JavaScript Security Utilities
 
 ```javascript
@@ -121,6 +196,8 @@ The following patterns are **prohibited** in djust code:
 | `params` in error responses | Remove entirely | Data leakage |
 | `eval(user_input)` | Never use eval | Code injection |
 | `exec(user_input)` | Never use exec | Code injection |
+| `getattr(obj, user_input)` without guard | `is_safe_event_name()` + `@event` check | Arbitrary method invocation |
+| Event handler without `@event` | Add `@event` or `@event_handler` decorator | Unrestricted WebSocket access |
 
 ### JavaScript
 
@@ -142,6 +219,13 @@ When reviewing PRs, check for these security issues:
 - [ ] No direct attribute access like `obj.__class__` from user input
 - [ ] URL parameters are validated before use
 - [ ] Form inputs are sanitized server-side
+
+### WebSocket Event Security
+- [ ] All event handlers decorated with `@event` or `@event_handler`
+- [ ] No `getattr()` on user-controlled names without `is_safe_event_name()` guard
+- [ ] `event_security` setting is `"strict"` (default) in production
+- [ ] Expensive handlers have `@rate_limit` decorator
+- [ ] `_allowed_events` uses `frozenset` (not mutable `set`)
 
 ### Error Handling
 - [ ] No stack traces exposed in non-DEBUG responses
@@ -221,7 +305,28 @@ logger.info(f"Query: {sanitize_for_log(user_query)}")
 - Client: Use `djustSecurity.safeSetInnerHTML()` for dynamic content
 - CSP headers for defense in depth
 
-### 5. Parameter Reflection
+### 5. Arbitrary Method Invocation via WebSocket
+
+**What it is:** A client sends a crafted event name (e.g., `__init__`, `delete`, `mount`) to invoke unintended methods via `getattr()`.
+
+**Impact:** Calling internal framework methods, Django ORM methods, or private helpers.
+
+**Prevention:**
+```python
+# All three layers are automatic when event_security = "strict" (default):
+# 1. Regex guard blocks _private, __dunder__, malformed names
+# 2. @event decorator allowlist blocks unmarked methods
+# 3. Rate limiter prevents flooding
+
+# Just decorate your handlers:
+from djust import event
+
+@event
+def my_handler(self, **kwargs):
+    pass
+```
+
+### 6. Parameter Reflection
 
 **What it is:** Including user parameters in error responses.
 
