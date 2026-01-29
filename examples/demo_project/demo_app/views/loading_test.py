@@ -6,6 +6,7 @@ Tests @loading.disable, @loading.class, @loading.show, @loading.hide modifiers.
 """
 
 from djust import LiveView
+from djust.decorators import event_handler
 import time
 
 
@@ -36,6 +37,7 @@ class LoadingTestView(LiveView):
         self.fast_call_count = 0
         self.result_message = ""
 
+    @event_handler()
     def slow_operation(self, **kwargs):
         """
         Handler that takes 1 second to complete.
@@ -46,6 +48,7 @@ class LoadingTestView(LiveView):
         self.result_message = f"Slow operation completed (call #{self.slow_call_count})"
         self._update_test_results()
 
+    @event_handler()
     def fast_operation(self, **kwargs):
         """
         Handler that completes quickly.
