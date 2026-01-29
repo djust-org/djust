@@ -8,7 +8,10 @@ Provides centralized configuration for:
 - Template preferences
 """
 
+import logging
 from typing import Dict, Any
+
+logger = logging.getLogger(__name__)
 
 
 class LiveViewConfig:
@@ -138,11 +141,61 @@ class LiveViewConfig:
             # itself fail if Django is partially installed
             pass
 
+        # --- Validate config values ---
+        self._validate_config()
+
         # Bridge debug_vdom to Rust VDOM tracing so developers only need one setting
         if self._config.get("debug_vdom", False):
             import os
 
             os.environ.setdefault("DJUST_VDOM_TRACE", "1")
+
+    def _validate_config(self):
+        """Validate security-critical config values on startup."""
+        valid_modes = ("open", "warn", "strict")
+        mode = self._config.get("event_security")
+        if mode not in valid_modes:
+            logger.warning(
+                "Invalid event_security mode %r (must be one of %s). " "Falling back to 'strict'.",
+                mode,
+                valid_modes,
+            )
+            self._config["event_security"] = "strict"
+
+        # Validate rate_limit values
+        defaults = self._defaults["rate_limit"]
+        rl = self._config.get("rate_limit", {})
+        if isinstance(rl, dict):
+            for key in ("rate", "burst", "max_warnings"):
+                val = rl.get(key)
+                if val is not None and (not isinstance(val, (int, float)) or val <= 0):
+                    logger.warning(
+                        "Invalid rate_limit.%s=%r (must be > 0). " "Using default %s.",
+                        key,
+                        val,
+                        defaults[key],
+                    )
+                    rl[key] = defaults[key]
+
+        # Warn about risky non-DEBUG settings
+        try:
+            from django.conf import settings as django_settings
+
+            debug = getattr(django_settings, "DEBUG", True)
+        except Exception:
+            debug = True
+
+        if not debug:
+            if self._config.get("max_message_size") == 0:
+                logger.warning(
+                    "max_message_size is 0 (no limit) with DEBUG=False. "
+                    "Consider setting a message size limit in production."
+                )
+            if self._config.get("event_security") == "open":
+                logger.warning(
+                    "event_security is 'open' with DEBUG=False. "
+                    "Consider using 'warn' or 'strict' in production."
+                )
 
     def get(self, key: str, default: Any = None) -> Any:
         """

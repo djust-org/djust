@@ -370,3 +370,61 @@ class TestGlobalRateLimit:
         assert limiter.should_disconnect() is False
         assert limiter.check("ping") is False
         assert limiter.should_disconnect() is True
+
+
+class TestConfigValidation:
+    """Validate event_security and rate_limit config on startup (Issue #110)."""
+
+    def _make_config(self, overrides):
+        """Create a LiveViewConfig with given overrides, bypassing Django settings."""
+        from djust.config import LiveViewConfig
+
+        cfg = LiveViewConfig.__new__(LiveViewConfig)
+        cfg._config = LiveViewConfig._defaults.copy()
+        cfg._config.update(overrides)
+        cfg._validate_config()
+        return cfg
+
+    def test_invalid_event_security_resets_to_strict(self):
+        cfg = self._make_config({"event_security": "STRICT"})
+        assert cfg._config["event_security"] == "strict"
+
+        cfg = self._make_config({"event_security": "invalid"})
+        assert cfg._config["event_security"] == "strict"
+
+    def test_negative_rate_limit_values_reset_to_defaults(self):
+        from djust.config import LiveViewConfig
+
+        defaults = LiveViewConfig._defaults["rate_limit"]
+        cfg = self._make_config({"rate_limit": {"rate": -1, "burst": 0, "max_warnings": -5}})
+        assert cfg._config["rate_limit"]["rate"] == defaults["rate"]
+        assert cfg._config["rate_limit"]["burst"] == defaults["burst"]
+        assert cfg._config["rate_limit"]["max_warnings"] == defaults["max_warnings"]
+
+    def test_valid_config_passes_without_warnings(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="djust.config"):
+            self._make_config(
+                {
+                    "event_security": "warn",
+                    "rate_limit": {"rate": 50, "burst": 10, "max_warnings": 5},
+                }
+            )
+        assert caplog.text == ""
+
+    def test_open_mode_warns_in_production(self, caplog, settings):
+        import logging
+
+        settings.DEBUG = False
+        with caplog.at_level(logging.WARNING, logger="djust.config"):
+            self._make_config({"event_security": "open"})
+        assert "event_security is 'open'" in caplog.text
+
+    def test_zero_message_size_warns_in_production(self, caplog, settings):
+        import logging
+
+        settings.DEBUG = False
+        with caplog.at_level(logging.WARNING, logger="djust.config"):
+            self._make_config({"max_message_size": 0})
+        assert "max_message_size is 0" in caplog.text
