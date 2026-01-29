@@ -5,6 +5,7 @@ Uses a token bucket algorithm: tokens refill at a steady rate, and each event
 consumes one token. Burst capacity allows short bursts of activity.
 """
 
+import threading
 import time
 import logging
 from typing import Dict, Optional
@@ -110,6 +111,44 @@ class ConnectionRateLimiter:
     def register_handler_limit(self, event_name: str, rate: float, burst: int) -> None:
         """Register a per-handler rate limit (from @rate_limit decorator)."""
         self.handler_buckets[event_name] = TokenBucket(rate, burst)
+
+
+class IPConnectionTracker:
+    """Process-level tracker for per-IP connection counts and reconnection cooldowns."""
+
+    def __init__(self):
+        self._connections: Dict[str, int] = {}
+        self._cooldowns: Dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def connect(self, ip: str, max_per_ip: int) -> bool:
+        """Try to register a connection. Returns False if limit reached or in cooldown."""
+        with self._lock:
+            now = time.monotonic()
+            cooldown_until = self._cooldowns.get(ip, 0)
+            if now < cooldown_until:
+                return False
+            self._cooldowns.pop(ip, None)
+            count = self._connections.get(ip, 0)
+            if count >= max_per_ip:
+                return False
+            self._connections[ip] = count + 1
+            return True
+
+    def disconnect(self, ip: str) -> None:
+        with self._lock:
+            count = self._connections.get(ip, 0)
+            if count <= 1:
+                self._connections.pop(ip, None)
+            else:
+                self._connections[ip] = count - 1
+
+    def add_cooldown(self, ip: str, seconds: float) -> None:
+        with self._lock:
+            self._cooldowns[ip] = time.monotonic() + seconds
+
+
+ip_tracker = IPConnectionTracker()
 
 
 def get_rate_limit_settings(handler) -> Optional[dict]:

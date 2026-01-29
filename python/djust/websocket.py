@@ -16,7 +16,7 @@ from .profiler import profiler
 from .security import handle_exception, sanitize_for_log, is_safe_event_name
 from .decorators import is_event_handler
 from .config import config as djust_config
-from .rate_limit import ConnectionRateLimiter, get_rate_limit_settings
+from .rate_limit import ConnectionRateLimiter, get_rate_limit_settings, ip_tracker
 
 logger = logging.getLogger(__name__)
 hotreload_logger = logging.getLogger("djust.hotreload")
@@ -134,6 +134,11 @@ async def _validate_event_security(
     _ensure_handler_rate_limit(rate_limiter, event_name, handler)
     if not rate_limiter.check_handler(event_name):
         if rate_limiter.should_disconnect():
+            client_ip = getattr(ws, "_client_ip", None)
+            if client_ip:
+                _rl = djust_config.get("rate_limit", {})
+                cooldown = _rl.get("reconnect_cooldown", 5) if isinstance(_rl, dict) else 5
+                ip_tracker.add_cooldown(client_ip, cooldown)
             await ws.close(code=4429)
             return None
         await ws.send_error("Rate limit exceeded, event dropped")
@@ -266,6 +271,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 response["cache_request_id"] = cache_request_id
             await self.send_json(response)
 
+    def _get_client_ip(self) -> Optional[str]:
+        """Extract client IP from scope, with X-Forwarded-For support."""
+        headers = dict(self.scope.get("headers", []))
+        forwarded = headers.get(b"x-forwarded-for")
+        if forwarded:
+            return forwarded.decode("utf-8").split(",")[0].strip()
+        client = self.scope.get("client")
+        if client:
+            return client[0]
+        return None
+
     async def connect(self):
         """Handle WebSocket connection"""
         await self.accept()
@@ -275,15 +291,26 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         self.session_id = str(uuid.uuid4())
 
+        # Per-IP connection limit and cooldown check
+        self._client_ip = self._get_client_ip()
+        rl_cfg = djust_config.get("rate_limit", {})
+        if not isinstance(rl_cfg, dict):
+            rl_cfg = {}
+        if self._client_ip:
+            max_per_ip = rl_cfg.get("max_connections_per_ip", 10)
+            if not ip_tracker.connect(self._client_ip, max_per_ip):
+                logger.warning("Connection rejected for IP %s (limit or cooldown)", self._client_ip)
+                await self.close(code=4429)
+                return
+
         # Add to hot reload broadcast group
         await self.channel_layer.group_add("djust_hotreload", self.channel_name)
 
         # Initialize per-connection rate limiter
-        rl_cfg = djust_config.get("rate_limit", {})
         self._rate_limiter = ConnectionRateLimiter(
-            rate=rl_cfg.get("rate", 100) if isinstance(rl_cfg, dict) else 100,
-            burst=rl_cfg.get("burst", 20) if isinstance(rl_cfg, dict) else 20,
-            max_warnings=rl_cfg.get("max_warnings", 3) if isinstance(rl_cfg, dict) else 3,
+            rate=rl_cfg.get("rate", 100),
+            burst=rl_cfg.get("burst", 20),
+            max_warnings=rl_cfg.get("max_warnings", 3),
         )
 
         # Send connection acknowledgment
@@ -296,6 +323,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection"""
+        # Release IP connection slot
+        client_ip = getattr(self, "_client_ip", None)
+        if client_ip:
+            ip_tracker.disconnect(client_ip)
+
         # Remove from hot reload broadcast group
         await self.channel_layer.group_discard("djust_hotreload", self.channel_name)
 
@@ -347,6 +379,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if not self._rate_limiter.check(msg_type or "unknown"):
                 if self._rate_limiter.should_disconnect():
                     logger.warning("Rate limit exceeded, disconnecting client")
+                    if getattr(self, "_client_ip", None):
+                        _rl = djust_config.get("rate_limit", {})
+                        cooldown = _rl.get("reconnect_cooldown", 5) if isinstance(_rl, dict) else 5
+                        ip_tracker.add_cooldown(self._client_ip, cooldown)
                     await self.close(code=4429)
                     return
                 await self.send_error("Rate limit exceeded")

@@ -34,7 +34,13 @@ class LiveViewConfig:
     # Default configuration
     _defaults = {
         # Rate limiting for WebSocket events (token bucket)
-        "rate_limit": {"rate": 100, "burst": 20, "max_warnings": 3},
+        "rate_limit": {
+            "rate": 100,
+            "burst": 20,
+            "max_warnings": 3,
+            "max_connections_per_ip": 10,
+            "reconnect_cooldown": 5,
+        },
         # Maximum incoming WebSocket message size in bytes (0 = no limit)
         "max_message_size": 65536,  # 64KB
         # Event security mode: "open", "warn", or "strict"
@@ -166,7 +172,13 @@ class LiveViewConfig:
         defaults = self._defaults["rate_limit"]
         rl = self._config.get("rate_limit", {})
         if isinstance(rl, dict):
-            for key in ("rate", "burst", "max_warnings"):
+            for key in (
+                "rate",
+                "burst",
+                "max_warnings",
+                "max_connections_per_ip",
+                "reconnect_cooldown",
+            ):
                 val = rl.get(key)
                 if val is not None and (not isinstance(val, (int, float)) or val <= 0):
                     logger.warning(
