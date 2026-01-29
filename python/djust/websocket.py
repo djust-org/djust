@@ -628,6 +628,34 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 logger.info(f"Handling event '{event_name}' with actor system")
 
+                # Security checks (same as non-actor path)
+                if not is_safe_event_name(event_name):
+                    error_msg = f"Blocked unsafe event name: {sanitize_for_log(event_name)}"
+                    logger.warning(error_msg)
+                    await self.send_error(_safe_error(error_msg))
+                    return
+
+                handler = getattr(self.view_instance, event_name, None)
+                if not handler or not callable(handler):
+                    error_msg = f"No handler found for event: {event_name}"
+                    logger.warning(error_msg)
+                    await self.send_error(_safe_error(error_msg))
+                    return
+
+                security_error = _check_event_security(handler, self.view_instance, event_name)
+                if security_error:
+                    logger.warning(security_error)
+                    await self.send_error(_safe_error(security_error))
+                    return
+
+                _ensure_handler_rate_limit(self._rate_limiter, event_name, handler)
+                if not self._rate_limiter.check_handler(event_name):
+                    if self._rate_limiter.should_disconnect():
+                        await self.close(code=4429)
+                        return
+                    await self.send_error("Rate limit exceeded, event dropped")
+                    return
+
                 # Call actor event handler (will call Python handler internally)
                 result = await self.actor_handle.event(event_name, params)
 

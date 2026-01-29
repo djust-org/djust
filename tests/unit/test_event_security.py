@@ -460,3 +460,55 @@ class TestErrorDisclosure:
         component_no_handler = _safe_error("Component MyView has no handler: foo")
         # All should return the same generic message
         assert blocked == no_handler == not_decorated == component_no_handler == "Event rejected"
+
+
+class TestActorPathSecurity:
+    """Issue #106: Actor path must apply the same security checks as non-actor path."""
+
+    def test_actor_path_blocks_unsafe_event_name(self):
+        """is_safe_event_name blocks dunder names regardless of path."""
+        from djust.security.event_guard import is_safe_event_name
+
+        # These would bypass Python security if sent directly to actor
+        assert is_safe_event_name("__class__") is False
+        assert is_safe_event_name("__init__") is False
+        assert is_safe_event_name("_private") is False
+
+    def test_actor_path_blocks_undecorated_handler(self):
+        """_check_event_security blocks undecorated handlers in strict mode."""
+        from unittest.mock import patch
+
+        from djust.websocket import _check_event_security
+
+        class FakeView:
+            pass
+
+        def undecorated(self):
+            pass
+
+        view = FakeView()
+        with patch("djust.websocket.djust_config") as mock_config:
+            mock_config.get.return_value = "strict"
+            result = _check_event_security(undecorated, view, "undecorated")
+            assert result is not None
+            assert "not decorated" in result
+
+    def test_actor_path_allows_decorated_handler(self):
+        """Decorated handlers pass security checks in actor path."""
+        from unittest.mock import patch
+
+        from djust.decorators import event
+        from djust.websocket import _check_event_security
+
+        class FakeView:
+            pass
+
+        @event
+        def my_event(self):
+            pass
+
+        view = FakeView()
+        with patch("djust.websocket.djust_config") as mock_config:
+            mock_config.get.return_value = "strict"
+            result = _check_event_security(my_event, view, "my_event")
+            assert result is None
