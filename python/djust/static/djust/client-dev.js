@@ -381,7 +381,7 @@
 
     function initErrorOverlay() {
         window.addEventListener('djust:error', (e) => {
-            const { error, traceback, event: eventName, validation_details } = e.detail;
+            const { error, event: eventName, validation_details } = e.detail;
 
             // Show toast
             showToast(error, 'error', 4000);

@@ -3129,8 +3129,8 @@ const lazyHydrationManager = {
 // Expose lazy hydration API
 window.djust.lazyHydration = lazyHydrationManager;
 
-// Initialize on load
-document.addEventListener('DOMContentLoaded', () => {
+// Initialize on load (support both normal page load and dynamic script injection via TurboNav)
+function djustInit() {
     console.log('[LiveView] Initializing...');
 
     // Initialize lazy hydration manager
@@ -3182,6 +3182,12 @@ document.addEventListener('DOMContentLoaded', () => {
         pendingTurboReinit = false;
         reinitLiveViewForTurboNav();
     }
-});
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', djustInit);
+} else {
+    djustInit();
+}
 
 } // End of double-load guard
