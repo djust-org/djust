@@ -76,7 +76,11 @@ def _check_event_security(handler, owner_instance, event_name: str) -> Optional[
 def _ensure_handler_rate_limit(
     rate_limiter: "ConnectionRateLimiter", event_name: str, handler
 ) -> None:
-    """Register per-handler rate limit from @rate_limit decorator metadata (once per event)."""
+    """Register per-handler rate limit from @rate_limit decorator metadata (once per event).
+
+    Must be called BEFORE the global rate_limiter.check() so the first
+    invocation is also subject to the per-handler bucket.
+    """
     if event_name not in rate_limiter.handler_buckets:
         rl_settings = get_rate_limit_settings(handler)
         if rl_settings:
@@ -261,15 +265,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         )
 
         try:
-            # Check message size
+            # Check message size (skip encoding when char length is already under limit)
             max_msg_size = djust_config.get("max_message_size", 65536)
-            raw_size = (
-                len(bytes_data)
-                if bytes_data
-                else len(text_data.encode("utf-8"))
-                if text_data
-                else 0
-            )
+            if bytes_data:
+                raw_size = len(bytes_data)
+            elif text_data:
+                char_len = len(text_data)
+                # UTF-8 is at most 4x char length; skip encode if clearly under limit
+                raw_size = char_len if char_len <= max_msg_size else len(text_data.encode("utf-8"))
+            else:
+                raw_size = 0
             if max_msg_size and raw_size > max_msg_size:
                 logger.warning("Message too large (%d bytes, max %d)", raw_size, max_msg_size)
                 await self.send_error(f"Message too large ({raw_size} bytes)")
@@ -689,8 +694,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         await self.send_error(security_error)
                         return
 
-                    # Register per-handler rate limit from @rate_limit decorator (once)
+                    # Register and check per-handler rate limit
                     _ensure_handler_rate_limit(self._rate_limiter, event_name, handler)
+                    if not self._rate_limiter.check_handler(event_name):
+                        if self._rate_limiter.should_disconnect():
+                            await self.close(code=4429)
+                            return
+                        await self.send_error("Rate limit exceeded, event dropped")
+                        return
 
                     # Extract component_id and remove from params
                     event_data = params.copy()
@@ -751,8 +762,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         await self.send_error(security_error)
                         return
 
-                    # Register per-handler rate limit from @rate_limit decorator (once)
+                    # Register and check per-handler rate limit
                     _ensure_handler_rate_limit(self._rate_limiter, event_name, handler)
+                    if not self._rate_limiter.check_handler(event_name):
+                        if self._rate_limiter.should_disconnect():
+                            await self.close(code=4429)
+                            return
+                        await self.send_error("Rate limit exceeded, event dropped")
+                        return
 
                     # Validate parameters before calling handler
                     # Pass positional_args so they can be mapped to named parameters

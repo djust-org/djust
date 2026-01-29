@@ -67,9 +67,10 @@ class ConnectionRateLimiter:
 
     def check(self, event_name: str) -> bool:
         """
-        Check if an event is allowed under rate limits.
+        Check if an event is allowed under global rate limit.
 
         Returns True if allowed, False if rate-limited.
+        Per-handler limits are checked separately via check_handler().
         """
         if not self.global_bucket.consume():
             self.warnings += 1
@@ -81,7 +82,14 @@ class ConnectionRateLimiter:
             )
             return False
 
-        # Check per-handler bucket if one exists
+        return True
+
+    def check_handler(self, event_name: str) -> bool:
+        """
+        Check per-handler rate limit bucket (if registered).
+
+        Returns True if allowed or no per-handler limit exists.
+        """
         handler_bucket = self.handler_buckets.get(event_name)
         if handler_bucket and not handler_bucket.consume():
             self.warnings += 1

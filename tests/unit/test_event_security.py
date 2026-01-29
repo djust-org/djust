@@ -123,10 +123,10 @@ class TestRateLimiter:
 
         limiter = ConnectionRateLimiter(rate=1000, burst=100, max_warnings=10)
         limiter.register_handler_limit("expensive", rate=1, burst=2)
-        assert limiter.check("expensive") is True
-        assert limiter.check("expensive") is True
+        assert limiter.check_handler("expensive") is True
+        assert limiter.check_handler("expensive") is True
         # Per-handler limit hit
-        assert limiter.check("expensive") is False
+        assert limiter.check_handler("expensive") is False
 
     def test_rate_limit_decorator_metadata(self):
         from djust.decorators import rate_limit
@@ -269,3 +269,34 @@ class TestMessageSizeLimit:
 
         cfg = LiveViewConfig()
         assert cfg.get("event_security") == "strict"
+
+
+class TestRateLimitIntegration:
+    """Integration tests for global + per-handler rate limit flow."""
+
+    def test_global_and_handler_limits_independent(self):
+        """Global check() and per-handler check_handler() consume separate buckets."""
+        from djust.rate_limit import ConnectionRateLimiter
+
+        limiter = ConnectionRateLimiter(rate=1000, burst=100, max_warnings=10)
+        limiter.register_handler_limit("slow", rate=1, burst=1)
+
+        # Global passes, per-handler passes (first call)
+        assert limiter.check("slow") is True
+        assert limiter.check_handler("slow") is True
+
+        # Global still passes (burst=100), per-handler exhausted (burst=1)
+        assert limiter.check("slow") is True
+        assert limiter.check_handler("slow") is False
+
+    def test_handler_limit_applies_on_first_call(self):
+        """Per-handler bucket limits the very first invocation after registration."""
+        from djust.rate_limit import ConnectionRateLimiter
+
+        limiter = ConnectionRateLimiter(rate=1000, burst=100, max_warnings=10)
+        limiter.register_handler_limit("once", rate=0.1, burst=1)
+
+        # First call allowed
+        assert limiter.check_handler("once") is True
+        # Second immediately rejected (burst=1, rate=0.1/s)
+        assert limiter.check_handler("once") is False
