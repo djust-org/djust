@@ -173,6 +173,19 @@ def event(func: F) -> F:
     return event_handler(func)
 
 
+def is_event_handler(func: Any) -> bool:
+    """
+    Check if a function has been decorated with @event or @event_handler.
+
+    Args:
+        func: The function to check.
+
+    Returns:
+        True if the function has event_handler metadata.
+    """
+    return bool(getattr(func, "_djust_decorators", {}).get("event_handler"))
+
+
 def reactive(func: Callable) -> property:
     """
     Create a reactive property that triggers re-render on change.
@@ -459,9 +472,32 @@ def client_state(keys: List[str]) -> Callable[[F], F]:
     return _make_metadata_decorator("client_state", {"keys": keys})
 
 
+def rate_limit(rate: float = 10, burst: int = 5) -> Callable[[F], F]:
+    """
+    Rate-limit a WebSocket event handler (server-side).
+
+    Uses a per-handler token bucket. When the limit is exceeded, the event
+    is dropped and the client is warned.
+
+    Args:
+        rate: Tokens per second (sustained rate).
+        burst: Maximum burst capacity.
+
+    Usage:
+        class MyView(LiveView):
+            @rate_limit(rate=5, burst=3)
+            @event
+            def expensive_operation(self, **kwargs):
+                ...
+    """
+    return _make_metadata_decorator("rate_limit", {"rate": rate, "burst": burst})
+
+
 __all__ = [
     "event_handler",
     "event",
+    "is_event_handler",
+    "rate_limit",
     "reactive",
     "state",
     "computed",

@@ -30,6 +30,15 @@ class LiveViewConfig:
 
     # Default configuration
     _defaults = {
+        # Rate limiting for WebSocket events (token bucket)
+        "rate_limit": {"rate": 100, "burst": 20, "max_warnings": 3},
+        # Maximum incoming WebSocket message size in bytes (0 = no limit)
+        "max_message_size": 65536,  # 64KB
+        # Event security mode: "open", "warn", or "strict"
+        # "open"   - no decorator check (legacy behavior)
+        # "warn"   - allow unmarked methods but log deprecation warning
+        # "strict" - only @event/@event_handler decorated methods (or _allowed_events)
+        "event_security": "strict",
         # LiveView transport mode
         "use_websocket": True,  # Set to False to use HTTP polling instead of WebSocket
         # Debug settings

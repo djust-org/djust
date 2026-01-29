@@ -13,6 +13,7 @@ This guide explains how to write effective event handlers in djust LiveView appl
 - [Error Handling](#error-handling)
 - [Common Patterns](#common-patterns)
 - [Debugging Tips](#debugging-tips)
+- [Security](#security)
 
 ## Parameter Naming Convention
 
@@ -680,7 +681,7 @@ def delete_item(self, item_id: int):
 
 ### Best Practices Checklist
 
-- [ ] All event handlers have `@event_handler()` decorator
+- [ ] All event handlers have `@event_handler()` or `@event` decorator (or are listed in `_allowed_events`)
 - [ ] Form input handlers use `value` parameter
 - [ ] Type hints specified for all parameters
 - [ ] Required vs optional parameters clearly distinguished
@@ -690,6 +691,90 @@ def delete_item(self, item_id: int):
 - [ ] Complex handlers split into helper methods
 - [ ] Debug panel used to verify handler signatures
 - [ ] Event history checked for validation errors
+
+## Security
+
+### Event Handler Access Control
+
+By default, djust runs in **strict** security mode: only methods decorated with `@event` or `@event_handler` are callable via WebSocket. Undecorated methods are blocked even if they pass the event name pattern check.
+
+```python
+from djust import LiveView, event
+from djust.decorators import event_handler
+
+class MyView(LiveView):
+    @event
+    def increment(self):
+        """Callable via WebSocket"""
+        self.count += 1
+
+    @event_handler(description="Search items")
+    def search(self, value: str = "", **kwargs):
+        """Also callable via WebSocket"""
+        self.query = value
+
+    def mount(self, request):
+        """NOT callable via WebSocket (not decorated)"""
+        self.count = 0
+
+    def _internal_helper(self):
+        """NOT callable — underscore prefix blocked by pattern guard"""
+        pass
+```
+
+### Bulk Allowlisting with `_allowed_events`
+
+For views with many handlers, use `_allowed_events` instead of decorating each method:
+
+```python
+class MyView(LiveView):
+    _allowed_events = frozenset({"bulk_update", "refresh", "export"})
+
+    def bulk_update(self, **kwargs):
+        ...
+
+    def refresh(self, **kwargs):
+        ...
+
+    def export(self, **kwargs):
+        ...
+```
+
+Use `frozenset` (not `set`) to prevent accidental mutation.
+
+### Rate Limiting Expensive Handlers
+
+Use `@rate_limit` to protect expensive operations from abuse:
+
+```python
+from djust import event, rate_limit
+
+class MyView(LiveView):
+    @rate_limit(rate=2, burst=3)
+    @event
+    def generate_report(self, **kwargs):
+        """Limited to 2/sec sustained, 3 burst"""
+        self.report = expensive_computation()
+```
+
+### Configuration
+
+In `settings.py`:
+
+```python
+LIVEVIEW_CONFIG = {
+    # "strict" (default), "warn", or "open"
+    "event_security": "strict",
+
+    # Global rate limit (token bucket)
+    "rate_limit": {"rate": 100, "burst": 20, "max_warnings": 3},
+
+    # Max WebSocket message size in bytes (0 = no limit)
+    "max_message_size": 65536,
+}
+```
+
+See [Security Guidelines](SECURITY_GUIDELINES.md) for full details.
 
 ## See Also
 

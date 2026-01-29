@@ -13,7 +13,10 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from .live_view import DjangoJSONEncoder
 from .validation import validate_handler_params
 from .profiler import profiler
-from .security import handle_exception, sanitize_for_log
+from .security import handle_exception, sanitize_for_log, is_safe_event_name
+from .decorators import is_event_handler
+from .config import config as djust_config
+from .rate_limit import ConnectionRateLimiter, get_rate_limit_settings
 
 logger = logging.getLogger(__name__)
 hotreload_logger = logging.getLogger("djust.hotreload")
@@ -38,6 +41,52 @@ def get_handler_coerce_setting(handler: Callable) -> bool:
     if hasattr(handler, "_djust_decorators"):
         return handler._djust_decorators.get("event_handler", {}).get("coerce_types", True)
     return True
+
+
+def _check_event_security(handler, owner_instance, event_name: str) -> Optional[str]:
+    """
+    Check the event_security policy for a handler.
+
+    Returns None if allowed, or an error message string if blocked in strict mode.
+    Logs a deprecation warning in warn mode for undecorated handlers.
+    """
+    mode = djust_config.get("event_security", "strict")
+    if mode not in ("warn", "strict"):
+        return None
+
+    allowed_events = getattr(owner_instance, "_allowed_events", None)
+    is_allowed = is_event_handler(handler) or (
+        isinstance(allowed_events, (set, frozenset)) and event_name in allowed_events
+    )
+    if is_allowed:
+        return None
+
+    if mode == "strict":
+        return f"Event '{event_name}' is not decorated with @event or listed in _allowed_events"
+
+    logger.warning(
+        "Deprecation: handler '%s' on %s is not decorated with @event. "
+        "This will be blocked in strict mode.",
+        event_name,
+        type(owner_instance).__name__,
+    )
+    return None
+
+
+def _ensure_handler_rate_limit(
+    rate_limiter: "ConnectionRateLimiter", event_name: str, handler
+) -> None:
+    """Register per-handler rate limit from @rate_limit decorator metadata (once per event).
+
+    Must be called BEFORE check_handler() so the first
+    invocation is also subject to the per-handler bucket.
+    """
+    if event_name not in rate_limiter.handler_buckets:
+        rl_settings = get_rate_limit_settings(handler)
+        if rl_settings:
+            rate_limiter.register_handler_limit(
+                event_name, rl_settings["rate"], rl_settings["burst"]
+            )
 
 
 async def _call_handler(handler: Callable, params: Optional[Dict[str, Any]] = None):
@@ -176,6 +225,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Add to hot reload broadcast group
         await self.channel_layer.group_add("djust_hotreload", self.channel_name)
 
+        # Initialize per-connection rate limiter
+        rl_cfg = djust_config.get("rate_limit") or {}
+        self._rate_limiter = ConnectionRateLimiter(
+            rate=rl_cfg.get("rate", 100) if isinstance(rl_cfg, dict) else 100,
+            burst=rl_cfg.get("burst", 20) if isinstance(rl_cfg, dict) else 20,
+            max_warnings=rl_cfg.get("max_warnings", 3) if isinstance(rl_cfg, dict) else 3,
+        )
+
         # Send connection acknowledgment
         await self.send_json(
             {
@@ -208,6 +265,21 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         )
 
         try:
+            # Check message size (skip encoding when char length is already under limit)
+            max_msg_size = djust_config.get("max_message_size", 65536)
+            if bytes_data:
+                raw_size = len(bytes_data)
+            elif text_data:
+                char_len = len(text_data)
+                # UTF-8 is at most 4x char length; skip encode if clearly under limit
+                raw_size = char_len if char_len <= max_msg_size else len(text_data.encode("utf-8"))
+            else:
+                raw_size = 0
+            if max_msg_size and raw_size > max_msg_size:
+                logger.warning("Message too large (%d bytes, max %d)", raw_size, max_msg_size)
+                await self.send_error(f"Message too large ({raw_size} bytes)")
+                return
+
             # Decode message
             if bytes_data:
                 data = msgpack.unpackb(bytes_data, raw=False)
@@ -217,6 +289,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             msg_type = data.get("type")
 
             if msg_type == "event":
+                # Rate limit check
+                event_name = data.get("event", "")
+                if not self._rate_limiter.check(event_name):
+                    if self._rate_limiter.should_disconnect():
+                        logger.warning("Rate limit exceeded, disconnecting client")
+                        await self.close(code=4429)
+                        return
+                    await self.send_error("Rate limit exceeded, event dropped")
+                    return
                 await self.handle_event(data)
             elif msg_type == "mount":
                 await self.handle_mount(data)
@@ -589,6 +670,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         await self.send_error(error_msg)
                         return
 
+                    # Validate event name before getattr
+                    if not is_safe_event_name(event_name):
+                        error_msg = f"Blocked unsafe event name: {sanitize_for_log(event_name)}"
+                        logger.warning(error_msg)
+                        await self.send_error(error_msg)
+                        return
+
                     # Get component's event handler
                     handler = getattr(component, event_name, None)
                     if not handler or not callable(handler):
@@ -597,6 +685,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         )
                         logger.error(error_msg)
                         await self.send_error(error_msg)
+                        return
+
+                    # Check event_security mode (decorator allowlist)
+                    security_error = _check_event_security(handler, component, event_name)
+                    if security_error:
+                        logger.warning(security_error)
+                        await self.send_error(security_error)
+                        return
+
+                    # Register and check per-handler rate limit
+                    _ensure_handler_rate_limit(self._rate_limiter, event_name, handler)
+                    if not self._rate_limiter.check_handler(event_name):
+                        if self._rate_limiter.should_disconnect():
+                            await self.close(code=4429)
+                            return
+                        await self.send_error("Rate limit exceeded, event dropped")
                         return
 
                     # Extract component_id and remove from params
@@ -636,12 +740,35 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         time.perf_counter() - handler_start
                     ) * 1000  # Convert to ms
                 else:
+                    # Validate event name before getattr
+                    if not is_safe_event_name(event_name):
+                        error_msg = f"Blocked unsafe event name: {sanitize_for_log(event_name)}"
+                        logger.warning(error_msg)
+                        await self.send_error(error_msg)
+                        return
+
                     # Regular event: route to handler method
                     handler = getattr(self.view_instance, event_name, None)
                     if not handler or not callable(handler):
                         error_msg = f"No handler found for event: {event_name}"
                         logger.warning(error_msg)
                         await self.send_error(error_msg)
+                        return
+
+                    # Check event_security mode (decorator allowlist)
+                    security_error = _check_event_security(handler, self.view_instance, event_name)
+                    if security_error:
+                        logger.warning(security_error)
+                        await self.send_error(security_error)
+                        return
+
+                    # Register and check per-handler rate limit
+                    _ensure_handler_rate_limit(self._rate_limiter, event_name, handler)
+                    if not self._rate_limiter.check_handler(event_name):
+                        if self._rate_limiter.should_disconnect():
+                            await self.close(code=4429)
+                            return
+                        await self.send_error("Rate limit exceeded, event dropped")
                         return
 
                     # Validate parameters before calling handler
