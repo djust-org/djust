@@ -913,6 +913,21 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
         return Ok(false);
     }
 
+    // Handle "or" (lowest precedence - split first)
+    // Use " or " with spaces to avoid matching variable names containing "or"
+    if let Some(pos) = condition.find(" or ") {
+        let left = &condition[..pos];
+        let right = &condition[pos + 4..];
+        return Ok(evaluate_condition(left, context)? || evaluate_condition(right, context)?);
+    }
+
+    // Handle "and" (higher precedence than "or")
+    if let Some(pos) = condition.find(" and ") {
+        let left = &condition[..pos];
+        let right = &condition[pos + 5..];
+        return Ok(evaluate_condition(left, context)? && evaluate_condition(right, context)?);
+    }
+
     // Handle variable lookups
     if let Some(value) = context.get(condition) {
         return Ok(value.is_truthy());
@@ -1317,5 +1332,47 @@ mod tests {
         context.set("other".to_string(), Value::String("inner".to_string()));
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "outerinnerouter");
+    }
+
+    #[test]
+    fn test_if_and_operator() {
+        let tokens = tokenize("{% if a and b %}yes{% endif %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("a".to_string(), Value::Bool(true));
+        context.set("b".to_string(), Value::Bool(true));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "yes");
+
+        context.set("b".to_string(), Value::Bool(false));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+    }
+
+    #[test]
+    fn test_if_or_operator() {
+        let tokens = tokenize("{% if a or b %}yes{% endif %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("a".to_string(), Value::Bool(false));
+        context.set("b".to_string(), Value::Bool(true));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "yes");
+
+        context.set("b".to_string(), Value::Bool(false));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+    }
+
+    #[test]
+    fn test_if_not_and_not() {
+        let tokens = tokenize("{% if not a and not b %}empty{% endif %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+
+        // Both falsy -> should show
+        let mut context = Context::new();
+        context.set("a".to_string(), Value::List(vec![]));
+        context.set("b".to_string(), Value::String(String::new()));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "empty");
+
+        // a truthy -> should not show
+        context.set("a".to_string(), Value::List(vec![Value::Integer(1)]));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
     }
 }
