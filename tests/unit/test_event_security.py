@@ -428,3 +428,35 @@ class TestConfigValidation:
         with caplog.at_level(logging.WARNING, logger="djust.config"):
             self._make_config({"max_message_size": 0})
         assert "max_message_size is 0" in caplog.text
+
+
+class TestErrorDisclosure:
+    """Verify _safe_error returns generic messages in production and detailed in DEBUG."""
+
+    def test_returns_generic_when_debug_false(self, settings):
+        from djust.websocket import _safe_error
+
+        settings.DEBUG = False
+        assert _safe_error("Secret internal detail") == "Event rejected"
+        assert _safe_error("Module foo.bar failed", "View not found") == "View not found"
+
+    def test_returns_detailed_when_debug_true(self, settings):
+        from djust.websocket import _safe_error
+
+        settings.DEBUG = True
+        assert _safe_error("Secret internal detail") == "Secret internal detail"
+        assert _safe_error("Module foo.bar failed", "View not found") == "Module foo.bar failed"
+
+    def test_all_generic_messages_identical_for_event_errors(self, settings):
+        """Prevents handler enumeration by ensuring identical error messages."""
+        from djust.websocket import _safe_error
+
+        settings.DEBUG = False
+        blocked = _safe_error("Blocked unsafe event name: __class__")
+        no_handler = _safe_error("No handler found for event: foo")
+        not_decorated = _safe_error(
+            "Event 'foo' is not decorated with @event or listed in _allowed_events"
+        )
+        component_no_handler = _safe_error("Component MyView has no handler: foo")
+        # All should return the same generic message
+        assert blocked == no_handler == not_decorated == component_no_handler == "Event rejected"

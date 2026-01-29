@@ -28,6 +28,18 @@ except ImportError:
     SessionActorHandle = None
 
 
+def _safe_error(detailed_msg: str, generic_msg: str = "Event rejected") -> str:
+    """Return detailed message in DEBUG mode, generic message in production."""
+    try:
+        from django.conf import settings
+
+        if settings.DEBUG:
+            return detailed_msg
+    except Exception:
+        pass
+    return generic_msg
+
+
 def get_handler_coerce_setting(handler: Callable) -> bool:
     """
     Get the coerce_types setting from a handler's @event_handler decorator.
@@ -312,7 +324,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         except json.JSONDecodeError as e:
             error_msg = f"Invalid JSON in WebSocket message: {str(e)}"
             logger.error(error_msg)
-            await self.send_error(error_msg)
+            await self.send_error(_safe_error(error_msg, "Invalid message format"))
         except Exception as e:
             # Handle exception: logs (with stack trace only in DEBUG) and returns safe response
             response = handle_exception(
@@ -351,7 +363,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 logger.warning(
                     f"Blocked attempt to mount view from unauthorized module: {view_path}"
                 )
-                await self.send_error(f"View {view_path} is not in allowed modules")
+                await self.send_error(
+                    _safe_error(f"View {view_path} is not in allowed modules", "View not found")
+                )
                 return
 
         # Import the view class
@@ -364,17 +378,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 f"Invalid view path format: {view_path}. Expected format: module.path.ClassName"
             )
             logger.error(error_msg)
-            await self.send_error(error_msg)
+            await self.send_error(_safe_error(error_msg, "View not found"))
             return
         except ImportError as e:
             error_msg = f"Failed to import module {module_path}: {str(e)}"
             logger.error(error_msg)
-            await self.send_error(error_msg)
+            await self.send_error(_safe_error(error_msg, "View not found"))
             return
         except AttributeError:
             error_msg = f"Class {class_name} not found in module {module_path}"
             logger.error(error_msg)
-            await self.send_error(error_msg)
+            await self.send_error(_safe_error(error_msg, "View not found"))
             return
 
         # Instantiate the view
@@ -676,7 +690,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     if not is_safe_event_name(event_name):
                         error_msg = f"Blocked unsafe event name: {sanitize_for_log(event_name)}"
                         logger.warning(error_msg)
-                        await self.send_error(error_msg)
+                        await self.send_error(_safe_error(error_msg))
                         return
 
                     # Get component's event handler
@@ -686,14 +700,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             f"Component {component.__class__.__name__} has no handler: {event_name}"
                         )
                         logger.error(error_msg)
-                        await self.send_error(error_msg)
+                        await self.send_error(_safe_error(error_msg))
                         return
 
                     # Check event_security mode (decorator allowlist)
                     security_error = _check_event_security(handler, component, event_name)
                     if security_error:
                         logger.warning(security_error)
-                        await self.send_error(security_error)
+                        await self.send_error(_safe_error(security_error))
                         return
 
                     # Register and check per-handler rate limit
@@ -746,7 +760,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     if not is_safe_event_name(event_name):
                         error_msg = f"Blocked unsafe event name: {sanitize_for_log(event_name)}"
                         logger.warning(error_msg)
-                        await self.send_error(error_msg)
+                        await self.send_error(_safe_error(error_msg))
                         return
 
                     # Regular event: route to handler method
@@ -754,14 +768,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     if not handler or not callable(handler):
                         error_msg = f"No handler found for event: {event_name}"
                         logger.warning(error_msg)
-                        await self.send_error(error_msg)
+                        await self.send_error(_safe_error(error_msg))
                         return
 
                     # Check event_security mode (decorator allowlist)
                     security_error = _check_event_security(handler, self.view_instance, event_name)
                     if security_error:
                         logger.warning(security_error)
-                        await self.send_error(security_error)
+                        await self.send_error(_safe_error(security_error))
                         return
 
                     # Register and check per-handler rate limit
