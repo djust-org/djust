@@ -9,6 +9,8 @@ import time
 import logging
 from typing import Dict, Optional
 
+from .security.log_sanitizer import sanitize_for_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,7 +75,7 @@ class ConnectionRateLimiter:
             self.warnings += 1
             logger.warning(
                 "Rate limit exceeded for event '%s' (warning %d/%d)",
-                event_name,
+                sanitize_for_log(event_name),
                 self.warnings,
                 self.max_warnings,
             )
@@ -85,7 +87,7 @@ class ConnectionRateLimiter:
             self.warnings += 1
             logger.warning(
                 "Per-handler rate limit exceeded for '%s' (warning %d/%d)",
-                event_name,
+                sanitize_for_log(event_name),
                 self.warnings,
                 self.max_warnings,
             )

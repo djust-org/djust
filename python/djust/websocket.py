@@ -73,6 +73,18 @@ def _check_event_security(handler, owner_instance, event_name: str) -> Optional[
     return None
 
 
+def _ensure_handler_rate_limit(
+    rate_limiter: "ConnectionRateLimiter", event_name: str, handler
+) -> None:
+    """Register per-handler rate limit from @rate_limit decorator metadata (once per event)."""
+    if event_name not in rate_limiter.handler_buckets:
+        rl_settings = get_rate_limit_settings(handler)
+        if rl_settings:
+            rate_limiter.register_handler_limit(
+                event_name, rl_settings["rate"], rl_settings["burst"]
+            )
+
+
 async def _call_handler(handler: Callable, params: Optional[Dict[str, Any]] = None):
     """
     Call an event handler, handling both sync and async handlers.
@@ -251,7 +263,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         try:
             # Check message size
             max_msg_size = djust_config.get("max_message_size", 65536)
-            raw_size = len(bytes_data) if bytes_data else len(text_data) if text_data else 0
+            raw_size = (
+                len(bytes_data)
+                if bytes_data
+                else len(text_data.encode("utf-8"))
+                if text_data
+                else 0
+            )
             if max_msg_size and raw_size > max_msg_size:
                 logger.warning("Message too large (%d bytes, max %d)", raw_size, max_msg_size)
                 await self.send_error(f"Message too large ({raw_size} bytes)")
@@ -672,12 +690,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         return
 
                     # Register per-handler rate limit from @rate_limit decorator (once)
-                    if event_name not in self._rate_limiter.handler_buckets:
-                        rl_settings = get_rate_limit_settings(handler)
-                        if rl_settings:
-                            self._rate_limiter.register_handler_limit(
-                                event_name, rl_settings["rate"], rl_settings["burst"]
-                            )
+                    _ensure_handler_rate_limit(self._rate_limiter, event_name, handler)
 
                     # Extract component_id and remove from params
                     event_data = params.copy()
@@ -739,12 +752,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         return
 
                     # Register per-handler rate limit from @rate_limit decorator (once)
-                    if event_name not in self._rate_limiter.handler_buckets:
-                        rl_settings = get_rate_limit_settings(handler)
-                        if rl_settings:
-                            self._rate_limiter.register_handler_limit(
-                                event_name, rl_settings["rate"], rl_settings["burst"]
-                            )
+                    _ensure_handler_rate_limit(self._rate_limiter, event_name, handler)
 
                     # Validate parameters before calling handler
                     # Pass positional_args so they can be mapped to named parameters
