@@ -3,6 +3,7 @@ DraftModeMixin Test - automated testing for localStorage auto-save
 """
 
 from djust import LiveView
+from djust.decorators import event_handler
 from djust.drafts import DraftModeMixin
 
 
@@ -48,6 +49,7 @@ class DraftModeTestView(DraftModeMixin, LiveView):
 
         return context
 
+    @event_handler()
     def save_article(self, title: str = "", content: str = "", author: str = "", **kwargs):
         """
         Handler for saving article (simulates successful submission).
@@ -65,6 +67,7 @@ class DraftModeTestView(DraftModeMixin, LiveView):
 
         self._update_test_results()
 
+    @event_handler()
     def discard_draft(self, **kwargs):
         """Handler for discarding draft manually"""
         self.clear_draft()

@@ -3,7 +3,7 @@ Cache Test - automated testing for @cache decorator
 """
 
 from djust import LiveView
-from djust.decorators import cache, debounce
+from djust.decorators import cache, debounce, event_handler
 
 
 class CacheTestView(LiveView):
@@ -102,6 +102,7 @@ class CacheTestView(LiveView):
         self.tests_failed = self.tests_run - self.tests_passed
         self.all_tests_passed = self.tests_failed == 0
 
+    @event_handler()
     @debounce(wait=0.5)
     @cache(ttl=300, key_params=["query"])
     def search(self, query: str = "", total_searches: int = 0, **kwargs):
