@@ -231,7 +231,10 @@ class TestDebugInfoInjection:
         assert "window.DJUST_DEBUG_INFO" in html
 
         # Check that debug CSS link is present
-        assert '<link rel="stylesheet" href="/static/djust/debug-panel.css">' in html
+        assert (
+            '<link rel="stylesheet" href="/static/djust/debug-panel.css" data-turbo-track="reload">'
+            in html
+        )
 
         # Extract and parse debug info
         import re

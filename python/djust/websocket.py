@@ -238,7 +238,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_add("djust_hotreload", self.channel_name)
 
         # Initialize per-connection rate limiter
-        rl_cfg = djust_config.get("rate_limit") or {}
+        rl_cfg = djust_config.get("rate_limit", {})
         self._rate_limiter = ConnectionRateLimiter(
             rate=rl_cfg.get("rate", 100) if isinstance(rl_cfg, dict) else 100,
             burst=rl_cfg.get("burst", 20) if isinstance(rl_cfg, dict) else 20,
@@ -277,7 +277,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         )
 
         try:
-            # Check message size (skip encoding when char length is already under limit)
+            # Check message size
             max_msg_size = djust_config.get("max_message_size", 65536)
             if bytes_data:
                 raw_size = len(bytes_data)

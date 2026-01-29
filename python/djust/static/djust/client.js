@@ -491,6 +491,15 @@ class LiveViewWebSocket {
                 if (data.traceback) {
                     console.error('Traceback:', data.traceback);
                 }
+                // Dispatch event for dev tools (debug panel, toasts)
+                window.dispatchEvent(new CustomEvent('djust:error', {
+                    detail: {
+                        error: data.error,
+                        traceback: data.traceback || null,
+                        event: data.event || this.lastEventName || null,
+                        validation_details: data.validation_details || null
+                    }
+                }));
 
                 // Phase 5: Stop loading state on error
                 if (this.lastEventName) {
@@ -3120,8 +3129,8 @@ const lazyHydrationManager = {
 // Expose lazy hydration API
 window.djust.lazyHydration = lazyHydrationManager;
 
-// Initialize on load
-document.addEventListener('DOMContentLoaded', () => {
+// Initialize on load (support both normal page load and dynamic script injection via TurboNav)
+function djustInit() {
     console.log('[LiveView] Initializing...');
 
     // Initialize lazy hydration manager
@@ -3173,6 +3182,12 @@ document.addEventListener('DOMContentLoaded', () => {
         pendingTurboReinit = false;
         reinitLiveViewForTurboNav();
     }
-});
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', djustInit);
+} else {
+    djustInit();
+}
 
 } // End of double-load guard
