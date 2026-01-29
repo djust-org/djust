@@ -379,6 +379,25 @@
         init();
     }
 
+    function initErrorOverlay() {
+        window.addEventListener('djust:error', (e) => {
+            const { error, traceback, event: eventName, validation_details } = e.detail;
+
+            // Show toast
+            showToast(error, 'error', 4000);
+
+            // Log to debug panel
+            if (window.djustDebugPanel) {
+                window.djustDebugPanel.logEvent(
+                    eventName || 'unknown',
+                    validation_details || {},
+                    { type: 'error', error: error },
+                    0
+                );
+            }
+        });
+    }
+
     function init() {
         console.log('[djust:dev] Initializing development tools...');
         console.log('[djust:dev] Debug mode:', window.djustDebug ? 'enabled' : 'disabled');
@@ -388,6 +407,7 @@
         initPerformanceMonitoring();
         initDevelopmentWarnings();
         initDebugPanel();
+        initErrorOverlay();
 
         console.log('[djust:dev] Development tools ready');
         console.log('[djust:dev] -----------------------------------------');

@@ -491,6 +491,15 @@ class LiveViewWebSocket {
                 if (data.traceback) {
                     console.error('Traceback:', data.traceback);
                 }
+                // Dispatch event for dev tools (debug panel, toasts)
+                window.dispatchEvent(new CustomEvent('djust:error', {
+                    detail: {
+                        error: data.error,
+                        traceback: data.traceback || null,
+                        event: data.event || this.lastEventName || null,
+                        validation_details: data.validation_details || null
+                    }
+                }));
 
                 // Phase 5: Stop loading state on error
                 if (this.lastEventName) {

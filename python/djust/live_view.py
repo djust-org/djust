@@ -2809,15 +2809,15 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         if settings.DEBUG:
             debug_info = self.get_debug_info()
             debug_info_script = f"""
-            <script>
+            <script data-turbo-track="reload">
                 window.DJUST_DEBUG_INFO = {json.dumps(debug_info)};
             </script>
             """
             # Add CSS link for debug panel
-            debug_css_link = '<link rel="stylesheet" href="/static/djust/debug-panel.css">'
+            debug_css_link = '<link rel="stylesheet" href="/static/djust/debug-panel.css" data-turbo-track="reload">'
 
         config_script = f"""
-        <script>
+        <script data-turbo-track="reload">
             // djust configuration
             window.DJUST_USE_WEBSOCKET = {str(use_websocket).lower()};
             window.DJUST_DEBUG_VDOM = {str(debug_vdom).lower()};
@@ -2839,7 +2839,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # Fall back to simple path (e.g., in test environment without collectstatic)
             client_js_url = "/static/djust/client.js"
 
-        script = f'<script src="{client_js_url}" defer></script>'
+        script = f'<script src="{client_js_url}" defer data-turbo-track="reload"></script>'
 
         # In DEBUG mode, also load development tools
         if settings.DEBUG:
@@ -2847,7 +2847,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 client_dev_js_url = static("djust/client-dev.js")
             except (ValueError, AttributeError):
                 client_dev_js_url = "/static/djust/client-dev.js"
-            script += f'\n        <script src="{client_dev_js_url}" defer></script>'
+            script += f'\n        <script src="{client_dev_js_url}" defer data-turbo-track="reload"></script>'
 
         # Inject config and script tags
         full_script = config_script + script
