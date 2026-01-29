@@ -1,8 +1,9 @@
 """
 Event name guard for WebSocket event dispatch.
 
-Validates event names before getattr() to prevent calling dangerous
-internal methods (Django View internals, LiveView lifecycle, private methods).
+Validates event name format before getattr() to prevent calling private
+or malformed method names. The @event decorator allowlist (event_security
+config) is the primary access control — this guard is a fast first filter.
 """
 
 import re
@@ -12,62 +13,26 @@ from .log_sanitizer import sanitize_for_log
 
 logger = logging.getLogger(__name__)
 
-# Only allow lowercase alphanumeric + underscore, starting with a letter
+# Only allow lowercase alphanumeric + underscore, starting with a letter.
+# This blocks: _private, __dunder__, CamelCase, dots, dashes, spaces, empty strings.
 _EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
-
-# Public methods that must never be callable via WebSocket events
-BLOCKED_EVENT_NAMES: frozenset = frozenset(
-    {
-        # Django View internals
-        "dispatch",
-        "setup",
-        "get",
-        "post",
-        "put",
-        "patch",
-        "delete",
-        "head",
-        "options",
-        "trace",
-        "http_method_not_allowed",
-        "as_view",
-        # LiveView lifecycle
-        "mount",
-        "render",
-        "render_full_template",
-        "render_with_diff",
-        "get_context_data",
-        "get_template",
-        "get_debug_info",
-        # LiveView internals
-        "handle_component_event",
-        "update_component",
-        "stream",
-        "stream_insert",
-        "stream_delete",
-        "stream_reset",
-    }
-)
 
 
 def is_safe_event_name(name: str) -> bool:
     """
-    Check whether an event name is safe to dispatch via WebSocket.
+    Check whether an event name has a safe format for WebSocket dispatch.
 
-    Returns True only if the name:
-    1. Matches ^[a-z][a-z0-9_]*$ (no leading underscore, no uppercase, no dots)
-    2. Is not in the blocklist of dangerous method names
+    This is a fast syntactic check only — it blocks obviously dangerous
+    names (private methods, dunders, malformed strings). The real access
+    control is the event_security decorator allowlist in websocket.py.
 
     Args:
         name: The event name received from the client.
 
     Returns:
-        True if safe to call via getattr, False otherwise.
+        True if the name format is valid, False otherwise.
     """
     if not _EVENT_NAME_PATTERN.match(name):
         logger.warning("Blocked event with invalid name pattern: %s", sanitize_for_log(name))
-        return False
-    if name in BLOCKED_EVENT_NAMES:
-        logger.warning("Blocked event targeting internal method: %s", sanitize_for_log(name))
         return False
     return True

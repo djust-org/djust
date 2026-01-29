@@ -33,38 +33,17 @@ class TestEventGuard:
         assert is_safe_event_name("has-dash") is False
         assert is_safe_event_name("has space") is False
 
-    def test_blocklist_methods_rejected(self):
+    def test_valid_internal_names_allowed_by_pattern(self):
+        """Pattern guard only checks format — internal names like 'mount' pass the
+        pattern check. The @event decorator allowlist is the real access control."""
         from djust.security.event_guard import is_safe_event_name
 
-        blocked = [
-            "dispatch",
-            "setup",
-            "get",
-            "post",
-            "put",
-            "patch",
-            "delete",
-            "head",
-            "options",
-            "trace",
-            "http_method_not_allowed",
-            "as_view",
-            "mount",
-            "render",
-            "render_full_template",
-            "render_with_diff",
-            "get_context_data",
-            "get_template",
-            "get_debug_info",
-            "handle_component_event",
-            "update_component",
-            "stream",
-            "stream_insert",
-            "stream_delete",
-            "stream_reset",
-        ]
-        for name in blocked:
-            assert is_safe_event_name(name) is False, f"{name} should be blocked"
+        # These pass the pattern check (valid format), but will be blocked
+        # by event_security strict mode if not decorated with @event
+        assert is_safe_event_name("mount") is True
+        assert is_safe_event_name("dispatch") is True
+        assert is_safe_event_name("render") is True
+        assert is_safe_event_name("get") is True
 
 
 class TestEventDecorator:
@@ -284,3 +263,9 @@ class TestMessageSizeLimit:
         assert rl["rate"] == 100
         assert rl["burst"] == 20
         assert rl["max_warnings"] == 3
+
+    def test_event_security_default_is_strict(self):
+        from djust.config import LiveViewConfig
+
+        cfg = LiveViewConfig()
+        assert cfg.get("event_security") == "strict"

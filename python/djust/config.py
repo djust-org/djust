@@ -38,7 +38,7 @@ class LiveViewConfig:
         # "open"   - no decorator check (legacy behavior)
         # "warn"   - allow unmarked methods but log deprecation warning
         # "strict" - only @event/@event_handler decorated methods (or _allowed_events)
-        "event_security": "warn",
+        "event_security": "strict",
         # LiveView transport mode
         "use_websocket": True,  # Set to False to use HTTP polling instead of WebSocket
         # Debug settings
