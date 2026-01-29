@@ -41,6 +41,10 @@ from .error_handling import (
     safe_error_message,
     handle_exception,
 )
+from .event_guard import (
+    is_safe_event_name,
+    BLOCKED_EVENT_NAMES,
+)
 
 __all__ = [
     # Attribute guard
@@ -55,4 +59,7 @@ __all__ = [
     "create_safe_error_response",
     "safe_error_message",
     "handle_exception",
+    # Event guard
+    "is_safe_event_name",
+    "BLOCKED_EVENT_NAMES",
 ]
