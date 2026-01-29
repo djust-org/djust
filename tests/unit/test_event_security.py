@@ -1,5 +1,6 @@
 """Tests for WebSocket event handler security hardening."""
 
+import threading
 import time
 
 
@@ -512,3 +513,94 @@ class TestActorPathSecurity:
             mock_config.get.return_value = "strict"
             result = _check_event_security(my_event, view, "my_event")
             assert result is None
+
+
+class TestIPConnectionTracker:
+    """Issue #108: Per-IP connection limit and reconnection throttle."""
+
+    def _make_tracker(self):
+        from djust.rate_limit import IPConnectionTracker
+
+        return IPConnectionTracker()
+
+    def test_allows_up_to_max_connections(self):
+        tracker = self._make_tracker()
+        for i in range(5):
+            assert tracker.connect("1.2.3.4", max_per_ip=5) is True
+        assert tracker.connect("1.2.3.4", max_per_ip=5) is False
+
+    def test_disconnect_frees_slot(self):
+        tracker = self._make_tracker()
+        for _ in range(3):
+            tracker.connect("1.2.3.4", max_per_ip=3)
+        assert tracker.connect("1.2.3.4", max_per_ip=3) is False
+        tracker.disconnect("1.2.3.4")
+        assert tracker.connect("1.2.3.4", max_per_ip=3) is True
+
+    def test_cooldown_blocks_reconnection(self):
+        tracker = self._make_tracker()
+        tracker.add_cooldown("1.2.3.4", 10.0)
+        assert tracker.connect("1.2.3.4", max_per_ip=10) is False
+
+    def test_cooldown_expires(self, monkeypatch):
+        tracker = self._make_tracker()
+        fake_time = [100.0]
+        monkeypatch.setattr(time, "monotonic", lambda: fake_time[0])
+        tracker.add_cooldown("1.2.3.4", 2.0)
+        assert tracker.connect("1.2.3.4", max_per_ip=10) is False
+        fake_time[0] = 103.0
+        assert tracker.connect("1.2.3.4", max_per_ip=10) is True
+
+    def test_concurrent_safety(self):
+        tracker = self._make_tracker()
+        errors = []
+
+        def worker():
+            try:
+                for _ in range(50):
+                    tracker.connect("1.2.3.4", max_per_ip=1000)
+                    tracker.disconnect("1.2.3.4")
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == []
+
+    def test_different_ips_independent(self):
+        tracker = self._make_tracker()
+        assert tracker.connect("1.1.1.1", max_per_ip=1) is True
+        assert tracker.connect("2.2.2.2", max_per_ip=1) is True
+        assert tracker.connect("1.1.1.1", max_per_ip=1) is False
+        assert tracker.connect("2.2.2.2", max_per_ip=1) is False
+
+
+class TestIPExtraction:
+    """Test _get_client_ip helper on LiveViewConsumer."""
+
+    def test_get_client_ip_from_scope(self):
+        from djust.websocket import LiveViewConsumer
+
+        consumer = LiveViewConsumer.__new__(LiveViewConsumer)
+        consumer.scope = {"client": ("10.0.0.1", 12345), "headers": []}
+        assert consumer._get_client_ip() == "10.0.0.1"
+
+    def test_get_client_ip_from_x_forwarded_for(self):
+        from djust.websocket import LiveViewConsumer
+
+        consumer = LiveViewConsumer.__new__(LiveViewConsumer)
+        consumer.scope = {
+            "client": ("127.0.0.1", 80),
+            "headers": [(b"x-forwarded-for", b"203.0.113.50, 70.41.3.18")],
+        }
+        assert consumer._get_client_ip() == "203.0.113.50"
+
+    def test_get_client_ip_no_client(self):
+        from djust.websocket import LiveViewConsumer
+
+        consumer = LiveViewConsumer.__new__(LiveViewConsumer)
+        consumer.scope = {"headers": []}
+        assert consumer._get_client_ip() is None
