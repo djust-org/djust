@@ -42,7 +42,6 @@ class UserListComponent(LiveComponent):
         self.users = users or []
         self.selected_id = selected_id
 
-    @event
     def update(self, users=None, selected_id=None, **props):
         """Update component when props change."""
         if users is not None:
@@ -108,7 +107,6 @@ class UserDetailComponent(LiveComponent):
         """Initialize component with optional user."""
         self.user = user
 
-    @event
     def update(self, user=None, **props):
         """Update user data when parent changes selection."""
         if user is not None:
@@ -166,7 +164,6 @@ class TodoComponent(LiveComponent):
         self.items = items or []
         self.user_name = user_name
 
-    @event
     def update(self, items=None, user_name=None, **props):
         """Update todos when parent changes selection."""
         if items is not None:
