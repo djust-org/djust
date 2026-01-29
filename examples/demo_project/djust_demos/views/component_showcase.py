@@ -4,6 +4,7 @@ Comprehensive Component Showcase - All 26 djust components in one interactive pa
 
 from djust import LiveView
 from djust.components.ui import (
+from djust.decorators import event
     # Display Components
     Alert, Avatar, Badge, Button, Card, Spinner, Progress, Tooltip, Toast, Divider, Icon,
     # Form Components
@@ -275,14 +276,17 @@ class ComponentShowcaseView(LiveView):
             hover=True
         )
 
+    @event
     def increment(self):
         """Increment the counter (for interactive demo)."""
         self.counter += 1
 
+    @event
     def decrement(self):
         """Decrement the counter."""
         self.counter -= 1
 
+    @event
     def toggle_switch(self):
         """Toggle the switch state."""
         import sys
@@ -298,22 +302,26 @@ class ComponentShowcaseView(LiveView):
         print(f"[toggle_switch] Switch HTML AFTER toggle:", file=sys.stderr)
         print(f"{self.switch_notifications.render()}", file=sys.stderr)
 
+    @event
     def update_slider(self, value: str = "50", **kwargs):
         """Update slider value."""
         self.slider_value = float(value)
         # Update component in-place
         self.range_volume.update(value=self.slider_value)
 
+    @event
     def update_radio(self, size: str = "medium", **kwargs):
         """Update radio selection."""
         self.selected_radio = size
         # Update component in-place
         self.radio_size.update(value=self.selected_radio)
 
+    @event
     def search_components(self, query: str = "", **kwargs):
         """Filter components by search query."""
         self.search_query = query.lower()
 
+    @event
     def filter_category(self, category: str = "all", **kwargs):
         """Filter components by category."""
         self.active_category = category

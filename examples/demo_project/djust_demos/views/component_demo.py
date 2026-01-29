@@ -9,6 +9,7 @@ This demo shows:
 """
 
 from djust import LiveView, LiveComponent
+from djust.decorators import event
 
 
 class UserListComponent(LiveComponent):
@@ -41,6 +42,7 @@ class UserListComponent(LiveComponent):
         self.users = users or []
         self.selected_id = selected_id
 
+    @event
     def update(self, users=None, selected_id=None, **props):
         """Update component when props change."""
         if users is not None:
@@ -48,6 +50,7 @@ class UserListComponent(LiveComponent):
         if selected_id is not None:
             self.selected_id = selected_id
 
+    @event
     def select_user(self, id: str = None, **kwargs):
         """Handle user selection and notify parent."""
         user_id = int(id)
@@ -105,6 +108,7 @@ class UserDetailComponent(LiveComponent):
         """Initialize component with optional user."""
         self.user = user
 
+    @event
     def update(self, user=None, **props):
         """Update user data when parent changes selection."""
         if user is not None:
@@ -162,6 +166,7 @@ class TodoComponent(LiveComponent):
         self.items = items or []
         self.user_name = user_name
 
+    @event
     def update(self, items=None, user_name=None, **props):
         """Update todos when parent changes selection."""
         if items is not None:
@@ -169,6 +174,7 @@ class TodoComponent(LiveComponent):
         if user_name is not None:
             self.user_name = user_name
 
+    @event
     def toggle_todo(self, id: str = None, **kwargs):
         """Toggle todo completion status."""
         todo_id = int(id)

@@ -3,7 +3,7 @@ Throttle Demo - demonstrates @throttle decorator with scroll events
 """
 
 from djust import LiveView
-from djust.decorators import throttle
+from djust.decorators import event, throttle
 
 
 class ThrottleScrollView(LiveView):
@@ -26,6 +26,7 @@ class ThrottleScrollView(LiveView):
         self.scroll_y = 0
         self.update_count = 0
 
+    @event
     @throttle(interval=0.1, leading=True, trailing=True)
     def on_scroll(self, scroll_y: int = 0, **kwargs):
         """

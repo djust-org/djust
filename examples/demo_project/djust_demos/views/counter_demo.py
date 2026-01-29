@@ -2,6 +2,7 @@
 Counter Demo - Simple reactive counter showcasing LiveView basics
 """
 
+from djust.decorators import event
 from djust_shared.views import BaseViewWithNavbar
 
 
@@ -78,11 +79,14 @@ class CounterView(LiveView):
 
         self.back_btn = BackButton(href="/demos/")
 
+    @event
     def increment(self):
         self.count += 1
 
+    @event
     def decrement(self):
         self.count -= 1
 
+    @event
     def reset(self):
         self.count = 0

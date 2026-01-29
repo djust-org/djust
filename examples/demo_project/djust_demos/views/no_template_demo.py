@@ -8,6 +8,7 @@ No template file exists - everything is generated from template_string and compo
 from djust import LiveView
 from djust.components.layout import NavbarComponent, NavItem, TabsComponent, TabItem
 from djust.components.ui import (
+from djust.decorators import event
     AlertComponent,
     BadgeComponent,
     ButtonComponent,
@@ -303,6 +304,7 @@ class NoTemplateDemo(LiveView):
         self.counter = 0
         self.navbar = NavbarComponent(...)
 
+    @event
     def increment(self):
         self.counter += 1  # Just update state!
         # VDOM automatically diffs and patches
@@ -369,24 +371,29 @@ class NoTemplateDemo(LiveView):
     # === Event Handlers ===
     # Note: Just update state variables - VDOM will automatically patch!
 
+    @event
     def increment(self):
         """Increment counter - VDOM patches the badge and stats automatically"""
         self.counter += 1
 
+    @event
     def decrement(self):
         """Decrement counter - VDOM patches the badge and stats automatically"""
         self.counter -= 1
 
+    @event
     def reset_counter(self):
         """Reset counter - VDOM patches the badge and stats automatically"""
         self.counter = 0
 
+    @event
     def add_item(self, **kwargs):
         """Add item to todo list - VDOM patches the list automatically"""
         import random
         items = ["Read a book", "Exercise", "Learn Python", "Build a project", "Drink water"]
         self.items.append(random.choice(items))
 
+    @event
     def remove_item(self, index: str = None, **kwargs):
         """Remove item from todo list - VDOM patches the list automatically"""
         if index is not None:
@@ -394,14 +401,17 @@ class NoTemplateDemo(LiveView):
             if 0 <= idx < len(self.items):
                 self.items.pop(idx)
 
+    @event
     def increase_progress(self):
         """Increase progress by 10% - VDOM patches the progress bar automatically"""
         self.progress = min(100, self.progress + 10)
 
+    @event
     def decrease_progress(self):
         """Decrease progress by 10% - VDOM patches the progress bar automatically"""
         self.progress = max(0, self.progress - 10)
 
+    @event
     def change_theme(self, theme: str = None, **kwargs):
         """Change theme - need to rebuild dropdown to update label"""
         if theme:
@@ -420,6 +430,7 @@ class NoTemplateDemo(LiveView):
                 ]
             )
 
+    @event
     def reset_all(self):
         """Reset everything - VDOM patches all changed elements automatically"""
         self.counter = 0
@@ -428,6 +439,7 @@ class NoTemplateDemo(LiveView):
         self.notification_count = 3
         self.show_success = True
 
+    @event
     def add_random_items(self):
         """Add random items - VDOM patches the list automatically"""
         import random
@@ -435,14 +447,17 @@ class NoTemplateDemo(LiveView):
         for _ in range(3):
             self.items.append(random.choice(items))
 
+    @event
     def show_success_alert(self):
         """Show success alert - VDOM adds the alert automatically"""
         self.show_success = True
 
+    @event
     def dismiss_alert(self):
         """Dismiss alert - VDOM removes the alert automatically"""
         self.show_success = False
 
+    @event
     def switch_tab(self, tab: str = None, **kwargs):
         """Switch active tab - component handles state internally"""
         if tab:
