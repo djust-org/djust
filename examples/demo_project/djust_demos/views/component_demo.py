@@ -9,6 +9,7 @@ This demo shows:
 """
 
 from djust import LiveView, LiveComponent
+from djust.decorators import event
 
 
 class UserListComponent(LiveComponent):
@@ -48,6 +49,7 @@ class UserListComponent(LiveComponent):
         if selected_id is not None:
             self.selected_id = selected_id
 
+    @event
     def select_user(self, id: str = None, **kwargs):
         """Handle user selection and notify parent."""
         user_id = int(id)
@@ -169,6 +171,7 @@ class TodoComponent(LiveComponent):
         if user_name is not None:
             self.user_name = user_name
 
+    @event
     def toggle_todo(self, id: str = None, **kwargs):
         """Toggle todo completion status."""
         todo_id = int(id)

@@ -6,6 +6,7 @@ Showcases all available Django Rust Live components with interactive examples.
 
 from django.http import HttpRequest
 from demo_app.views.navbar_example import BaseViewWithNavbar
+from djust.decorators import event
 from djust.components import (
     # UI Components
     AlertComponent,
@@ -258,41 +259,49 @@ class KitchenSinkView(BaseViewWithNavbar):
         self.modal_open_count = 0
         self.current_progress = 45
 
+    @event
     def handle_button_click(self):
         """Handle primary button click"""
         self.button_click_count += 1
         self.alert_success.set_message(f"Button clicked {self.button_click_count} time(s)!")
         self.alert_success.show()
 
+    @event
     def edit_item(self):
         """Handle edit action"""
         self.alert_info.set_message("Edit action triggered!")
         self.alert_info.show()
 
+    @event
     def delete_item(self):
         """Handle delete action"""
         self.alert_warning.set_message("Delete action triggered!")
         self.alert_warning.show()
 
+    @event
     def archive_item(self):
         """Handle archive action"""
         self.alert_info.set_message("Archive action triggered!")
         self.alert_info.show()
 
+    @event
     def dismiss_tag(self):
         """Handle tag dismissal"""
         self.badge_dismissible.dismiss()
 
+    @event
     def show_modal(self):
         """Show the example modal"""
         self.modal_open_count += 1
         self.modal_example.set_body(f"This modal has been opened {self.modal_open_count} time(s).")
         self.modal_example.show()
 
+    @event
     def close_modal(self):
         """Close the example modal"""
         self.modal_example.hide()
 
+    @event
     def increment_progress(self):
         """Increment progress bar"""
         if self.current_progress < 100:
@@ -300,17 +309,20 @@ class KitchenSinkView(BaseViewWithNavbar):
             self.progress_simple.set_value(self.current_progress)
             self.progress_striped.set_value(min(self.current_progress + 20, 100))
 
+    @event
     def reset_progress(self):
         """Reset progress bars"""
         self.current_progress = 0
         self.progress_simple.reset()
         self.progress_striped.reset()
 
+    @event
     def handle_page_change(self, page: int):
         """Handle pagination page change"""
         self.alert_info.set_message(f"Navigated to page {page}")
         self.alert_info.show()
 
+    @event
     def dismiss(self, component_id: str = None, **kwargs):
         """Handle component dismiss/hide - works for alerts, modals, etc."""
         # Get the component by its attribute name (which is now used as component_id)
@@ -322,6 +334,7 @@ class KitchenSinkView(BaseViewWithNavbar):
             elif hasattr(component, 'hide'):
                 component.hide()
 
+    @event
     def activate_tab(self, tab: str = None):
         """Handle tab activation"""
         if tab:

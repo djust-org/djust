@@ -2,6 +2,103 @@
 
 This guide helps you upgrade between major versions of djust.
 
+## Upgrading to 0.2.1 — Event Handler Security
+
+Version 0.2.1 defaults `event_security` to `"strict"`: only methods decorated with `@event` or `@event_handler` (or listed in `_allowed_events`) are callable via WebSocket. Undecorated handler methods will be silently blocked.
+
+### Step 1: Enable warn mode (optional)
+
+To identify which handlers need decorators without breaking anything, temporarily use warn mode:
+
+```python
+# settings.py
+LIVEVIEW_CONFIG = {
+    "event_security": "warn",  # Log warnings for undecorated handlers
+}
+```
+
+Then check your Django logs for messages like:
+
+```
+WARNING Deprecation: handler 'increment' on CounterView is not decorated with @event.
+This will be blocked in strict mode.
+```
+
+### Step 2: Add `@event` to all handler methods
+
+**Before:**
+```python
+from djust import LiveView
+
+class CounterView(LiveView):
+    def mount(self, request):
+        self.count = 0
+
+    def increment(self):      # ← blocked in strict mode!
+        self.count += 1
+
+    def decrement(self):      # ← blocked in strict mode!
+        self.count -= 1
+```
+
+**After:**
+```python
+from djust import LiveView
+from djust.decorators import event
+
+class CounterView(LiveView):
+    def mount(self, request):
+        self.count = 0
+
+    @event
+    def increment(self):      # ← allowed
+        self.count += 1
+
+    @event
+    def decrement(self):      # ← allowed
+        self.count -= 1
+```
+
+Methods that are **not** called via WebSocket (`mount`, `get_context_data`, private `_helpers`) do **not** need the decorator.
+
+If you already use `@event_handler()`, `@debounce`, `@throttle`, `@optimistic`, `@cache`, or `@rate_limit`, add `@event` as the outermost decorator:
+
+```python
+@event
+@debounce(wait=0.5)
+def search(self, value: str = "", **kwargs):
+    ...
+```
+
+### Step 3: Alternative — bulk allowlisting
+
+For views with many handlers, use `_allowed_events` instead of decorating each method:
+
+```python
+class MyView(LiveView):
+    _allowed_events = frozenset({"handler_a", "handler_b", "handler_c"})
+```
+
+### Step 4: Switch to strict mode
+
+Remove the `"warn"` override (or set `"strict"` explicitly). This is the default, so you can simply delete the `event_security` key.
+
+### Rate limiting configuration
+
+New rate-limit settings are available (all optional, shown with defaults):
+
+```python
+LIVEVIEW_CONFIG = {
+    "rate_limit": {
+        "rate": 100,                  # Tokens per second
+        "burst": 20,                  # Max burst capacity
+        "max_warnings": 3,            # Warnings before disconnect (code 4429)
+        "max_connections_per_ip": 10,  # Max concurrent WebSocket connections per IP
+        "reconnect_cooldown": 5,       # Seconds before a rate-limited IP can reconnect
+    },
+}
+```
+
 ## Upgrading from 0.1.x to 0.2.0
 
 Version 0.2.0 includes several breaking changes to improve API consistency. Follow this guide to update your code.

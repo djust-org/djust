@@ -8,6 +8,7 @@ components are instantiated in Python code and have state/behavior.
 from djust import LiveView
 from djust.components.layout import NavbarComponent, NavItem, TabsComponent, TabItem
 from djust.components.ui import DropdownComponent, DropdownItem
+from djust.decorators import event
 
 
 class RustComponentsDemo(LiveView):
@@ -312,6 +313,7 @@ class RustComponentsDemo(LiveView):
 
     # === Event Handlers ===
 
+    @event
     def select_basic_option(self, value: str = None, **kwargs):
         """Handle basic dropdown selection"""
         if value:
@@ -329,6 +331,7 @@ class RustComponentsDemo(LiveView):
                 ]
             )
 
+    @event
     def select_country(self, country: str = None, **kwargs):
         """Handle country selection - updates all size dropdowns"""
         if country:
@@ -374,6 +377,7 @@ class RustComponentsDemo(LiveView):
                 ]
             )
 
+    @event
     def select_variant(self, variant: str = None, option: str = None, **kwargs):
         """Handle variant dropdown selection"""
         if variant and option:
@@ -410,6 +414,7 @@ class RustComponentsDemo(LiveView):
                 ]
                 self.dropdown_danger = DropdownComponent(label=label, variant=variant, items=items)
 
+    @event
     def select_location(self, location: str = None, **kwargs):
         """Handle location dropdown selection"""
         if location:
@@ -427,6 +432,7 @@ class RustComponentsDemo(LiveView):
                 ]
             )
 
+    @event
     def increment_counter(self):
         """Increment counter and update interactive tabs"""
         self.counter += 1
@@ -459,6 +465,7 @@ class RustComponentsDemo(LiveView):
             action='switch_interactive_tab'
         )
 
+    @event
     def reset_counter(self):
         """Reset counter"""
         self.counter = 0
@@ -490,32 +497,38 @@ class RustComponentsDemo(LiveView):
             action='switch_interactive_tab'
         )
 
+    @event
     def clear_messages(self):
         """Clear all messages"""
         self.dropdown_message = ""
 
     # === TABS EVENT HANDLERS ===
 
+    @event
     def switch_basic_tab(self, tab: str = None, **kwargs):
         """Switch active tab in basic tabs"""
         if tab:
             self.basic_tabs.activate_tab(tab)
 
+    @event
     def switch_pills_tab(self, tab: str = None, **kwargs):
         """Switch active tab in pills tabs"""
         if tab:
             self.pills_tabs.activate_tab(tab)
 
+    @event
     def switch_underline_tab(self, tab: str = None, **kwargs):
         """Switch active tab in underline tabs"""
         if tab:
             self.underline_tabs.activate_tab(tab)
 
+    @event
     def switch_vertical_tab(self, tab: str = None, **kwargs):
         """Switch active tab in vertical tabs"""
         if tab:
             self.vertical_tabs.activate_tab(tab)
 
+    @event
     def switch_interactive_tab(self, tab: str = None, **kwargs):
         """Switch active tab in interactive tabs"""
         if tab:
