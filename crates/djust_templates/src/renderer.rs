@@ -977,6 +977,26 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
         }
     }
 
+    // Handle "in" operator: {% if item in list %}
+    if condition.contains(" in ") {
+        let parts: Vec<&str> = condition.splitn(2, " in ").map(|s| s.trim()).collect();
+        if parts.len() == 2 {
+            let needle = get_value(parts[0], context)?;
+            let haystack = get_value(parts[1], context)?;
+            return match haystack {
+                Value::List(items) => Ok(items.iter().any(|item| values_equal(&needle, item))),
+                Value::String(s) => {
+                    if let Value::String(n) = &needle {
+                        Ok(s.contains(n.as_str()))
+                    } else {
+                        Ok(false)
+                    }
+                }
+                _ => Ok(false),
+            };
+        }
+    }
+
     // Handle > (greater than)
     if condition.contains(" > ") {
         let parts: Vec<&str> = condition.split(" > ").map(|s| s.trim()).collect();
@@ -1429,5 +1449,38 @@ mod tests {
         context.set("a".to_string(), Value::Bool(false));
         context.set("b".to_string(), Value::Bool(false));
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "yes");
+    }
+
+    #[test]
+    fn test_if_in_list() {
+        let tokens = tokenize("{% if item in items %}found{% endif %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("item".to_string(), Value::String("b".to_string()));
+        context.set(
+            "items".to_string(),
+            Value::List(vec![
+                Value::String("a".to_string()),
+                Value::String("b".to_string()),
+                Value::String("c".to_string()),
+            ]),
+        );
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "found");
+
+        context.set("item".to_string(), Value::String("z".to_string()));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+    }
+
+    #[test]
+    fn test_if_in_string() {
+        let tokens = tokenize("{% if sub in text %}found{% endif %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("sub".to_string(), Value::String("world".to_string()));
+        context.set("text".to_string(), Value::String("hello world".to_string()));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "found");
+
+        context.set("sub".to_string(), Value::String("xyz".to_string()));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
     }
 }
