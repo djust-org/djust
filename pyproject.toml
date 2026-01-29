@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "djust"
-version = "0.2.0"
+version = "0.2.1a1"
 description = "Blazing fast reactive server-side rendering for Django, powered by Rust"
 authors = [{name = "djust contributors"}]
 readme = "README.md"

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1a1] - 2026-01-29
+
 ### Security
 
 - **WebSocket Event Security Hardening** - Three-layer defense for WebSocket event dispatch: ([#104](https://github.com/djust-org/djust/pull/104))
@@ -183,7 +185,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bug fixes and stability improvements
 
-[Unreleased]: https://github.com/djust-org/djust/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/djust-org/djust/compare/v0.2.1a1...HEAD
+[0.2.1a1]: https://github.com/djust-org/djust/compare/v0.2.0...v0.2.1a1
 [0.2.0]: https://github.com/djust-org/djust/compare/v0.2.0a2...v0.2.0
 [0.2.0a2]: https://github.com/djust-org/djust/compare/v0.2.0a1...v0.2.0a2
 [0.2.0a1]: https://github.com/djust-org/djust/compare/v0.1.8...v0.2.0a1
