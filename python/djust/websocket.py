@@ -288,16 +288,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
             msg_type = data.get("type")
 
-            if msg_type == "event":
-                # Rate limit check
-                event_name = data.get("event", "")
-                if not self._rate_limiter.check(event_name):
-                    if self._rate_limiter.should_disconnect():
-                        logger.warning("Rate limit exceeded, disconnecting client")
-                        await self.close(code=4429)
-                        return
-                    await self.send_error("Rate limit exceeded, event dropped")
+            # Global rate limit check — applies to ALL message types (#107)
+            if not self._rate_limiter.check(msg_type or "unknown"):
+                if self._rate_limiter.should_disconnect():
+                    logger.warning("Rate limit exceeded, disconnecting client")
+                    await self.close(code=4429)
                     return
+                await self.send_error("Rate limit exceeded")
+                return
+
+            if msg_type == "event":
                 await self.handle_event(data)
             elif msg_type == "mount":
                 await self.handle_mount(data)
