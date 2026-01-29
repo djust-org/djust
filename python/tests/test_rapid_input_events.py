@@ -37,7 +37,7 @@ class SliderTestView(LiveView):
         try:
             self.value = int(float(value))
         except (ValueError, TypeError):
-            pass
+            pass  # Ignore invalid slider values (non-numeric input)
 
 
 def add_session_to_request(request):
