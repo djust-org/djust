@@ -6,6 +6,7 @@ Analyzes variable access paths and generates optimal select_related/prefetch_rel
 
 from typing import Dict, List, Set
 from django.db import models
+from django.db.models import Count
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models.fields.related import (
     ForeignKey,
@@ -20,13 +21,17 @@ class QueryOptimization:
     def __init__(self):
         self.select_related: Set[str] = set()
         self.prefetch_related: Set[str] = set()
+        self.annotations: Dict = {}
 
     def to_dict(self) -> Dict[str, List[str]]:
         """Convert to dictionary format."""
-        return {
+        result = {
             "select_related": sorted(self.select_related),
             "prefetch_related": sorted(self.prefetch_related),
         }
+        if self.annotations:
+            result["annotations"] = list(self.annotations.keys())
+        return result
 
 
 def analyze_queryset_optimization(
@@ -117,6 +122,50 @@ def _analyze_path(
             _analyze_path(related_model, remaining_path, optimization, django_path)
 
 
+def auto_optimize(queryset, *fields):
+    """
+    Standalone query optimizer — applies select_related/prefetch_related based on field types.
+
+    Usage:
+        posts = auto_optimize(BlogPost.objects.all(), 'category', 'series', 'tags')
+        # Equivalent to: .select_related('category', 'series').prefetch_related('tags')
+
+    Args:
+        queryset: Django QuerySet
+        *fields: Field names to optimize for access
+
+    Returns:
+        Optimized QuerySet
+    """
+    model_class = queryset.model
+    optimization = analyze_queryset_optimization(model_class, list(fields))
+    return optimize_queryset(queryset, optimization)
+
+
+def annotate_counts(queryset, **filters):
+    """
+    Annotate a QuerySet with counts of reverse relations, avoiding N+1 queries.
+
+    Usage:
+        categories = annotate_counts(
+            Category.objects.all(),
+            posts=Q(posts__status='published')
+        )
+        # Each category now has .posts_count
+
+    Args:
+        queryset: Django QuerySet
+        **filters: Keyword args where key is the relation name and value is a Q filter.
+
+    Returns:
+        Annotated QuerySet
+    """
+    annotations = {}
+    for relation_name, filter_q in filters.items():
+        annotations[f"{relation_name}_count"] = Count(relation_name, filter=filter_q)
+    return queryset.annotate(**annotations)
+
+
 def optimize_queryset(queryset, optimization: QueryOptimization):
     """
     Apply select_related/prefetch_related to a QuerySet.
@@ -139,5 +188,8 @@ def optimize_queryset(queryset, optimization: QueryOptimization):
 
     if optimization.prefetch_related:
         queryset = queryset.prefetch_related(*optimization.prefetch_related)
+
+    if optimization.annotations:
+        queryset = queryset.annotate(**optimization.annotations)
 
     return queryset

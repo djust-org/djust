@@ -5,7 +5,12 @@ djust Optimization Modules
 - Fingerprint Optimization: Tracks state changes to minimize re-rendering and data transfer
 """
 
-from .query_optimizer import analyze_queryset_optimization, optimize_queryset
+from .query_optimizer import (
+    analyze_queryset_optimization,
+    optimize_queryset,
+    auto_optimize,
+    annotate_counts,
+)
 from .codegen import generate_serializer_code, compile_serializer, get_serializer_source
 from .cache import SerializerCache
 from .fingerprint import (
@@ -20,6 +25,8 @@ __all__ = [
     # Query optimization
     "analyze_queryset_optimization",
     "optimize_queryset",
+    "auto_optimize",
+    "annotate_counts",
     "generate_serializer_code",
     "compile_serializer",
     "get_serializer_source",
