@@ -91,6 +91,13 @@ class ContextMixin:
                         except Exception:
                             pass
 
+                    # Compute template hash once for codegen cache keys
+                    import hashlib
+                    from ..session_utils import _jit_serializer_cache, _get_model_hash
+                    from ..optimization.codegen import generate_serializer_code, compile_serializer
+
+                    template_hash = hashlib.sha256(template_content.encode()).hexdigest()[:8]
+
                     for key, value in list(context.items()):
                         if isinstance(value, QuerySet):
                             serialized = self._jit_serialize_queryset(value, template_content, key)
@@ -133,10 +140,25 @@ class ContextMixin:
                                 pk_map = {obj.pk: obj for obj in qs}
                                 value = [pk_map[pk] for pk in pks if pk in pk_map]
 
-                            context[key] = [
-                                self._jit_serialize_model(item, template_content, key)
-                                for item in value
-                            ]
+                            if paths:
+                                # Use codegen serializer directly — avoids DjangoJSONEncoder fallback
+                                model_hash = _get_model_hash(model_class)
+                                cache_key = (template_hash, key, model_hash, "list")
+                                if cache_key in _jit_serializer_cache:
+                                    serializer, _ = _jit_serializer_cache[cache_key]
+                                else:
+                                    func_name = f"serialize_{key}_{template_hash}"
+                                    code = generate_serializer_code(
+                                        model_class.__name__, paths, func_name
+                                    )
+                                    serializer = compile_serializer(code, func_name)
+                                    _jit_serializer_cache[cache_key] = (serializer, None)
+                                context[key] = [serializer(item) for item in value]
+                            else:
+                                context[key] = [
+                                    self._jit_serialize_model(item, template_content, key)
+                                    for item in value
+                                ]
                             jit_serialized_keys.add(key)
             except Exception as e:
                 logger.debug(f"JIT auto-serialization failed: {e}", exc_info=True)

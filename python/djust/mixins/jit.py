@@ -40,11 +40,48 @@ class JITMixin:
     def _get_template_content(self) -> Optional[str]:
         """
         Get template source code for JIT variable extraction.
+
+        Prefers the fully-resolved template (with inheritance) so that
+        variables used in parent/base templates are also discovered.
         """
+        # Prefer the fully-resolved template (includes inherited blocks)
+        if hasattr(self, "_full_template") and self._full_template:
+            return self._full_template
+
         if hasattr(self, "template") and self.template:
             return self.template
 
         if hasattr(self, "template_name") and self.template_name:
+            # Try Rust template inheritance resolution first
+            try:
+                from djust._rust import resolve_template_inheritance
+                from django.conf import settings
+                from pathlib import Path
+
+                template_dirs = []
+                for tpl_cfg in getattr(settings, "TEMPLATES", []):
+                    if "DIRS" in tpl_cfg:
+                        template_dirs.extend(str(d) for d in tpl_cfg["DIRS"])
+                    backend = tpl_cfg.get("BACKEND", "")
+                    if backend == "django.template.backends.django.DjangoTemplates":
+                        if tpl_cfg.get("APP_DIRS", False):
+                            from django.apps import apps
+
+                            for app_config in apps.get_app_configs():
+                                tpl_dir = Path(app_config.path) / "templates"
+                                if tpl_dir.exists():
+                                    template_dirs.append(str(tpl_dir))
+
+                resolved = resolve_template_inheritance(self.template_name, template_dirs)
+                if resolved:
+                    # Also inline {% include %} directives so variable extraction
+                    # discovers variables used in included templates
+                    resolved = self._inline_includes(resolved, template_dirs)
+                    return resolved
+            except Exception:
+                pass
+
+            # Fallback to single-file template source
             try:
                 from django.template.loader import get_template
 
@@ -62,6 +99,42 @@ class JITMixin:
                 return None
 
         return None
+
+    @staticmethod
+    def _inline_includes(template_content: str, template_dirs: list) -> str:
+        """Inline {% include "..." %} directives for variable extraction.
+
+        Only handles simple static includes (not variable includes).
+        Recursively resolves nested includes up to 5 levels deep.
+        """
+        import re
+        import os
+
+        # Handle both normal quotes and doubled quotes from Rust resolver
+        include_re = re.compile(
+            r'\{%\s*include\s+"{1,2}([^"]+)"{1,2}\s*%\}|\{%\s*include\s+\'{1,2}([^\']+)\'{1,2}\s*%\}'
+        )
+
+        def resolve(content, depth=0):
+            if depth > 5:
+                return content
+
+            def replacer(match):
+                include_path = match.group(1) or match.group(2)
+                for tpl_dir in template_dirs:
+                    full_path = os.path.join(tpl_dir, include_path)
+                    if os.path.isfile(full_path):
+                        try:
+                            with open(full_path, "r") as f:
+                                included = f.read()
+                            return resolve(included, depth + 1)
+                        except Exception:
+                            pass
+                return match.group(0)  # Keep original if not found
+
+            return include_re.sub(replacer, content)
+
+        return resolve(template_content)
 
     def _jit_serialize_queryset(self, queryset, template_content: str, variable_name: str):
         """
