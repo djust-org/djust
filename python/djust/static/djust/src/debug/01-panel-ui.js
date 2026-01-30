@@ -1,3 +1,4 @@
+
         createFloatingButton() {
             // Check if button already exists
             const existingButton = document.getElementById('djust-debug-button');

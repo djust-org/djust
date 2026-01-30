@@ -1,3 +1,5 @@
+
+        // Tab render methods
         renderEventsTab() {
             if (this.eventHistory.length === 0) {
                 return '<div class="empty-state">No events captured yet. Interact with the page to see events.</div>';

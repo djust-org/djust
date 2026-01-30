@@ -1,3 +1,4 @@
+
         renderHandlersTab() {
             if (!this.handlers || this.handlers.length === 0) {
                 return '<div class="empty-state">No event handlers detected. Handlers will appear after the view is mounted.</div>';

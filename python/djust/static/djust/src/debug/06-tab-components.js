@@ -1,3 +1,4 @@
+
         renderComponentsTab() {
             if (!this.components) {
                 return '<div class="empty-state">No components detected. Components will appear after the view is mounted.</div>';

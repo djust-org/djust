@@ -1,3 +1,4 @@
+
         renderPatchesTab() {
             if (this.patchHistory.length === 0) {
                 return '<div class="empty-state">No DOM patches applied yet. Interact with the page to see patches.</div>';
