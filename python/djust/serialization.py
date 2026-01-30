@@ -277,11 +277,20 @@ class DjangoJSONEncoder(json.JSONEncoder):
                         prop_names.append(attr_name)
             DjangoJSONEncoder._property_cache[model_class] = prop_names
 
+        cache = getattr(obj, "_djust_prop_cache", None)
+        if cache is None:
+            cache = {}
+            obj._djust_prop_cache = cache
+
         for attr_name in DjangoJSONEncoder._property_cache[model_class]:
             if attr_name not in result:
+                if attr_name in cache:
+                    result[attr_name] = cache[attr_name]
+                    continue
                 try:
                     val = getattr(obj, attr_name)
                     if isinstance(val, (str, int, float, bool, type(None))):
+                        cache[attr_name] = val
                         result[attr_name] = val
                 except Exception:
                     pass

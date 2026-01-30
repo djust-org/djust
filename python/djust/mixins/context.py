@@ -34,6 +34,11 @@ class ContextMixin:
         Returns:
             Dictionary of context variables
         """
+        # Return cached context if available (set during GET request to avoid
+        # redundant QuerySet evaluation across sync_state_to_rust/render_with_diff)
+        if hasattr(self, "_cached_context") and self._cached_context is not None:
+            return self._cached_context
+
         from ..components.base import Component, LiveComponent
         from django.db.models import QuerySet
 
@@ -76,6 +81,16 @@ class ContextMixin:
             try:
                 template_content = self._get_template_content()
                 if template_content:
+                    # Extract variable paths once for list[Model] optimization
+                    from ..mixins.jit import extract_template_variables
+
+                    variable_paths_map = None
+                    if extract_template_variables:
+                        try:
+                            variable_paths_map = extract_template_variables(template_content)
+                        except Exception:
+                            pass
+
                     for key, value in list(context.items()):
                         if isinstance(value, QuerySet):
                             serialized = self._jit_serialize_queryset(value, template_content, key)
@@ -94,6 +109,30 @@ class ContextMixin:
                         elif (
                             isinstance(value, list) and value and isinstance(value[0], models.Model)
                         ):
+                            # Re-fetch with select_related/prefetch_related/annotations
+                            # to avoid N+1 queries during serialization
+                            from ..optimization.query_optimizer import (
+                                analyze_queryset_optimization,
+                                optimize_queryset,
+                            )
+
+                            model_class = value[0].__class__
+                            paths = variable_paths_map.get(key, []) if variable_paths_map else []
+                            optimization = (
+                                analyze_queryset_optimization(model_class, paths) if paths else None
+                            )
+
+                            if optimization and (
+                                optimization.select_related
+                                or optimization.prefetch_related
+                                or optimization.annotations
+                            ):
+                                pks = [obj.pk for obj in value]
+                                qs = model_class._default_manager.filter(pk__in=pks)
+                                qs = optimize_queryset(qs, optimization)
+                                pk_map = {obj.pk: obj for obj in qs}
+                                value = [pk_map[pk] for pk in pks if pk in pk_map]
+
                             context[key] = [
                                 self._jit_serialize_model(item, template_content, key)
                                 for item in value

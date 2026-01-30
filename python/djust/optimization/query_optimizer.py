@@ -4,7 +4,7 @@ Django ORM Query Optimizer
 Analyzes variable access paths and generates optimal select_related/prefetch_related calls.
 """
 
-from typing import Dict, List, Set
+from typing import Any, Dict, List, Set
 from django.db import models
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models.fields.related import (
@@ -20,12 +20,14 @@ class QueryOptimization:
     def __init__(self):
         self.select_related: Set[str] = set()
         self.prefetch_related: Set[str] = set()
+        self.annotations: Dict[str, Any] = {}
 
     def to_dict(self) -> Dict[str, List[str]]:
         """Convert to dictionary format."""
         return {
             "select_related": sorted(self.select_related),
             "prefetch_related": sorted(self.prefetch_related),
+            "annotations": list(self.annotations.keys()),
         }
 
 
@@ -81,8 +83,12 @@ def _analyze_path(
     try:
         field = model_class._meta.get_field(field_name)
     except FieldDoesNotExist:
-        # Not a field, might be a property or method
-        # Can't optimize, skip
+        # Check for @property with annotation hint via _djust_annotations
+        # Use _annotated_ prefix to avoid conflict with @property descriptors
+        annotations = getattr(model_class, "_djust_annotations", {})
+        if field_name in annotations:
+            annotation_key = f"_annotated_{field_name}"
+            optimization.annotations[annotation_key] = annotations[field_name]
         return
 
     # Build Django ORM path
@@ -134,6 +140,9 @@ def optimize_queryset(queryset, optimization: QueryOptimization):
         >>> qs = optimize_queryset(qs, optimization)
         >>> # qs is now: Lease.objects.all().select_related("property")
     """
+    if optimization.annotations:
+        queryset = queryset.annotate(**optimization.annotations)
+
     if optimization.select_related:
         queryset = queryset.select_related(*optimization.select_related)
 

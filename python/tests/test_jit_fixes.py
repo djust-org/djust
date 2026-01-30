@@ -175,6 +175,64 @@ class TestPropertySerialization:
         assert "list_prop" not in result
 
 
+# --- Fix 3b: @property cache avoids duplicate evaluation ---
+
+
+class TestPropertyCache:
+    def _make_model_class(self):
+        from django.db import models as django_models
+
+        class CountingModel(django_models.Model):
+            class Meta:
+                app_label = "test"
+
+            _call_count = 0
+
+            @property
+            def expensive_prop(self):
+                CountingModel._call_count += 1
+                return 42
+
+        return CountingModel
+
+    def test_property_cache_populated_on_first_access(self):
+        """First _add_property_values call populates _djust_prop_cache."""
+        encoder = DjangoJSONEncoder()
+        ModelClass = self._make_model_class()
+        obj = ModelClass.__new__(ModelClass)
+        obj.pk = 1
+        obj.__dict__["id"] = 1
+
+        result = {}
+        encoder._add_property_values(obj, result)
+        assert result["expensive_prop"] == 42
+        assert hasattr(obj, "_djust_prop_cache")
+        assert obj._djust_prop_cache["expensive_prop"] == 42
+
+    def test_property_cache_avoids_reeval(self):
+        """Second _add_property_values call reads from cache, not property."""
+        encoder = DjangoJSONEncoder()
+        ModelClass = self._make_model_class()
+        obj = ModelClass.__new__(ModelClass)
+        obj.pk = 1
+        obj.__dict__["id"] = 1
+
+        ModelClass._call_count = 0
+
+        result1 = {}
+        encoder._add_property_values(obj, result1)
+        first_count = ModelClass._call_count
+
+        result2 = {}
+        encoder._add_property_values(obj, result2)
+        second_count = ModelClass._call_count
+
+        assert result1["expensive_prop"] == 42
+        assert result2["expensive_prop"] == 42
+        # Property should only be called once; second call uses cache
+        assert second_count == first_count
+
+
 # --- Fix 4: Model before duck-typing ---
 
 
