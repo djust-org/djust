@@ -16,10 +16,12 @@ from .security import handle_exception, sanitize_for_log
 from .config import config as djust_config
 from .rate_limit import ConnectionRateLimiter, ip_tracker
 from .websocket_utils import (
-    _safe_error,
-    get_handler_coerce_setting,
-    _validate_event_security,
     _call_handler,
+    _check_event_security,  # noqa: F401 - re-exported for tests
+    _ensure_handler_rate_limit,  # noqa: F401 - re-exported for tests
+    _safe_error,
+    _validate_event_security,
+    get_handler_coerce_setting,
 )
 
 logger = logging.getLogger(__name__)
