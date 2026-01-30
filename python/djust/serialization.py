@@ -9,6 +9,7 @@ import json
 import logging
 from datetime import datetime, date, time
 from decimal import Decimal
+from typing import Dict, List
 from uuid import UUID
 
 from django.db import models
@@ -34,6 +35,9 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
     # Class variable to track recursion depth
     _depth = 0
+
+    # Cache @property names per model class to avoid repeated MRO walks
+    _property_cache: Dict[type, List[str]] = {}
 
     @staticmethod
     def _get_max_depth():
@@ -263,14 +267,21 @@ class DjangoJSONEncoder(json.JSONEncoder):
         """Add @property values defined on user model classes (not Django base)."""
         model_class = obj.__class__
 
-        for cls in model_class.__mro__:
-            if cls is models.Model:
-                break
-            for attr_name, attr_value in cls.__dict__.items():
-                if isinstance(attr_value, property) and attr_name not in result:
-                    try:
-                        val = getattr(obj, attr_name)
-                        if isinstance(val, (str, int, float, bool, type(None))):
-                            result[attr_name] = val
-                    except Exception:
-                        pass
+        if model_class not in DjangoJSONEncoder._property_cache:
+            prop_names = []
+            for cls in model_class.__mro__:
+                if cls is models.Model:
+                    break
+                for attr_name, attr_value in cls.__dict__.items():
+                    if isinstance(attr_value, property):
+                        prop_names.append(attr_name)
+            DjangoJSONEncoder._property_cache[model_class] = prop_names
+
+        for attr_name in DjangoJSONEncoder._property_cache[model_class]:
+            if attr_name not in result:
+                try:
+                    val = getattr(obj, attr_name)
+                    if isinstance(val, (str, int, float, bool, type(None))):
+                        result[attr_name] = val
+                except Exception:
+                    pass

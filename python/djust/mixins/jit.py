@@ -13,6 +13,12 @@ from ..session_utils import _jit_serializer_cache, _get_model_hash
 
 logger = logging.getLogger(__name__)
 
+# Cache template_content → sha256 hash (avoids recomputing per variable)
+_template_hash_cache: Dict[str, str] = {}
+
+# Cache (template_hash, variable_name) → expected top-level key count
+_expected_keys_cache: Dict[tuple, int] = {}
+
 try:
     from .._rust import extract_template_variables
 
@@ -82,7 +88,11 @@ class JITMixin:
                 return [json.loads(json.dumps(obj, cls=DjangoJSONEncoder)) for obj in queryset]
 
             model_class = queryset.model
-            template_hash = hashlib.sha256(template_content.encode()).hexdigest()[:8]
+            if template_content not in _template_hash_cache:
+                _template_hash_cache[template_content] = hashlib.sha256(
+                    template_content.encode()
+                ).hexdigest()[:8]
+            template_hash = _template_hash_cache[template_content]
             model_hash = _get_model_hash(model_class)
             cache_key = (template_hash, variable_name, model_hash)
 
@@ -118,7 +128,13 @@ class JITMixin:
 
             # Check if Rust serializer captured all expected paths
             # (Rust can't access @property attributes, only model fields)
-            if result and len(result[0]) < len(set(p.split(".")[0] for p in paths_for_var)):
+            ek_cache_key = (template_hash, variable_name)
+            if ek_cache_key not in _expected_keys_cache:
+                _expected_keys_cache[ek_cache_key] = len(
+                    set(p.split(".")[0] for p in paths_for_var)
+                )
+            expected_keys = _expected_keys_cache[ek_cache_key]
+            if result and len(result[0]) < expected_keys:
                 # Rust missed some paths — use Python codegen instead
                 func_name = f"serialize_{variable_name}_{template_hash}"
                 code = generate_serializer_code(model_class.__name__, paths_for_var, func_name)
@@ -158,7 +174,11 @@ class JITMixin:
                 return json.loads(json.dumps(obj, cls=DjangoJSONEncoder))
 
             model_class = obj.__class__
-            template_hash = hashlib.sha256(template_content.encode()).hexdigest()[:8]
+            if template_content not in _template_hash_cache:
+                _template_hash_cache[template_content] = hashlib.sha256(
+                    template_content.encode()
+                ).hexdigest()[:8]
+            template_hash = _template_hash_cache[template_content]
             model_hash = _get_model_hash(model_class)
             cache_key = (template_hash, variable_name, model_hash)
 

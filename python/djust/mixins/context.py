@@ -109,27 +109,22 @@ class ContextMixin:
                 if count_key not in context:
                     context[count_key] = len(value)
 
-        # Deep-serialize Models nested in dicts (e.g. series_nav = {'previous': BlogPost})
-        if JIT_AVAILABLE:
-            for key, value in list(context.items()):
-                if key in jit_serialized_keys:
-                    continue
-                if isinstance(value, dict):
-                    context[key] = self._deep_serialize_dict(
-                        value, template_content if "template_content" in dir() else None, key
-                    )
-
-        # Fallback serialization for Model instances not JIT-serialized
+        # Single pass: deep-serialize dicts and fallback-serialize remaining Models
+        tc = template_content if JIT_AVAILABLE and "template_content" in dir() else None
         for key, value in list(context.items()):
-            if key not in jit_serialized_keys:
-                if isinstance(value, models.Model):
-                    context[key] = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
-                elif isinstance(value, list) and value and isinstance(value[0], models.Model):
-                    context[key] = [
-                        json.loads(json.dumps(item, cls=DjangoJSONEncoder)) for item in value
-                    ]
-                elif isinstance(value, dict):
+            if key in jit_serialized_keys:
+                continue
+            if isinstance(value, dict):
+                if tc:
+                    context[key] = self._deep_serialize_dict(value, tc, key)
+                else:
                     context[key] = self._deep_serialize_dict_fallback(value)
+            elif isinstance(value, models.Model):
+                context[key] = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+            elif isinstance(value, list) and value and isinstance(value[0], models.Model):
+                context[key] = [
+                    json.loads(json.dumps(item, cls=DjangoJSONEncoder)) for item in value
+                ]
 
         self._jit_serialized_keys = jit_serialized_keys
 
