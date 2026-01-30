@@ -2821,6 +2821,9 @@ function applyPatches(patches) {
 
     // Sort patches: RemoveChild before InsertChild (Issue #142), and
     // RemoveChild in descending index order to preserve indices during removal.
+    // Note: relies on stable sort (ES2019+) to preserve relative order of
+    // non-RemoveChild patches. The batching path below also enforces this
+    // separation explicitly as a safety net.
     patches.sort((a, b) => {
         const aIsRemove = a.type === 'RemoveChild' ? 1 : 0;
         const bIsRemove = b.type === 'RemoveChild' ? 1 : 0;
