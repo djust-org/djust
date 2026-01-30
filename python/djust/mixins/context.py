@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 _context_processors_cache: Dict[int, list] = {}
 
 try:
-    from ..optimization.query_optimizer import analyze_queryset_optimization  # noqa: F401
-    from ..optimization.codegen import generate_serializer_code  # noqa: F401
+    import djust.optimization.query_optimizer  # noqa: F401
+    import djust.optimization.codegen  # noqa: F401
 
     JIT_AVAILABLE = True
 except ImportError:

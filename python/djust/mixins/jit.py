@@ -16,10 +16,8 @@ logger = logging.getLogger(__name__)
 try:
     from .._rust import extract_template_variables
 
-    _RUST_AVAILABLE = True
 except ImportError:
     extract_template_variables = None
-    _RUST_AVAILABLE = False
 
 try:
     from ..optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
