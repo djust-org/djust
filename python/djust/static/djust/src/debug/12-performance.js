@@ -1,3 +1,4 @@
+
         trackMetrics(performance) {
             if (!performance) return;
 

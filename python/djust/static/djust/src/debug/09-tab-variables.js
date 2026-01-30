@@ -1,3 +1,4 @@
+
         renderVariablesTab() {
             if (!this.variables) {
                 return '<div class="empty-state">No public variables detected. Variables will appear after the view is mounted.</div>';

@@ -1,3 +1,4 @@
+
         renderNetworkTab() {
             // Get WebSocket stats from liveview client (Phase 2.1: WebSocket Inspector)
             const stats = window.liveview && window.liveview.stats ? window.liveview.stats : null;

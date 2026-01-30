@@ -1,3 +1,4 @@
+
         collectRecentWarnings() {
             const warnings = [];
             const recentPatches = this.patchHistory.slice(0, 10); // Last 10 patches

@@ -1,3 +1,4 @@
+
         registerTabs() {
             // Register default tabs
             this.registerTab('events', {
@@ -92,5 +93,3 @@
                 contentContainer.innerHTML = activeTab.render();
             }
         }
-
-        // Tab render methods
