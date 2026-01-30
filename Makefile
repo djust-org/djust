@@ -20,6 +20,13 @@ help: ## Display this help message
 	@echo ""
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n  make $(YELLOW)<target>$(NC)\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  $(GREEN)%-15s$(NC) %s\n", $$1, $$2 } /^##@/ { printf "\n$(BLUE)%s$(NC)\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
+##@ Build
+
+.PHONY: build-js
+build-js: ## Build client.js from source modules
+	@echo "$(GREEN)Building client.js from source modules...$(NC)"
+	@bash scripts/build-client.sh
+
 ##@ Development Server
 
 .PHONY: start
