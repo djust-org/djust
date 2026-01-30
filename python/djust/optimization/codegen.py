@@ -238,6 +238,31 @@ def _generate_nested_access(
                     None,
                     indent + 1,
                 )
+            elif attr_name in ("all", "count", "exists") or attr_name.startswith("get_"):
+                # Method call that returns a list/queryset — iterate results
+                # e.g. tags.all has subtree {name: {}, url: {}} meaning
+                # template does {% for tag in post.tags.all %} {{ tag.name }}
+                dict_path = _build_dict_path(result_var, current_path)
+                list_var = f"item_{indent}"
+                lines.append(f"{ind}    try:")
+                lines.append(f"{ind}        {dict_path}['{attr_name}'] = []")
+                lines.append(f"{ind}        for {list_var} in {obj_access}():")
+                lines.append(f"{ind}            _item_result = {{}}")
+
+                for nested_attr, nested_subtree in subtree.items():
+                    _generate_nested_access(
+                        lines,
+                        [],
+                        {nested_attr: nested_subtree},
+                        list_var,
+                        "_item_result",
+                        None,
+                        indent + 3,
+                    )
+
+                lines.append(f"{ind}            {dict_path}['{attr_name}'].append(_item_result)")
+                lines.append(f"{ind}    except (TypeError, AttributeError):")
+                lines.append(f"{ind}        pass  # Method call or iteration failed")
             else:
                 # Has nested attributes - create nested dict and recurse
                 dict_path = _build_dict_path(result_var, current_path)
@@ -256,8 +281,8 @@ def _generate_nested_access(
             # Leaf node - final assignment
             dict_path_full = _build_dict_path(result_var, new_path[:-1])
 
-            if attr_name.startswith("get_"):
-                # Method call
+            if attr_name.startswith("get_") or attr_name in ("all", "count", "exists"):
+                # Method call (includes Django manager methods like .all())
                 lines.append(f"{ind}    try:")
                 lines.append(f"{ind}        {dict_path_full}['{attr_name}'] = {obj_access}()")
                 lines.append(f"{ind}    except Exception:")

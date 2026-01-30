@@ -110,17 +110,27 @@ class JITMixin:
             if optimization:
                 queryset = optimize_queryset(queryset, optimization)
 
+            # Try Rust serializer first, fall back to Python codegen if incomplete
             from djust._rust import serialize_queryset
 
-            result = serialize_queryset(list(queryset), paths_for_var)
+            items = list(queryset)
+            result = serialize_queryset(items, paths_for_var)
+
+            # Check if Rust serializer captured all expected paths
+            # (Rust can't access @property attributes, only model fields)
+            if result and len(result[0]) < len(set(p.split(".")[0] for p in paths_for_var)):
+                # Rust missed some paths — use Python codegen instead
+                func_name = f"serialize_{variable_name}_{template_hash}"
+                code = generate_serializer_code(model_class.__name__, paths_for_var, func_name)
+                serializer = compile_serializer(code, func_name)
+                result = [serializer(obj) for obj in items]
 
             from ..config import config
 
             if config.get("jit_debug"):
                 logger.debug(
-                    f"[JIT] Serialized {len(result)} {queryset.model.__name__} objects for '{variable_name}' using Rust"
+                    f"[JIT] Serialized {len(result)} {queryset.model.__name__} objects for '{variable_name}'"
                 )
-                logger.debug(f"[JIT DEBUG] Rust serializer returned {len(result)} items")
                 if result:
                     logger.debug(f"[JIT DEBUG] First item keys: {list(result[0].keys())}")
             return result
@@ -155,8 +165,8 @@ class JITMixin:
             if cache_key in _jit_serializer_cache:
                 serializer, _ = _jit_serializer_cache[cache_key]
             else:
-                code = generate_serializer_code(model_class.__name__, paths_for_var)
                 func_name = f"serialize_{variable_name}_{template_hash}"
+                code = generate_serializer_code(model_class.__name__, paths_for_var, func_name)
                 serializer = compile_serializer(code, func_name)
                 _jit_serializer_cache[cache_key] = (serializer, None)
 
