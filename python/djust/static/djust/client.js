@@ -2819,13 +2819,19 @@ function applyPatches(patches) {
         return true;
     }
 
-    // Sort patches: RemoveChild in descending order to preserve indices
+    // Sort patches: RemoveChild before InsertChild (Issue #142), and
+    // RemoveChild in descending index order to preserve indices during removal.
     patches.sort((a, b) => {
-        if (a.type === 'RemoveChild' && b.type === 'RemoveChild') {
+        const aIsRemove = a.type === 'RemoveChild' ? 1 : 0;
+        const bIsRemove = b.type === 'RemoveChild' ? 1 : 0;
+        if (aIsRemove !== bIsRemove) {
+            return bIsRemove - aIsRemove;  // RemoveChild first
+        }
+        if (aIsRemove && bIsRemove) {
             const pathA = JSON.stringify(a.path);
             const pathB = JSON.stringify(b.path);
             if (pathA === pathB) {
-                return b.index - a.index;
+                return b.index - a.index;  // Descending index
             }
         }
         return 0;
