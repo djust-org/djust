@@ -20,7 +20,7 @@ from django.db import models
 from .validation import validate_handler_params
 from .security import safe_setattr
 from .utils import get_template_dirs
-from .session_utils import (  # noqa: F401
+from .session_utils import (
     DEFAULT_SESSION_TTL,
     cleanup_expired_sessions,
     get_session_stats,
@@ -29,6 +29,14 @@ from .session_utils import (  # noqa: F401
     clear_jit_cache,
     Stream,
 )
+
+# Backward compatibility: re-export symbols previously defined in this module
+__all__ = [
+    "DEFAULT_SESSION_TTL",
+    "cleanup_expired_sessions",
+    "get_session_stats",
+    "clear_jit_cache",
+]
 
 # Try to use orjson for faster JSON operations (2-3x faster than stdlib)
 import importlib.util
