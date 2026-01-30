@@ -203,7 +203,7 @@ class TestEventSecurityHelper:
 
         view = FakeView()
 
-        with patch("djust.websocket.djust_config") as mock_config:
+        with patch("djust.websocket_utils.djust_config") as mock_config:
             mock_config.get.return_value = "strict"
             result = _check_event_security(plain_handler, view, "plain_handler")
             assert result is not None
@@ -224,7 +224,7 @@ class TestEventSecurityHelper:
 
         view = FakeView()
 
-        with patch("djust.websocket.djust_config") as mock_config:
+        with patch("djust.websocket_utils.djust_config") as mock_config:
             mock_config.get.return_value = "strict"
             result = _check_event_security(my_handler, view, "my_handler")
             assert result is None
@@ -242,7 +242,7 @@ class TestEventSecurityHelper:
 
         view = FakeView()
 
-        with patch("djust.websocket.djust_config") as mock_config:
+        with patch("djust.websocket_utils.djust_config") as mock_config:
             mock_config.get.return_value = "strict"
             result = _check_event_security(bulk_update, view, "bulk_update")
             assert result is None
@@ -260,7 +260,7 @@ class TestEventSecurityHelper:
 
         view = FakeView()
 
-        with patch("djust.websocket.djust_config") as mock_config:
+        with patch("djust.websocket_utils.djust_config") as mock_config:
             mock_config.get.return_value = "open"
             result = _check_event_security(plain_handler, view, "plain_handler")
             assert result is None
@@ -278,7 +278,7 @@ class TestEventSecurityHelper:
 
         view = FakeView()
 
-        with patch("djust.websocket.djust_config") as mock_config:
+        with patch("djust.websocket_utils.djust_config") as mock_config:
             mock_config.get.return_value = "warn"
             result = _check_event_security(plain_handler, view, "plain_handler")
             assert result is None  # warn mode doesn't block
@@ -488,7 +488,7 @@ class TestActorPathSecurity:
             pass
 
         view = FakeView()
-        with patch("djust.websocket.djust_config") as mock_config:
+        with patch("djust.websocket_utils.djust_config") as mock_config:
             mock_config.get.return_value = "strict"
             result = _check_event_security(undecorated, view, "undecorated")
             assert result is not None
@@ -509,7 +509,7 @@ class TestActorPathSecurity:
             pass
 
         view = FakeView()
-        with patch("djust.websocket.djust_config") as mock_config:
+        with patch("djust.websocket_utils.djust_config") as mock_config:
             mock_config.get.return_value = "strict"
             result = _check_event_security(my_event, view, "my_event")
             assert result is None
