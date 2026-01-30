@@ -7,7 +7,7 @@ Demonstrates both:
 """
 
 from djust import LiveView
-from djust.decorators import event
+from djust.decorators import event_handler
 from djust.components.ui import (
     Dropdown,  # Stateless
     DropdownComponent,  # Stateful
@@ -171,28 +171,28 @@ class DropdownDemo(LiveView):
             variant="info"
         )
 
-    @event
+    @event_handler
     def handle_edit(self):
         """Handle edit action"""
         self.action_count += 1
         self.last_action = f"Edit clicked! (Action #{self.action_count})"
         self.status_alert = Alert(text=self.last_action, variant="info")
 
-    @event
+    @event_handler
     def handle_duplicate(self):
         """Handle duplicate action"""
         self.action_count += 1
         self.last_action = f"Duplicate clicked! (Action #{self.action_count})"
         self.status_alert = Alert(text=self.last_action, variant="success")
 
-    @event
+    @event_handler
     def handle_share(self):
         """Handle share action"""
         self.action_count += 1
         self.last_action = f"Share clicked! (Action #{self.action_count})"
         self.status_alert = Alert(text=self.last_action, variant="primary")
 
-    @event
+    @event_handler
     def handle_delete(self):
         """Handle delete action"""
         self.action_count += 1

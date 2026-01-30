@@ -3,7 +3,7 @@ Live Demos - interactive examples showcasing Django Rust Live features
 """
 
 from djust import LiveView
-from djust.decorators import event
+from djust.decorators import event_handler
 from djust._rust import fast_json_dumps
 from django.http import JsonResponse
 from djust_shared.views import BaseTemplateView
@@ -66,40 +66,40 @@ class DemosIndexShadcnView(BaseViewWithNavbar):
         }
 
     # Counter demo event handlers
-    @event
+    @event_handler
     def increment(self):
         demos = self._get_demos()
         demos['counter'].increment()
 
-    @event
+    @event_handler
     def decrement(self):
         demos = self._get_demos()
         demos['counter'].decrement()
 
-    @event
+    @event_handler
     def reset(self):
         demos = self._get_demos()
         demos['counter'].reset()
 
     # Dropdown demo event handlers
-    @event
+    @event_handler
     def toggle_dropdown(self):
         demos = self._get_demos()
         demos['dropdown'].toggle_dropdown()
 
-    @event
+    @event_handler
     def select_item(self, item: str = "", **kwargs):
         demos = self._get_demos()
         demos['dropdown'].select_item(item=item, **kwargs)
 
     # Debounce demo event handler
-    @event
+    @event_handler
     def debounce_search(self, value: str = "", **kwargs):
         demos = self._get_demos()
         demos['debounce'].debounce_search(value=value, **kwargs)
 
     # Cache demo event handler
-    @event
+    @event_handler
     def cache_search(self, query: str = "", **kwargs):
         demos = self._get_demos()
         demos['cache'].cache_search(query=query, **kwargs)
@@ -129,7 +129,7 @@ class TodoView(BaseViewWithNavbar):
         self.todos = []
         self.next_id = 1
 
-    @event
+    @event_handler
     def add_todo(self, text=""):
         if text.strip():
             self.todos.append({
@@ -139,7 +139,7 @@ class TodoView(BaseViewWithNavbar):
             })
             self.next_id += 1
 
-    @event
+    @event_handler
     def toggle_todo(self, id=None, **kwargs):
         # Accept both 'id' and 'todo_id' for backwards compatibility
         item_id = id or kwargs.get('todo_id')
@@ -149,7 +149,7 @@ class TodoView(BaseViewWithNavbar):
                     todo['done'] = not todo['done']
                     break
 
-    @event
+    @event_handler
     def delete_todo(self, id=None, **kwargs):
         # Accept both 'id' and 'todo_id' for backwards compatibility
         item_id = id or kwargs.get('todo_id')
@@ -167,7 +167,7 @@ class ChatView(BaseViewWithNavbar):
         self.messages = []
         self.next_id = 1
 
-    @event
+    @event_handler
     def send_message(self, text=""):
         if text.strip():
             self.messages.append({
@@ -191,12 +191,12 @@ class ReactDemoView(BaseViewWithNavbar):
         self.todo_items = []
         self.next_id = 1
 
-    @event
+    @event_handler
     def increment_server(self):
         """Server-side counter increment"""
         self.server_count += 1
 
-    @event
+    @event_handler
     def add_todo_item(self, text=""):
         """Add todo item from server-side"""
         if text.strip():
@@ -228,17 +228,17 @@ class PerformanceTestView(BaseViewWithNavbar):
         self.filter_text = ""
         self.sort_by = "name"
 
-    @event
+    @event_handler
     def add_items_10(self):
         """Add 10 items"""
         self._add_items(10)
 
-    @event
+    @event_handler
     def add_items_100(self):
         """Add 100 items"""
         self._add_items(100)
 
-    @event
+    @event_handler
     def add_items_1000(self):
         """Add 1000 items"""
         self._add_items(1000)
@@ -256,17 +256,17 @@ class PerformanceTestView(BaseViewWithNavbar):
             })
             self.next_id += 1
 
-    @event
+    @event_handler
     def clear_all(self):
         """Clear all items"""
         self.items = []
 
-    @event
+    @event_handler
     def filter_items(self, value="", **kwargs):
         """Update filter text"""
         self.filter_text = value
 
-    @event
+    @event_handler
     def sort_items(self, value="", **kwargs):
         """Update sort order"""
         self.sort_by = value
@@ -277,7 +277,7 @@ class PerformanceTestView(BaseViewWithNavbar):
         elif self.sort_by == "priority":
             self.items.sort(key=lambda x: x['priority'], reverse=True)
 
-    @event
+    @event_handler
     def select_all(self):
         """Select all filtered items"""
         filtered = self._get_filtered_items()
@@ -285,25 +285,25 @@ class PerformanceTestView(BaseViewWithNavbar):
             if item in filtered:
                 item['selected'] = True
 
-    @event
+    @event_handler
     def deselect_all(self):
         """Deselect all items"""
         for item in self.items:
             item['selected'] = False
 
-    @event
+    @event_handler
     def delete_selected(self):
         """Delete all selected items"""
         self.items = [item for item in self.items if not item['selected']]
 
-    @event
+    @event_handler
     def toggle_priority_selected(self):
         """Toggle priority for all selected items"""
         for item in self.items:
             if item['selected']:
                 item['priority'] = not item['priority']
 
-    @event
+    @event_handler
     def toggle_item(self, id=None, **kwargs):
         """Toggle item selection"""
         if id:
@@ -312,7 +312,7 @@ class PerformanceTestView(BaseViewWithNavbar):
                     item['selected'] = not item['selected']
                     break
 
-    @event
+    @event_handler
     def toggle_priority(self, id=None, **kwargs):
         """Toggle item priority"""
         if id:
@@ -321,7 +321,7 @@ class PerformanceTestView(BaseViewWithNavbar):
                     item['priority'] = not item['priority']
                     break
 
-    @event
+    @event_handler
     def delete_item(self, id=None, **kwargs):
         """Delete a single item"""
         if id:

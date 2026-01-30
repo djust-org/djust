@@ -13,7 +13,7 @@ All 4 panels coordinate via client-side StateBus without any manual JavaScript!
 
 import random
 from djust import LiveView
-from djust.decorators import event, client_state, optimistic, debounce, throttle, cache
+from djust.decorators import event_handler, client_state, optimistic, debounce, throttle, cache
 from djust_shared.views import BaseViewWithNavbar
 
 
@@ -74,7 +74,7 @@ class SmartDashboardView(BaseViewWithNavbar):
     # CLIMATE CONTROL - @client_state + @throttle + @optimistic
     # ========================================================================
 
-    @event
+    @event_handler
     @client_state(keys=["temperature"])  # Outermost: publish to state bus
     @throttle(interval=0.1)              # Middle: limit to 10 updates/sec
     @optimistic                           # Innermost: immediate UI update
@@ -117,7 +117,7 @@ class SmartDashboardView(BaseViewWithNavbar):
         self.temperature_celsius = self._fahrenheit_to_celsius(self.temperature)
         self.heat_index_celsius = self._fahrenheit_to_celsius(self.heat_index)
 
-    @event
+    @event_handler
     @client_state(keys=["humidity"])  # Outermost: publish to state bus
     @throttle(interval=0.1)           # Middle: limit to 10 updates/sec
     @optimistic                        # Innermost: immediate UI update
@@ -151,7 +151,7 @@ class SmartDashboardView(BaseViewWithNavbar):
     # SIMULATED SENSOR UPDATES - @throttle + @client_state
     # ========================================================================
 
-    @event
+    @event_handler
     @client_state(keys=["temperature", "humidity"])
     @throttle(interval=2.0)
     def simulate_sensor(self, **kwargs):
@@ -182,7 +182,7 @@ class SmartDashboardView(BaseViewWithNavbar):
     # DEVICE MANAGEMENT - @optimistic + @client_state
     # ========================================================================
 
-    @event
+    @event_handler
     @client_state(keys=["devices"])
     @optimistic
     def toggle_device(self, device_id: int = None, **kwargs):
@@ -209,7 +209,7 @@ class SmartDashboardView(BaseViewWithNavbar):
     # FILTERING - @client_state (server-side filtering)
     # ========================================================================
 
-    @event
+    @event_handler
     @client_state(keys=["filter"])
     def update_filter(self, filter: str = "all", **kwargs):
         """
@@ -232,7 +232,7 @@ class SmartDashboardView(BaseViewWithNavbar):
     # DATA FETCHING - @cache + @debounce
     # ========================================================================
 
-    @event
+    @event_handler
     @cache(ttl=60, key_params=["device_id"])
     @debounce(wait=0.5)
     def fetch_device_details(self, device_id: int = None, **kwargs):
