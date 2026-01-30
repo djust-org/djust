@@ -1469,4 +1469,62 @@ mod tests {
             "dj-click should be preserved"
         );
     }
+
+    #[test]
+    fn test_data_djust_replace_patch_ordering() {
+        // Verify that replace_all_children emits all RemoveChild patches
+        // before any InsertChild patches. The JS client batching path
+        // depends on this ordering to avoid stale index bugs (Issue #142).
+        let old = VNode::element("div")
+            .with_djust_id("container")
+            .with_attr("data-djust-replace", "")
+            .with_children(vec![
+                VNode::element("p").with_child(VNode::text("old-1")),
+                VNode::element("p").with_child(VNode::text("old-2")),
+                VNode::element("p").with_child(VNode::text("old-3")),
+            ]);
+        let new = VNode::element("div")
+            .with_djust_id("container")
+            .with_attr("data-djust-replace", "")
+            .with_children(vec![
+                VNode::element("span").with_child(VNode::text("new-1")),
+                VNode::element("span").with_child(VNode::text("new-2")),
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        // Find positions of last RemoveChild and first InsertChild
+        let last_remove_idx = patches
+            .iter()
+            .rposition(|p| matches!(p, Patch::RemoveChild { .. }));
+        let first_insert_idx = patches
+            .iter()
+            .position(|p| matches!(p, Patch::InsertChild { .. }));
+
+        assert!(
+            last_remove_idx.is_some() && first_insert_idx.is_some(),
+            "Should have both RemoveChild and InsertChild patches"
+        );
+        assert!(
+            last_remove_idx.unwrap() < first_insert_idx.unwrap(),
+            "All RemoveChild patches must come before any InsertChild patch. \
+             Got last RemoveChild at index {}, first InsertChild at index {}",
+            last_remove_idx.unwrap(),
+            first_insert_idx.unwrap()
+        );
+
+        // Verify RemoveChild indices are in descending order (for safe removal)
+        let remove_indices: Vec<usize> = patches
+            .iter()
+            .filter_map(|p| match p {
+                Patch::RemoveChild { index, .. } => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            remove_indices,
+            vec![2, 1, 0],
+            "RemoveChild should be in descending index order"
+        );
+    }
 }
