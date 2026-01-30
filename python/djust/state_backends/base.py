@@ -19,7 +19,7 @@ NO_COMPRESSION_MARKER = b"\x00"  # Prefix byte for uncompressed data
 
 # Try to import zstd for compression (optional dependency)
 try:
-    import zstandard as zstd  # noqa: F401
+    import zstandard  # noqa: F401
 
     ZSTD_AVAILABLE = True
     logger.debug("zstd compression available")
