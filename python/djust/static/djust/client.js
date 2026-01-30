@@ -2854,8 +2854,31 @@ function applyPatches(patches) {
     const patchGroups = groupPatchesByParent(patches);
 
     for (const [parentPath, group] of patchGroups) {
+        // IMPORTANT: Apply RemoveChild patches first before any InsertChild.
+        // For data-djust-replace, Rust emits all RemoveChild then all InsertChild.
+        // If InsertChild runs first, old children shift indices and RemoveChild
+        // targets the wrong nodes (Issue #142).
+        const removePatches = [];
+        const remainingPatches = [];
+        for (const patch of group) {
+            if (patch.type === 'RemoveChild') {
+                removePatches.push(patch);
+            } else {
+                remainingPatches.push(patch);
+            }
+        }
+
+        // Apply all RemoveChild patches first (already sorted descending by index)
+        for (const patch of removePatches) {
+            if (applySinglePatch(patch)) {
+                successCount++;
+            } else {
+                failedCount++;
+            }
+        }
+
         // Optimization: Use DocumentFragment for consecutive InsertChild on same parent
-        const insertPatches = group.filter(p => p.type === 'InsertChild');
+        const insertPatches = remainingPatches.filter(p => p.type === 'InsertChild');
 
         if (insertPatches.length >= 3) {
             // Group only consecutive inserts (can't batch non-consecutive indices)
@@ -2892,22 +2915,22 @@ function applyPatches(patches) {
 
                         // Mark these patches as processed
                         const processedSet = new Set(consecutiveGroup);
-                        for (let i = group.length - 1; i >= 0; i--) {
-                            if (processedSet.has(group[i])) {
-                                group.splice(i, 1);
+                        for (let i = remainingPatches.length - 1; i >= 0; i--) {
+                            if (processedSet.has(remainingPatches[i])) {
+                                remainingPatches.splice(i, 1);
                             }
                         }
                     } catch (error) {
                         console.error('[LiveView] Batch insert failed, falling back to individual patches:', error.message);
-                        // On failure, patches remain in group for individual processing
+                        // On failure, patches remain for individual processing
                         successCount -= consecutiveGroup.length;  // Undo count
                     }
                 }
             }
         }
 
-        // Apply remaining patches individually
-        for (const patch of group) {
+        // Apply remaining non-remove patches individually
+        for (const patch of remainingPatches) {
             if (applySinglePatch(patch)) {
                 successCount++;
             } else {
