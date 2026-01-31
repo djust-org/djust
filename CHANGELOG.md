@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Debug Toolbar: Network Message Inspection** — Network tab messages now have directional color coding (blue for sent, green for received), and expanded messages include a copy-to-clipboard button with visual feedback. ([#167](https://github.com/djust-org/djust/issues/167))
+- **Debug Toolbar: Event Filtering Controls** — Events tab now includes filter controls: text search by event/handler name (substring match), status filter (all/errors/success), clear filters button, and match count display. Filters persist across tab switches. ([#170](https://github.com/djust-org/djust/issues/170))
 
 ## [0.2.2rc3] - 2026-01-31
 

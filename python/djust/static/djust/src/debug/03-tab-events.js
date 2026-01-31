@@ -5,14 +5,42 @@
                 return '<div class="empty-state">No events captured yet. Interact with the page to see events.</div>';
             }
 
+            // Apply filters
+            const nameFilter = (this.state.filters.eventName || '').toLowerCase();
+            const statusFilter = this.state.filters.eventStatus || 'all';
+
+            const filtered = this.eventHistory.filter(event => {
+                const name = (event.handler || event.name || '').toLowerCase();
+                if (nameFilter && !name.includes(nameFilter)) return false;
+                if (statusFilter === 'errors' && !event.error) return false;
+                if (statusFilter === 'success' && event.error) return false;
+                return true;
+            });
+
+            const hasActiveFilters = nameFilter || statusFilter !== 'all';
+
             return `
+                <div class="events-filter-bar">
+                    <input type="text" class="events-filter-input" placeholder="Filter by event name..."
+                        value="${this.escapeHtml(this.state.filters.eventName || '')}"
+                        oninput="window.djustDebugPanel.setEventNameFilter(this.value)" />
+                    <select class="events-filter-select" onchange="window.djustDebugPanel.setEventStatusFilter(this.value)">
+                        <option value="all" ${statusFilter === 'all' ? 'selected' : ''}>All</option>
+                        <option value="errors" ${statusFilter === 'errors' ? 'selected' : ''}>Errors only</option>
+                        <option value="success" ${statusFilter === 'success' ? 'selected' : ''}>Success only</option>
+                    </select>
+                    ${hasActiveFilters ? `<button class="btn-xs events-filter-clear" onclick="window.djustDebugPanel.clearEventFilters()">Clear filters</button>` : ''}
+                    <span class="events-filter-count">${filtered.length} / ${this.eventHistory.length}</span>
+                </div>
+                ${filtered.length === 0 ? '<div class="empty-state">No events match the current filters.</div>' : `
                 <div class="events-list">
-                    ${this.eventHistory.map((event, index) => {
+                    ${filtered.map((event, index) => {
                         const hasDetails = event.params || event.error || event.result;
                         const paramCount = event.params ? Object.keys(event.params).length : 0;
+                        const originalIndex = this.eventHistory.indexOf(event);
 
                         return `
-                            <div class="event-item ${event.error ? 'error' : ''} ${hasDetails ? 'expandable' : ''}" data-index="${index}">
+                            <div class="event-item ${event.error ? 'error' : ''} ${hasDetails ? 'expandable' : ''}" data-index="${originalIndex}">
                                 <div class="event-header" ${hasDetails ? 'onclick="window.djustDebugPanel.toggleExpand(this)"' : ''}>
                                     ${hasDetails ? '<span class="expand-icon">▶</span>' : ''}
                                     <span class="event-name">${event.handler || event.name || 'unknown'}</span>
@@ -64,5 +92,25 @@
                         `;
                     }).join('')}
                 </div>
+                `}
             `;
+        }
+
+        setEventNameFilter(value) {
+            this.state.filters.eventName = value;
+            this.saveState();
+            this.renderTabContent();
+        }
+
+        setEventStatusFilter(value) {
+            this.state.filters.eventStatus = value;
+            this.saveState();
+            this.renderTabContent();
+        }
+
+        clearEventFilters() {
+            this.state.filters.eventName = '';
+            this.state.filters.eventStatus = 'all';
+            this.saveState();
+            this.renderTabContent();
         }
