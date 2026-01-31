@@ -2637,6 +2637,8 @@ function isWhitespacePreserving(node) {
 // Export for testing
 window.djust.getSignificantChildren = getSignificantChildren;
 window.djust._stampDjIds = _stampDjIds;
+window.djust._groupPatchesByParent = groupPatchesByParent;
+window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
 
 /**
  * Group patches by their parent path for batching.
@@ -2644,7 +2646,15 @@ window.djust._stampDjIds = _stampDjIds;
 function groupPatchesByParent(patches) {
     const groups = new Map(); // Use Map to avoid prototype pollution
     for (const patch of patches) {
-        const parentPath = patch.path.slice(0, -1).join('/');
+        // For child operations (InsertChild, RemoveChild, MoveChild), patch.path
+        // is already the parent container path. For node-targeting ops, we need
+        // to slice off the last element to get the parent.
+        const isChildOp = patch.type === 'InsertChild' ||
+                          patch.type === 'RemoveChild' ||
+                          patch.type === 'MoveChild';
+        const parentPath = isChildOp
+            ? patch.path.join('/')
+            : patch.path.slice(0, -1).join('/');
         if (!groups.has(parentPath)) {
             groups.set(parentPath, []);
         }
@@ -2673,7 +2683,8 @@ function groupConsecutiveInserts(inserts) {
 
     for (let i = 1; i < inserts.length; i++) {
         // Check if this insert is consecutive with the previous one
-        if (inserts[i].index === inserts[i - 1].index + 1) {
+        if (inserts[i].index === inserts[i - 1].index + 1 &&
+            inserts[i].d === inserts[i - 1].d) {
             currentGroup.push(inserts[i]);
         } else {
             // Start a new group
