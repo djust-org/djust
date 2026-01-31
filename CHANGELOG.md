@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Debug Toolbar: Event Filtering** — Events tab now has filter controls to search by event/handler name (substring match) and filter by status (all/errors/success). Includes a clear button and match count display. (#176)
+
 ## [0.2.2rc3] - 2026-01-31
 
 ### Fixed

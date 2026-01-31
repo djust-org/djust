@@ -33,7 +33,9 @@
                 searchQuery: '',
                 filters: {
                     types: [],
-                    severity: 'all'
+                    severity: 'all',
+                    eventName: '',
+                    eventStatus: 'all'
                 }
             };
 
