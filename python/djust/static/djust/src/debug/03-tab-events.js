@@ -57,6 +57,8 @@
                                     ${event.duration ? `<span class="event-duration">${event.duration.toFixed(1)}ms</span>` : ''}
                                     ${paramCount > 0 ? `<span class="event-param-count">${paramCount} param${paramCount === 1 ? '' : 's'}</span>` : ''}
                                     ${event.error ? '<span class="event-status">❌</span>' : ''}
+                                    <span class="replay-status" id="replay-status-${index}"></span>
+                                    ${(event.name || event.handler) && event.params ? `<button class="replay-btn" onclick="event.stopPropagation();window.djustDebugPanel.replayEvent(${index})" style="padding:1px 6px;font-size:10px;border-radius:2px;cursor:pointer;border:1px solid #475569;background:#1e293b;color:#94a3b8;margin-left:4px;" title="Replay this event">▶ Replay</button>` : ''}
                                     <span class="event-time">${this.formatTime(event.timestamp)}</span>
                                 </div>
                                 ${hasDetails ? `
@@ -121,4 +123,56 @@
             this.state.filters.severity = 'all';
             this.saveState();
             this.renderTabContent();
+        }
+
+        async replayEvent(filteredIndex) {
+            // Get the filtered list to find the correct event
+            const nameFilter = (this.state.filters.nameQuery || '').toLowerCase();
+            const statusFilter = this.state.filters.severity || 'all';
+            const filtered = this.eventHistory.filter(ev => {
+                if (nameFilter) {
+                    const n = (ev.handler || ev.name || '').toLowerCase();
+                    if (!n.includes(nameFilter)) return false;
+                }
+                if (statusFilter === 'error' && !ev.error) return false;
+                if (statusFilter === 'success' && ev.error) return false;
+                return true;
+            });
+
+            const event = filtered[filteredIndex];
+            if (!event) return;
+
+            const statusEl = document.getElementById(`replay-status-${filteredIndex}`);
+            const eventName = event.name || event.handler;
+            if (!eventName || !event.params) return;
+
+            // Show pending
+            if (statusEl) {
+                statusEl.textContent = '⏳';
+                statusEl.title = 'Replaying…';
+            }
+
+            try {
+                await handleEvent(eventName, { ...event.params });
+                if (statusEl) {
+                    statusEl.textContent = '✓';
+                    statusEl.style.color = '#16a34a';
+                    statusEl.title = 'Replay succeeded';
+                }
+            } catch (err) {
+                if (statusEl) {
+                    statusEl.textContent = '✗';
+                    statusEl.style.color = '#dc2626';
+                    statusEl.title = 'Replay failed: ' + err.message;
+                }
+            }
+
+            // Clear status after 3 seconds
+            setTimeout(() => {
+                if (statusEl) {
+                    statusEl.textContent = '';
+                    statusEl.title = '';
+                    statusEl.style.color = '';
+                }
+            }, 3000);
         }
