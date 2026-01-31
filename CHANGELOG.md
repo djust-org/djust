@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Debug Toolbar: Handlers, Variables, Components Tabs Empty on Load** — Debug panel now bootstraps its tabs from `window.DJUST_DEBUG_INFO` on initialization, so Handlers, Variables, and Components tabs show data immediately on page load. (#189)
 - **Debug Toolbar: Received WebSocket Messages Not Captured** — Network tab now captures both sent and received WebSocket messages by intercepting the `onmessage` property setter (not just `addEventListener`). (#186)
 - **Debug Toolbar: Events Tab Always Empty** — Events tab now populates by extracting event data from sent WebSocket messages and matching responses, replacing the broken `window.liveView` hook. Event replay now uses `window.djust.liveViewInstance`. (#187)
 
