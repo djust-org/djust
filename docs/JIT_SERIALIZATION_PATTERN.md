@@ -202,21 +202,47 @@ class MaintenanceListView(BaseViewWithNavbar):
         return context
 ```
 
+## Custom Annotations with `_djust_annotations`
+
+Models can declare computed annotations that JIT automatically applies during query optimization:
+
+```python
+from django.db.models import Count
+
+class Author(models.Model):
+    name = models.CharField(max_length=200)
+
+    # Declare annotations JIT should apply when serializing this model
+    _djust_annotations = {
+        "book_count": Count("books"),
+    }
+```
+
+```html
+<!-- Template can reference the annotation directly -->
+{{ author.book_count }} books published
+```
+
+JIT detects `_djust_annotations` on the model class and adds them to the query automatically. The annotation values are then available as regular attributes during serialization.
+
 ## How JIT Serialization Works
 
 When you assign a QuerySet to a public instance variable and call `super().get_context_data()`:
 
-1. **Template Analysis**: JIT analyzes the template to extract all field access paths
+1. **Template Analysis**: JIT analyzes the template (including `{% include %}` directives) to extract all field access paths
    - Example: `{{ request.property.name }}` → extracts `property.name`
    - Example: `{{ tenant.user.get_full_name }}` → extracts `tenant.user`
+   - Included templates are inlined so their variables are also discovered
 
-2. **Automatic Optimization**: JIT automatically applies `select_related()` and `prefetch_related()`
+2. **Automatic Optimization**: JIT automatically applies `select_related()`, `prefetch_related()`, and model-declared annotations
    - Eliminates N+1 query problems
    - You don't need to manually optimize (though you can for complex cases)
+   - `_djust_annotations` on the model class are applied automatically
 
-3. **Rust Serialization**: QuerySet serialized using Rust (10-100x faster than Python)
+3. **Rust Serialization with Python Fallback**: QuerySet serialized using Rust (10-100x faster than Python)
    - Sub-millisecond serialization for hundreds of objects
    - Automatic type conversion and JSON formatting
+   - Falls back to Python codegen for `@property` attributes that Rust can't access
 
 4. **Auto-Generated Variables**: JIT creates convenience variables
    - `items_count` automatically created from `len(items)`
@@ -383,7 +409,24 @@ All concrete fields on the model are serialized:
 - ForeignKey → `{id: ..., __str__: ...}` (if not prefetched)
 - ForeignKey (prefetched) → full nested serialization
 
-#### 2. Methods Starting with `get_`
+#### 2. `@property` Attributes
+Python `@property` attributes on models are automatically serialized. The Rust serializer can't access these directly, so JIT falls back to Python codegen when it detects missing keys:
+
+```python
+class MyModel(models.Model):
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+
+    @property
+    def full_name(self):            # ✅ Auto-serialized via codegen fallback
+        return f"{self.first_name} {self.last_name}"
+
+    @property
+    def is_active(self):            # ✅ Auto-serialized
+        return self.status == "active"
+```
+
+#### 3. Methods Starting with `get_`
 Methods following Django's convention are auto-called:
 
 ```python
@@ -404,6 +447,39 @@ class MyModel(models.Model):
 - Must take no arguments (other than `self`)
 - Must return simple types: `str`, `int`, `float`, `bool`, or `None`
 - Complex return types (list, dict, queryset) are silently ignored
+
+#### 4. Many-to-Many Relations via `.all()`
+M2M relations accessed with `.all()` in templates are now serialized with iteration:
+
+```html
+<!-- Template -->
+{% for tag in product.tags.all %}
+    <span>{{ tag.name }}</span>
+{% endfor %}
+```
+
+JIT generates codegen that iterates `.all()` and serializes each related object.
+
+#### 5. Nested Dicts with Model Values
+Dicts containing Model or QuerySet values are recursively deep-serialized:
+
+```python
+def get_context_data(self, **kwargs):
+    self.dashboard = {
+        "recent_order": Order.objects.latest("created_at"),
+        "top_products": Product.objects.order_by("-sales")[:5],
+    }
+    return super().get_context_data(**kwargs)
+```
+
+#### 6. `list[Model]` (Not Just QuerySets)
+Plain Python lists of model instances now receive full JIT optimization. JIT re-fetches the objects with optimized `select_related`/`prefetch_related` based on template analysis:
+
+```python
+def mount(self, request, **kwargs):
+    # Even plain lists get JIT optimization
+    self.featured = list(Product.objects.filter(featured=True)[:3])
+```
 
 #### 3. Skipped Methods (For Performance)
 These methods are intentionally skipped:
@@ -520,9 +596,11 @@ If data isn't appearing in your template, check:
 ### Cache Invalidation
 
 JIT serializers are cached for performance. The cache key includes:
-- Template hash (changes when template changes)
+- Template content hash (SHA-256, changes when template changes)
 - Variable name
 - Model structure hash (changes when model fields change)
+
+Template hashes are further cached by `id(template_content)` to avoid recomputing the SHA-256 for every variable in the same request. This is safe because the template string is kept alive by the caller for the duration of `get_context_data()`.
 
 **In development**, the cache auto-clears when Django's autoreloader runs.
 
@@ -542,7 +620,11 @@ clear_jit_cache()  # Returns number of entries cleared
   - `examples/demo_project/djust_rentals/views/leases.py` - LeaseListView
 
 - **Core Implementation**:
-  - `python/djust/live_view.py` - LiveView base class with JIT serialization logic
+  - `python/djust/mixins/jit.py` - JIT serialization mixin (template resolution, Rust/codegen serialization)
+  - `python/djust/mixins/context.py` - Context data management (JIT dispatch for QuerySets, Models, lists, dicts)
+  - `python/djust/optimization/codegen.py` - Python serializer code generation
+  - `python/djust/optimization/query_optimizer.py` - Automatic select_related/prefetch_related/annotation optimization
+  - `python/djust/serialization.py` - DjangoJSONEncoder and @property serialization
 
 - **Documentation**:
   - `CLAUDE.md` - Project overview and architecture

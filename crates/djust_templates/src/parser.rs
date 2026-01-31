@@ -697,12 +697,31 @@ fn extract_from_nodes(
                 for var_name in var_names {
                     if let Some(loop_var_paths) = variables.get(var_name) {
                         // Transfer paths from loop variable to iterable (but keep loop var)
+                        // Prepend the iterable suffix so paths are correctly nested.
+                        // Example: {% for tag in post.tags.all %}{{ tag.name }}{% endfor %}
+                        //   iterable = "post.tags.all", loop var paths = ["name", "url"]
+                        //   iterable_name = "post", iterable_suffix = "tags.all"
+                        //   transferred paths = ["tags.all.name", "tags.all.url"]
                         let iterable_name = iterable.split('.').next().unwrap_or(iterable);
-                        let paths_clone = loop_var_paths.clone();
+                        let iterable_suffix = if iterable.len() > iterable_name.len() + 1 {
+                            &iterable[iterable_name.len() + 1..]
+                        } else {
+                            ""
+                        };
+                        let prefixed_paths: Vec<String> = loop_var_paths
+                            .iter()
+                            .map(|path| {
+                                if iterable_suffix.is_empty() {
+                                    path.clone()
+                                } else {
+                                    format!("{}.{}", iterable_suffix, path)
+                                }
+                            })
+                            .collect();
                         variables
                             .entry(iterable_name.to_string())
                             .or_default()
-                            .extend(paths_clone);
+                            .extend(prefixed_paths);
                     }
                 }
             }

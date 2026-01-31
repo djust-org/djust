@@ -355,6 +355,54 @@ def test_code_uniqueness():
     assert code1 != code2
 
 
+def test_method_call_with_subtree_generates_iteration():
+    """When .all() has nested children (e.g., tags.all.name), codegen should iterate."""
+    code = generate_serializer_code("Post", ["tags.all.name", "tags.all.url"])
+    assert "for" in code
+    assert ".all()" in code
+
+    class Tag:
+        def __init__(self, n, u):
+            self.name = n
+            self.url = u
+
+    class TagManager:
+        def __init__(self, tags):
+            self._tags = tags
+
+        def all(self):
+            return self._tags
+
+    class Post:
+        def __init__(self):
+            self.tags = TagManager([Tag("py", "/py"), Tag("dj", "/dj")])
+
+    func_name = code.split("def ")[1].split("(")[0]
+    func = compile_serializer(code, func_name)
+    result = func(Post())
+    assert len(result["tags"]["all"]) == 2
+    assert result["tags"]["all"][0]["name"] == "py"
+
+
+def test_method_call_leaf_still_calls_method():
+    """When .all() is a leaf (no subtree), it should call the method directly."""
+    code = generate_serializer_code("Post", ["tags.all"])
+    assert ".all()" in code
+    func_name = code.split("def ")[1].split("(")[0]
+
+    class TagManager:
+        def all(self):
+            return ["a", "b"]
+
+    class Post:
+        def __init__(self):
+            self.tags = TagManager()
+
+    func = compile_serializer(code, func_name)
+    result = func(Post())
+    assert result["tags"]["all"] == ["a", "b"]
+
+
 def test_compile_syntax_error():
     """Test handling of syntax errors in compilation."""
     # Create intentionally broken code

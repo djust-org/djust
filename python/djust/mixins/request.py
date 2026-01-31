@@ -44,9 +44,15 @@ class RequestMixin:
         if not request.session.session_key:
             request.session.create()
 
-        # Get context for rendering
+        # Get context for rendering and cache it so _sync_state_to_rust()
+        # and render_with_diff() don't re-evaluate QuerySets.
+        # Note: cached BEFORE _apply_context_processors, so downstream callers
+        # of get_context_data() won't see processor-added keys (csrf_token,
+        # messages, etc.). This is intentional — those callers only need
+        # serialized view state, not request-scoped processor context.
         t0 = time.perf_counter()
         context = self.get_context_data()
+        self._cached_context = dict(context)
         context = self._apply_context_processors(context, request)
         t_get_context = (time.perf_counter() - t0) * 1000
 
@@ -91,6 +97,9 @@ class RequestMixin:
         t0 = time.perf_counter()
         _, _, _ = self.render_with_diff(request)
         t_render_diff = (time.perf_counter() - t0) * 1000
+
+        # Clear context cache so WebSocket events get fresh data
+        self._cached_context = None
 
         # Wrap in Django template if wrapper_template is specified
         if hasattr(self, "wrapper_template") and self.wrapper_template:

@@ -9,6 +9,7 @@ import json
 import logging
 from datetime import datetime, date, time
 from decimal import Decimal
+from typing import Dict, List
 from uuid import UUID
 
 from django.db import models
@@ -34,6 +35,9 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
     # Class variable to track recursion depth
     _depth = 0
+
+    # Cache @property names per model class to avoid repeated MRO walks
+    _property_cache: Dict[type, List[str]] = {}
 
     @staticmethod
     def _get_max_depth():
@@ -87,6 +91,11 @@ class DjangoJSONEncoder(json.JSONEncoder):
                     return None
             return None
 
+        # Handle Django model instances (must be before duck-typing check
+        # since models with 'url' and 'name' properties would match file-like heuristic)
+        if isinstance(obj, models.Model):
+            return self._serialize_model_safely(obj)
+
         # Duck-typing fallback for file-like objects (e.g., custom file fields, mocks)
         # Must have 'url' and 'name' attributes (signature of file fields)
         if hasattr(obj, "url") and hasattr(obj, "name") and not isinstance(obj, type):
@@ -98,10 +107,6 @@ class DjangoJSONEncoder(json.JSONEncoder):
                     except (ValueError, AttributeError):
                         return None
                 return None
-
-        # Handle Django model instances
-        if isinstance(obj, models.Model):
-            return self._serialize_model_safely(obj)
 
         # Handle QuerySets
         if hasattr(obj, "model") and hasattr(obj, "__iter__"):
@@ -172,6 +177,10 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
         # Only include explicitly defined get_* methods (skip auto-generated ones)
         self._add_safe_model_methods(obj, result)
+
+        # Include @property values defined on user model classes
+        self._add_property_values(obj, result)
+
         return result
 
     def _is_relation_prefetched(self, obj, field_name):
@@ -253,3 +262,35 @@ class DjangoJSONEncoder(json.JSONEncoder):
             if method_name in cls.__dict__:
                 return True
         return False
+
+    def _add_property_values(self, obj, result):
+        """Add @property values defined on user model classes (not Django base)."""
+        model_class = obj.__class__
+
+        if model_class not in DjangoJSONEncoder._property_cache:
+            prop_names = []
+            for cls in model_class.__mro__:
+                if cls is models.Model:
+                    break
+                for attr_name, attr_value in cls.__dict__.items():
+                    if isinstance(attr_value, property):
+                        prop_names.append(attr_name)
+            DjangoJSONEncoder._property_cache[model_class] = prop_names
+
+        cache = getattr(obj, "_djust_prop_cache", None)
+        if cache is None:
+            cache = {}
+            obj._djust_prop_cache = cache
+
+        for attr_name in DjangoJSONEncoder._property_cache[model_class]:
+            if attr_name not in result:
+                if attr_name in cache:
+                    result[attr_name] = cache[attr_name]
+                    continue
+                try:
+                    val = getattr(obj, attr_name)
+                    if isinstance(val, (str, int, float, bool, type(None))):
+                        cache[attr_name] = val
+                        result[attr_name] = val
+                except Exception:
+                    pass  # Property may raise; skip gracefully during serialization
