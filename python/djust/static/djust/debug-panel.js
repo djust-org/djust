@@ -33,7 +33,9 @@
                 searchQuery: '',
                 filters: {
                     types: [],
-                    severity: 'all'
+                    severity: 'all',
+                    eventName: '',
+                    eventStatus: 'all'
                 }
             };
 
@@ -1701,9 +1703,38 @@
                 return '<div class="empty-state">No events captured yet. Interact with the page to see events.</div>';
             }
 
+            const nameFilter = (this.state.filters.eventName || '').toLowerCase();
+            const statusFilter = this.state.filters.eventStatus || 'all';
+
+            const filtered = this.eventHistory.filter(event => {
+                const eventName = (event.handler || event.name || 'unknown').toLowerCase();
+                if (nameFilter && !eventName.includes(nameFilter)) return false;
+                if (statusFilter === 'errors' && !event.error) return false;
+                if (statusFilter === 'success' && event.error) return false;
+                return true;
+            });
+
+            const hasActiveFilters = nameFilter || statusFilter !== 'all';
+
             return `
+                <div class="events-filter-bar">
+                    <input type="text"
+                        class="events-filter-input"
+                        placeholder="Filter by event name..."
+                        value="${this.escapeHtml(this.state.filters.eventName || '')}"
+                        oninput="window.djustDebugPanel.onEventNameFilter(this.value)" />
+                    <select class="events-filter-select"
+                        onchange="window.djustDebugPanel.onEventStatusFilter(this.value)">
+                        <option value="all"${statusFilter === 'all' ? ' selected' : ''}>All</option>
+                        <option value="errors"${statusFilter === 'errors' ? ' selected' : ''}>Errors only</option>
+                        <option value="success"${statusFilter === 'success' ? ' selected' : ''}>Success only</option>
+                    </select>
+                    ${hasActiveFilters ? `<button class="events-filter-clear" onclick="window.djustDebugPanel.clearEventFilters()">Clear</button>` : ''}
+                    <span class="events-filter-count">${filtered.length} / ${this.eventHistory.length}</span>
+                </div>
                 <div class="events-list">
-                    ${this.eventHistory.map((event, index) => {
+                    ${filtered.length === 0 ? '<div class="empty-state">No events match the current filters.</div>' :
+                    filtered.map((event, index) => {
                         const hasDetails = event.params || event.error || event.result;
                         const paramCount = event.params ? Object.keys(event.params).length : 0;
 
@@ -1761,6 +1792,22 @@
                     }).join('')}
                 </div>
             `;
+        }
+
+        onEventNameFilter(value) {
+            this.state.filters.eventName = value;
+            this.renderTabContent();
+        }
+
+        onEventStatusFilter(value) {
+            this.state.filters.eventStatus = value;
+            this.renderTabContent();
+        }
+
+        clearEventFilters() {
+            this.state.filters.eventName = '';
+            this.state.filters.eventStatus = 'all';
+            this.renderTabContent();
         }
 
         renderNetworkTab() {

@@ -136,6 +136,9 @@ search • 45.2ms • 4:32:15 PM   [Click to expand]
 - **Copy JSON**: Copy event data for testing
 - **Export all**: Download entire event history as JSON
 - **Color coding**: Green for success, red for errors
+- **Filter by name**: Substring search to find specific events quickly
+- **Filter by status**: Show all, errors only, or successes only
+- **Clear filters**: Single action to reset all active filters
 
 ### VDOM Patches Tab
 
