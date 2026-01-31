@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Debug Toolbar: Event Replay** — Each event in the Events tab now has a replay button (⟳) that re-sends the event through the WebSocket with original params. Shows inline pending/success/error feedback. (#177)
 - **Debug Toolbar: Scoped State Persistence** — Panel UI state (open/closed, active tab) is now scoped per view class via localStorage. Data histories are not persisted, preventing stale data after navigation. (#178)
 - **Debug Toolbar: Network Message Inspection** — Network tab messages now have directional color coding (amber for sent, cyan for received), and expanded payloads include a copy-to-clipboard button with visual feedback. (#179)
+- **Debug Toolbar: Test Harness** — Added a test harness that evaluates the real debug-panel.js IIFE in a DOM environment, replacing replicated-logic tests with integration tests against the actual `DjustDebugPanel` class. (#184)
 
 ## [0.2.2rc3] - 2026-01-31
 
