@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Debug Toolbar: Event Filtering** — Filter events by handler/event name (substring match) and by status (all/errors/success) with a clear button to reset filters ([#164](https://github.com/djust-org/djust/issues/164))
+
 ## [0.2.2rc3] - 2026-01-31
 
 ### Fixed
