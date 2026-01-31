@@ -50,7 +50,7 @@ except ImportError:
     # Rust components not yet built - this is optional
     rust_components = None
 
-__version__ = "0.2.0"
+__version__ = "0.2.2rc1"
 
 
 def enable_hot_reload():
