@@ -204,6 +204,50 @@
             }
         }
 
+        replayEvent(buttonElement, index) {
+            const event = this.eventHistory[index];
+            if (!event || !event.params) return;
+
+            const ws = this._activeWebSocket;
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                buttonElement.textContent = 'No connection';
+                buttonElement.classList.add('replay-error');
+                setTimeout(() => {
+                    buttonElement.textContent = 'Replay';
+                    buttonElement.classList.remove('replay-error');
+                }, 1500);
+                return;
+            }
+
+            buttonElement.textContent = 'Sending...';
+            buttonElement.classList.add('replay-pending');
+
+            try {
+                const message = JSON.stringify({
+                    type: 'event',
+                    event: event.handler || event.name,
+                    params: event.params
+                });
+                ws.send(message);
+
+                buttonElement.textContent = 'Sent!';
+                buttonElement.classList.remove('replay-pending');
+                buttonElement.classList.add('replay-success');
+                setTimeout(() => {
+                    buttonElement.textContent = 'Replay';
+                    buttonElement.classList.remove('replay-success');
+                }, 2000);
+            } catch (err) {
+                buttonElement.textContent = 'Error';
+                buttonElement.classList.remove('replay-pending');
+                buttonElement.classList.add('replay-error');
+                setTimeout(() => {
+                    buttonElement.textContent = 'Replay';
+                    buttonElement.classList.remove('replay-error');
+                }, 2000);
+            }
+        }
+
         copyPayload(buttonElement, index) {
             const stats = window.liveview && window.liveview.stats ? window.liveview.stats : null;
             const messages = stats ? stats.messages : this.networkHistory;

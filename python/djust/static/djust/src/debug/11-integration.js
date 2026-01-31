@@ -5,6 +5,9 @@
                 const self = this;
 
                 WebSocket.prototype.send = function(data) {
+                    // Store reference to the active WebSocket for replay
+                    self._activeWebSocket = this;
+
                     self.captureNetworkMessage({
                         direction: 'sent',
                         type: self.detectMessageType(data),

@@ -886,3 +886,29 @@
     color: var(--djust-text-muted);
     margin-left: auto;
 }
+
+/* --- Event Replay Button --- */
+.event-replay-btn {
+    margin-left: 8px;
+    font-size: 10px;
+    padding: 2px 6px;
+    flex-shrink: 0;
+}
+
+.event-replay-btn.replay-pending {
+    background: var(--djust-warning);
+    border-color: var(--djust-warning);
+    color: #000;
+}
+
+.event-replay-btn.replay-success {
+    background: var(--djust-success);
+    border-color: var(--djust-success);
+    color: white;
+}
+
+.event-replay-btn.replay-error {
+    background: var(--djust-error);
+    border-color: var(--djust-error);
+    color: white;
+}

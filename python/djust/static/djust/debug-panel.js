@@ -1789,6 +1789,7 @@
                                     ${paramCount > 0 ? `<span class="event-param-count">${paramCount} param${paramCount === 1 ? '' : 's'}</span>` : ''}
                                     ${event.error ? '<span class="event-status">❌</span>' : ''}
                                     <span class="event-time">${this.formatTime(event.timestamp)}</span>
+                                    ${event.params ? `<button class="btn-xs event-replay-btn" onclick="event.stopPropagation(); window.djustDebugPanel.replayEvent(this, ${originalIndex})">Replay</button>` : ''}
                                 </div>
                                 ${hasDetails ? `
                                     <div class="event-details" style="display: none;">
@@ -2576,6 +2577,9 @@
                 const self = this;
 
                 WebSocket.prototype.send = function(data) {
+                    // Store reference to the active WebSocket for replay
+                    self._activeWebSocket = this;
+
                     self.captureNetworkMessage({
                         direction: 'sent',
                         type: self.detectMessageType(data),
@@ -3362,6 +3366,50 @@
                 details.style.display = 'none';
                 icon.textContent = '▶';
                 item.classList.remove('expanded');
+            }
+        }
+
+        replayEvent(buttonElement, index) {
+            const event = this.eventHistory[index];
+            if (!event || !event.params) return;
+
+            const ws = this._activeWebSocket;
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                buttonElement.textContent = 'No connection';
+                buttonElement.classList.add('replay-error');
+                setTimeout(() => {
+                    buttonElement.textContent = 'Replay';
+                    buttonElement.classList.remove('replay-error');
+                }, 1500);
+                return;
+            }
+
+            buttonElement.textContent = 'Sending...';
+            buttonElement.classList.add('replay-pending');
+
+            try {
+                const message = JSON.stringify({
+                    type: 'event',
+                    event: event.handler || event.name,
+                    params: event.params
+                });
+                ws.send(message);
+
+                buttonElement.textContent = 'Sent!';
+                buttonElement.classList.remove('replay-pending');
+                buttonElement.classList.add('replay-success');
+                setTimeout(() => {
+                    buttonElement.textContent = 'Replay';
+                    buttonElement.classList.remove('replay-success');
+                }, 2000);
+            } catch (err) {
+                buttonElement.textContent = 'Error';
+                buttonElement.classList.remove('replay-pending');
+                buttonElement.classList.add('replay-error');
+                setTimeout(() => {
+                    buttonElement.textContent = 'Replay';
+                    buttonElement.classList.remove('replay-error');
+                }, 2000);
             }
         }
 

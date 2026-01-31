@@ -49,6 +49,7 @@
                                     ${paramCount > 0 ? `<span class="event-param-count">${paramCount} param${paramCount === 1 ? '' : 's'}</span>` : ''}
                                     ${event.error ? '<span class="event-status">❌</span>' : ''}
                                     <span class="event-time">${this.formatTime(event.timestamp)}</span>
+                                    ${event.params ? `<button class="btn-xs event-replay-btn" onclick="event.stopPropagation(); window.djustDebugPanel.replayEvent(this, ${originalIndex})">Replay</button>` : ''}
                                 </div>
                                 ${hasDetails ? `
                                     <div class="event-details" style="display: none;">
