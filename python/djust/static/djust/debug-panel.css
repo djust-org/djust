@@ -895,3 +895,51 @@
     white-space: pre-wrap;
     word-break: break-word;
 }
+
+/* Network Tab — directional color coding */
+.network-direction.sent {
+    color: #f59e0b;
+    font-weight: 600;
+}
+
+.network-direction.received {
+    color: #22d3ee;
+    font-weight: 600;
+}
+
+.network-item.sent {
+    border-left: 3px solid #f59e0b;
+}
+
+.network-item.received {
+    border-left: 3px solid #22d3ee;
+}
+
+/* Network copy button */
+.network-copy-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: 4px;
+    padding: 3px 8px;
+    color: var(--djust-accent);
+    font-family: var(--djust-font-mono);
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.network-copy-btn:hover {
+    background: rgba(59, 130, 246, 0.3);
+}
+
+.network-copy-btn.copied {
+    background: rgba(34, 197, 94, 0.2);
+    border-color: rgba(34, 197, 94, 0.4);
+    color: var(--djust-success);
+}
+
+.network-payload {
+    position: relative;
+}

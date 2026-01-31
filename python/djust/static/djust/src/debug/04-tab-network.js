@@ -58,12 +58,13 @@
                         const hasDebugInfo = msg.payload && msg.payload._debug;
                         const payload = msg.data || msg.payload;
                         const type = msg.type || (payload ? (payload.type || payload.event || 'data') : 'unknown');
+                        const payloadJson = hasPayload ? JSON.stringify(payload, null, 2) : '';
 
                         return `
                             <div class="network-item ${msg.direction} ${hasPayload ? 'expandable' : ''}" data-index="${index}">
                                 <div class="network-header" ${hasPayload ? 'onclick="window.djustDebugPanel.toggleExpand(this)"' : ''}>
                                     ${hasPayload ? '<span class="expand-icon">▶</span>' : ''}
-                                    <span class="network-direction">${msg.direction === 'sent' ? '↑' : '↓'}</span>
+                                    <span class="network-direction ${msg.direction}">${msg.direction === 'sent' ? '↑' : '↓'}</span>
                                     <span class="network-type">${type}</span>
                                     ${hasDebugInfo ? '<span class="network-debug">🐛</span>' : ''}
                                     <span class="network-size">${this.formatBytes(msg.size)}</span>
@@ -72,7 +73,8 @@
                                 ${hasPayload ? `
                                     <div class="network-details" style="display: none;">
                                         <div class="network-payload">
-                                            <pre>${JSON.stringify(payload, null, 2)}</pre>
+                                            <button class="network-copy-btn" onclick="window.djustDebugPanel.copyNetworkPayload(this, ${index})">Copy JSON</button>
+                                            <pre>${payloadJson}</pre>
                                         </div>
                                     </div>
                                 ` : ''}
@@ -81,4 +83,27 @@
                     }).join('')}
                 </div>
             `;
+        }
+
+        copyNetworkPayload(btnElement, index) {
+            const stats = window.liveview && window.liveview.stats ? window.liveview.stats : null;
+            const messages = stats ? stats.messages : this.networkHistory;
+            const msg = messages[index];
+            if (!msg) return;
+
+            const payload = msg.data || msg.payload;
+            const json = JSON.stringify(payload, null, 2);
+
+            navigator.clipboard.writeText(json).then(() => {
+                const original = btnElement.textContent;
+                btnElement.textContent = 'Copied!';
+                btnElement.classList.add('copied');
+                setTimeout(() => {
+                    btnElement.textContent = original;
+                    btnElement.classList.remove('copied');
+                }, 1500);
+            }).catch(() => {
+                btnElement.textContent = 'Failed';
+                setTimeout(() => { btnElement.textContent = 'Copy JSON'; }, 1500);
+            });
         }
