@@ -96,6 +96,11 @@ def _build_path_tree(paths: List[str]) -> Dict:
         parts = path.split(".")
         current = tree
 
+        # Skip paths starting with numeric index (e.g., "0.url" from "posts.0.url")
+        # These are list index accesses, not model attribute paths
+        if parts[0].isdigit():
+            continue
+
         i = 0
         while i < len(parts):
             part = parts[i]
