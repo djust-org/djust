@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Debug Toolbar: Per-View State Scoping** — Panel UI state (open/closed, active tab) is now persisted per-view instead of globally. Data histories (events, patches, network) are cleared on view navigation to prevent stale data from appearing. ([#166](https://github.com/djust-org/djust/issues/166))
 
+### Added
+
+- **Debug Toolbar: Network Message Inspection** — Network tab messages now have directional color coding (blue for sent, green for received), and expanded messages include a copy-to-clipboard button with visual feedback. ([#167](https://github.com/djust-org/djust/issues/167))
+
 ## [0.2.2rc3] - 2026-01-31
 
 ### Fixed
