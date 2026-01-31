@@ -63,7 +63,7 @@
                             <div class="network-item ${msg.direction} ${hasPayload ? 'expandable' : ''}" data-index="${index}">
                                 <div class="network-header" ${hasPayload ? 'onclick="window.djustDebugPanel.toggleExpand(this)"' : ''}>
                                     ${hasPayload ? '<span class="expand-icon">▶</span>' : ''}
-                                    <span class="network-direction" style="color:${msg.direction === 'sent' ? '#60a5fa' : '#4ade80'}">${msg.direction === 'sent' ? '↑' : '↓'}</span>
+                                    <span class="network-direction">${msg.direction === 'sent' ? '↑' : '↓'}</span>
                                     <span class="network-type">${type}</span>
                                     ${hasDebugInfo ? '<span class="network-debug">🐛</span>' : ''}
                                     <span class="network-size">${this.formatBytes(msg.size)}</span>
@@ -72,7 +72,6 @@
                                 ${hasPayload ? `
                                     <div class="network-details" style="display: none;">
                                         <div class="network-payload">
-                                            <button class="network-copy-btn" onclick="window.djustDebugPanel.copyNetworkPayload(${index})" style="float:right;padding:2px 8px;font-size:10px;border-radius:2px;cursor:pointer;border:1px solid #475569;background:#1e293b;color:#94a3b8;margin-bottom:4px;" data-index="${index}">Copy</button>
                                             <pre>${JSON.stringify(payload, null, 2)}</pre>
                                         </div>
                                     </div>
@@ -82,24 +81,4 @@
                     }).join('')}
                 </div>
             `;
-        }
-
-        copyNetworkPayload(index) {
-            const stats = window.liveview && window.liveview.stats ? window.liveview.stats : null;
-            const messages = stats ? stats.messages : this.networkHistory;
-            const msg = messages[index];
-            if (!msg) return;
-
-            const payload = msg.data || msg.payload;
-            const raw = JSON.stringify(payload);
-
-            navigator.clipboard.writeText(raw).then(() => {
-                const btn = this.panel.querySelector(`.network-copy-btn[data-index="${index}"]`);
-                if (btn) {
-                    btn.textContent = 'Copied!';
-                    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
-                }
-            }).catch(() => {
-                console.warn('[djust] Failed to copy to clipboard');
-            });
         }

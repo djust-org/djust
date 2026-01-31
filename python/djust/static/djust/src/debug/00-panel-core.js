@@ -33,8 +33,7 @@
                 searchQuery: '',
                 filters: {
                     types: [],
-                    severity: 'all',
-                    nameQuery: ''
+                    severity: 'all'
                 }
             };
 

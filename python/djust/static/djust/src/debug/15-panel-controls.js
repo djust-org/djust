@@ -56,31 +56,20 @@
             this.renderTabContent();
         }
 
-        // State persistence (scoped per view)
-        _stateKey() {
-            const viewName = this.viewInfo && this.viewInfo.name;
-            return viewName ? `djust-debug-state-${viewName}` : 'djust-debug-state';
-        }
-
+        // State persistence
         saveState() {
-            // Only persist UI state, not transient data like filters/search
-            const uiState = {
-                isOpen: this.state.isOpen,
-                activeTab: this.state.activeTab
-            };
-            localStorage.setItem(this._stateKey(), JSON.stringify(uiState));
+            localStorage.setItem('djust-debug-state', JSON.stringify(this.state));
         }
 
         loadState() {
-            const saved = localStorage.getItem(this._stateKey());
+            const saved = localStorage.getItem('djust-debug-state');
             if (saved) {
                 try {
                     const parsedState = JSON.parse(saved);
-                    // Only restore UI state fields
-                    if (parsedState.isOpen !== undefined) this.state.isOpen = parsedState.isOpen;
-                    if (parsedState.activeTab) this.state.activeTab = parsedState.activeTab;
+                    this.state = { ...this.state, ...parsedState };
 
                     // Restore panel visibility and active tab if saved
+                    // Combined into single setTimeout to reduce queued microtasks
                     if (parsedState.isOpen || parsedState.activeTab) {
                         setTimeout(() => {
                             if (parsedState.isOpen) this.open();
@@ -90,25 +79,6 @@
                 } catch (e) {
                     console.warn('[djust] Failed to load debug panel state:', e);
                 }
-            }
-        }
-
-        // Called when a new view connects — clear stale data, reload view-scoped state
-        onViewMount() {
-            this.eventHistory = [];
-            this.patchHistory = [];
-            this.networkHistory = [];
-            this.stateHistory = [];
-            this.errorCount = 0;
-            this.warningCount = 0;
-            this.updateErrorBadge();
-            this.updateCounter('event-count', 0);
-            this.updateCounter('patch-count', 0);
-            this.updateCounter('error-count', 0);
-            this.updateCounter('warning-count', 0);
-            this.loadState();
-            if (this.state.isOpen) {
-                this.renderTabContent();
             }
         }
 
