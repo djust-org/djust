@@ -146,7 +146,12 @@ class ContextMixin:
                 processor = import_string(processor_path)
                 processor_context = processor(request)
                 if processor_context:
-                    context.update(processor_context)
+                    # Only add keys not already set by the view — view context
+                    # takes precedence over context processors (e.g. Django's
+                    # messages processor should not overwrite a view's 'messages').
+                    for k, v in processor_context.items():
+                        if k not in context:
+                            context[k] = v
             except Exception as e:
                 logger.warning(f"Failed to apply context processor {processor_path}: {e}")
 
