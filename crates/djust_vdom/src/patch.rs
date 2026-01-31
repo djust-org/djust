@@ -12,11 +12,20 @@ use crate::{Patch, VNode};
 /// by `djust_id` instead of index. This mirrors the client-side JS
 /// resolution strategy using `data-d` attributes.
 pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
-    // Snapshot djust_ids of children for each parent path before any moves.
-    // Key: parent path, Value: vec of (original_index, djust_id)
+    // The keyed diff engine emits patches where RemoveChild indices reference
+    // the original tree and InsertChild indices reference the final tree.
+    // To apply them correctly with sequential index-based mutation, we
+    // reorder child mutations per parent: removes descending, then inserts
+    // ascending. Non-child patches (SetText, SetAttr, etc.) use paths that
+    // reference the final tree layout, so they are applied after child
+    // mutations.
+    //
+    // For MoveChild, we snapshot children before mutations and resolve by
+    // djust_id, mirroring the client-side data-d attribute strategy.
+
+    // Snapshot djust_ids of children for MoveChild resolution.
     let mut move_sources: std::collections::HashMap<Vec<usize>, Vec<(usize, Option<String>)>> =
         std::collections::HashMap::new();
-
     for patch in patches {
         if let Patch::MoveChild { path, .. } = patch {
             move_sources.entry(path.clone()).or_insert_with(|| {
@@ -34,38 +43,75 @@ pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
         }
     }
 
+    // Collect child mutation patches.
+    let mut removes: Vec<(&Vec<usize>, usize)> = Vec::new();
+    let mut inserts: Vec<(&Vec<usize>, usize, &VNode)> = Vec::new();
+    let mut moves: Vec<&Patch> = Vec::new();
+    let mut other_patches: Vec<&Patch> = Vec::new();
+
     for patch in patches {
         match patch {
-            Patch::MoveChild { path, from, to, .. } => {
-                // Look up the djust_id of the child originally at `from`
-                let child_id = move_sources.get(path).and_then(|sources| {
-                    sources
-                        .iter()
-                        .find(|(i, _)| *i == *from)
-                        .and_then(|(_, id)| id.clone())
-                });
+            Patch::RemoveChild { path, index, .. } => removes.push((path, *index)),
+            Patch::InsertChild {
+                path, index, node, ..
+            } => inserts.push((path, *index, node)),
+            Patch::MoveChild { .. } => moves.push(patch),
+            _ => other_patches.push(patch),
+        }
+    }
 
-                if let Some(target) = get_node_mut(root, path) {
-                    if let Some(ref child_id) = child_id {
-                        // Find current position by djust_id
-                        if let Some(current_pos) = target
-                            .children
-                            .iter()
-                            .position(|c| c.djust_id.as_deref() == Some(child_id.as_str()))
-                        {
-                            let node = target.children.remove(current_pos);
-                            let insert_at = (*to).min(target.children.len());
-                            target.children.insert(insert_at, node);
-                        }
-                    } else if *from < target.children.len() && *to <= target.children.len() {
-                        // Fallback: no djust_id, use index directly
-                        let node = target.children.remove(*from);
-                        target.children.insert(*to, node);
+    // Apply removes in descending index order so earlier indices stay valid.
+    removes.sort_by(|a, b| a.0.cmp(b.0).then_with(|| b.1.cmp(&a.1)));
+    for (path, index) in &removes {
+        if let Some(target) = get_node_mut(root, path) {
+            if *index < target.children.len() {
+                target.children.remove(*index);
+            }
+        }
+    }
+
+    // Apply moves with djust_id resolution.
+    for patch in &moves {
+        if let Patch::MoveChild { path, from, to, .. } = patch {
+            let child_id = move_sources.get(path).and_then(|sources| {
+                sources
+                    .iter()
+                    .find(|(i, _)| *i == *from)
+                    .and_then(|(_, id)| id.clone())
+            });
+
+            if let Some(target) = get_node_mut(root, path) {
+                if let Some(ref child_id) = child_id {
+                    if let Some(current_pos) = target
+                        .children
+                        .iter()
+                        .position(|c| c.djust_id.as_deref() == Some(child_id.as_str()))
+                    {
+                        let node = target.children.remove(current_pos);
+                        let insert_at = (*to).min(target.children.len());
+                        target.children.insert(insert_at, node);
                     }
+                } else if *from < target.children.len() && *to <= target.children.len() {
+                    let node = target.children.remove(*from);
+                    target.children.insert(*to, node);
                 }
             }
-            _ => apply_patch(root, patch),
         }
+    }
+
+    // Apply inserts in ascending index order.
+    inserts.sort_by(|a, b| a.0.cmp(b.0).then_with(|| a.1.cmp(&b.1)));
+    for (path, index, node) in &inserts {
+        if let Some(target) = get_node_mut(root, path) {
+            let insert_at = (*index).min(target.children.len());
+            target.children.insert(insert_at, (*node).clone());
+        }
+    }
+
+    // Apply non-child-mutation patches (SetText, SetAttr, etc.) after
+    // child mutations, since their paths reference the final tree layout.
+    for patch in &other_patches {
+        apply_patch(root, patch);
     }
 }
 

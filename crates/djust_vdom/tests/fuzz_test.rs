@@ -6,10 +6,9 @@
 //! 3. No panics: arbitrary tree pairs (including keyed) never panic
 //! 4. Patch count bounds: patches ≤ total nodes in both trees (unkeyed trees)
 //!
-//! Note: Round-trip and patch-count tests use unkeyed trees because
-//! `apply_patches` is a test utility that applies patches sequentially by
-//! index, which doesn't handle the keyed diff's insert ordering correctly.
-//! The real client uses `data-d` attributes for O(1) element lookup.
+//! Note: Round-trip and patch-count tests now work with keyed trees too,
+//! since `apply_patches` resolves InsertChild/RemoveChild/MoveChild via
+//! `djust_id` (mirroring the client's `data-d` attribute strategy).
 //! See: https://github.com/djust-org/djust/issues/152
 
 use djust_vdom::diff::diff_nodes;
@@ -25,7 +24,8 @@ use std::collections::HashMap;
 const TAGS: &[&str] = &["div", "span", "p", "li", "ul", "a", "h1", "section"];
 const ATTR_KEYS: &[&str] = &["class", "style", "href", "title", "role"];
 
-/// Generate a random VNode tree without keys (for round-trip testing).
+/// Generate a random VNode tree without keys.
+#[allow(dead_code)]
 fn arb_unkeyed_inner(max_depth: u32, current_depth: u32) -> BoxedStrategy<VNode> {
     if current_depth >= max_depth {
         prop_oneof![
@@ -53,6 +53,7 @@ fn arb_unkeyed_inner(max_depth: u32, current_depth: u32) -> BoxedStrategy<VNode>
 }
 
 /// Generate a random VNode tree with optional keys (for panic/stress testing).
+/// Keys are made unique per sibling group by appending the child index.
 fn arb_keyed_inner(max_depth: u32, current_depth: u32) -> BoxedStrategy<VNode> {
     if current_depth >= max_depth {
         prop_oneof![
@@ -69,7 +70,16 @@ fn arb_keyed_inner(max_depth: u32, current_depth: u32) -> BoxedStrategy<VNode> {
                 prop::collection::vec(arb_keyed_inner(max_depth, current_depth + 1), 0..=6,),
                 prop::option::weighted(0.3, "[a-z]{1,5}"),
             )
-                .prop_map(|(tag, attrs, children, key)| {
+                .prop_map(|(tag, attrs, mut children, key)| {
+                    // Deduplicate keys among siblings by appending index
+                    let mut seen_keys = std::collections::HashSet::new();
+                    for (i, child) in children.iter_mut().enumerate() {
+                        if let Some(ref k) = child.key {
+                            if !seen_keys.insert(k.clone()) {
+                                child.key = Some(format!("{}_{}", k, i));
+                            }
+                        }
+                    }
                     let mut node = VNode::element(tag);
                     node.attrs = attrs.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
                     node.children = children;
@@ -81,6 +91,7 @@ fn arb_keyed_inner(max_depth: u32, current_depth: u32) -> BoxedStrategy<VNode> {
     }
 }
 
+#[allow(dead_code)]
 fn arb_unkeyed_tree() -> BoxedStrategy<VNode> {
     (0u32..=5)
         .prop_flat_map(|depth| arb_unkeyed_inner(depth, 0))
@@ -167,12 +178,11 @@ proptest! {
     }
 
     /// Property 2: apply(A, diff(A, B)) structurally equals B.
-    /// Uses unkeyed trees only — keyed apply_patches has index ordering
-    /// limitations (the real client uses data-d for O(1) resolution).
+    /// Works with keyed trees — apply_patches resolves children by djust_id.
     #[test]
     fn round_trip_correctness(
-        tree_a in arb_unkeyed_tree(),
-        tree_b in arb_unkeyed_tree(),
+        tree_a in arb_keyed_tree(),
+        tree_b in arb_keyed_tree(),
     ) {
         let mut a = tree_a;
         let mut b = tree_b;
@@ -213,8 +223,8 @@ proptest! {
     /// Each node can produce at most: 1 structural patch + N attribute patches.
     #[test]
     fn patch_count_bounded(
-        tree_a in arb_unkeyed_tree(),
-        tree_b in arb_unkeyed_tree(),
+        tree_a in arb_keyed_tree(),
+        tree_b in arb_keyed_tree(),
     ) {
         let mut a = tree_a;
         let mut b = tree_b;
