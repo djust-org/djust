@@ -510,20 +510,30 @@ window.djustDebugPanel.maxHistory = 20;  // Default: 50
 
 ## Advanced Features
 
-### Filtering Event History (Future)
+### Filtering Event History
 
-Planned feature to filter events by:
-- Handler name
+Filter events by:
+- Handler name (substring match)
 - Success/error status
-- Time range
-- Parameter values
+- Clear button and match count display
 
-### Event Replay (Future)
+### Event Replay
 
-Planned feature to replay events for debugging:
+Replay events for debugging:
 1. Select event from history
-2. Click "Replay"
-3. Event resent with same parameters
+2. Click the replay button (⟳)
+3. Event resent with same parameters, with inline pending/success/error feedback
+
+### Live Debug Updates via WebSocket
+
+When `DEBUG=True`, WebSocket event responses include a `_debug` payload with:
+- Updated **variables** (current view state after the event)
+- **Handlers** metadata
+- **Patches** applied (for the Patches tab)
+- **Performance** metrics (render time, diff time)
+- **Event name** that triggered the response
+
+This enables the Variables, Handlers, Patches, and State tabs to update live after each interaction, rather than showing only the initial page-load data.
 
 ### Network Tab
 
