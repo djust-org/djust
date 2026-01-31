@@ -227,18 +227,38 @@ fn diff_keyed_children(
 ) -> Vec<Patch> {
     let mut patches = Vec::new();
 
-    // Build key-to-index maps
-    let old_keys: HashMap<String, usize> = old
-        .iter()
-        .enumerate()
-        .filter_map(|(i, node)| node.key.as_ref().map(|k| (k.clone(), i)))
-        .collect();
+    // Build key-to-index maps, warning on duplicate keys
+    let mut old_keys: HashMap<String, usize> = HashMap::new();
+    for (i, node) in old.iter().enumerate() {
+        if let Some(k) = &node.key {
+            if let Some(&prev_idx) = old_keys.get(k) {
+                vdom_trace!(
+                    "WARNING: Duplicate key '{}' in old children at indices {} and {}. \
+                     Earlier element will be invisible to the keyed diff.",
+                    k,
+                    prev_idx,
+                    i
+                );
+            }
+            old_keys.insert(k.clone(), i);
+        }
+    }
 
-    let new_keys: HashMap<String, usize> = new
-        .iter()
-        .enumerate()
-        .filter_map(|(i, node)| node.key.as_ref().map(|k| (k.clone(), i)))
-        .collect();
+    let mut new_keys: HashMap<String, usize> = HashMap::new();
+    for (i, node) in new.iter().enumerate() {
+        if let Some(k) = &node.key {
+            if let Some(&prev_idx) = new_keys.get(k) {
+                vdom_trace!(
+                    "WARNING: Duplicate key '{}' in new children at indices {} and {}. \
+                     Earlier element will be invisible to the keyed diff.",
+                    k,
+                    prev_idx,
+                    i
+                );
+            }
+            new_keys.insert(k.clone(), i);
+        }
+    }
 
     vdom_trace!(
         "diff_keyed_children: old_keys={:?} new_keys={:?}",
