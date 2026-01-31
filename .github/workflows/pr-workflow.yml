@@ -1,0 +1,112 @@
+name: PR Workflow Agent
+# NOTE: Requires ANTHROPIC_API_KEY secret (direct API key, not Max subscription).
+# For local use, cc-pr-workflow uses your Max subscription auth instead.
+
+# Disabled: uncomment schedule when ANTHROPIC_API_KEY secret is configured
+# on:
+#   schedule:
+#     - cron: '0 6 * * *'
+#   workflow_dispatch:
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Specific issue number (leave empty for all)'
+        required: false
+        type: string
+      limit:
+        description: 'Max issues to process'
+        required: false
+        default: '3'
+        type: string
+      mode:
+        description: 'Run mode'
+        required: false
+        default: 'no-merge'
+        type: choice
+        options:
+          - autonomous
+          - no-merge
+          - dry-run
+
+# Only one workflow run at a time
+concurrency:
+  group: pr-workflow
+  cancel-in-progress: false
+
+jobs:
+  pr-workflow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Determine mode and target
+        id: config
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "mode=no-merge" >> $GITHUB_OUTPUT
+            echo "limit=3" >> $GITHUB_OUTPUT
+            echo "target=" >> $GITHUB_OUTPUT
+          else
+            echo "mode=${{ inputs.mode || 'no-merge' }}" >> $GITHUB_OUTPUT
+            echo "limit=${{ inputs.limit || '3' }}" >> $GITHUB_OUTPUT
+            echo "target=${{ inputs.issue_number || '' }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run PR Workflow
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          MODE="${{ steps.config.outputs.mode }}"
+          LIMIT="${{ steps.config.outputs.limit }}"
+          TARGET="${{ steps.config.outputs.target }}"
+          REPORT_FILE="pr-workflow-report.md"
+
+          if [ -n "$TARGET" ]; then
+            PROMPT="Run /pr-workflow ${TARGET}."
+          else
+            PROMPT="Run /pr-workflow. Work through up to ${LIMIT} open issues, highest priority first."
+          fi
+
+          PROMPT="${PROMPT} MODE: ${MODE}. Auto-continue through all steps without asking for confirmation."
+
+          if [ "$MODE" = "autonomous" ]; then
+            PROMPT="${PROMPT} For score>=80, auto-merge. For score<80, create the PR but leave it for manual review."
+          elif [ "$MODE" = "no-merge" ]; then
+            PROMPT="${PROMPT} Create PRs but do NOT merge any of them."
+          else
+            PROMPT="${PROMPT} Plan and review only, do NOT implement or merge."
+          fi
+
+          PROMPT="${PROMPT} Write a summary report to ${REPORT_FILE} when done."
+
+          claude --dangerously-skip-permissions -p "$PROMPT" || true
+
+          # Upload report if it exists
+          if [ -f "$REPORT_FILE" ]; then
+            echo "## PR Workflow Report" >> $GITHUB_STEP_SUMMARY
+            cat "$REPORT_FILE" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-workflow-report
+          path: pr-workflow-report.md
+          if-no-files-found: ignore

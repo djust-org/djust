@@ -1,0 +1,38 @@
+name: Follow-up from PR
+description: Track work deferred from a pull request
+labels: ["follow-up"]
+body:
+  - type: markdown
+    attributes:
+      value: This template is for issues created during PR review to track deferred work.
+  - type: input
+    id: source_pr
+    attributes:
+      label: Source PR
+      description: "PR number that surfaced this (e.g., #123)"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What needs to be done and why it was deferred.
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - Low - nice to have
+        - Medium - should address soon
+        - High - blocking or important
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Code references, review comments, or related issues.
+    validations:
+      required: false
