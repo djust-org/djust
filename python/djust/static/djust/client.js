@@ -2637,6 +2637,8 @@ function isWhitespacePreserving(node) {
 // Export for testing
 window.djust.getSignificantChildren = getSignificantChildren;
 window.djust._stampDjIds = _stampDjIds;
+window.djust._groupPatchesByParent = groupPatchesByParent;
+window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
 
 /**
  * Group patches by their parent path for batching.
@@ -2644,7 +2646,15 @@ window.djust._stampDjIds = _stampDjIds;
 function groupPatchesByParent(patches) {
     const groups = new Map(); // Use Map to avoid prototype pollution
     for (const patch of patches) {
-        const parentPath = patch.path.slice(0, -1).join('/');
+        // For child operations (InsertChild, RemoveChild, MoveChild), patch.path
+        // is already the parent container path. For node-targeting ops, we need
+        // to slice off the last element to get the parent.
+        const isChildOp = patch.type === 'InsertChild' ||
+                          patch.type === 'RemoveChild' ||
+                          patch.type === 'MoveChild';
+        const parentPath = isChildOp
+            ? patch.path.join('/')
+            : patch.path.slice(0, -1).join('/');
         if (!groups.has(parentPath)) {
             groups.set(parentPath, []);
         }
@@ -2673,7 +2683,8 @@ function groupConsecutiveInserts(inserts) {
 
     for (let i = 1; i < inserts.length; i++) {
         // Check if this insert is consecutive with the previous one
-        if (inserts[i].index === inserts[i - 1].index + 1) {
+        if (inserts[i].index === inserts[i - 1].index + 1 &&
+            inserts[i].d === inserts[i - 1].d) {
             currentGroup.push(inserts[i]);
         } else {
             // Start a new group
@@ -2819,13 +2830,22 @@ function applyPatches(patches) {
         return true;
     }
 
-    // Sort patches: RemoveChild in descending order to preserve indices
+    // Sort patches: RemoveChild before InsertChild (Issue #142), and
+    // RemoveChild in descending index order to preserve indices during removal.
+    // Note: relies on stable sort (ES2019+) to preserve relative order of
+    // non-RemoveChild patches. The batching path below also enforces this
+    // separation explicitly as a safety net.
     patches.sort((a, b) => {
-        if (a.type === 'RemoveChild' && b.type === 'RemoveChild') {
+        const aIsRemove = a.type === 'RemoveChild' ? 1 : 0;
+        const bIsRemove = b.type === 'RemoveChild' ? 1 : 0;
+        if (aIsRemove !== bIsRemove) {
+            return bIsRemove - aIsRemove;  // RemoveChild first
+        }
+        if (aIsRemove && bIsRemove) {
             const pathA = JSON.stringify(a.path);
             const pathB = JSON.stringify(b.path);
             if (pathA === pathB) {
-                return b.index - a.index;
+                return b.index - a.index;  // Descending index
             }
         }
         return 0;
@@ -2854,8 +2874,31 @@ function applyPatches(patches) {
     const patchGroups = groupPatchesByParent(patches);
 
     for (const [parentPath, group] of patchGroups) {
+        // IMPORTANT: Apply RemoveChild patches first before any InsertChild.
+        // For data-djust-replace, Rust emits all RemoveChild then all InsertChild.
+        // If InsertChild runs first, old children shift indices and RemoveChild
+        // targets the wrong nodes (Issue #142).
+        const removePatches = [];
+        const remainingPatches = [];
+        for (const patch of group) {
+            if (patch.type === 'RemoveChild') {
+                removePatches.push(patch);
+            } else {
+                remainingPatches.push(patch);
+            }
+        }
+
+        // Apply all RemoveChild patches first (already sorted descending by index)
+        for (const patch of removePatches) {
+            if (applySinglePatch(patch)) {
+                successCount++;
+            } else {
+                failedCount++;
+            }
+        }
+
         // Optimization: Use DocumentFragment for consecutive InsertChild on same parent
-        const insertPatches = group.filter(p => p.type === 'InsertChild');
+        const insertPatches = remainingPatches.filter(p => p.type === 'InsertChild');
 
         if (insertPatches.length >= 3) {
             // Group only consecutive inserts (can't batch non-consecutive indices)
@@ -2892,22 +2935,22 @@ function applyPatches(patches) {
 
                         // Mark these patches as processed
                         const processedSet = new Set(consecutiveGroup);
-                        for (let i = group.length - 1; i >= 0; i--) {
-                            if (processedSet.has(group[i])) {
-                                group.splice(i, 1);
+                        for (let i = remainingPatches.length - 1; i >= 0; i--) {
+                            if (processedSet.has(remainingPatches[i])) {
+                                remainingPatches.splice(i, 1);
                             }
                         }
                     } catch (error) {
                         console.error('[LiveView] Batch insert failed, falling back to individual patches:', error.message);
-                        // On failure, patches remain in group for individual processing
+                        // On failure, patches remain for individual processing
                         successCount -= consecutiveGroup.length;  // Undo count
                     }
                 }
             }
         }
 
-        // Apply remaining patches individually
-        for (const patch of group) {
+        // Apply remaining non-remove patches individually
+        for (const patch of remainingPatches) {
             if (applySinglePatch(patch)) {
                 successCount++;
             } else {

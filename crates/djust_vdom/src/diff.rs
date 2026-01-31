@@ -1469,4 +1469,155 @@ mod tests {
             "dj-click should be preserved"
         );
     }
+
+    #[test]
+    fn test_data_djust_replace_patch_ordering() {
+        // Verify that replace_all_children emits all RemoveChild patches
+        // before any InsertChild patches. The JS client batching path
+        // depends on this ordering to avoid stale index bugs (Issue #142).
+        let old = VNode::element("div")
+            .with_djust_id("container")
+            .with_attr("data-djust-replace", "")
+            .with_children(vec![
+                VNode::element("p").with_child(VNode::text("old-1")),
+                VNode::element("p").with_child(VNode::text("old-2")),
+                VNode::element("p").with_child(VNode::text("old-3")),
+            ]);
+        let new = VNode::element("div")
+            .with_djust_id("container")
+            .with_attr("data-djust-replace", "")
+            .with_children(vec![
+                VNode::element("span").with_child(VNode::text("new-1")),
+                VNode::element("span").with_child(VNode::text("new-2")),
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        // Find positions of last RemoveChild and first InsertChild
+        let last_remove_idx = patches
+            .iter()
+            .rposition(|p| matches!(p, Patch::RemoveChild { .. }));
+        let first_insert_idx = patches
+            .iter()
+            .position(|p| matches!(p, Patch::InsertChild { .. }));
+
+        assert!(
+            last_remove_idx.is_some() && first_insert_idx.is_some(),
+            "Should have both RemoveChild and InsertChild patches"
+        );
+        assert!(
+            last_remove_idx.unwrap() < first_insert_idx.unwrap(),
+            "All RemoveChild patches must come before any InsertChild patch. \
+             Got last RemoveChild at index {}, first InsertChild at index {}",
+            last_remove_idx.unwrap(),
+            first_insert_idx.unwrap()
+        );
+
+        // Verify RemoveChild indices are in descending order (for safe removal)
+        let remove_indices: Vec<usize> = patches
+            .iter()
+            .filter_map(|p| match p {
+                Patch::RemoveChild { index, .. } => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            remove_indices,
+            vec![2, 1, 0],
+            "RemoveChild should be in descending index order"
+        );
+    }
+
+    #[test]
+    fn test_data_djust_replace_with_siblings() {
+        // Regression test: when a data-djust-replace container has a sibling,
+        // all InsertChild/RemoveChild patches must have correct path and d values
+        // targeting only the replace container. This ensures the JS client's
+        // groupPatchesByParent groups them correctly (Issue #142 continued).
+        let old = VNode::element("div")
+            .with_djust_id("root")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_djust_id("messages")
+                    .with_attr("data-djust-replace", "")
+                    .with_children(vec![
+                        VNode::element("p").with_child(VNode::text("No messages"))
+                    ]),
+                VNode::element("div")
+                    .with_djust_id("chat-input")
+                    .with_children(vec![VNode::element("input")]),
+            ]);
+        let new = VNode::element("div")
+            .with_djust_id("root")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_djust_id("messages")
+                    .with_attr("data-djust-replace", "")
+                    .with_children(vec![
+                        VNode::element("p").with_child(VNode::text("Message 1")),
+                        VNode::element("p").with_child(VNode::text("Message 2")),
+                    ]),
+                VNode::element("div")
+                    .with_djust_id("chat-input")
+                    .with_children(vec![VNode::element("input")]),
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        // All child-op patches should target the messages container
+        for patch in &patches {
+            match patch {
+                Patch::InsertChild { path, d, .. } | Patch::RemoveChild { path, d, .. } => {
+                    assert_eq!(
+                        d.as_deref(),
+                        Some("messages"),
+                        "Child op patch should target 'messages' container, got d={:?} path={:?}",
+                        d,
+                        path
+                    );
+                    assert_eq!(
+                        path,
+                        &vec![0],
+                        "Child op patch path should be [0] (first child of root), got {:?}",
+                        path
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        // Should have at least 1 remove and 2 inserts
+        let remove_count = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
+            .count();
+        let insert_count = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::InsertChild { .. }))
+            .count();
+        assert!(
+            remove_count >= 1,
+            "Should have at least 1 RemoveChild, got {}",
+            remove_count
+        );
+        assert!(
+            insert_count >= 2,
+            "Should have at least 2 InsertChild, got {}",
+            insert_count
+        );
+
+        // No patches should target the chat-input sibling
+        for patch in &patches {
+            match patch {
+                Patch::InsertChild { d, .. } | Patch::RemoveChild { d, .. } => {
+                    assert_ne!(
+                        d.as_deref(),
+                        Some("chat-input"),
+                        "No child op patches should target the sibling 'chat-input'"
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
 }
