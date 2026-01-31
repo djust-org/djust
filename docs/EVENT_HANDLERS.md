@@ -681,7 +681,7 @@ def delete_item(self, item_id: int):
 
 ### Best Practices Checklist
 
-- [ ] All event handlers have `@event_handler()` or `@event` decorator (or are listed in `_allowed_events`)
+- [ ] All event handlers have `@event_handler` decorator (or are listed in `_allowed_events`)
 - [ ] Form input handlers use `value` parameter
 - [ ] Type hints specified for all parameters
 - [ ] Required vs optional parameters clearly distinguished
@@ -696,14 +696,14 @@ def delete_item(self, item_id: int):
 
 ### Event Handler Access Control
 
-By default, djust runs in **strict** security mode: only methods decorated with `@event` or `@event_handler` are callable via WebSocket. Undecorated methods are blocked even if they pass the event name pattern check.
+By default, djust runs in **strict** security mode: only methods decorated with `@event_handler` are callable via WebSocket. Undecorated methods are blocked even if they pass the event name pattern check.
 
 ```python
-from djust import LiveView, event
+from djust import LiveView
 from djust.decorators import event_handler
 
 class MyView(LiveView):
-    @event
+    @event_handler
     def increment(self):
         """Callable via WebSocket"""
         self.count += 1
@@ -747,11 +747,11 @@ Use `frozenset` (not `set`) to prevent accidental mutation.
 Use `@rate_limit` to protect expensive operations from abuse:
 
 ```python
-from djust import event, rate_limit
+from djust.decorators import event_handler, rate_limit
 
 class MyView(LiveView):
     @rate_limit(rate=2, burst=3)
-    @event
+    @event_handler
     def generate_report(self, **kwargs):
         """Limited to 2/sec sustained, 3 burst"""
         self.report = expensive_computation()

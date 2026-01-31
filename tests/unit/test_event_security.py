@@ -36,11 +36,11 @@ class TestEventGuard:
 
     def test_valid_internal_names_allowed_by_pattern(self):
         """Pattern guard only checks format — internal names like 'mount' pass the
-        pattern check. The @event decorator allowlist is the real access control."""
+        pattern check. The @event_handler decorator allowlist is the real access control."""
         from djust.security.event_guard import is_safe_event_name
 
         # These pass the pattern check (valid format), but will be blocked
-        # by event_security strict mode if not decorated with @event
+        # by event_security strict mode if not decorated with @event_handler
         assert is_safe_event_name("mount") is True
         assert is_safe_event_name("dispatch") is True
         assert is_safe_event_name("render") is True
@@ -48,12 +48,12 @@ class TestEventGuard:
 
 
 class TestEventDecorator:
-    """Proposal 2: @event decorator allowlist tests."""
+    """Proposal 2: @event_handler decorator allowlist tests."""
 
     def test_is_event_handler_decorated(self):
-        from djust.decorators import event, is_event_handler
+        from djust.decorators import event_handler, is_event_handler
 
-        @event
+        @event_handler
         def my_handler(self):
             pass
 
@@ -212,13 +212,13 @@ class TestEventSecurityHelper:
     def test_strict_mode_allows_decorated(self):
         from unittest.mock import patch
 
-        from djust.decorators import event
+        from djust.decorators import event_handler
         from djust.websocket import _check_event_security
 
         class FakeView:
             pass
 
-        @event
+        @event_handler
         def my_handler(self):
             pass
 
@@ -456,7 +456,7 @@ class TestErrorDisclosure:
         blocked = _safe_error("Blocked unsafe event name: __class__")
         no_handler = _safe_error("No handler found for event: foo")
         not_decorated = _safe_error(
-            "Event 'foo' is not decorated with @event or listed in _allowed_events"
+            "Event 'foo' is not decorated with @event_handler or listed in _allowed_events"
         )
         component_no_handler = _safe_error("Component MyView has no handler: foo")
         # All should return the same generic message
@@ -498,13 +498,13 @@ class TestActorPathSecurity:
         """Decorated handlers pass security checks in actor path."""
         from unittest.mock import patch
 
-        from djust.decorators import event
+        from djust.decorators import event_handler
         from djust.websocket import _check_event_security
 
         class FakeView:
             pass
 
-        @event
+        @event_handler
         def my_event(self):
             pass
 

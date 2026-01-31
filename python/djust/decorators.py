@@ -173,7 +173,7 @@ def event(func: F) -> F:
 
 def is_event_handler(func: Any) -> bool:
     """
-    Check if a function has been decorated with @event or @event_handler.
+    Check if a function has been decorated with @event_handler.
 
     Args:
         func: The function to check.

@@ -2,7 +2,7 @@
 Event name guard for WebSocket event dispatch.
 
 Validates event name format before getattr() to prevent calling private
-or malformed method names. The @event decorator allowlist (event_security
+or malformed method names. The @event_handler decorator allowlist (event_security
 config) is the primary access control — this guard is a fast first filter.
 """
 
