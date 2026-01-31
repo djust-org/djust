@@ -77,6 +77,11 @@
         processDebugInfo(debugInfo) {
             if (!debugInfo) return;
 
+            // Detect view change and scope data accordingly
+            if (debugInfo.view_name && debugInfo.view_name !== this.currentViewId) {
+                this._onViewChanged(debugInfo.view_name);
+            }
+
             // Update handlers
             if (debugInfo.handlers) {
                 this.handlers = debugInfo.handlers;

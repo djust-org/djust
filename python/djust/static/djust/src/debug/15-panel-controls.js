@@ -56,13 +56,19 @@
             this.renderTabContent();
         }
 
-        // State persistence
+        // State persistence (per-view scoped)
         saveState() {
-            localStorage.setItem('djust-debug-state', JSON.stringify(this.state));
+            const uiState = {
+                isOpen: this.state.isOpen,
+                activeTab: this.state.activeTab,
+                searchQuery: this.state.searchQuery,
+                filters: this.state.filters
+            };
+            localStorage.setItem(this._getStateKey(), JSON.stringify(uiState));
         }
 
         loadState() {
-            const saved = localStorage.getItem('djust-debug-state');
+            const saved = localStorage.getItem(this._getStateKey());
             if (saved) {
                 try {
                     const parsedState = JSON.parse(saved);
