@@ -2,11 +2,12 @@ name: PR Workflow Agent
 # NOTE: Requires ANTHROPIC_API_KEY secret (direct API key, not Max subscription).
 # For local use, cc-pr-workflow uses your Max subscription auth instead.
 
+# Disabled: uncomment schedule when ANTHROPIC_API_KEY secret is configured
+# on:
+#   schedule:
+#     - cron: '0 6 * * *'
+#   workflow_dispatch:
 on:
-  # Run daily at 6am UTC (midnight CST)
-  schedule:
-    - cron: '0 6 * * *'
-  # Manual trigger with options
   workflow_dispatch:
     inputs:
       issue_number:
