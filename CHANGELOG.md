@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2rc3] - 2026-01-31
+
+### Fixed
+
+- **Codegen Crash on Numeric Index Paths** — Template expressions like `{{ posts.0.url }}` produced paths starting with a numeric index (`0.url`), generating invalid Python (`obj.0`). Codegen now skips numeric-leading paths since list items are serialized individually.
+
 ## [0.2.2rc2] - 2026-01-31
 
 ### Fixed
@@ -223,7 +229,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bug fixes and stability improvements
 
-[Unreleased]: https://github.com/djust-org/djust/compare/v0.2.2rc2...HEAD
+[Unreleased]: https://github.com/djust-org/djust/compare/v0.2.2rc3...HEAD
+[0.2.2rc3]: https://github.com/djust-org/djust/compare/v0.2.2rc2...v0.2.2rc3
 [0.2.2rc2]: https://github.com/djust-org/djust/compare/v0.2.2rc1...v0.2.2rc2
 [0.2.2rc1]: https://github.com/djust-org/djust/compare/v0.2.1...v0.2.2rc1
 [0.2.1]: https://github.com/djust-org/djust/compare/v0.2.0...v0.2.1
