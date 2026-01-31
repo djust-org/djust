@@ -10,11 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Debug Toolbar: Handlers, Variables, Components Tabs Empty on Load** — Debug panel now bootstraps its tabs from `window.DJUST_DEBUG_INFO` on initialization, so Handlers, Variables, and Components tabs show data immediately on page load. (#189)
+- **Debug Toolbar: No Debug Data in WebSocket Responses** — WebSocket responses now include a `_debug` field (when `DEBUG=True`) with updated variables, handlers, patches, and performance metrics, so debug panel tabs update after each interaction. (#190)
 - **Debug Toolbar: Received WebSocket Messages Not Captured** — Network tab now captures both sent and received WebSocket messages by intercepting the `onmessage` property setter (not just `addEventListener`). (#186)
 - **Debug Toolbar: Events Tab Always Empty** — Events tab now populates by extracting event data from sent WebSocket messages and matching responses, replacing the broken `window.liveView` hook. Event replay now uses `window.djust.liveViewInstance`. (#187)
 
 ### Added
 
+- **Debug Panel: Live Debug Payload in WebSocket Responses** — When `DEBUG=True`, WebSocket event responses now include a `_debug` field with updated variables, handlers, patches, and performance metrics, enabling the debug panel to refresh all tabs after each interaction. (#190)
 - **Debug Toolbar: Event Filtering** — Events tab now has filter controls to search by event/handler name (substring match) and filter by status (all/errors/success). Includes a clear button and match count display. (#176)
 - **Debug Toolbar: Event Replay** — Each event in the Events tab now has a replay button (⟳) that re-sends the event through the WebSocket with original params. Shows inline pending/success/error feedback. (#177)
 - **Debug Toolbar: Scoped State Persistence** — Panel UI state (open/closed, active tab) is now scoped per view class via localStorage. Data histories are not persisted, preventing stale data after navigation. (#178)
