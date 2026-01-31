@@ -1,13 +1,50 @@
 
         // Tab render methods
         renderEventsTab() {
+            const nameFilter = (this.state.filters.nameQuery || '').toLowerCase();
+            const statusFilter = this.state.filters.severity || 'all';
+
+            const filtered = this.eventHistory.filter(event => {
+                if (nameFilter) {
+                    const eventName = (event.handler || event.name || '').toLowerCase();
+                    if (!eventName.includes(nameFilter)) return false;
+                }
+                if (statusFilter === 'error' && !event.error) return false;
+                if (statusFilter === 'success' && event.error) return false;
+                return true;
+            });
+
+            const filterBar = `
+                <div class="events-filter-bar" style="display:flex;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid #334155;background:#1e293b;">
+                    <input type="text" class="events-name-filter" placeholder="Filter by event name…"
+                        value="${this.escapeHtml(this.state.filters.nameQuery || '')}"
+                        oninput="window.djustDebugPanel.setEventNameFilter(this.value)"
+                        style="flex:1;background:#0f172a;border:1px solid #475569;color:#f1f5f9;padding:3px 8px;border-radius:3px;font-size:12px;">
+                    <button class="events-filter-btn ${statusFilter === 'all' ? 'active' : ''}"
+                        onclick="window.djustDebugPanel.setEventStatusFilter('all')"
+                        style="padding:2px 8px;font-size:11px;border-radius:3px;cursor:pointer;border:1px solid #475569;background:${statusFilter === 'all' ? '#E57324' : '#1e293b'};color:#f1f5f9;">All</button>
+                    <button class="events-filter-btn ${statusFilter === 'error' ? 'active' : ''}"
+                        onclick="window.djustDebugPanel.setEventStatusFilter('error')"
+                        style="padding:2px 8px;font-size:11px;border-radius:3px;cursor:pointer;border:1px solid #475569;background:${statusFilter === 'error' ? '#dc2626' : '#1e293b'};color:#f1f5f9;">Errors</button>
+                    <button class="events-filter-btn ${statusFilter === 'success' ? 'active' : ''}"
+                        onclick="window.djustDebugPanel.setEventStatusFilter('success')"
+                        style="padding:2px 8px;font-size:11px;border-radius:3px;cursor:pointer;border:1px solid #475569;background:${statusFilter === 'success' ? '#16a34a' : '#1e293b'};color:#f1f5f9;">Success</button>
+                    <button onclick="window.djustDebugPanel.clearEventFilters()"
+                        style="padding:2px 8px;font-size:11px;border-radius:3px;cursor:pointer;border:1px solid #475569;background:#1e293b;color:#94a3b8;">Clear</button>
+                </div>
+            `;
+
             if (this.eventHistory.length === 0) {
-                return '<div class="empty-state">No events captured yet. Interact with the page to see events.</div>';
+                return filterBar + '<div class="empty-state">No events captured yet. Interact with the page to see events.</div>';
             }
 
-            return `
+            if (filtered.length === 0) {
+                return filterBar + '<div class="empty-state">No matching events. Try adjusting your filters.</div>';
+            }
+
+            return filterBar + `
                 <div class="events-list">
-                    ${this.eventHistory.map((event, index) => {
+                    ${filtered.map((event, index) => {
                         const hasDetails = event.params || event.error || event.result;
                         const paramCount = event.params ? Object.keys(event.params).length : 0;
 
@@ -65,4 +102,23 @@
                     }).join('')}
                 </div>
             `;
+        }
+
+        setEventNameFilter(value) {
+            this.state.filters.nameQuery = value;
+            this.saveState();
+            this.renderTabContent();
+        }
+
+        setEventStatusFilter(value) {
+            this.state.filters.severity = value;
+            this.saveState();
+            this.renderTabContent();
+        }
+
+        clearEventFilters() {
+            this.state.filters.nameQuery = '';
+            this.state.filters.severity = 'all';
+            this.saveState();
+            this.renderTabContent();
         }
