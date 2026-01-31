@@ -15,7 +15,7 @@ Identify bottlenecks in the render cycle and optimize.
 
 Understand memory pressure and evaluate client-side or external storage.
 
-**Current architecture** (`state_backend.py`):
+**Current architecture** (`state_backends/`):
 - Pluggable backends: memory (dev) or Redis (prod)
 - Server memory holds: RustLiveView instance, user context, cached decorator values, draft state
 - States >100KB trigger warnings; >10KB get zstd compressed
@@ -49,25 +49,24 @@ Lower the barrier to getting started and debugging.
 
 - Docs are extensive (40+ files) but scattered — consolidate the getting-started path
 - CLI (`cli.py`) has `stats`, `health`, `profile`, `analyze`, `clear` — evaluate discoverability
-- Error messages from event security now surface in the debug toolbar — verify clarity and usefulness
+- ~~Error messages from event security now surface in the debug toolbar — verify clarity and usefulness~~ ✅ Done (#112)
 - Identify common first-time stumbling blocks: missing `@event_handler` decorator? WebSocket/Channels config? Template syntax?
+- ~~Document `@event` → `@event_handler` migration path~~ ✅ Done (#122, #141)
 - Consider a `django-admin startapp` template with djust boilerplate
 - Consider better error pages in DEBUG mode with actionable suggestions
 
-## 5. Break Up Large Files
+## 5. Break Up Large Files — ✅ Complete
 
-Separate concerns and reduce merge conflicts. Priority by file size:
+All major files have been split into focused modules:
 
-| File | Lines | Split candidates |
-|------|-------|-----------------|
-| `debug-panel.js` | 3,475 | UI rendering, event logging, VDOM patches, variable inspection |
-| `client.js` | 3,193 | WebSocket connection, VDOM patching, event binding, loading states, init |
-| `live_view.py` | 2,924 | Core class, request handling, state management, JSON encoding, script injection |
-| `websocket.py` | 1,224 | Consumer, event dispatch, validation, rate limiting |
-| `state_backend.py` | 1,043 | Backend interface, memory impl, Redis impl, compression, cleanup |
-| `template_backend.py` | 978 | Django integration, variable extraction, context processing |
-
-Start with `live_view.py` and `client.js` — they change most frequently and cause the most merge conflicts.
+| File | Status | PRs |
+|------|--------|-----|
+| `debug-panel.js` | ✅ Split into source modules | #125 |
+| `client.js` | ✅ Split into source modules | #124 |
+| `live_view.py` | ✅ Extracted serialization, session utils, mixins | #126, #127, #130 |
+| `websocket.py` | ✅ Extracted websocket_utils | #129 |
+| `state_backend.py` | ✅ Split into state_backends package | #123 |
+| `template_backend.py` | ✅ Split into template package | #128 |
 
 ## 6. Finish Debug Toolbar
 
@@ -82,6 +81,7 @@ Complete the development tools suite.
 - Toast notifications and error overlay
 - Hot reload with template change detection
 - Performance warnings for patches >16ms
+- Server error display in toolbar (#112)
 
 **Missing:**
 - Event filtering by handler name, success/error status, time range
@@ -90,3 +90,32 @@ Complete the development tools suite.
 - Performance warnings tab — slow patches (>5ms), state size alerts, memory tracking
 - State size visualization — session contents and size breakdown
 - Panel state persistence across TurboNav navigation
+
+## 7. WebSocket Security Hardening — ✅ Complete
+
+All critical and high-priority WebSocket security issues have been resolved:
+
+- ✅ Rust actor path bypass (#106, #118, #120)
+- ✅ Rate limiting for mount/ping messages (#107)
+- ✅ Per-IP connection limit and reconnection throttle (#108, #121)
+- ✅ Error disclosure leak prevention (#109)
+- ✅ Config validation on startup (#110)
+- ✅ Message size byte-count check (#111)
+- ✅ Shared `_validate_event_security` helper (#120)
+
+## 8. VDOM Correctness
+
+Ongoing effort to harden the VDOM diff and patch pipeline.
+
+**Resolved:**
+- ✅ Keyed diff insert ordering (#152, #154)
+- ✅ MoveChild resolution via djust_id (#150)
+- ✅ Duplicate key detection warning (#145, #149)
+- ✅ data-djust-replace child removal (#142, #143, #144)
+- ✅ Unkeyed list reorder documentation (#148, #151)
+- ✅ Proptest/fuzzing for diff algorithm (#146, #153)
+- ✅ JIT serialization fixes for M2M, nested dicts, @property (#140)
+
+**Remaining:**
+- Investigate edge cases surfaced by proptest fuzzing
+- Performance optimization for large list diffs (>1000 items)
