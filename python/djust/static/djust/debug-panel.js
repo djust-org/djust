@@ -1869,7 +1869,7 @@
                             <div class="network-item ${msg.direction} ${hasPayload ? 'expandable' : ''}" data-index="${index}">
                                 <div class="network-header" ${hasPayload ? 'onclick="window.djustDebugPanel.toggleExpand(this)"' : ''}>
                                     ${hasPayload ? '<span class="expand-icon">▶</span>' : ''}
-                                    <span class="network-direction">${msg.direction === 'sent' ? '↑' : '↓'}</span>
+                                    <span class="network-direction ${msg.direction}">${msg.direction === 'sent' ? '↑' : '↓'}</span>
                                     <span class="network-type">${type}</span>
                                     ${hasDebugInfo ? '<span class="network-debug">🐛</span>' : ''}
                                     <span class="network-size">${this.formatBytes(msg.size)}</span>
@@ -1878,6 +1878,9 @@
                                 ${hasPayload ? `
                                     <div class="network-details" style="display: none;">
                                         <div class="network-payload">
+                                            <div class="network-payload-toolbar">
+                                                <button class="btn-xs network-copy-btn" onclick="window.djustDebugPanel.copyPayload(this, ${index})">Copy JSON</button>
+                                            </div>
                                             <pre>${JSON.stringify(payload, null, 2)}</pre>
                                         </div>
                                     </div>
@@ -3310,6 +3313,29 @@
                 icon.textContent = '▶';
                 item.classList.remove('expanded');
             }
+        }
+
+        copyPayload(buttonElement, index) {
+            const stats = window.liveview && window.liveview.stats ? window.liveview.stats : null;
+            const messages = stats ? stats.messages : this.networkHistory;
+            const msg = messages[index];
+            if (!msg) return;
+
+            const payload = msg.data || msg.payload;
+            const text = JSON.stringify(payload, null, 2);
+
+            navigator.clipboard.writeText(text).then(() => {
+                const original = buttonElement.textContent;
+                buttonElement.textContent = 'Copied!';
+                buttonElement.classList.add('copied');
+                setTimeout(() => {
+                    buttonElement.textContent = original;
+                    buttonElement.classList.remove('copied');
+                }, 1500);
+            }).catch(() => {
+                buttonElement.textContent = 'Failed';
+                setTimeout(() => { buttonElement.textContent = 'Copy JSON'; }, 1500);
+            });
         }
 
         // Panel control methods

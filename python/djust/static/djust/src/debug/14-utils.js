@@ -204,4 +204,27 @@
             }
         }
 
+        copyPayload(buttonElement, index) {
+            const stats = window.liveview && window.liveview.stats ? window.liveview.stats : null;
+            const messages = stats ? stats.messages : this.networkHistory;
+            const msg = messages[index];
+            if (!msg) return;
+
+            const payload = msg.data || msg.payload;
+            const text = JSON.stringify(payload, null, 2);
+
+            navigator.clipboard.writeText(text).then(() => {
+                const original = buttonElement.textContent;
+                buttonElement.textContent = 'Copied!';
+                buttonElement.classList.add('copied');
+                setTimeout(() => {
+                    buttonElement.textContent = original;
+                    buttonElement.classList.remove('copied');
+                }, 1500);
+            }).catch(() => {
+                buttonElement.textContent = 'Failed';
+                setTimeout(() => { buttonElement.textContent = 'Copy JSON'; }, 1500);
+            });
+        }
+
         // Panel control methods

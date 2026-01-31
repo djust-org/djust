@@ -63,7 +63,7 @@
                             <div class="network-item ${msg.direction} ${hasPayload ? 'expandable' : ''}" data-index="${index}">
                                 <div class="network-header" ${hasPayload ? 'onclick="window.djustDebugPanel.toggleExpand(this)"' : ''}>
                                     ${hasPayload ? '<span class="expand-icon">▶</span>' : ''}
-                                    <span class="network-direction">${msg.direction === 'sent' ? '↑' : '↓'}</span>
+                                    <span class="network-direction ${msg.direction}">${msg.direction === 'sent' ? '↑' : '↓'}</span>
                                     <span class="network-type">${type}</span>
                                     ${hasDebugInfo ? '<span class="network-debug">🐛</span>' : ''}
                                     <span class="network-size">${this.formatBytes(msg.size)}</span>
@@ -72,6 +72,9 @@
                                 ${hasPayload ? `
                                     <div class="network-details" style="display: none;">
                                         <div class="network-payload">
+                                            <div class="network-payload-toolbar">
+                                                <button class="btn-xs network-copy-btn" onclick="window.djustDebugPanel.copyPayload(this, ${index})">Copy JSON</button>
+                                            </div>
                                             <pre>${JSON.stringify(payload, null, 2)}</pre>
                                         </div>
                                     </div>

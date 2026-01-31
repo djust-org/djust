@@ -790,3 +790,34 @@
     white-space: pre-wrap;
     word-break: break-word;
 }
+
+/* --- Network Tab Enhancements --- */
+.network-direction.sent {
+    color: var(--djust-accent);
+    font-weight: 700;
+}
+
+.network-direction.received {
+    color: var(--djust-success);
+    font-weight: 700;
+}
+
+.network-item.sent {
+    border-left: 3px solid var(--djust-accent);
+}
+
+.network-item.received {
+    border-left: 3px solid var(--djust-success);
+}
+
+.network-payload-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 8px;
+}
+
+.network-copy-btn.copied {
+    background: var(--djust-success);
+    border-color: var(--djust-success);
+    color: white;
+}
