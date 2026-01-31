@@ -120,7 +120,7 @@
             const handlerName = event.handler || event.name;
             if (!handlerName) return;
 
-            const lv = window.liveView;
+            const lv = window.djust && window.djust.liveViewInstance;
             if (!lv || !lv.sendEvent) {
                 this.showReplayStatus(btnElement, 'error', 'No connection');
                 return;

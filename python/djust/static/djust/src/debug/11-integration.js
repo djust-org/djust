@@ -5,71 +5,104 @@
                 const self = this;
 
                 WebSocket.prototype.send = function(data) {
+                    const payload = self.parsePayload(data);
+
                     self.captureNetworkMessage({
                         direction: 'sent',
                         type: self.detectMessageType(data),
                         size: new Blob([data]).size,
-                        payload: self.parsePayload(data)
+                        payload: payload
                     });
+
+                    // Capture events from sent messages
+                    if (payload && payload.type === 'event') {
+                        self._pendingEvents = self._pendingEvents || {};
+                        const eventKey = (payload.event || payload.handler) + '_' + Date.now();
+                        self._pendingEvents[eventKey] = {
+                            handler: payload.event || payload.handler,
+                            params: payload.params || payload.data || {},
+                            startTime: performance.now()
+                        };
+                    }
 
                     return originalSend.call(this, data);
                 };
 
-                // Also hook into message receive
+                // Also hook into message receive via addEventListener
                 const originalAddEventListener = WebSocket.prototype.addEventListener;
                 WebSocket.prototype.addEventListener = function(type, listener) {
                     if (type === 'message') {
                         const wrappedListener = function(event) {
-                            const payload = self.parsePayload(event.data);
-
-                            self.captureNetworkMessage({
-                                direction: 'received',
-                                type: self.detectMessageType(event.data),
-                                size: new Blob([event.data]).size,
-                                payload: payload
-                            });
-
-                            // Process debug information if present
-                            if (payload && payload._debug) {
-                                self.processDebugInfo(payload._debug);
-                            }
-
+                            self._handleReceivedMessage(event);
                             return listener.call(this, event);
                         };
                         return originalAddEventListener.call(this, type, wrappedListener);
                     }
                     return originalAddEventListener.call(this, type, listener);
                 };
+
+                // Hook into onmessage property setter to capture messages
+                // assigned via ws.onmessage = handler (bypasses addEventListener)
+                const onmessageDescriptor = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
+                if (onmessageDescriptor) {
+                    Object.defineProperty(WebSocket.prototype, 'onmessage', {
+                        set(handler) {
+                            if (typeof handler !== 'function') {
+                                return onmessageDescriptor.set.call(this, handler);
+                            }
+                            const wrappedHandler = function(event) {
+                                self._handleReceivedMessage(event);
+                                return handler.call(this, event);
+                            };
+                            onmessageDescriptor.set.call(this, wrappedHandler);
+                        },
+                        get() {
+                            return onmessageDescriptor.get.call(this);
+                        },
+                        configurable: true
+                    });
+                }
             }
 
-            // Hook into LiveView event handling
-            if (window.liveView) {
-                const originalHandleEvent = window.liveView.handleEvent;
-                window.liveView.handleEvent = (event) => {
-                    const startTime = performance.now();
+            // Initialize pending events tracker for matching sent events to responses
+            this._pendingEvents = {};
+        }
 
-                    try {
-                        const result = originalHandleEvent.call(window.liveView, event);
+        _handleReceivedMessage(event) {
+            const payload = this.parsePayload(event.data);
+
+            this.captureNetworkMessage({
+                direction: 'received',
+                type: this.detectMessageType(event.data),
+                size: new Blob([event.data]).size,
+                payload: payload
+            });
+
+            // Process debug information if present
+            if (payload && payload._debug) {
+                this.processDebugInfo(payload._debug);
+            }
+
+            // Match response to pending events and capture completed event
+            if (payload && this._pendingEvents) {
+                const isEventResponse = payload.type === 'patch' || payload.type === 'error' || payload.type === 'noop';
+                if (isEventResponse) {
+                    // Find the most recent pending event (FIFO)
+                    const keys = Object.keys(this._pendingEvents);
+                    if (keys.length > 0) {
+                        const key = keys[0];
+                        const pending = this._pendingEvents[key];
+                        delete this._pendingEvents[key];
 
                         this.captureEvent({
                             type: 'event',
-                            handler: event.handler || event.type,
-                            params: event.params,
-                            duration: performance.now() - startTime
+                            handler: pending.handler,
+                            params: pending.params,
+                            duration: performance.now() - pending.startTime,
+                            error: payload.type === 'error' ? (payload.error || 'Server error') : null
                         });
-
-                        return result;
-                    } catch (error) {
-                        this.captureEvent({
-                            type: 'event',
-                            handler: event.handler || event.type,
-                            params: event.params,
-                            duration: performance.now() - startTime,
-                            error: error.message
-                        });
-                        throw error;
                     }
-                };
+                }
             }
         }
 
