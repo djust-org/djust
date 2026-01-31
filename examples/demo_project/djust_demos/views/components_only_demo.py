@@ -7,7 +7,7 @@ No HTML in the template - everything is composed from reusable components.
 
 from djust import LiveView
 from djust.components.layout import NavbarComponent, NavItem, TabsComponent, TabItem
-from djust.decorators import event
+from djust.decorators import event_handler
 from djust.components.ui import (
     AlertComponent,
     BadgeComponent,
@@ -354,13 +354,13 @@ def mount(self, request):
 
     # === Event Handlers ===
 
-    @event
+    @event_handler
     def dismiss_alert(self):
         """Dismiss the alert message"""
         self.show_alert = False
         self._build_header()
 
-    @event
+    @event_handler
     def complete_task(self):
         """Complete a task and update progress"""
         if self.tasks_completed < self.tasks_total:
@@ -377,7 +377,7 @@ def mount(self, request):
             self.alert_variant = "success"
             self._build_header()
 
-    @event
+    @event_handler
     def reset_progress(self):
         """Reset all progress"""
         self.tasks_completed = 0
@@ -393,7 +393,7 @@ def mount(self, request):
         self.alert_variant = "warning"
         self._build_header()
 
-    @event
+    @event_handler
     def export_data(self):
         """Simulate data export"""
         self.show_alert = True
@@ -401,7 +401,7 @@ def mount(self, request):
         self.alert_variant = "success"
         self._build_header()
 
-    @event
+    @event_handler
     def show_settings(self):
         """Show settings modal"""
         self.show_modal = True
@@ -417,7 +417,7 @@ def mount(self, request):
         """
         self._build_modal()
 
-    @event
+    @event_handler
     def open_modal(self):
         """Open the confirmation modal"""
         self.show_modal = True
@@ -425,13 +425,13 @@ def mount(self, request):
         self.modal_message = "This modal was created using the ModalComponent. No HTML needed!"
         self._build_modal()
 
-    @event
+    @event_handler
     def close_modal(self):
         """Close the modal"""
         self.show_modal = False
         self._build_modal()
 
-    @event
+    @event_handler
     def change_status(self, value: str = None, **kwargs):
         """Change user status"""
         if value:
@@ -439,7 +439,7 @@ def mount(self, request):
             self._build_stats_cards()
             self.close_modal()
 
-    @event
+    @event_handler
     def switch_tab(self, tab: str = None, **kwargs):
         """Switch active tab"""
         if tab:

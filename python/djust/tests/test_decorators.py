@@ -113,12 +113,14 @@ class TestEventHandlerDecorator:
         assert hasattr(my_handler, "_djust_decorators")
 
     def test_event_alias(self):
-        """Test @event alias works"""
+        """Test @event alias works but emits deprecation warning"""
 
-        @event
-        def my_handler(self, value: str):
-            """Test handler"""
-            pass
+        with pytest.warns(DeprecationWarning, match="@event is deprecated"):
+
+            @event
+            def my_handler(self, value: str):
+                """Test handler"""
+                pass
 
         assert hasattr(my_handler, "_djust_decorators")
         assert "event_handler" in my_handler._djust_decorators

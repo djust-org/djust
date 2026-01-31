@@ -50,7 +50,7 @@ Lower the barrier to getting started and debugging.
 - Docs are extensive (40+ files) but scattered — consolidate the getting-started path
 - CLI (`cli.py`) has `stats`, `health`, `profile`, `analyze`, `clear` — evaluate discoverability
 - Error messages from event security now surface in the debug toolbar — verify clarity and usefulness
-- Identify common first-time stumbling blocks: missing `@event` decorator? WebSocket/Channels config? Template syntax?
+- Identify common first-time stumbling blocks: missing `@event_handler` decorator? WebSocket/Channels config? Template syntax?
 - Consider a `django-admin startapp` template with djust boilerplate
 - Consider better error pages in DEBUG mode with actionable suggestions
 

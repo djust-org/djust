@@ -6,6 +6,7 @@ event handlers, reactive state, and computed properties.
 """
 
 import functools
+import warnings
 from typing import Callable, Any, TypeVar, cast, List, Optional
 
 
@@ -104,7 +105,7 @@ def event_handler(
             "coerce_types": True
         }
 
-    Note: You can also use the shorter @event alias.
+    Note: The @event alias is deprecated. Use @event_handler directly.
     """
 
     def decorator(func: F) -> F:
@@ -153,29 +154,26 @@ def event_handler(
     return decorator
 
 
-# Shorter alias for event_handler
+# Shorter alias for event_handler (deprecated)
 def event(func: F) -> F:
     """
-    Shorter alias for @event_handler.
+    Deprecated alias for @event_handler. Use @event_handler instead.
 
-    Mark a method as an event handler for cleaner syntax.
-
-    Usage:
-        class MyView(LiveView):
-            @event
-            def increment(self):
-                self.count += 1
-
-            @event
-            def update_item(self, item_id: str, value: str = "", **kwargs):
-                self.items[item_id] = value
+    .. deprecated::
+        ``@event`` is deprecated and will be removed in a future release.
+        Use ``@event_handler`` instead.
     """
+    warnings.warn(
+        "@event is deprecated. Use @event_handler instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return event_handler(func)
 
 
 def is_event_handler(func: Any) -> bool:
     """
-    Check if a function has been decorated with @event or @event_handler.
+    Check if a function has been decorated with @event_handler.
 
     Args:
         func: The function to check.
@@ -230,7 +228,7 @@ def state(default: Any = None):
             count = state(default=0)
             message = state(default="Hello")
 
-            @event
+            @event_handler
             def increment(self):
                 self.count += 1
 
@@ -486,7 +484,7 @@ def rate_limit(rate: float = 10, burst: int = 5) -> Callable[[F], F]:
     Usage:
         class MyView(LiveView):
             @rate_limit(rate=5, burst=3)
-            @event
+            @event_handler
             def expensive_operation(self, **kwargs):
                 ...
     """

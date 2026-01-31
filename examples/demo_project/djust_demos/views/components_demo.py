@@ -9,7 +9,7 @@ This demonstrates:
 """
 
 from djust import LiveView
-from djust.decorators import event
+from djust.decorators import event_handler
 from djust.components.ui import Badge, Button
 
 
@@ -286,18 +286,18 @@ badges = [Badge(f"Badge {i}", variant=v)
         return context
 
     # Event handlers for interactive counter
-    @event
+    @event_handler
     def increment(self):
         """Increment counter"""
         self.count += 1
 
-    @event
+    @event_handler
     def decrement(self):
         """Decrement counter"""
         if self.count > 0:
             self.count -= 1
 
-    @event
+    @event_handler
     def reset(self):
         """Reset counter"""
         self.count = 0

@@ -65,10 +65,10 @@ def _check_event_security(handler, owner_instance, event_name: str) -> Optional[
         return None
 
     if mode == "strict":
-        return f"Event '{event_name}' is not decorated with @event or listed in _allowed_events"
+        return f"Event '{event_name}' is not decorated with @event_handler or listed in _allowed_events"
 
     logger.warning(
-        "Deprecation: handler '%s' on %s is not decorated with @event. "
+        "Deprecation: handler '%s' on %s is not decorated with @event_handler. "
         "This will be blocked in strict mode.",
         event_name,
         type(owner_instance).__name__,

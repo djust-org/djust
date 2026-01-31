@@ -114,15 +114,16 @@ is_safe_event_name("__class__")    # False
 is_safe_event_name("_private")     # False
 ```
 
-#### Layer 2: `@event` Decorator Allowlist
+#### Layer 2: `@event_handler` Decorator Allowlist
 
 Only methods explicitly marked as event handlers are callable via WebSocket. This is controlled by the `event_security` setting (default: `"strict"`):
 
 ```python
-from djust import LiveView, event
+from djust import LiveView
+from djust.decorators import event_handler
 
 class MyView(LiveView):
-    @event
+    @event_handler
     def increment(self):
         """This IS callable via WebSocket"""
         self.count += 1
@@ -133,7 +134,7 @@ class MyView(LiveView):
 ```
 
 **Modes:**
-- `"strict"` (default) — only `@event`/`@event_handler` decorated methods or those in `_allowed_events`
+- `"strict"` (default) — only `@event_handler` decorated methods or those in `_allowed_events`
 - `"warn"` — allows undecorated methods but logs deprecation warnings
 - `"open"` — no decorator check (legacy behavior, not recommended)
 
@@ -165,11 +166,11 @@ LIVEVIEW_CONFIG = {
 For expensive handlers, use the `@rate_limit` decorator:
 
 ```python
-from djust import event, rate_limit
+from djust.decorators import event_handler, rate_limit
 
 class MyView(LiveView):
     @rate_limit(rate=5, burst=3)
-    @event
+    @event_handler
     def expensive_operation(self, **kwargs):
         """Limited to 5/sec sustained, 3 burst"""
         ...
@@ -208,8 +209,8 @@ The following patterns are **prohibited** in djust code:
 | `params` in error responses | Remove entirely | Data leakage |
 | `eval(user_input)` | Never use eval | Code injection |
 | `exec(user_input)` | Never use exec | Code injection |
-| `getattr(obj, user_input)` without guard | `is_safe_event_name()` + `@event` check | Arbitrary method invocation |
-| Event handler without `@event` | Add `@event` or `@event_handler` decorator | Unrestricted WebSocket access |
+| `getattr(obj, user_input)` without guard | `is_safe_event_name()` + `@event_handler` check | Arbitrary method invocation |
+| Event handler without `@event_handler` | Add `@event_handler` decorator | Unrestricted WebSocket access |
 
 ### JavaScript
 
@@ -233,7 +234,7 @@ When reviewing PRs, check for these security issues:
 - [ ] Form inputs are sanitized server-side
 
 ### WebSocket Event Security
-- [ ] All event handlers decorated with `@event` or `@event_handler`
+- [ ] All event handlers decorated with `@event_handler`
 - [ ] No `getattr()` on user-controlled names without `is_safe_event_name()` guard
 - [ ] `event_security` setting is `"strict"` (default) in production
 - [ ] Expensive handlers have `@rate_limit` decorator
@@ -327,13 +328,13 @@ logger.info(f"Query: {sanitize_for_log(user_query)}")
 ```python
 # All three layers are automatic when event_security = "strict" (default):
 # 1. Regex guard blocks _private, __dunder__, malformed names
-# 2. @event decorator allowlist blocks unmarked methods
+# 2. @event_handler decorator allowlist blocks unmarked methods
 # 3. Rate limiter prevents flooding
 
 # Just decorate your handlers:
-from djust import event
+from djust.decorators import event_handler
 
-@event
+@event_handler
 def my_handler(self, **kwargs):
     pass
 ```

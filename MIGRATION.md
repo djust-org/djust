@@ -4,7 +4,7 @@ This guide helps you upgrade between major versions of djust.
 
 ## Upgrading to 0.2.1 — Event Handler Security
 
-Version 0.2.1 defaults `event_security` to `"strict"`: only methods decorated with `@event` or `@event_handler` (or listed in `_allowed_events`) are callable via WebSocket. Undecorated handler methods will be silently blocked.
+Version 0.2.1 defaults `event_security` to `"strict"`: only methods decorated with `@event_handler` (or listed in `_allowed_events`) are callable via WebSocket. Undecorated handler methods will be silently blocked.
 
 ### Step 1: Enable warn mode (optional)
 
@@ -20,11 +20,11 @@ LIVEVIEW_CONFIG = {
 Then check your Django logs for messages like:
 
 ```
-WARNING Deprecation: handler 'increment' on CounterView is not decorated with @event.
+WARNING Deprecation: handler 'increment' on CounterView is not decorated with @event_handler.
 This will be blocked in strict mode.
 ```
 
-### Step 2: Add `@event` to all handler methods
+### Step 2: Add `@event_handler` to all handler methods
 
 **Before:**
 ```python
@@ -44,27 +44,27 @@ class CounterView(LiveView):
 **After:**
 ```python
 from djust import LiveView
-from djust.decorators import event
+from djust.decorators import event_handler
 
 class CounterView(LiveView):
     def mount(self, request):
         self.count = 0
 
-    @event
+    @event_handler
     def increment(self):      # ← allowed
         self.count += 1
 
-    @event
+    @event_handler
     def decrement(self):      # ← allowed
         self.count -= 1
 ```
 
 Methods that are **not** called via WebSocket (`mount`, `get_context_data`, private `_helpers`) do **not** need the decorator.
 
-If you already use `@event_handler()`, `@debounce`, `@throttle`, `@optimistic`, `@cache`, or `@rate_limit`, add `@event` as the outermost decorator:
+If you already use `@debounce`, `@throttle`, `@optimistic`, `@cache`, or `@rate_limit`, add `@event_handler` as the outermost decorator:
 
 ```python
-@event
+@event_handler
 @debounce(wait=0.5)
 def search(self, value: str = "", **kwargs):
     ...
