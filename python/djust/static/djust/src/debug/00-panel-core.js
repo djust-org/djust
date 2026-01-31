@@ -59,6 +59,9 @@
             this.performance = null;
             this.viewInfo = null;
 
+            // Per-view state scoping
+            this.currentViewId = this._detectCurrentViewId();
+
             this.init();
         }
 
@@ -71,4 +74,43 @@
             this.loadState();
 
             console.log('[djust] Developer Bar initialized 🐍');
+        }
+
+        _detectCurrentViewId() {
+            // Derive view ID from server-injected debug info or URL path
+            if (window.DJUST_DEBUG_INFO && window.DJUST_DEBUG_INFO.view_name) {
+                return window.DJUST_DEBUG_INFO.view_name;
+            }
+            return window.location.pathname;
+        }
+
+        _getStateKey() {
+            return `djust-debug-ui-${this.currentViewId}`;
+        }
+
+        _onViewChanged(newViewId) {
+            this.currentViewId = newViewId;
+            // Clear data histories — they belong to the previous view
+            this.eventHistory = [];
+            this.patchHistory = [];
+            this.networkHistory = [];
+            this.stateHistory = [];
+            this.memoryHistory = [];
+            this.errorCount = 0;
+            this.warningCount = 0;
+            this.totalContextSize = 0;
+            this.contextSizeCount = 0;
+            this.updateErrorBadge();
+            this.updateCounter('event-count', 0);
+            this.updateCounter('patch-count', 0);
+            this.updateCounter('error-count', 0);
+            this.updateCounter('warning-count', 0);
+
+            // Load UI preferences for the new view
+            this.loadState();
+
+            // Re-render if panel is open
+            if (this.state.isOpen) {
+                this.renderTabContent();
+            }
         }
