@@ -117,10 +117,15 @@
 
             // Update view info
             if (debugInfo.view_name) {
+                const prevView = this.viewInfo && this.viewInfo.name;
                 this.viewInfo = {
                     name: debugInfo.view_name,
                     module: debugInfo.view_module
                 };
+                // If view changed, reset data and reload view-scoped state
+                if (prevView !== debugInfo.view_name && this.onViewMount) {
+                    this.onViewMount();
+                }
             }
         }
 
