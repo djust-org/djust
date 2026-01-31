@@ -77,6 +77,7 @@ class ContextMixin:
 
         # JIT auto-serialization for QuerySets and Models
         jit_serialized_keys = set()
+        template_content = None
         if JIT_AVAILABLE:
             try:
                 template_content = self._get_template_content()
@@ -171,15 +172,12 @@ class ContextMixin:
                     context[count_key] = len(value)
 
         # Single pass: deep-serialize dicts and fallback-serialize remaining Models
-        tc = template_content if JIT_AVAILABLE and "template_content" in dir() else None
+        tc = template_content
         for key, value in list(context.items()):
             if key in jit_serialized_keys:
                 continue
             if isinstance(value, dict):
-                if tc:
-                    context[key] = self._deep_serialize_dict(value, tc, key)
-                else:
-                    context[key] = self._deep_serialize_dict_fallback(value)
+                context[key] = self._deep_serialize_dict(value, tc, key)
             elif isinstance(value, models.Model):
                 context[key] = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
             elif isinstance(value, list) and value and isinstance(value[0], models.Model):
@@ -191,50 +189,36 @@ class ContextMixin:
 
         return context
 
-    def _deep_serialize_dict(self, d: dict, template_content, var_name: str) -> dict:
-        """Recursively walk a dict, JIT-serializing any Model/QuerySet values found."""
+    def _deep_serialize_dict(self, d: dict, template_content=None, var_name: str = "") -> dict:
+        """Recursively walk a dict, serializing any Model/QuerySet values found.
+
+        When template_content is provided, uses JIT serialization; otherwise
+        falls back to DjangoJSONEncoder.
+        """
         from django.db.models import QuerySet
 
         result = {}
         for k, v in d.items():
+            child_name = f"{var_name}.{k}" if var_name else k
             if isinstance(v, models.Model):
                 if template_content:
-                    result[k] = self._jit_serialize_model(v, template_content, f"{var_name}.{k}")
+                    result[k] = self._jit_serialize_model(v, template_content, child_name)
                 else:
                     result[k] = json.loads(json.dumps(v, cls=DjangoJSONEncoder))
             elif isinstance(v, QuerySet):
                 if template_content:
-                    result[k] = self._jit_serialize_queryset(v, template_content, f"{var_name}.{k}")
+                    result[k] = self._jit_serialize_queryset(v, template_content, child_name)
                 else:
                     result[k] = [json.loads(json.dumps(item, cls=DjangoJSONEncoder)) for item in v]
             elif isinstance(v, list) and v and isinstance(v[0], models.Model):
                 if template_content:
                     result[k] = [
-                        self._jit_serialize_model(item, template_content, f"{var_name}.{k}")
-                        for item in v
+                        self._jit_serialize_model(item, template_content, child_name) for item in v
                     ]
                 else:
                     result[k] = [json.loads(json.dumps(item, cls=DjangoJSONEncoder)) for item in v]
             elif isinstance(v, dict):
-                result[k] = self._deep_serialize_dict(v, template_content, f"{var_name}.{k}")
-            else:
-                result[k] = v
-        return result
-
-    def _deep_serialize_dict_fallback(self, d: dict) -> dict:
-        """Recursively walk a dict, fallback-serializing any Model instances."""
-        from django.db.models import QuerySet
-
-        result = {}
-        for k, v in d.items():
-            if isinstance(v, models.Model):
-                result[k] = json.loads(json.dumps(v, cls=DjangoJSONEncoder))
-            elif isinstance(v, QuerySet):
-                result[k] = [json.loads(json.dumps(item, cls=DjangoJSONEncoder)) for item in v]
-            elif isinstance(v, list) and v and isinstance(v[0], models.Model):
-                result[k] = [json.loads(json.dumps(item, cls=DjangoJSONEncoder)) for item in v]
-            elif isinstance(v, dict):
-                result[k] = self._deep_serialize_dict_fallback(v)
+                result[k] = self._deep_serialize_dict(v, template_content, child_name)
             else:
                 result[k] = v
         return result

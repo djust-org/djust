@@ -5,6 +5,8 @@ JITMixin - JIT auto-serialization for QuerySets and Models.
 import hashlib
 import json
 import logging
+import os
+import re
 import sys
 from typing import Dict, Optional
 
@@ -107,9 +109,6 @@ class JITMixin:
         Only handles simple static includes (not variable includes).
         Recursively resolves nested includes up to 5 levels deep.
         """
-        import re
-        import os
-
         # Handle both normal quotes and doubled quotes from Rust resolver
         include_re = re.compile(
             r'\{%\s*include\s+"{1,2}([^"]+)"{1,2}\s*%\}|\{%\s*include\s+\'{1,2}([^\']+)\'{1,2}\s*%\}'
@@ -128,8 +127,8 @@ class JITMixin:
                             with open(full_path, "r") as f:
                                 included = f.read()
                             return resolve(included, depth + 1)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug("Failed to read included template %s: %s", full_path, e)
                 return match.group(0)  # Keep original if not found
 
             return include_re.sub(replacer, content)
