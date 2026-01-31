@@ -525,12 +525,14 @@ Planned feature to replay events for debugging:
 2. Click "Replay"
 3. Event resent with same parameters
 
-### Network Tab (Future)
+### Network Tab
 
-Planned feature to inspect WebSocket messages:
-- See raw messages sent/received
-- Monitor connection status
-- Debug protocol issues
+Inspect WebSocket messages in real time:
+- **Directional color coding**: Amber (↑) for sent messages, cyan (↓) for received
+- **Expandable payloads**: Click any message to reveal the full pretty-printed JSON body
+- **Copy to clipboard**: Copy button in expanded view copies raw JSON with visual feedback
+- **Connection stats**: Messages sent/received, bytes transferred, reconnections, uptime
+- **Debug indicator**: Messages containing debug info are flagged with 🐛
 
 ## See Also
 
