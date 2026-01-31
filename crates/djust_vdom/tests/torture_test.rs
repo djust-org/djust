@@ -12,7 +12,7 @@
 //! - Real HTML parsing round-trips
 
 use djust_vdom::diff::diff_nodes;
-use djust_vdom::patch::apply_patch;
+use djust_vdom::patch::{apply_patch, apply_patches};
 use djust_vdom::{parse_html, reset_id_counter, Patch, VNode};
 
 // ============================================================================
@@ -21,15 +21,14 @@ use djust_vdom::{parse_html, reset_id_counter, Patch, VNode};
 
 /// Diff old vs new, apply patches to old, verify result equals new.
 /// This is the gold standard correctness check.
+///
+/// Uses `apply_patches()` which correctly handles `MoveChild` by resolving
+/// children via `djust_id` instead of raw indices.
 fn diff_apply_verify(old: &VNode, new: &VNode) {
     let patches = diff_nodes(old, new, &[]);
     let mut result = old.clone();
 
-    // Apply patches in order. For RemoveChild we need reverse-index safety,
-    // but the diff algorithm already emits them in the right order.
-    for patch in &patches {
-        apply_patch(&mut result, patch);
-    }
+    apply_patches(&mut result, &patches);
 
     assert_eq_vnode(&result, new, &[]);
 }
@@ -1218,17 +1217,9 @@ fn torture_keyed_move_apply_verify_simple_swap() {
                 .with_child(VNode::text("A")),
         ]);
 
-    // NOTE: Can't use diff_apply_verify because keyed MoveChild
-    // semantics differ between the diff algorithm's patch ordering
-    // and the apply_patch() Rust implementation. This test verifies
-    // the patches are structurally correct.
-    let patches = diff_nodes(&old, &new, &[]);
-
-    let move_count = patches
-        .iter()
-        .filter(|p| matches!(p, Patch::MoveChild { .. }))
-        .count();
-    assert!(move_count > 0, "Should generate move patches for swap");
+    // Now that apply_patch resolves MoveChild by djust_id instead of
+    // raw index, diff_apply_verify works for keyed moves.
+    diff_apply_verify(&old, &new);
 }
 
 // ============================================================================
