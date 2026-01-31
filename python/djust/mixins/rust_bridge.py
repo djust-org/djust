@@ -60,6 +60,8 @@ class RustBridgeMixin:
                 if cached:
                     cached_view, timestamp = cached
                     self._rust_view = cached_view
+                    # template_dirs are not serialized; restore them after cache hit
+                    self._rust_view.set_template_dirs(get_template_dirs())
                     print("[LiveView] Cache HIT! Using cached RustLiveView", file=sys.stderr)
                     backend.set(self._cache_key, cached_view)
                     return
@@ -87,6 +89,8 @@ class RustBridgeMixin:
                 if cached:
                     cached_view, timestamp = cached
                     self._rust_view = cached_view
+                    # template_dirs are not serialized; restore them after cache hit
+                    self._rust_view.set_template_dirs(get_template_dirs())
                     print("[LiveView] Cache HIT! Using cached RustLiveView", file=sys.stderr)
                     backend.set(self._cache_key, cached_view)
                     return
