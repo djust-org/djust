@@ -405,6 +405,7 @@ fn diff_indexed_children(
     );
 
     // Diff common children
+    let patch_count_before = patches.len();
     for i in 0..old_len.min(new_len) {
         let mut child_path = path.to_vec();
         child_path.push(i);
@@ -417,6 +418,20 @@ fn diff_indexed_children(
             new[i].djust_id
         );
         patches.extend(diff_nodes(&old[i], &new[i], &child_path));
+    }
+
+    // Warn when unkeyed diffing produces excessive patches (likely a reorder)
+    let common = old_len.min(new_len);
+    let child_patches = patches.len() - patch_count_before;
+    if common > 10 && child_patches > common / 2 {
+        vdom_trace!(
+            "  PERFORMANCE WARNING: Unkeyed list with {} children produced {} patches. \
+             This often means the list was reordered. Add `data-key` attributes to \
+             enable keyed diffing and reduce patch count. See: \
+             docs/guides/LIST_REORDERING_PERFORMANCE.md",
+            common,
+            child_patches
+        );
     }
 
     // Remove extra old children

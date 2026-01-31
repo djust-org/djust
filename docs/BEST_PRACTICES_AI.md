@@ -674,6 +674,26 @@ def apply_filter(self, filter: str = "all", **kwargs):
     self._refresh_results()
 ```
 
+### List Reordering — Use `data-key`
+
+```html
+<!-- ❌ BAD: Unkeyed list — removing/reordering causes O(n) patches -->
+{% for task in tasks %}
+  <li>{{ task.name }}</li>
+{% endfor %}
+
+<!-- ✅ GOOD: Keyed list — only changed items generate patches -->
+{% for task in tasks %}
+  <li data-key="{{ task.id }}">{{ task.name }}</li>
+{% endfor %}
+```
+
+Add `data-key` to list items when items can be sorted, filtered, removed from the middle, or reordered. Without keys, the positional diff rewrites every shifted item's text. With keys, only actual changes are sent.
+
+**Skip keys** for append-only lists, small static lists (<10 items), or lists that always replace entirely.
+
+See [List Reordering Performance Guide](guides/LIST_REORDERING_PERFORMANCE.md) for benchmark data and detailed examples.
+
 ### Payload Optimization
 
 ```python
