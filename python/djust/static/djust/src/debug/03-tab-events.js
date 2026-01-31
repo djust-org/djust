@@ -1,50 +1,13 @@
 
         // Tab render methods
         renderEventsTab() {
-            const nameFilter = (this.state.filters.nameQuery || '').toLowerCase();
-            const statusFilter = this.state.filters.severity || 'all';
-
-            const filtered = this.eventHistory.filter(event => {
-                if (nameFilter) {
-                    const eventName = (event.handler || event.name || '').toLowerCase();
-                    if (!eventName.includes(nameFilter)) return false;
-                }
-                if (statusFilter === 'error' && !event.error) return false;
-                if (statusFilter === 'success' && event.error) return false;
-                return true;
-            });
-
-            const filterBar = `
-                <div class="events-filter-bar" style="display:flex;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid #334155;background:#1e293b;">
-                    <input type="text" class="events-name-filter" placeholder="Filter by event name…"
-                        value="${this.escapeHtml(this.state.filters.nameQuery || '')}"
-                        oninput="window.djustDebugPanel.setEventNameFilter(this.value)"
-                        style="flex:1;background:#0f172a;border:1px solid #475569;color:#f1f5f9;padding:3px 8px;border-radius:3px;font-size:12px;">
-                    <button class="events-filter-btn ${statusFilter === 'all' ? 'active' : ''}"
-                        onclick="window.djustDebugPanel.setEventStatusFilter('all')"
-                        style="padding:2px 8px;font-size:11px;border-radius:3px;cursor:pointer;border:1px solid #475569;background:${statusFilter === 'all' ? '#E57324' : '#1e293b'};color:#f1f5f9;">All</button>
-                    <button class="events-filter-btn ${statusFilter === 'error' ? 'active' : ''}"
-                        onclick="window.djustDebugPanel.setEventStatusFilter('error')"
-                        style="padding:2px 8px;font-size:11px;border-radius:3px;cursor:pointer;border:1px solid #475569;background:${statusFilter === 'error' ? '#dc2626' : '#1e293b'};color:#f1f5f9;">Errors</button>
-                    <button class="events-filter-btn ${statusFilter === 'success' ? 'active' : ''}"
-                        onclick="window.djustDebugPanel.setEventStatusFilter('success')"
-                        style="padding:2px 8px;font-size:11px;border-radius:3px;cursor:pointer;border:1px solid #475569;background:${statusFilter === 'success' ? '#16a34a' : '#1e293b'};color:#f1f5f9;">Success</button>
-                    <button onclick="window.djustDebugPanel.clearEventFilters()"
-                        style="padding:2px 8px;font-size:11px;border-radius:3px;cursor:pointer;border:1px solid #475569;background:#1e293b;color:#94a3b8;">Clear</button>
-                </div>
-            `;
-
             if (this.eventHistory.length === 0) {
-                return filterBar + '<div class="empty-state">No events captured yet. Interact with the page to see events.</div>';
+                return '<div class="empty-state">No events captured yet. Interact with the page to see events.</div>';
             }
 
-            if (filtered.length === 0) {
-                return filterBar + '<div class="empty-state">No matching events. Try adjusting your filters.</div>';
-            }
-
-            return filterBar + `
+            return `
                 <div class="events-list">
-                    ${filtered.map((event, index) => {
+                    ${this.eventHistory.map((event, index) => {
                         const hasDetails = event.params || event.error || event.result;
                         const paramCount = event.params ? Object.keys(event.params).length : 0;
 
@@ -57,8 +20,6 @@
                                     ${event.duration ? `<span class="event-duration">${event.duration.toFixed(1)}ms</span>` : ''}
                                     ${paramCount > 0 ? `<span class="event-param-count">${paramCount} param${paramCount === 1 ? '' : 's'}</span>` : ''}
                                     ${event.error ? '<span class="event-status">❌</span>' : ''}
-                                    <span class="replay-status" id="replay-status-${index}"></span>
-                                    ${(event.name || event.handler) && event.params ? `<button class="replay-btn" onclick="event.stopPropagation();window.djustDebugPanel.replayEvent(${index})" style="padding:1px 6px;font-size:10px;border-radius:2px;cursor:pointer;border:1px solid #475569;background:#1e293b;color:#94a3b8;margin-left:4px;" title="Replay this event">▶ Replay</button>` : ''}
                                     <span class="event-time">${this.formatTime(event.timestamp)}</span>
                                 </div>
                                 ${hasDetails ? `
@@ -104,75 +65,4 @@
                     }).join('')}
                 </div>
             `;
-        }
-
-        setEventNameFilter(value) {
-            this.state.filters.nameQuery = value;
-            this.saveState();
-            this.renderTabContent();
-        }
-
-        setEventStatusFilter(value) {
-            this.state.filters.severity = value;
-            this.saveState();
-            this.renderTabContent();
-        }
-
-        clearEventFilters() {
-            this.state.filters.nameQuery = '';
-            this.state.filters.severity = 'all';
-            this.saveState();
-            this.renderTabContent();
-        }
-
-        async replayEvent(filteredIndex) {
-            // Get the filtered list to find the correct event
-            const nameFilter = (this.state.filters.nameQuery || '').toLowerCase();
-            const statusFilter = this.state.filters.severity || 'all';
-            const filtered = this.eventHistory.filter(ev => {
-                if (nameFilter) {
-                    const n = (ev.handler || ev.name || '').toLowerCase();
-                    if (!n.includes(nameFilter)) return false;
-                }
-                if (statusFilter === 'error' && !ev.error) return false;
-                if (statusFilter === 'success' && ev.error) return false;
-                return true;
-            });
-
-            const event = filtered[filteredIndex];
-            if (!event) return;
-
-            const statusEl = document.getElementById(`replay-status-${filteredIndex}`);
-            const eventName = event.name || event.handler;
-            if (!eventName || !event.params) return;
-
-            // Show pending
-            if (statusEl) {
-                statusEl.textContent = '⏳';
-                statusEl.title = 'Replaying…';
-            }
-
-            try {
-                await handleEvent(eventName, { ...event.params });
-                if (statusEl) {
-                    statusEl.textContent = '✓';
-                    statusEl.style.color = '#16a34a';
-                    statusEl.title = 'Replay succeeded';
-                }
-            } catch (err) {
-                if (statusEl) {
-                    statusEl.textContent = '✗';
-                    statusEl.style.color = '#dc2626';
-                    statusEl.title = 'Replay failed: ' + err.message;
-                }
-            }
-
-            // Clear status after 3 seconds
-            setTimeout(() => {
-                if (statusEl) {
-                    statusEl.textContent = '';
-                    statusEl.title = '';
-                    statusEl.style.color = '';
-                }
-            }, 3000);
         }
