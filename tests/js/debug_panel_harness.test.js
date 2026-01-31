@@ -7,13 +7,8 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createPanel, loadPanel } from './helpers/debug-panel-harness.js';
-
-const __testDir = dirname(fileURLToPath(import.meta.url));
-const PANEL_JS = resolve(__testDir, '../../python/djust/static/djust/debug-panel.js');
+import { createPanel, loadPanel, PANEL_SOURCE_PATH } from './helpers/debug-panel-harness.js';
 
 describe('Debug Panel Harness — IIFE loading', () => {
     afterEach(() => {
@@ -31,7 +26,7 @@ describe('Debug Panel Harness — IIFE loading', () => {
     it('does not export class when DEBUG_MODE is false', () => {
         window.DEBUG_MODE = false;
         delete window.DjustDebugPanel;
-        const source = readFileSync(PANEL_JS, 'utf-8');
+        const source = readFileSync(PANEL_SOURCE_PATH, 'utf-8');
         const fn = new Function(source);
         fn.call(window);
         expect(window.DjustDebugPanel).toBeUndefined();
@@ -52,7 +47,8 @@ describe('Debug Panel Harness — Event Filtering (real code)', () => {
 
     beforeEach(() => {
         panel = createPanel();
-        // Add sample events directly to the panel's history
+        // Add sample events — last entry uses `name` instead of `handler`
+        // to test the fallback path (event.handler || event.name)
         panel.eventHistory = [
             { handler: 'increment', timestamp: Date.now(), params: { amount: 1 } },
             { handler: 'decrement', timestamp: Date.now() },
@@ -254,8 +250,10 @@ describe('Debug Panel Harness — State Persistence (real code)', () => {
 
 describe('Debug Panel Harness — Network Message Inspection (real code)', () => {
     let panel;
+    let originalClipboard;
 
     beforeEach(() => {
+        originalClipboard = navigator.clipboard;
         panel = createPanel();
         panel.networkHistory = [
             { direction: 'sent', payload: { type: 'event', event: 'increment', params: { amount: 1 } }, size: 64, timestamp: Date.now() },
@@ -267,6 +265,12 @@ describe('Debug Panel Harness — Network Message Inspection (real code)', () =>
 
     afterEach(() => {
         panel.destroy();
+        // Restore original clipboard to prevent leaking between tests
+        Object.defineProperty(navigator, 'clipboard', {
+            value: originalClipboard,
+            writable: true,
+            configurable: true,
+        });
     });
 
     it('renders network tab with messages', () => {
@@ -284,7 +288,6 @@ describe('Debug Panel Harness — Network Message Inspection (real code)', () =>
 
     it('copyNetworkPayload calls clipboard API', async () => {
         const writeText = vi.fn().mockResolvedValue(undefined);
-        // navigator.clipboard is read-only in happy-dom, so use defineProperty
         Object.defineProperty(navigator, 'clipboard', {
             value: { writeText },
             writable: true,
@@ -293,7 +296,9 @@ describe('Debug Panel Harness — Network Message Inspection (real code)', () =>
 
         const btn = document.createElement('button');
         btn.textContent = 'Copy JSON';
-        panel.copyNetworkPayload(btn, 0);
+        await panel.copyNetworkPayload(btn, 0);
+        // Flush microtasks for the clipboard promise chain
+        await new Promise(r => setTimeout(r, 0));
 
         expect(writeText).toHaveBeenCalled();
         const arg = writeText.mock.calls[0][0];
