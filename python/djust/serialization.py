@@ -293,4 +293,4 @@ class DjangoJSONEncoder(json.JSONEncoder):
                         cache[attr_name] = val
                         result[attr_name] = val
                 except Exception:
-                    pass
+                    pass  # Property may raise; skip gracefully during serialization

@@ -89,7 +89,7 @@ class JITMixin:
                     resolved = self._inline_includes(resolved, template_dirs)
                     return resolved
             except Exception:
-                pass
+                pass  # Rust resolver unavailable or failed; fall back to Django loader
 
             # Fallback to single-file template source
             try:

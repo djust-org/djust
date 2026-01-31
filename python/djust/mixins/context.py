@@ -90,7 +90,7 @@ class ContextMixin:
                         try:
                             variable_paths_map = extract_template_variables(template_content)
                         except Exception:
-                            pass
+                            pass  # Rust extractor unavailable or failed; fall back to non-optimized path
 
                     # Compute template hash once for codegen cache keys
                     import hashlib

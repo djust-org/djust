@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **JIT Serialization Pipeline** — Fixed multiple issues in JIT auto-serialization: ([#140](https://github.com/djust-org/djust/pull/140))
+  - M2M `.all()` traversal now generates correct iteration code in codegen serializers
+  - `@property` attributes are now serialized via Rust→Python codegen fallback when Rust can't access them
+  - `list[Model]` context values (not just QuerySets) now receive full JIT optimization with `select_related`/`prefetch_related`
+  - Nested dicts containing Model/QuerySet values are now deep-serialized recursively
+  - `_djust_annotations` model class attribute for declaring computed annotations (e.g., `Count`) applied during query optimization
+  - `{% include %}` templates are now inlined for variable extraction, so included template variables get JIT optimization
+  - Rust template parser now correctly prefixes loop variable paths (e.g., `item.field` inside `{% for item in items %}`)
+
+- **VDOM Replace Sibling Grouping** — Fixed `data-djust-replace` inserting children into wrong parent when the replace container has siblings. `groupPatchesByParent()` now uses the full path for child-operation patches, and `groupConsecutiveInserts()` checks parent identity before batching. ([#144](https://github.com/djust-org/djust/pull/144))
+
+### Deprecated
+
+- **`@event` decorator alias** — The `@event` shorthand is deprecated in favor of `@event_handler`. `@event` will be removed in v0.3.0. A deprecation warning is emitted at import time. ([#141](https://github.com/djust-org/djust/pull/141))
+
 ## [0.2.1] - 2026-01-29
 
 ### Security
