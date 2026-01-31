@@ -109,6 +109,7 @@ function reinitLiveViewForTurboNav() {
         console.log('[LiveView:TurboNav] Initializing new WebSocket connection');
         // Initialize WebSocket
         liveViewWS = new LiveViewWebSocket();
+        window.djust.liveViewInstance = liveViewWS;
         liveViewWS.connect();
 
         // Start heartbeat
@@ -3103,6 +3104,7 @@ const lazyHydrationManager = {
         // Ensure WebSocket is connected
         if (!liveViewWS || !liveViewWS.enabled) {
             liveViewWS = new LiveViewWebSocket();
+            window.djust.liveViewInstance = liveViewWS;
             liveViewWS.connect();
         }
 
@@ -3195,6 +3197,7 @@ function djustInit() {
     if (eagerContainers.length > 0) {
         // Initialize WebSocket
         liveViewWS = new LiveViewWebSocket();
+        window.djust.liveViewInstance = liveViewWS;
         liveViewWS.connect();
 
         // Start heartbeat

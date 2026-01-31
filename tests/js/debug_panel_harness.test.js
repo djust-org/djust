@@ -122,7 +122,8 @@ describe('Debug Panel Harness — Event Replay (real code)', () => {
 
     beforeEach(() => {
         mockSendEvent = vi.fn().mockReturnValue(true);
-        window.liveView = { sendEvent: mockSendEvent };
+        window.djust = window.djust || {};
+        window.djust.liveViewInstance = { sendEvent: mockSendEvent };
         panel = createPanel();
         panel.eventHistory = [
             { handler: 'increment', timestamp: Date.now(), params: { amount: 1 } },
@@ -134,7 +135,7 @@ describe('Debug Panel Harness — Event Replay (real code)', () => {
 
     afterEach(() => {
         panel.destroy();
-        delete window.liveView;
+        delete window.djust.liveViewInstance;
     });
 
     it('replays event with handler and params via real replayEvent', () => {
@@ -170,7 +171,7 @@ describe('Debug Panel Harness — Event Replay (real code)', () => {
     });
 
     it('shows error when no liveView connection', () => {
-        delete window.liveView;
+        delete window.djust.liveViewInstance;
         const btn = document.createElement('button');
         btn.textContent = '⟳';
         btn.className = 'event-replay-btn';

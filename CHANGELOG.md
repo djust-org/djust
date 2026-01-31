@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Debug Toolbar: Received WebSocket Messages Not Captured** — Network tab now captures both sent and received WebSocket messages by intercepting the `onmessage` property setter (not just `addEventListener`). (#186)
+- **Debug Toolbar: Events Tab Always Empty** — Events tab now populates by extracting event data from sent WebSocket messages and matching responses, replacing the broken `window.liveView` hook. Event replay now uses `window.djust.liveViewInstance`. (#187)
+
 ### Added
 
 - **Debug Toolbar: Event Filtering** — Events tab now has filter controls to search by event/handler name (substring match) and filter by status (all/errors/success). Includes a clear button and match count display. (#176)
