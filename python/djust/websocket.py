@@ -77,6 +77,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         performance: Optional[Dict[str, Any]] = None,
         hotreload: bool = False,
         file_path: Optional[str] = None,
+        event_name: Optional[str] = None,
     ) -> None:
         """
         Send a patch or full HTML update to the client.
@@ -94,6 +95,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             performance: Comprehensive performance data
             hotreload: Whether this is a hot reload update
             file_path: File path that triggered hot reload (if hotreload=True)
+            event_name: Name of the event that triggered this update (for debug payload)
         """
         # Note: patches=[] (empty list) is valid and should be sent as "patch" type
         # Only patches=None indicates we should send html_update
@@ -119,6 +121,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     response["hotreload"] = True
                     if file_path:
                         response["file"] = file_path
+                self._attach_debug_payload(response, event_name, performance)
                 await self.send_json(response)
         else:
             response = {
@@ -130,7 +133,41 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 response["reset_form"] = True
             if cache_request_id:
                 response["cache_request_id"] = cache_request_id
+            self._attach_debug_payload(response, event_name)
             await self.send_json(response)
+
+    def _attach_debug_payload(
+        self,
+        response: Dict[str, Any],
+        event_name: Optional[str] = None,
+        performance: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Attach _debug payload to a WebSocket response when DEBUG is enabled.
+
+        This allows the debug panel to update Handlers, Variables, Patches,
+        and State tabs after each interaction, not just on initial page load.
+        """
+        from django.conf import settings
+
+        if not getattr(settings, "DEBUG", False):
+            return
+        if not self.view_instance:
+            return
+
+        try:
+            debug_info = self.view_instance.get_debug_info()
+            if event_name:
+                debug_info["_eventName"] = event_name
+            if performance:
+                debug_info["performance"] = performance
+            # Include patches from the response so the debug panel Patches tab
+            # can display them without duplicating the data extraction logic.
+            if "patches" in response:
+                debug_info["patches"] = response["patches"]
+            response["_debug"] = debug_info
+        except Exception as e:
+            logger.debug("Failed to attach debug payload: %s", e)
 
     def _get_client_ip(self) -> Optional[str]:
         """Extract client IP from scope, with X-Forwarded-For support."""
@@ -611,6 +648,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     html=html,
                     version=version,
                     cache_request_id=cache_request_id,
+                    event_name=event_name,
                 )
 
             except Exception as e:
@@ -814,6 +852,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         reset_form=should_reset_form,
                         timing=timing,
                         performance=perf_summary,
+                        event_name=event_name,
                     )
                 else:
                     # patches=None means VDOM diff failed or was skipped - send full HTML
@@ -840,6 +879,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         version=version,
                         cache_request_id=cache_request_id,
                         reset_form=should_reset_form,
+                        event_name=event_name,
                     )
 
             except Exception as e:
