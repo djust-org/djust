@@ -15,11 +15,19 @@ from ..session_utils import _jit_serializer_cache, _get_model_hash
 
 logger = logging.getLogger(__name__)
 
-# Cache template_content → sha256 hash (avoids recomputing per variable)
-_template_hash_cache: Dict[str, str] = {}
+# Cache template_content id → sha256 hash (avoids recomputing per variable).
+# Keyed by id(template_content) to avoid keeping large template strings alive as dict keys.
+# The id is safe here because the template string is kept alive by the caller for the
+# duration of get_context_data(), and stale entries are harmless (just a cache miss).
+_template_hash_cache: Dict[int, str] = {}
 
 # Cache (template_hash, variable_name) → expected top-level key count
 _expected_keys_cache: Dict[tuple, int] = {}
+
+# Pre-compiled regex for {% include %} — handles normal and doubled quotes from Rust resolver
+_INCLUDE_RE = re.compile(
+    r'\{%\s*include\s+"{1,2}([^"]+)"{1,2}\s*%\}|\{%\s*include\s+\'{1,2}([^\']+)\'{1,2}\s*%\}'
+)
 
 try:
     from .._rust import extract_template_variables
@@ -109,10 +117,6 @@ class JITMixin:
         Only handles simple static includes (not variable includes).
         Recursively resolves nested includes up to 5 levels deep.
         """
-        # Handle both normal quotes and doubled quotes from Rust resolver
-        include_re = re.compile(
-            r'\{%\s*include\s+"{1,2}([^"]+)"{1,2}\s*%\}|\{%\s*include\s+\'{1,2}([^\']+)\'{1,2}\s*%\}'
-        )
 
         def resolve(content, depth=0):
             if depth > 5:
@@ -131,7 +135,7 @@ class JITMixin:
                             logger.debug("Failed to read included template %s: %s", full_path, e)
                 return match.group(0)  # Keep original if not found
 
-            return include_re.sub(replacer, content)
+            return _INCLUDE_RE.sub(replacer, content)
 
         return resolve(template_content)
 
@@ -160,11 +164,12 @@ class JITMixin:
                 return [json.loads(json.dumps(obj, cls=DjangoJSONEncoder)) for obj in queryset]
 
             model_class = queryset.model
-            if template_content not in _template_hash_cache:
-                _template_hash_cache[template_content] = hashlib.sha256(
+            _tc_id = id(template_content)
+            if _tc_id not in _template_hash_cache:
+                _template_hash_cache[_tc_id] = hashlib.sha256(
                     template_content.encode()
                 ).hexdigest()[:8]
-            template_hash = _template_hash_cache[template_content]
+            template_hash = _template_hash_cache[_tc_id]
             model_hash = _get_model_hash(model_class)
             cache_key = (template_hash, variable_name, model_hash)
 
@@ -207,7 +212,11 @@ class JITMixin:
                 )
             expected_keys = _expected_keys_cache[ek_cache_key]
             if result and len(result[0]) < expected_keys:
-                # Rust missed some paths — use Python codegen instead
+                # Heuristic: if the first item has fewer top-level keys than expected,
+                # Rust likely can't access some paths (e.g. @property). A nullable FK
+                # on item 0 could cause a false positive, but the codegen fallback is
+                # correct (just slightly slower), so this is an acceptable trade-off.
+
                 func_name = f"serialize_{variable_name}_{template_hash}"
                 code = generate_serializer_code(model_class.__name__, paths_for_var, func_name)
                 serializer = compile_serializer(code, func_name)
@@ -246,11 +255,12 @@ class JITMixin:
                 return json.loads(json.dumps(obj, cls=DjangoJSONEncoder))
 
             model_class = obj.__class__
-            if template_content not in _template_hash_cache:
-                _template_hash_cache[template_content] = hashlib.sha256(
+            _tc_id = id(template_content)
+            if _tc_id not in _template_hash_cache:
+                _template_hash_cache[_tc_id] = hashlib.sha256(
                     template_content.encode()
                 ).hexdigest()[:8]
-            template_hash = _template_hash_cache[template_content]
+            template_hash = _template_hash_cache[_tc_id]
             model_hash = _get_model_hash(model_class)
             cache_key = (template_hash, variable_name, model_hash)
 

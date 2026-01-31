@@ -45,7 +45,11 @@ class RequestMixin:
             request.session.create()
 
         # Get context for rendering and cache it so _sync_state_to_rust()
-        # and render_with_diff() don't re-evaluate QuerySets
+        # and render_with_diff() don't re-evaluate QuerySets.
+        # Note: cached BEFORE _apply_context_processors, so downstream callers
+        # of get_context_data() won't see processor-added keys (csrf_token,
+        # messages, etc.). This is intentional — those callers only need
+        # serialized view state, not request-scoped processor context.
         t0 = time.perf_counter()
         context = self.get_context_data()
         self._cached_context = dict(context)
