@@ -378,6 +378,7 @@ def test_save_property(self):
 
 ### Minimize Impact
 
+- **Per-view state**: Panel open/closed state and active tab are remembered per view class, so each view gets its own panel preferences. Data histories (events, patches, network) are cleared on navigation to prevent stale data.
 - **Close when not needed**: Panel uses ~10KB memory per 50 events
 - **Clear history**: Click "Clear" button in Event History/VDOM Patches tabs
 - **Limit history**: Configure `maxHistory` in client.js (default: 50)
