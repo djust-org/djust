@@ -1747,6 +1747,7 @@
                                     ${event.duration ? `<span class="event-duration">${event.duration.toFixed(1)}ms</span>` : ''}
                                     ${paramCount > 0 ? `<span class="event-param-count">${paramCount} param${paramCount === 1 ? '' : 's'}</span>` : ''}
                                     ${event.error ? '<span class="event-status">❌</span>' : ''}
+                                    ${(event.handler || event.name) ? `<button class="event-replay-btn" data-event-index="${this.eventHistory.indexOf(event)}" onclick="event.stopPropagation(); window.djustDebugPanel.replayEvent(${this.eventHistory.indexOf(event)}, this)" title="Replay this event">⟳</button>` : ''}
                                     <span class="event-time">${this.formatTime(event.timestamp)}</span>
                                 </div>
                                 ${hasDetails ? `
@@ -1808,6 +1809,51 @@
             this.state.filters.eventName = '';
             this.state.filters.eventStatus = 'all';
             this.renderTabContent();
+        }
+
+        replayEvent(index, btnElement) {
+            const event = this.eventHistory[index];
+            if (!event) return;
+
+            const handlerName = event.handler || event.name;
+            if (!handlerName) return;
+
+            const lv = window.liveView;
+            if (!lv || !lv.sendEvent) {
+                this.showReplayStatus(btnElement, 'error', 'No connection');
+                return;
+            }
+
+            this.showReplayStatus(btnElement, 'pending', '');
+            const sent = lv.sendEvent(handlerName, event.params || {});
+            if (sent) {
+                this.showReplayStatus(btnElement, 'success', '');
+            } else {
+                this.showReplayStatus(btnElement, 'error', 'Send failed');
+            }
+        }
+
+        showReplayStatus(btnElement, status, message) {
+            const original = btnElement.textContent;
+            if (status === 'pending') {
+                btnElement.textContent = '⏳';
+                btnElement.classList.add('replay-pending');
+            } else if (status === 'success') {
+                btnElement.textContent = '✓';
+                btnElement.classList.remove('replay-pending');
+                btnElement.classList.add('replay-success');
+            } else {
+                btnElement.textContent = '✗';
+                btnElement.classList.remove('replay-pending');
+                btnElement.classList.add('replay-error');
+                if (message) btnElement.title = message;
+            }
+
+            setTimeout(() => {
+                btnElement.textContent = '⟳';
+                btnElement.className = 'event-replay-btn';
+                btnElement.title = 'Replay this event';
+            }, 2000);
         }
 
         renderNetworkTab() {

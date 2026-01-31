@@ -139,6 +139,7 @@ search • 45.2ms • 4:32:15 PM   [Click to expand]
 - **Filter by name**: Substring search to find specific events quickly
 - **Filter by status**: Show all, errors only, or successes only
 - **Clear filters**: Single action to reset all active filters
+- **Replay events**: Re-trigger any event through the WebSocket connection with original params; inline status feedback (pending/success/error) auto-clears after 2 seconds
 
 ### VDOM Patches Tab
 
