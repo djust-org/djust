@@ -24,6 +24,7 @@ djust_core = { path = "../djust_core" }
 [dev-dependencies]
 criterion = "0.8"
 tempfile = "3.24"
+proptest = "1.6"
 
 [[bench]]
 name = "diff"
