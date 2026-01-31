@@ -10,7 +10,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __harnessDir = dirname(fileURLToPath(import.meta.url));
-const PANEL_SOURCE_PATH = resolve(
+export const PANEL_SOURCE_PATH = resolve(
     __harnessDir,
     '../../../python/djust/static/djust/debug-panel.js'
 );
@@ -35,8 +35,6 @@ function getSource() {
  * @param {object} [opts.globals] - Extra window globals to set before eval
  * @returns {typeof DjustDebugPanel} The real panel class
  */
-export { PANEL_SOURCE_PATH };
-
 export function loadPanel(opts = {}) {
     // Ensure DEBUG_MODE is set so the IIFE doesn't bail out
     window.DEBUG_MODE = true;
