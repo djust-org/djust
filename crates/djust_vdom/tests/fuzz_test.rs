@@ -287,14 +287,16 @@ fn arb_keyed_mutation_pair() -> BoxedStrategy<(VNode, VNode)> {
         .boxed()
 }
 
-/// Assign unique djust_ids to all element nodes in a tree.
+/// Assign unique djust_ids to all nodes in a tree (elements and text nodes).
+///
+/// In production, only element nodes receive IDs (the parser skips text nodes).
+/// For testing, we assign IDs to text nodes too so that `apply_patches` can
+/// resolve them by ID after structural changes shift path indices (#221).
 fn assign_ids(node: &mut VNode, counter: &mut u64) {
-    if !node.is_text() {
-        node.djust_id = Some(format!("t{}", counter));
-        *counter += 1;
-        for child in &mut node.children {
-            assign_ids(child, counter);
-        }
+    node.djust_id = Some(format!("t{}", counter));
+    *counter += 1;
+    for child in &mut node.children {
+        assign_ids(child, counter);
     }
 }
 

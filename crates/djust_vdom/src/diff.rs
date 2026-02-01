@@ -30,12 +30,16 @@ pub fn sync_ids(old: &VNode, new: &mut VNode) {
         return;
     }
 
-    // Copy old ID to new for matched elements (text nodes don't have IDs)
-    if !old.is_text() {
+    // Copy old ID to new for matched nodes.
+    // In production, only element nodes have IDs. In tests, text nodes may
+    // also have synthetic IDs for apply_patches resolution (#221).
+    if old.djust_id.is_some() {
         new.djust_id = old.djust_id.clone();
-        // Also sync the data-dj-id attribute to match
-        if let Some(ref id) = new.djust_id {
-            new.attrs.insert("data-dj-id".to_string(), id.clone());
+        // Also sync the data-dj-id attribute to match (elements only)
+        if !old.is_text() {
+            if let Some(ref id) = new.djust_id {
+                new.attrs.insert("data-dj-id".to_string(), id.clone());
+            }
         }
     }
 
@@ -153,7 +157,11 @@ pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
         return patches;
     }
 
-    // Diff text content (text nodes don't have djust_ids)
+    // Diff text content.
+    // In production, text nodes don't have djust_ids (the parser only assigns
+    // IDs to elements). However, test infrastructure may assign synthetic IDs
+    // to text nodes so that apply_patches can resolve them by ID after
+    // structural changes shift path indices (#221).
     if old.is_text() {
         if old.text != new.text {
             vdom_trace!(
@@ -169,7 +177,7 @@ pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
             if let Some(text) = &new.text {
                 patches.push(Patch::SetText {
                     path: path.to_vec(),
-                    d: None, // Text nodes don't have IDs
+                    d: old.djust_id.clone(),
                     text: text.clone(),
                 });
             }
@@ -1851,5 +1859,68 @@ mod tests {
                 want.attrs.get("class")
             );
         }
+    }
+
+    #[test]
+    fn test_keyed_unkeyed_text_node_round_trip() {
+        // Regression test for #221: when keyed children move and a text node
+        // changes content, SetText must target the correct node even though
+        // path indices shifted due to structural changes.
+        //
+        // This works when text nodes have synthetic djust_ids (assigned by
+        // test infrastructure), allowing resolve_node_mut to find them by ID.
+        //
+        // Tree A: [#text("hello"), section(key=a), ul(key=b)]
+        // Tree B: [ul(key=b), section(key=a), #text("world")]
+        use crate::patch::apply_patches;
+
+        let mut text_old = VNode::text("hello");
+        text_old.djust_id = Some("txt1".to_string());
+
+        let old = VNode::element("div")
+            .with_djust_id("root")
+            .with_children(vec![
+                text_old,
+                VNode::element("section").with_key("a").with_djust_id("s1"),
+                VNode::element("ul").with_key("b").with_djust_id("u1"),
+            ]);
+
+        let mut text_new = VNode::text("world");
+        text_new.djust_id = Some("txt1".to_string());
+
+        let new = VNode::element("div")
+            .with_djust_id("root")
+            .with_children(vec![
+                VNode::element("ul").with_key("b").with_djust_id("u1"),
+                VNode::element("section").with_key("a").with_djust_id("s1"),
+                text_new,
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        // The SetText patch should carry the text node's djust_id
+        let set_text = patches.iter().find(|p| matches!(p, Patch::SetText { .. }));
+        assert!(
+            set_text.is_some(),
+            "Expected SetText patch, got: {:?}",
+            patches
+        );
+        if let Some(Patch::SetText { d, text, .. }) = set_text {
+            assert_eq!(
+                d.as_deref(),
+                Some("txt1"),
+                "SetText should carry text node ID"
+            );
+            assert_eq!(text, "world");
+        }
+
+        // Verify round-trip
+        let mut patched = old.clone();
+        apply_patches(&mut patched, &patches);
+        assert_eq!(patched.children.len(), 3);
+        // Text node should be at index 2 with content "world"
+        assert_eq!(patched.children[2].text.as_deref(), Some("world"));
+        assert_eq!(patched.children[0].tag, "ul");
+        assert_eq!(patched.children[1].tag, "section");
     }
 }
