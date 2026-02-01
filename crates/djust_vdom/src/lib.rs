@@ -235,6 +235,7 @@ fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+        .replace('\u{00A0}', "&nbsp;")
 }
 
 /// Escape HTML special characters in attribute values
@@ -346,6 +347,12 @@ pub fn diff(old: &VNode, new: &VNode) -> Vec<Patch> {
 pub fn parse_html(html: &str) -> Result<VNode> {
     vdom_trace!("parse_html() called - will reset ID counter");
     parser::parse_html(html)
+}
+
+/// Synchronize IDs from old VDOM to new VDOM for matched elements.
+/// Call after diffing to ensure `last_vdom` retains IDs matching the client DOM.
+pub fn sync_ids(old: &VNode, new: &mut VNode) {
+    diff::sync_ids(old, new);
 }
 
 /// Parse HTML into a virtual DOM without resetting ID counter.

@@ -22,7 +22,7 @@ use dashmap::DashMap;
 use djust_core::{Context, Value};
 use djust_templates::inheritance::FilesystemTemplateLoader;
 use djust_templates::Template;
-use djust_vdom::{diff, parse_html, parse_html_continue, reset_id_counter, VNode};
+use djust_vdom::{diff, parse_html, parse_html_continue, reset_id_counter, sync_ids, VNode};
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
@@ -178,7 +178,7 @@ impl RustLiveViewBackend {
         // IMPORTANT: Use parse_html() only for the FIRST render (resets ID counter to 0).
         // For subsequent renders, use parse_html_continue() to ensure newly inserted
         // elements get unique IDs that don't collide with existing elements in the DOM.
-        let new_vdom = if self.last_vdom.is_some() {
+        let mut new_vdom = if self.last_vdom.is_some() {
             // Subsequent render: continue ID sequence to avoid collisions
             parse_html_continue(&html)
         } else {
@@ -191,6 +191,10 @@ impl RustLiveViewBackend {
         let patches =
             if let Some(old_vdom) = &self.last_vdom {
                 let patches = diff(old_vdom, &new_vdom);
+                // Sync old IDs to new VDOM for matched elements, so that last_vdom
+                // retains IDs matching the client DOM (which keeps old IDs for
+                // unchanged elements). Without this, IDs drift apart on each render.
+                sync_ids(old_vdom, &mut new_vdom);
                 if !patches.is_empty() {
                     Some(serde_json::to_string(&patches).map_err(|e| {
                         PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
@@ -230,7 +234,7 @@ impl RustLiveViewBackend {
         let html = template_arc.render_with_loader(&context, &loader)?;
 
         // IMPORTANT: Use parse_html_continue() for subsequent renders to avoid ID collisions
-        let new_vdom = if self.last_vdom.is_some() {
+        let mut new_vdom = if self.last_vdom.is_some() {
             parse_html_continue(&html)
         } else {
             parse_html(&html)
@@ -239,6 +243,8 @@ impl RustLiveViewBackend {
 
         let patches_bytes = if let Some(old_vdom) = &self.last_vdom {
             let patches = diff(old_vdom, &new_vdom);
+            // Sync old IDs to matched new VDOM elements (see render_with_diff)
+            sync_ids(old_vdom, &mut new_vdom);
             if !patches.is_empty() {
                 let bytes = rmp_serde::to_vec(&patches)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;

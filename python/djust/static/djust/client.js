@@ -204,6 +204,7 @@ function handleServerResponse(data, eventName, triggerElement) {
         if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
             console.log('[LiveView] Applying', data.patches.length, 'patches');
 
+
             // Store timing info globally for debug panel access
             window._lastPatchTiming = data.timing;
             // Store comprehensive performance data if available
@@ -2016,11 +2017,21 @@ function getNodeByPath(path, djustId = null) {
 
     for (let i = 0; i < path.length; i++) {
         const index = path[i];
-        // Use childNodes directly (not filtered) to match the server's Rust VDOM
-        // which counts ALL children including whitespace text nodes when computing
-        // path indices. Filtering out whitespace here causes index mismatches
-        // when the ID-based lookup fails. See: #198
-        const children = node.childNodes;
+        // Filter children to match server's Rust VDOM which strips whitespace-only
+        // text nodes (parser.rs). Must use same logic as getSignificantChildren().
+        // NOTE: \xa0 (non-breaking space / &nbsp;) is preserved by both server and
+        // client since it's semantically significant (e.g., syntax highlighting).
+        const children = Array.from(node.childNodes).filter(child => {
+            if (child.nodeType === Node.ELEMENT_NODE) return true;
+            if (child.nodeType === Node.TEXT_NODE) {
+                if (isWhitespacePreserving(node)) return true;
+                // Preserve text nodes containing \xa0 (non-breaking space)
+                const text = child.textContent;
+                if (text.indexOf('\xa0') !== -1) return true;
+                return text.trim().length > 0;
+            }
+            return false;
+        });
 
         if (index >= children.length) {
             if (globalThis.djustDebug) {
@@ -2830,22 +2841,39 @@ function applyPatches(patches) {
         return true;
     }
 
-    // Sort patches: RemoveChild before InsertChild (Issue #142), and
-    // RemoveChild in descending index order to preserve indices during removal.
-    // Note: relies on stable sort (ES2019+) to preserve relative order of
-    // non-RemoveChild patches. The batching path below also enforces this
-    // separation explicitly as a safety net.
-    patches.sort((a, b) => {
-        const aIsRemove = a.type === 'RemoveChild' ? 1 : 0;
-        const bIsRemove = b.type === 'RemoveChild' ? 1 : 0;
-        if (aIsRemove !== bIsRemove) {
-            return bIsRemove - aIsRemove;  // RemoveChild first
+    // Sort patches to match server's Rust apply_patches() ordering (patch.rs):
+    //   Phase 1: RemoveChild (descending index to preserve earlier indices)
+    //   Phase 2: MoveChild
+    //   Phase 3: InsertChild (ascending index)
+    //   Phase 4: Everything else (SetText, SetAttr, etc.) — LAST
+    // SetText/SetAttr paths reference the FINAL tree layout, so they must
+    // be applied after all child mutations are complete. See Issue #142, #198.
+    function patchPhase(p) {
+        switch (p.type) {
+            case 'RemoveChild': return 0;
+            case 'MoveChild':   return 1;
+            case 'InsertChild': return 2;
+            default:            return 3;
         }
-        if (aIsRemove && bIsRemove) {
+    }
+    patches.sort((a, b) => {
+        const phaseA = patchPhase(a);
+        const phaseB = patchPhase(b);
+        if (phaseA !== phaseB) return phaseA - phaseB;
+        // Within RemoveChild: same-parent removes in descending index
+        if (phaseA === 0) {
             const pathA = JSON.stringify(a.path);
             const pathB = JSON.stringify(b.path);
             if (pathA === pathB) {
-                return b.index - a.index;  // Descending index
+                return b.index - a.index;
+            }
+        }
+        // Within InsertChild: same-parent inserts in ascending index
+        if (phaseA === 2) {
+            const pathA = JSON.stringify(a.path);
+            const pathB = JSON.stringify(b.path);
+            if (pathA === pathB) {
+                return a.index - b.index;
             }
         }
         return 0;

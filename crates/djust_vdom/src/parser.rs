@@ -332,9 +332,10 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                         if preserve_whitespace {
                             children.push(child_vnode);
                         } else {
-                            // Use chars().all() for more reliable whitespace detection
-                            // This catches all Unicode whitespace characters
-                            if !text.chars().all(|c| c.is_whitespace()) {
+                            // Filter whitespace-only text nodes (newlines, spaces, tabs)
+                            // but preserve non-breaking spaces (\u{00A0}) since they are
+                            // semantically significant (e.g., &nbsp; in syntax highlighting)
+                            if !text.chars().all(|c| c.is_whitespace() && c != '\u{00A0}') {
                                 children.push(child_vnode);
                             }
                             // Debug logging disabled - too verbose

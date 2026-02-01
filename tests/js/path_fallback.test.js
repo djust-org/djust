@@ -2,8 +2,11 @@
  * Tests for getNodeByPath path-based fallback.
  *
  * Regression tests for #198: VDOM path fallback corrupts sibling elements
- * when removing list items because whitespace text nodes are filtered out
- * during path traversal, causing index mismatches with the server's Rust VDOM.
+ * when removing list items. Both the Rust VDOM parser and the JS client
+ * filter out whitespace-only text nodes, so path indices only count
+ * significant nodes (elements + non-whitespace text nodes).
+ *
+ * Non-breaking spaces (\u00A0 / &nbsp;) are preserved as significant.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -46,14 +49,13 @@ describe('getNodeByPath - path fallback with whitespace nodes (#198)', () => {
         root.remove();
     });
 
-    it('should count whitespace text nodes in path indices to match server VDOM', () => {
-        // Server VDOM has: [element(0), whitespace(1), element(2), whitespace(3), element(4)]
-        // Path [2] should reach the second element, not skip whitespace
+    it('should skip whitespace text nodes to match server VDOM indices', () => {
+        // DOM childNodes: div(A), "\n    ", div(B), "\n    ", div(C)
+        // Significant children (what Rust VDOM sees): div(A)=0, div(B)=1, div(C)=2
         root.innerHTML = '<div>A</div>\n    <div>B</div>\n    <div>C</div>';
 
-        // The DOM childNodes are: div, "\n    ", div, "\n    ", div
-        // Path [2] should reach the second div (containing "B"), not the third
-        const node = _getNodeByPath([2], null);
+        // Path [1] should reach the second div (B), skipping whitespace
+        const node = _getNodeByPath([1], null);
 
         expect(node).not.toBeNull();
         expect(node.nodeType).toBe(dom.window.Node.ELEMENT_NODE);
@@ -61,19 +63,7 @@ describe('getNodeByPath - path fallback with whitespace nodes (#198)', () => {
         expect(node.textContent).toBe('B');
     });
 
-    it('should reach whitespace text nodes by index', () => {
-        root.innerHTML = '<div>A</div>\n    <div>B</div>';
-
-        // Path [1] should reach the whitespace text node "\n    "
-        const node = _getNodeByPath([1], null);
-
-        expect(node).not.toBeNull();
-        expect(node.nodeType).toBe(dom.window.Node.TEXT_NODE);
-        expect(node.textContent.trim()).toBe('');
-    });
-
-    it('should correctly traverse nested paths with whitespace nodes', () => {
-        // Simulates a form with whitespace between fields - the exact bug scenario
+    it('should correctly traverse nested paths skipping whitespace', () => {
         root.innerHTML = [
             '<form>',
             '<div class="field">Field 1</div>',
@@ -85,54 +75,41 @@ describe('getNodeByPath - path fallback with whitespace nodes (#198)', () => {
             '</form>'
         ].join('');
 
-        const form = root.childNodes[0]; // the <form>
-        // form.childNodes: div(0), "\n..."(1), div(2), "\n..."(3), div(4), "\n..."(5)
-
-        // Path [0, 4] should reach the counter div (index 4 in form's childNodes)
-        const counterNode = _getNodeByPath([0, 4], null);
+        // Significant children of <form>: div(0), div(1), div(2)
+        // Path [0, 2] should reach the counter div
+        const counterNode = _getNodeByPath([0, 2], null);
 
         expect(counterNode).not.toBeNull();
         expect(counterNode.tagName).toBe('DIV');
         expect(counterNode.textContent).toBe('Count: 5');
     });
 
-    it('should reach correct text node for SetText patch after list removal', () => {
-        // This is the exact bug scenario from #198:
-        // A todo list with items removed, sibling counter text gets corrupted
-        // because path fallback skips whitespace nodes
+    it('should reach correct element for SetText patch after list removal', () => {
         root.innerHTML = [
             '<div class="todo-app">',
             '\n    ',
-            '<ul class="todo-list"></ul>',  // empty after removing items
+            '<ul class="todo-list"></ul>',
             '\n    ',
             '<p class="counter">0 items left</p>',
             '\n',
             '</div>'
         ].join('');
 
-        // Server sends SetText patch with path [0, 4, 0] targeting the counter text
-        // div.todo-app childNodes: "\n    "(0), ul(1), "\n    "(2), p(3), "\n"(4)
-        // Wait -- let me verify the actual DOM structure
-        const todoApp = root.childNodes[0];
-
-        // Find the <p> counter - it should be at index 4 in childNodes
-        // (childNodes: "\n    ", ul, "\n    ", p, "\n")
-        const counterP = _getNodeByPath([0, 3], null);
+        // Significant children of todo-app: ul(0), p(1)
+        const counterP = _getNodeByPath([0, 1], null);
 
         expect(counterP).not.toBeNull();
         expect(counterP.tagName).toBe('P');
         expect(counterP.textContent).toBe('0 items left');
 
-        // The text node inside <p> at path [0, 3, 0]
-        const counterText = _getNodeByPath([0, 3, 0], null);
+        // The text node inside <p> at path [0, 1, 0]
+        const counterText = _getNodeByPath([0, 1, 0], null);
         expect(counterText).not.toBeNull();
         expect(counterText.nodeType).toBe(dom.window.Node.TEXT_NODE);
         expect(counterText.textContent).toBe('0 items left');
     });
 
     it('should not corrupt sibling pre/code block when list items are removed', () => {
-        // Another manifestation of #198: patches meant for a counter
-        // get applied to text inside a <pre> code block
         root.innerHTML = [
             '<div>',
             '\n    ',
@@ -143,11 +120,23 @@ describe('getNodeByPath - path fallback with whitespace nodes (#198)', () => {
             '</div>'
         ].join('');
 
-        // Path [0, 3] should reach the <pre>, not skip whitespace and land elsewhere
-        const preNode = _getNodeByPath([0, 3], null);
+        // Significant children of div: ul(0), pre(1)
+        const preNode = _getNodeByPath([0, 1], null);
 
         expect(preNode).not.toBeNull();
         expect(preNode.tagName).toBe('PRE');
+    });
+
+    it('preserves non-breaking space text nodes as significant', () => {
+        root.innerHTML = '<div>A</div>\u00A0<div>B</div>';
+
+        // DOM childNodes: div(A), "\u00A0", div(B)
+        // Significant: div(A)=0, "\u00A0"=1, div(B)=2
+        const nbspNode = _getNodeByPath([1], null);
+
+        expect(nbspNode).not.toBeNull();
+        expect(nbspNode.nodeType).toBe(dom.window.Node.TEXT_NODE);
+        expect(nbspNode.textContent).toBe('\u00A0');
     });
 
     it('prefers ID-based lookup over path fallback', () => {
