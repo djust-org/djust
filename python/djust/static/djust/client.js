@@ -2675,6 +2675,28 @@ window.djust._stampDjIds = _stampDjIds;
 window.djust._getNodeByPath = getNodeByPath;
 window.djust._groupPatchesByParent = groupPatchesByParent;
 window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
+window.djust._sortPatches = function(patches) {
+    function patchPhase(p) {
+        switch (p.type) {
+            case 'RemoveChild': return 0;
+            case 'MoveChild':   return 1;
+            case 'InsertChild': return 2;
+            default:            return 3;
+        }
+    }
+    patches.sort((a, b) => {
+        const phaseA = patchPhase(a);
+        const phaseB = patchPhase(b);
+        if (phaseA !== phaseB) return phaseA - phaseB;
+        if (phaseA === 0) {
+            const pathA = JSON.stringify(a.path);
+            const pathB = JSON.stringify(b.path);
+            if (pathA === pathB) return b.index - a.index;
+        }
+        return 0;
+    });
+    return patches;
+};
 
 /**
  * Group patches by their parent path for batching.
