@@ -11,6 +11,7 @@ const optimisticUpdates = new Map(); // Map<eventName, {element, originalState}>
 const pendingEvents = new Set(); // Set<eventName> (for loading indicators)
 const resultCache = new Map(); // Map<cacheKey, {patches, expiresAt}>
 const pendingCacheRequests = new Map(); // Map<requestId, {cacheKey, ttl, timeoutId}>
+const inFlightEvents = new Map(); // Map<string, number> — guards against duplicate event sends
 const CACHE_MAX_SIZE = 100; // Maximum number of cached entries (LRU eviction)
 const PENDING_CACHE_TIMEOUT = 30000; // Cleanup pending cache requests after 30 seconds
 
@@ -85,6 +86,7 @@ function buildCacheKey(eventName, params, keyParams = null) {
         // Try to use specified key params
         keyParams.forEach(key => {
             if (Object.prototype.hasOwnProperty.call(params, key)) {
+                // eslint-disable-next-line security/detect-object-injection
                 cacheParams[key] = params[key];
                 usedKeyParams = true;
             }
@@ -96,6 +98,7 @@ function buildCacheKey(eventName, params, keyParams = null) {
     if (!usedKeyParams) {
         Object.keys(params).forEach(key => {
             if (!key.startsWith('_')) {
+                // eslint-disable-next-line security/detect-object-injection
                 cacheParams[key] = params[key];
             }
         });
@@ -104,6 +107,7 @@ function buildCacheKey(eventName, params, keyParams = null) {
     // Build key: eventName:param1=value1:param2=value2
     const paramParts = Object.keys(cacheParams)
         .sort()
+        // eslint-disable-next-line security/detect-object-injection
         .map(k => `${k}=${JSON.stringify(cacheParams[k])}`)
         .join(':');
 

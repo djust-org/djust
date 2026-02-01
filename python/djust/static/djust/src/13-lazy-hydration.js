@@ -135,6 +135,7 @@ const lazyHydrationManager = {
         // Ensure WebSocket is connected
         if (!liveViewWS || !liveViewWS.enabled) {
             liveViewWS = new LiveViewWebSocket();
+            window.djust.liveViewInstance = liveViewWS;
             liveViewWS.connect();
         }
 

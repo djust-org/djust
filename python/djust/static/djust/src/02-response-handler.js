@@ -128,6 +128,12 @@ function handleServerResponse(data, eventName, triggerElement) {
             if (form) form.reset();
         }
 
+        // Clean up stale in-flight event guards (older than 1s)
+        const cleanupTime = Date.now();
+        for (const [key, ts] of inFlightEvents) {
+            if (cleanupTime - ts > 1000) inFlightEvents.delete(key);
+        }
+
         // Stop loading state
         globalLoadingManager.stopLoading(eventName, triggerElement);
         return true;

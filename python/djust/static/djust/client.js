@@ -258,6 +258,12 @@ function handleServerResponse(data, eventName, triggerElement) {
             if (form) form.reset();
         }
 
+        // Clean up stale in-flight event guards (older than 1s)
+        const cleanupTime = Date.now();
+        for (const [key, ts] of inFlightEvents) {
+            if (cleanupTime - ts > 1000) inFlightEvents.delete(key);
+        }
+
         // Stop loading state
         globalLoadingManager.stopLoading(eventName, triggerElement);
         return true;
@@ -661,6 +667,7 @@ const optimisticUpdates = new Map(); // Map<eventName, {element, originalState}>
 const pendingEvents = new Set(); // Set<eventName> (for loading indicators)
 const resultCache = new Map(); // Map<cacheKey, {patches, expiresAt}>
 const pendingCacheRequests = new Map(); // Map<requestId, {cacheKey, ttl, timeoutId}>
+const inFlightEvents = new Map(); // Map<string, number> — guards against duplicate event sends
 const CACHE_MAX_SIZE = 100; // Maximum number of cached entries (LRU eviction)
 const PENDING_CACHE_TIMEOUT = 30000; // Cleanup pending cache requests after 30 seconds
 
@@ -1877,6 +1884,22 @@ async function handleEvent(eventName, params = {}) {
         console.log(`[LiveView] Handling event: ${eventName}`, params);
     }
 
+    // Guard against duplicate in-flight events (e.g., rapid clicks on delete button)
+    const guardParams = {};
+    for (const [k, v] of Object.entries(params)) {
+        if (k !== '_targetElement') guardParams[k] = v;
+    }
+    const inFlightKey = eventName + ':' + JSON.stringify(guardParams);
+    const now = Date.now();
+    const lastSent = inFlightEvents.get(inFlightKey);
+    if (lastSent && (now - lastSent) < 300) {
+        if (globalThis.djustDebug) {
+            console.log(`[LiveView] Duplicate event suppressed: ${eventName}`);
+        }
+        return;
+    }
+    inFlightEvents.set(inFlightKey, now);
+
     // Start loading state
     const triggerElement = params._targetElement;
 
@@ -2648,8 +2671,8 @@ function isWhitespacePreserving(node) {
 
 // Export for testing
 window.djust.getSignificantChildren = getSignificantChildren;
-window.djust._getNodeByPath = getNodeByPath;
 window.djust._stampDjIds = _stampDjIds;
+window.djust._getNodeByPath = getNodeByPath;
 window.djust._groupPatchesByParent = groupPatchesByParent;
 window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
 
@@ -2870,14 +2893,6 @@ function applyPatches(patches) {
                 return b.index - a.index;
             }
         }
-        // Within InsertChild: same-parent inserts in ascending index
-        if (phaseA === 2) {
-            const pathA = JSON.stringify(a.path);
-            const pathB = JSON.stringify(b.path);
-            if (pathA === pathB) {
-                return a.index - b.index;
-            }
-        }
         return 0;
     });
 
@@ -2898,37 +2913,14 @@ function applyPatches(patches) {
 
     // For larger patch sets, use batching
     let failedCount = 0;
-    let _successCount = 0;
+    let successCount = 0;
 
     // Group patches by parent for potential batching
     const patchGroups = groupPatchesByParent(patches);
 
-    for (const [_parentPath, group] of patchGroups) {
-        // IMPORTANT: Apply RemoveChild patches first before any InsertChild.
-        // For data-djust-replace, Rust emits all RemoveChild then all InsertChild.
-        // If InsertChild runs first, old children shift indices and RemoveChild
-        // targets the wrong nodes (Issue #142).
-        const removePatches = [];
-        const remainingPatches = [];
-        for (const patch of group) {
-            if (patch.type === 'RemoveChild') {
-                removePatches.push(patch);
-            } else {
-                remainingPatches.push(patch);
-            }
-        }
-
-        // Apply all RemoveChild patches first (already sorted descending by index)
-        for (const patch of removePatches) {
-            if (applySinglePatch(patch)) {
-                _successCount++;
-            } else {
-                failedCount++;
-            }
-        }
-
+    for (const [parentPath, group] of patchGroups) {
         // Optimization: Use DocumentFragment for consecutive InsertChild on same parent
-        const insertPatches = remainingPatches.filter(p => p.type === 'InsertChild');
+        const insertPatches = group.filter(p => p.type === 'InsertChild');
 
         if (insertPatches.length >= 3) {
             // Group only consecutive inserts (can't batch non-consecutive indices)
@@ -2949,7 +2941,7 @@ function applyPatches(patches) {
                         for (const patch of consecutiveGroup) {
                             const newChild = createNodeFromVNode(patch.node, svgContext);
                             fragment.appendChild(newChild);
-                            _successCount++;
+                            successCount++;
                         }
 
                         // Insert fragment at the first index position
@@ -2965,24 +2957,24 @@ function applyPatches(patches) {
 
                         // Mark these patches as processed
                         const processedSet = new Set(consecutiveGroup);
-                        for (let i = remainingPatches.length - 1; i >= 0; i--) {
-                            if (processedSet.has(remainingPatches[i])) {
-                                remainingPatches.splice(i, 1);
+                        for (let i = group.length - 1; i >= 0; i--) {
+                            if (processedSet.has(group[i])) {
+                                group.splice(i, 1);
                             }
                         }
                     } catch (error) {
                         console.error('[LiveView] Batch insert failed, falling back to individual patches:', error.message);
-                        // On failure, patches remain for individual processing
-                        _successCount -= consecutiveGroup.length;  // Undo count
+                        // On failure, patches remain in group for individual processing
+                        successCount -= consecutiveGroup.length;  // Undo count
                     }
                 }
             }
         }
 
-        // Apply remaining non-remove patches individually
-        for (const patch of remainingPatches) {
+        // Apply remaining patches individually
+        for (const patch of group) {
             if (applySinglePatch(patch)) {
-                _successCount++;
+                successCount++;
             } else {
                 failedCount++;
             }

@@ -45,10 +45,18 @@ function getNodeByPath(path, djustId = null) {
 
     for (let i = 0; i < path.length; i++) {
         const index = path[i];
+        // Filter children to match server's Rust VDOM which strips whitespace-only
+        // text nodes (parser.rs). Must use same logic as getSignificantChildren().
+        // NOTE: \xa0 (non-breaking space / &nbsp;) is preserved by both server and
+        // client since it's semantically significant (e.g., syntax highlighting).
         const children = Array.from(node.childNodes).filter(child => {
             if (child.nodeType === Node.ELEMENT_NODE) return true;
             if (child.nodeType === Node.TEXT_NODE) {
-                return child.textContent.trim().length > 0;
+                if (isWhitespacePreserving(node)) return true;
+                // Preserve text nodes containing \xa0 (non-breaking space)
+                const text = child.textContent;
+                if (text.indexOf('\xa0') !== -1) return true;
+                return text.trim().length > 0;
             }
             return false;
         });
@@ -667,6 +675,9 @@ function isWhitespacePreserving(node) {
 // Export for testing
 window.djust.getSignificantChildren = getSignificantChildren;
 window.djust._stampDjIds = _stampDjIds;
+window.djust._getNodeByPath = getNodeByPath;
+window.djust._groupPatchesByParent = groupPatchesByParent;
+window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
 
 /**
  * Group patches by their parent path for batching.
@@ -674,7 +685,15 @@ window.djust._stampDjIds = _stampDjIds;
 function groupPatchesByParent(patches) {
     const groups = new Map(); // Use Map to avoid prototype pollution
     for (const patch of patches) {
-        const parentPath = patch.path.slice(0, -1).join('/');
+        // For child operations (InsertChild, RemoveChild, MoveChild), patch.path
+        // is already the parent container path. For node-targeting ops, we need
+        // to slice off the last element to get the parent.
+        const isChildOp = patch.type === 'InsertChild' ||
+                          patch.type === 'RemoveChild' ||
+                          patch.type === 'MoveChild';
+        const parentPath = isChildOp
+            ? patch.path.join('/')
+            : patch.path.slice(0, -1).join('/');
         if (!groups.has(parentPath)) {
             groups.set(parentPath, []);
         }
@@ -703,7 +722,8 @@ function groupConsecutiveInserts(inserts) {
 
     for (let i = 1; i < inserts.length; i++) {
         // Check if this insert is consecutive with the previous one
-        if (inserts[i].index === inserts[i - 1].index + 1) {
+        if (inserts[i].index === inserts[i - 1].index + 1 &&
+            inserts[i].d === inserts[i - 1].d) {
             currentGroup.push(inserts[i]);
         } else {
             // Start a new group
@@ -849,9 +869,27 @@ function applyPatches(patches) {
         return true;
     }
 
-    // Sort patches: RemoveChild in descending order to preserve indices
+    // Sort patches to match server's Rust apply_patches() ordering (patch.rs):
+    //   Phase 1: RemoveChild (descending index to preserve earlier indices)
+    //   Phase 2: MoveChild
+    //   Phase 3: InsertChild (ascending index)
+    //   Phase 4: Everything else (SetText, SetAttr, etc.) — LAST
+    // SetText/SetAttr paths reference the FINAL tree layout, so they must
+    // be applied after all child mutations are complete. See Issue #142, #198.
+    function patchPhase(p) {
+        switch (p.type) {
+            case 'RemoveChild': return 0;
+            case 'MoveChild':   return 1;
+            case 'InsertChild': return 2;
+            default:            return 3;
+        }
+    }
     patches.sort((a, b) => {
-        if (a.type === 'RemoveChild' && b.type === 'RemoveChild') {
+        const phaseA = patchPhase(a);
+        const phaseB = patchPhase(b);
+        if (phaseA !== phaseB) return phaseA - phaseB;
+        // Within RemoveChild: same-parent removes in descending index
+        if (phaseA === 0) {
             const pathA = JSON.stringify(a.path);
             const pathB = JSON.stringify(b.path);
             if (pathA === pathB) {

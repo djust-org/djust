@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Duplicate Event Guard** — Rapid clicks (e.g., deleting the last todo) could fire the same event twice within 300ms, causing a version mismatch and full HTML fallback. Added a time-based deduplication guard in `handleEvent` that suppresses identical events within 300ms. Also synced source modules with built `client.js` to fix build reproducibility. (#201)
 - **VDOM: Non-breaking Space Text Nodes Stripped** — Rust parser stripped `&nbsp;`-only text nodes (used in syntax highlighting) because `char::is_whitespace()` includes U+00A0. Now preserves `\u00A0` text nodes in parser, `to_html()`, and client-side path traversal. Also adds `sync_ids()` to prevent ID drift between server VDOM and client DOM after diffing, and 4-phase patch ordering matching Rust's `apply_patches()`. (#198, #199)
 - **Debug Toolbar: Received WebSocket Messages Not Captured** — Network tab now captures both sent and received WebSocket messages by intercepting the `onmessage` property setter (not just `addEventListener`). (#186)
 - **Debug Toolbar: Events Tab Always Empty** — Events tab now populates by extracting event data from sent WebSocket messages and matching responses, replacing the broken `window.liveView` hook. Event replay now uses `window.djust.liveViewInstance`. (#187)
