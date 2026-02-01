@@ -161,25 +161,56 @@ class TestGetDebugInfo:
         # Public method should be in handlers
         assert "public_method" in debug_info["handlers"]
 
-    def test_undecorated_handler_discovered(self):
-        """Test that public methods without @event_handler are discovered (#193)"""
+    def test_undecorated_method_not_shown(self):
+        """Test that public methods without @event_handler are NOT shown (#193)
+
+        The debug panel matches the runtime event_security policy: only
+        @event_handler-decorated methods and _allowed_events are displayed.
+        """
 
         class MyView(LiveView):
             template_name = "test.html"
 
-            def increment(self):
-                """Increment the counter"""
+            def plain_method(self):
+                """Not an event handler"""
                 pass
 
-            def decrement(self, amount: int = 1):
+            @event_handler
+            def real_handler(self):
+                """A real event handler"""
                 pass
 
         view = MyView()
         debug_info = view.get_debug_info()
 
-        # Undecorated public methods should be discovered as handlers
+        # Undecorated method should NOT appear
+        assert "plain_method" not in debug_info["handlers"]
+        # Decorated method should appear
+        assert "real_handler" in debug_info["handlers"]
+
+    def test_allowed_events_shown(self):
+        """Test that _allowed_events methods appear in handlers (#193)"""
+
+        class MyView(LiveView):
+            template_name = "test.html"
+            _allowed_events = frozenset({"increment", "decrement"})
+
+            def increment(self):
+                """Increment the counter"""
+                pass
+
+            def decrement(self):
+                pass
+
+            def not_allowed(self):
+                pass
+
+        view = MyView()
+        debug_info = view.get_debug_info()
+
         assert "increment" in debug_info["handlers"]
         assert "decrement" in debug_info["handlers"]
+        assert "not_allowed" not in debug_info["handlers"]
         assert debug_info["handlers"]["increment"]["description"] == "Increment the counter"
 
     def test_base_view_methods_excluded(self):
@@ -188,22 +219,20 @@ class TestGetDebugInfo:
         class MyView(LiveView):
             template_name = "test.html"
 
+            @event_handler
             def my_handler(self):
                 pass
 
         view = MyView()
         debug_info = view.get_debug_info()
 
-        # Django View base methods should be excluded
+        # Django View and LiveView base methods should be excluded
         assert "dispatch" not in debug_info["handlers"]
         assert "setup" not in debug_info["handlers"]
-        assert "http_method_not_allowed" not in debug_info["handlers"]
-
-        # LiveView/mixin methods should also be excluded
         assert "get_context_data" not in debug_info["handlers"]
         assert "mount" not in debug_info["handlers"]
 
-        # Custom method should be included
+        # Decorated handler should be included
         assert "my_handler" in debug_info["handlers"]
 
     def test_long_value_truncation(self):

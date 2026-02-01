@@ -434,9 +434,9 @@ console.log(window.DJUST_DEBUG_INFO);
 
 **Symptom**: "No event handlers detected" message
 
-**Cause**: The view has no public methods beyond the base Django `View` methods, or the view hasn't mounted yet.
+**Cause**: The view has no `@event_handler`-decorated methods or `_allowed_events`, or the view hasn't mounted yet.
 
-**Note**: The debug panel automatically discovers all public methods on your view that aren't inherited from Django's base `View` class. You do **not** need the `@event_handler()` decorator for handlers to appear — any public method works. The `@event_handler()` decorator adds extra metadata (description, parameter hints) but is optional for discovery.
+**Note**: The debug panel matches the runtime event security policy. Only methods decorated with `@event_handler` (or listed in `_allowed_events`) appear in the Handlers tab. This ensures the panel accurately reflects which events are callable at runtime.
 
 ### Event History Not Logging Events
 

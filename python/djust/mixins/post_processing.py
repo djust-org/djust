@@ -22,17 +22,15 @@ class PostProcessingMixin:
             Dict with debug information
         """
         from ..validation import get_handler_signature_info
+        from ..decorators import is_event_handler
 
         handlers = {}
         variables = {}
 
-        # Collect method names defined on LiveView and its base classes (but not
-        # on the user's subclass) so we only surface user-defined handlers.
-        base_methods = set()
-        for cls in type(self).__mro__[1:]:  # skip the user's class itself
-            for name in vars(cls):
-                if not name.startswith("_"):
-                    base_methods.add(name)
+        # Match the runtime event_security policy: in strict mode (default),
+        # only @event_handler-decorated methods and _allowed_events are callable.
+        allowed_events = getattr(self, "_allowed_events", None)
+        allowed_set = allowed_events if isinstance(allowed_events, (set, frozenset)) else set()
 
         for name in dir(self):
             if name.startswith("_"):
@@ -44,14 +42,8 @@ class PostProcessingMixin:
                 continue
 
             if callable(attr) and hasattr(attr, "__func__"):
-                # Discover handlers matching runtime resolution logic:
-                # any public method that is not inherited from base Django View classes
-                is_decorated = hasattr(attr, "_djust_decorators") and "event_handler" in getattr(
-                    attr, "_djust_decorators", {}
-                )
-                is_potential_handler = is_decorated or name not in base_methods
-
-                if is_potential_handler:
+                # Show only handlers that would pass _check_event_security at runtime
+                if is_event_handler(attr) or name in allowed_set:
                     sig_info = get_handler_signature_info(attr)
 
                     handlers[name] = {
