@@ -1,10 +1,13 @@
 //! Property-based tests for the VDOM diff algorithm using proptest.
 //!
-//! Tests four key properties:
+//! Tests five key properties:
 //! 1. Identity: diff(A, A) produces 0 patches
-//! 2. Round-trip: apply(A, diff(A, B)) structurally equals B (unkeyed trees)
+//! 2. Round-trip: apply(A, diff(A, B)) structurally equals B
 //! 3. No panics: arbitrary tree pairs (including keyed) never panic
-//! 4. Patch count bounds: patches ≤ total nodes in both trees (unkeyed trees)
+//! 4. Patch count bounds: patches ≤ total nodes in both trees
+//! 5. Keyed mutation round-trip: mutating a tree (reorder, add, remove keyed
+//!    children) produces a correct round-trip — exercises the keyed diff path
+//!    far more effectively than independent random generation (#216, #217)
 //!
 //! Note: Round-trip and patch-count tests now work with keyed trees too,
 //! since `apply_patches` resolves InsertChild/RemoveChild/MoveChild via
@@ -101,6 +104,186 @@ fn arb_unkeyed_tree() -> BoxedStrategy<VNode> {
 fn arb_keyed_tree() -> BoxedStrategy<VNode> {
     (0u32..=5)
         .prop_flat_map(|depth| arb_keyed_inner(depth, 0))
+        .boxed()
+}
+
+// ============================================================================
+// Fully-keyed tree generator and keyed-mutation generator (#216)
+//
+// Produces tree B by *mutating* tree A, guaranteeing key overlap and exercising
+// keyed reorder/move/add/remove paths that independent generation rarely hits.
+//
+// Uses fully-keyed trees (every element child has a key) to avoid a known
+// limitation where the diff engine doesn't emit move patches for unkeyed
+// children interleaved with keyed moves (tracked separately).
+// ============================================================================
+
+/// Generate a fully-keyed VNode tree where every element child has a key.
+fn arb_fully_keyed_inner(
+    max_depth: u32,
+    current_depth: u32,
+    key_prefix: &str,
+) -> BoxedStrategy<VNode> {
+    if current_depth >= max_depth {
+        // Leaf: only element nodes (no text, to keep everything keyed)
+        (
+            prop::sample::select(TAGS),
+            prop::collection::hash_map(prop::sample::select(ATTR_KEYS), "[a-z]{1,10}", 0..=2),
+            "[a-z]{1,4}",
+        )
+            .prop_map(|(tag, attrs, key)| {
+                let mut node = VNode::element(tag);
+                node.attrs = attrs.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+                node.key = Some(key);
+                node
+            })
+            .boxed()
+    } else {
+        let prefix = key_prefix.to_string();
+        (
+            prop::sample::select(TAGS),
+            prop::collection::hash_map(prop::sample::select(ATTR_KEYS), "[a-z]{1,10}", 0..=2),
+            "[a-z]{1,4}",
+            prop::collection::vec(0..=5u32, 0..=4),
+        )
+            .prop_flat_map(move |(tag, attrs, key, child_seeds)| {
+                let n = child_seeds.len();
+                let prefix = prefix.clone();
+                let tag = tag.to_string();
+                let attrs: Vec<(String, String)> =
+                    attrs.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+                let children_strats: Vec<BoxedStrategy<VNode>> = (0..n)
+                    .map(|i| {
+                        let child_prefix = format!("{}{}.", prefix, i);
+                        arb_fully_keyed_inner(max_depth, current_depth + 1, &child_prefix)
+                    })
+                    .collect();
+                if children_strats.is_empty() {
+                    Just(VNode {
+                        tag: tag.clone(),
+                        attrs: attrs.into_iter().collect(),
+                        children: vec![],
+                        text: None,
+                        key: Some(key.clone()),
+                        djust_id: None,
+                    })
+                    .boxed()
+                } else {
+                    children_strats
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                        .prop_map(move |mut children| {
+                            // Ensure unique keys among siblings
+                            let mut seen = std::collections::HashSet::new();
+                            for (i, child) in children.iter_mut().enumerate() {
+                                if let Some(ref k) = child.key {
+                                    if !seen.insert(k.clone()) {
+                                        child.key = Some(format!("{}_{}", k, i));
+                                    }
+                                }
+                            }
+                            VNode {
+                                tag: tag.clone(),
+                                attrs: attrs.clone().into_iter().collect(),
+                                children,
+                                text: None,
+                                key: Some(key.clone()),
+                                djust_id: None,
+                            }
+                        })
+                        .boxed()
+                }
+            })
+            .boxed()
+    }
+}
+
+fn arb_fully_keyed_tree() -> BoxedStrategy<VNode> {
+    (1u32..=3)
+        .prop_flat_map(|depth| arb_fully_keyed_inner(depth, 0, "r"))
+        .boxed()
+}
+
+/// Apply random mutations to a cloned tree to produce tree B.
+/// Mutations: shuffle keyed siblings, modify attrs, add/remove keyed children.
+/// `key_counter` ensures newly inserted keys are globally unique.
+fn mutate_tree(node: &VNode, rng: &mut impl Iterator<Item = u8>, key_counter: &mut u32) -> VNode {
+    let mut result = node.clone();
+
+    let action = rng.next().unwrap_or(0);
+
+    if result.text.is_some() {
+        return result;
+    }
+
+    // Recurse into children first
+    result.children = result
+        .children
+        .iter()
+        .map(|c| mutate_tree(c, rng, key_counter))
+        .collect();
+
+    let n_children = result.children.len();
+
+    match action % 6 {
+        // Shuffle keyed siblings (the main target)
+        0 if n_children >= 2 => {
+            let swap_a = rng.next().unwrap_or(0) as usize % n_children;
+            let swap_b = rng.next().unwrap_or(1) as usize % n_children;
+            if swap_a != swap_b {
+                result.children.swap(swap_a, swap_b);
+            }
+        }
+        // Remove a child
+        1 if n_children >= 1 => {
+            let idx = rng.next().unwrap_or(0) as usize % n_children;
+            result.children.remove(idx);
+        }
+        // Add a new keyed child
+        2 => {
+            *key_counter += 1;
+            let new_key = format!("new_{}", key_counter);
+            let mut child = VNode::element("div");
+            child.key = Some(new_key);
+            let pos = if n_children > 0 {
+                rng.next().unwrap_or(0) as usize % (n_children + 1)
+            } else {
+                0
+            };
+            result.children.insert(pos, child);
+        }
+        // Modify an attribute
+        3 => {
+            result
+                .attrs
+                .insert("class".to_string(), format!("m{}", action));
+        }
+        // Reverse children (exercises reorder)
+        4 if n_children >= 2 => {
+            result.children.reverse();
+        }
+        // No mutation (identity)
+        _ => {}
+    }
+
+    result
+}
+
+/// Strategy that generates fully-keyed tree A then mutates it into tree B.
+/// Guarantees key overlap between the two trees.
+fn arb_keyed_mutation_pair() -> BoxedStrategy<(VNode, VNode)> {
+    arb_fully_keyed_tree()
+        .prop_flat_map(|tree_a| {
+            let a = tree_a.clone();
+            // Use a large seed to avoid iterator exhaustion on deep trees,
+            // which would bias later mutations toward unwrap_or defaults.
+            prop::collection::vec(any::<u8>(), 50..200).prop_map(move |seed_bytes| {
+                let mut rng = seed_bytes.into_iter();
+                let mut key_counter = 0u32;
+                let tree_b = mutate_tree(&a, &mut rng, &mut key_counter);
+                (a.clone(), tree_b)
+            })
+        })
         .boxed()
 }
 
@@ -203,7 +386,7 @@ fn structurally_equal(a: &VNode, b: &VNode) -> bool {
 // ============================================================================
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(500))]
+    #![proptest_config(ProptestConfig::with_cases(1000))]
 
     /// Property 1: diff(A, A) always produces 0 patches.
     #[test]
@@ -286,6 +469,30 @@ proptest! {
             patches.len() <= bound,
             "Patch count {} exceeds bound {} (nodes={}, attrs={})",
             patches.len(), bound, total_nodes, total_attrs,
+        );
+    }
+
+    /// Property 5: keyed mutation round-trip (#216, #217).
+    /// Tree B is derived from tree A by mutation, guaranteeing key overlap.
+    /// This exercises keyed reorder/move paths far more than independent generation.
+    #[test]
+    fn round_trip_keyed_mutation(
+        pair in arb_keyed_mutation_pair(),
+    ) {
+        let (mut a, mut b) = pair;
+
+        let mut counter = 0u64;
+        assign_ids(&mut a, &mut counter);
+        assign_ids(&mut b, &mut counter);
+
+        let patches = diff_nodes(&a, &b, &[]);
+        let mut patched = a.clone();
+        apply_patches(&mut patched, &patches);
+
+        prop_assert!(
+            structurally_equal(&patched, &b),
+            "Keyed mutation round-trip failed.\nA: {:?}\nB: {:?}\nPatches: {:?}\nPatched: {:?}",
+            a, b, patches, patched,
         );
     }
 }

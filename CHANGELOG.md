@@ -10,10 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Auto-build client.js from src/ modules** — Pre-commit hook runs `build-client.sh` when `src/` files change, eliminating manual concatenation drift between `src/` and built JS files. ([#211](https://github.com/djust-org/djust/issues/211))
+- **Keyed-mutation fuzz test generator** — New proptest generator produces tree B by mutating tree A (reorder, insert, remove keyed children), guaranteeing key overlap and exercising keyed diff paths far more effectively than independent random generation. Proptest cases bumped from 500 to 1000. ([#216](https://github.com/djust-org/djust/issues/216), [#217](https://github.com/djust-org/djust/issues/217))
 
 ### Fixed
 
 - **VDOM diff/patch round-trip failure on keyed child reorder** — `apply_patches` now processes patches level-by-level (shallowest parent first) so structural changes establish correct tree shape before deeper patches navigate into children. ([#212](https://github.com/djust-org/djust/issues/212))
+- **apply_patches djust_id-based resolution** — Rewrote `apply_patches` to resolve parent nodes by `djust_id` instead of path-based traversal, preventing mis-targeting when structural patches at shallower levels invalidate deeper path indices. Fixed patch application order (removes → inserts → moves) and MoveChild index clamping. ([#216](https://github.com/djust-org/djust/issues/216))
 
 ## [0.2.2] - 2026-02-01
 
