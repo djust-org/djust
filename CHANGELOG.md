@@ -7,11 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2rc4] - 2026-01-31
+
 ### Fixed
 
 - **Debug Toolbar: Received WebSocket Messages Not Captured** — Network tab now captures both sent and received WebSocket messages by intercepting the `onmessage` property setter (not just `addEventListener`). (#186)
 - **Debug Toolbar: Events Tab Always Empty** — Events tab now populates by extracting event data from sent WebSocket messages and matching responses, replacing the broken `window.liveView` hook. Event replay now uses `window.djust.liveViewInstance`. (#187)
-- **Debug Panel: Handler Discovery Too Restrictive** — Handler discovery now finds all public methods on the view, not just those with `@event_handler()` decorator. Matches runtime handler resolution logic. (#193)
+- **Debug Panel: Handler Discovery Matches Runtime Policy** — Handler discovery now shows only `@event_handler`-decorated methods and `_allowed_events`, matching the runtime `event_security` strict-mode dispatch in `_check_event_security()`. (#193)
 - **Debug Panel: JS Not Auto-loaded** — `_inject_client_script` now includes `debug-panel.js` (before `client-dev.js`) so the panel auto-instantiates without manual setup. (#194)
 - **Debug Panel: Handlers Tab Crash** — Fixed `TypeError: this.handlers.map` by normalizing server-returned handler dict to array. (#195)
 - **Debug Panel: Events/Patches/Network Tabs Empty** — Added retroactive WebSocket instance hooking for connections established before the panel loads. Fixed patch counter DOM id mismatch and added patches processing from `_debug` payload. (#196)
@@ -247,7 +249,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bug fixes and stability improvements
 
-[Unreleased]: https://github.com/djust-org/djust/compare/v0.2.2rc3...HEAD
+[Unreleased]: https://github.com/djust-org/djust/compare/v0.2.2rc4...HEAD
+[0.2.2rc4]: https://github.com/djust-org/djust/compare/v0.2.2rc3...v0.2.2rc4
 [0.2.2rc3]: https://github.com/djust-org/djust/compare/v0.2.2rc2...v0.2.2rc3
 [0.2.2rc2]: https://github.com/djust-org/djust/compare/v0.2.2rc1...v0.2.2rc2
 [0.2.2rc1]: https://github.com/djust-org/djust/compare/v0.2.1...v0.2.2rc1
