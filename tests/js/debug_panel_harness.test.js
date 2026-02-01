@@ -370,3 +370,66 @@ describe('Debug Panel Harness — Bootstrap from DJUST_DEBUG_INFO (#189)', () =>
         expect(panel.stateHistory[0].trigger).toBe('mount');
     });
 });
+
+describe('Debug Panel Harness — Handlers tab with dict format (#195)', () => {
+    let panel;
+
+    afterEach(() => {
+        if (panel) panel.destroy();
+    });
+
+    it('renderHandlersTab handles object/dict handlers without crashing', () => {
+        panel = createPanel();
+        panel.handlers = {
+            increment: { name: 'increment', description: 'Add one', params: [], decorators: {} },
+            decrement: { name: 'decrement', description: 'Sub one', params: [], decorators: {} },
+        };
+        const html = panel.renderHandlersTab();
+        expect(html).toContain('increment');
+        expect(html).toContain('decrement');
+        expect(html).not.toContain('No event handlers detected');
+    });
+
+    it('renderHandlersTab handles array handlers', () => {
+        panel = createPanel();
+        panel.handlers = [
+            { name: 'increment', description: 'Add one', params: [], decorators: {} },
+        ];
+        const html = panel.renderHandlersTab();
+        expect(html).toContain('increment');
+    });
+
+    it('renderHandlersTab shows empty state for null handlers', () => {
+        panel = createPanel();
+        panel.handlers = null;
+        const html = panel.renderHandlersTab();
+        expect(html).toContain('No event handlers detected');
+    });
+});
+
+describe('Debug Panel Harness — processDebugInfo patches (#196)', () => {
+    let panel;
+
+    afterEach(() => {
+        if (panel) panel.destroy();
+    });
+
+    it('processDebugInfo populates patchHistory from patches array', () => {
+        panel = createPanel();
+        panel.processDebugInfo({
+            patches: [
+                { type: 'SetText', path: [0, 1], text: 'hello' },
+                { type: 'SetAttr', path: [0, 2], key: 'class', value: 'active' },
+            ],
+            performance: { render_time: 1.5, diff_time: 0.3 },
+        });
+        expect(panel.patchHistory.length).toBe(1); // one patch entry (containing 2 ops)
+        expect(panel.patchHistory[0].patches).toHaveLength(2);
+    });
+
+    it('processDebugInfo ignores empty patches array', () => {
+        panel = createPanel();
+        panel.processDebugInfo({ patches: [] });
+        expect(panel.patchHistory.length).toBe(0);
+    });
+});

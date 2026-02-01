@@ -161,6 +161,47 @@ class TestGetDebugInfo:
         # Public method should be in handlers
         assert "public_method" in debug_info["handlers"]
 
+    def test_undecorated_handler_discovered(self):
+        """Test that public methods without @event_handler are discovered (#193)"""
+
+        class MyView(LiveView):
+            template_name = "test.html"
+
+            def increment(self):
+                """Increment the counter"""
+                pass
+
+            def decrement(self, amount: int = 1):
+                pass
+
+        view = MyView()
+        debug_info = view.get_debug_info()
+
+        # Undecorated public methods should be discovered as handlers
+        assert "increment" in debug_info["handlers"]
+        assert "decrement" in debug_info["handlers"]
+        assert debug_info["handlers"]["increment"]["description"] == "Increment the counter"
+
+    def test_base_view_methods_excluded(self):
+        """Test that inherited Django View methods are not listed as handlers (#193)"""
+
+        class MyView(LiveView):
+            template_name = "test.html"
+
+            def my_handler(self):
+                pass
+
+        view = MyView()
+        debug_info = view.get_debug_info()
+
+        # Django View base methods should be excluded
+        assert "dispatch" not in debug_info["handlers"]
+        assert "setup" not in debug_info["handlers"]
+        assert "http_method_not_allowed" not in debug_info["handlers"]
+
+        # Custom method should be included
+        assert "my_handler" in debug_info["handlers"]
+
     def test_long_value_truncation(self):
         """Test that long variable values are truncated"""
 
@@ -235,6 +276,14 @@ class TestDebugInfoInjection:
             '<link rel="stylesheet" href="/static/djust/debug-panel.css" data-turbo-track="reload">'
             in html
         )
+
+        # Check that debug-panel.js script tag is present (#194)
+        assert '<script src="/static/djust/debug-panel.js"' in html
+
+        # Verify debug-panel.js script tag comes before client-dev.js script tag
+        debug_panel_pos = html.index('<script src="/static/djust/debug-panel.js"')
+        client_dev_pos = html.index('<script src="/static/djust/client-dev.js"')
+        assert debug_panel_pos < client_dev_pos, "debug-panel.js must load before client-dev.js"
 
         # Extract and parse debug info
         import re
