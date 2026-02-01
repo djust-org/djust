@@ -432,18 +432,11 @@ console.log(window.DJUST_DEBUG_INFO);
 
 ### Event Handler Tab Empty
 
-**Symptom**: "No event handlers found" message
+**Symptom**: "No event handlers detected" message
 
-**Cause**: No handlers decorated with `@event_handler()`
+**Cause**: The view has no `@event_handler`-decorated methods or `_allowed_events`, or the view hasn't mounted yet.
 
-**Solution**: Add decorator to event handlers:
-```python
-from djust.decorators import event_handler
-
-@event_handler()  # Add this!
-def my_handler(self, value: str = ""):
-    pass
-```
+**Note**: The debug panel matches the runtime event security policy. Only methods decorated with `@event_handler` (or listed in `_allowed_events`) appear in the Handlers tab. This ensures the panel accurately reflects which events are callable at runtime.
 
 ### Event History Not Logging Events
 

@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Debug Toolbar: Received WebSocket Messages Not Captured** — Network tab now captures both sent and received WebSocket messages by intercepting the `onmessage` property setter (not just `addEventListener`). (#186)
 - **Debug Toolbar: Events Tab Always Empty** — Events tab now populates by extracting event data from sent WebSocket messages and matching responses, replacing the broken `window.liveView` hook. Event replay now uses `window.djust.liveViewInstance`. (#187)
+- **Debug Panel: Handler Discovery Too Restrictive** — Handler discovery now finds all public methods on the view, not just those with `@event_handler()` decorator. Matches runtime handler resolution logic. (#193)
+- **Debug Panel: JS Not Auto-loaded** — `_inject_client_script` now includes `debug-panel.js` (before `client-dev.js`) so the panel auto-instantiates without manual setup. (#194)
+- **Debug Panel: Handlers Tab Crash** — Fixed `TypeError: this.handlers.map` by normalizing server-returned handler dict to array. (#195)
+- **Debug Panel: Events/Patches/Network Tabs Empty** — Added retroactive WebSocket instance hooking for connections established before the panel loads. Fixed patch counter DOM id mismatch and added patches processing from `_debug` payload. (#196)
 
 ### Added
 

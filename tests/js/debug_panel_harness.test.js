@@ -370,3 +370,116 @@ describe('Debug Panel Harness — Bootstrap from DJUST_DEBUG_INFO (#189)', () =>
         expect(panel.stateHistory[0].trigger).toBe('mount');
     });
 });
+
+describe('Debug Panel Harness — Handlers tab with dict format (#195)', () => {
+    let panel;
+
+    afterEach(() => {
+        if (panel) panel.destroy();
+    });
+
+    it('renderHandlersTab handles object/dict handlers without crashing', () => {
+        panel = createPanel();
+        panel.handlers = {
+            increment: { name: 'increment', description: 'Add one', params: [], decorators: {} },
+            decrement: { name: 'decrement', description: 'Sub one', params: [], decorators: {} },
+        };
+        const html = panel.renderHandlersTab();
+        expect(html).toContain('increment');
+        expect(html).toContain('decrement');
+        expect(html).not.toContain('No event handlers detected');
+    });
+
+    it('renderHandlersTab handles array handlers', () => {
+        panel = createPanel();
+        panel.handlers = [
+            { name: 'increment', description: 'Add one', params: [], decorators: {} },
+        ];
+        const html = panel.renderHandlersTab();
+        expect(html).toContain('increment');
+    });
+
+    it('renderHandlersTab shows empty state for null handlers', () => {
+        panel = createPanel();
+        panel.handlers = null;
+        const html = panel.renderHandlersTab();
+        expect(html).toContain('No event handlers detected');
+    });
+});
+
+describe('Debug Panel Harness — processDebugInfo patches (#196)', () => {
+    let panel;
+
+    afterEach(() => {
+        if (panel) panel.destroy();
+    });
+
+    it('processDebugInfo populates patchHistory from patches array', () => {
+        panel = createPanel();
+        panel.processDebugInfo({
+            patches: [
+                { type: 'SetText', path: [0, 1], text: 'hello' },
+                { type: 'SetAttr', path: [0, 2], key: 'class', value: 'active' },
+            ],
+            performance: { render_time: 1.5, diff_time: 0.3 },
+        });
+        expect(panel.patchHistory.length).toBe(1); // one patch entry (containing 2 ops)
+        expect(panel.patchHistory[0].patches).toHaveLength(2);
+    });
+
+    it('processDebugInfo ignores empty patches array', () => {
+        panel = createPanel();
+        panel.processDebugInfo({ patches: [] });
+        expect(panel.patchHistory.length).toBe(0);
+    });
+});
+
+describe('Debug Panel Harness — _hookExistingWebSocket (#196)', () => {
+    let panel;
+
+    afterEach(() => {
+        if (panel) panel.destroy();
+        delete window.djust;
+    });
+
+    it('hooks into existing WebSocket instance', () => {
+        const mockSend = vi.fn();
+        const mockWs = {
+            send: mockSend,
+            onmessage: null,
+            readyState: 1,
+        };
+        window.djust = { liveViewInstance: { ws: mockWs } };
+
+        panel = createPanel();
+        // hookIntoLiveView is called during init, which calls _hookExistingWebSocket
+
+        expect(mockWs._djustDebugHooked).toBe(true);
+        // Original send should still be callable through the wrapper
+        mockWs.send(JSON.stringify({ type: 'ping' }));
+        expect(mockSend).toHaveBeenCalled();
+    });
+
+    it('does not double-hook the same WebSocket', () => {
+        const mockWs = {
+            send: vi.fn(),
+            onmessage: null,
+            readyState: 1,
+        };
+        window.djust = { liveViewInstance: { ws: mockWs } };
+
+        panel = createPanel();
+        const hookedSend = mockWs.send;
+
+        // Call again — should not re-wrap
+        panel._hookExistingWebSocket();
+        expect(mockWs.send).toBe(hookedSend);
+    });
+
+    it('no-ops when no LiveView instance exists', () => {
+        window.djust = {};
+        panel = createPanel();
+        // Should not throw
+        expect(panel).toBeDefined();
+    });
+});

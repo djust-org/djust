@@ -22,9 +22,15 @@ class PostProcessingMixin:
             Dict with debug information
         """
         from ..validation import get_handler_signature_info
+        from ..decorators import is_event_handler
 
         handlers = {}
         variables = {}
+
+        # Match the runtime event_security policy: in strict mode (default),
+        # only @event_handler-decorated methods and _allowed_events are callable.
+        allowed_events = getattr(self, "_allowed_events", None)
+        allowed_set = allowed_events if isinstance(allowed_events, (set, frozenset)) else set()
 
         for name in dir(self):
             if name.startswith("_"):
@@ -35,20 +41,18 @@ class PostProcessingMixin:
             except AttributeError:
                 continue
 
-            if (
-                callable(attr)
-                and hasattr(attr, "_djust_decorators")
-                and "event_handler" in getattr(attr, "_djust_decorators", {})
-            ):
-                sig_info = get_handler_signature_info(attr)
+            if callable(attr) and hasattr(attr, "__func__"):
+                # Show only handlers that would pass _check_event_security at runtime
+                if is_event_handler(attr) or name in allowed_set:
+                    sig_info = get_handler_signature_info(attr)
 
-                handlers[name] = {
-                    "name": name,
-                    "params": sig_info["params"],
-                    "description": sig_info["description"],
-                    "accepts_kwargs": sig_info["accepts_kwargs"],
-                    "decorators": getattr(attr, "_djust_decorators", {}),
-                }
+                    handlers[name] = {
+                        "name": name,
+                        "params": sig_info["params"],
+                        "description": sig_info["description"],
+                        "accepts_kwargs": sig_info["accepts_kwargs"],
+                        "decorators": getattr(attr, "_djust_decorators", {}),
+                    }
 
             elif (
                 not callable(attr)
@@ -189,6 +193,15 @@ class PostProcessingMixin:
         script = f'<script src="{client_js_url}" defer data-turbo-track="reload"></script>'
 
         if settings.DEBUG:
+            # debug-panel.js MUST load before client-dev.js so that
+            # DjustDebugPanel is defined when client-dev.js calls
+            # initDebugPanel() (fixes #193 and #196).
+            try:
+                debug_panel_js_url = static("djust/debug-panel.js")
+            except (ValueError, AttributeError):
+                debug_panel_js_url = "/static/djust/debug-panel.js"
+            script += f'\n        <script src="{debug_panel_js_url}" defer data-turbo-track="reload"></script>'
+
             try:
                 client_dev_js_url = static("djust/client-dev.js")
             except (ValueError, AttributeError):
