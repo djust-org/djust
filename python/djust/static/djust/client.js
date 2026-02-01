@@ -1955,7 +1955,9 @@ async function handleEvent(eventName, params = {}) {
     console.log('[LiveView] WebSocket unavailable, falling back to HTTP');
 
     try {
-        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value;
+        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value
+            || document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1]
+            || '';
         const response = await fetch(window.location.href, {
             method: 'POST',
             headers: {
