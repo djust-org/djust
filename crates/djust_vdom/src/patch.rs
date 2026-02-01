@@ -140,29 +140,46 @@ pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
             }
         }
 
-        // Moves: by djust_id
+        // Moves: by djust_id.
+        //
+        // Collect all moves first, then apply them in a single pass.
+        // Sequential remove+insert would corrupt indices because each move
+        // changes the child list, making subsequent `to` indices wrong.
+        // Instead: extract all moving children, leaving holes, then insert
+        // them all at their target positions in ascending `to` order (#222).
+        let mut move_targets: Vec<(String, usize)> = Vec::new(); // (child_djust_id, to)
         for patch in &group.moves {
             if let Patch::MoveChild { d, from, to, .. } = patch {
                 let child_id = d
                     .as_ref()
                     .and_then(|pid| move_id_map.get(&(pid.clone(), *from)).cloned());
+                if let Some(child_id) = child_id {
+                    move_targets.push((child_id, *to));
+                }
+            }
+        }
 
-                if let Some(target) = find_by_djust_id_mut(root, pid) {
-                    if let Some(ref child_id) = child_id {
-                        if let Some(current_pos) = target
-                            .children
-                            .iter()
-                            .position(|c| c.djust_id.as_deref() == Some(child_id.as_str()))
-                        {
-                            let node = target.children.remove(current_pos);
-                            let insert_at = (*to).min(target.children.len());
-                            target.children.insert(insert_at, node);
-                        }
-                    } else if *from < target.children.len() {
-                        let node = target.children.remove(*from);
-                        let insert_at = (*to).min(target.children.len());
-                        target.children.insert(insert_at, node);
+        if !move_targets.is_empty() {
+            if let Some(target) = find_by_djust_id_mut(root, pid) {
+                // Extract all moving children (replace with None temporarily)
+                let mut extracted: Vec<(String, usize, VNode)> = Vec::new(); // (id, to, node)
+                for (child_id, to) in &move_targets {
+                    if let Some(pos) = target
+                        .children
+                        .iter()
+                        .position(|c| c.djust_id.as_deref() == Some(child_id.as_str()))
+                    {
+                        let node = target.children.remove(pos);
+                        extracted.push((child_id.clone(), *to, node));
                     }
+                }
+
+                // Re-insert in ascending `to` order so each insert at `to`
+                // sees the correct intermediate state.
+                extracted.sort_by_key(|(_, to, _)| *to);
+                for (_, to, node) in extracted {
+                    let insert_at = to.min(target.children.len());
+                    target.children.insert(insert_at, node);
                 }
             }
         }

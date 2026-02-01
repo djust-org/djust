@@ -8,6 +8,9 @@
 //! 5. Keyed mutation round-trip: mutating a tree (reorder, add, remove keyed
 //!    children) produces a correct round-trip — exercises the keyed diff path
 //!    far more effectively than independent random generation (#216, #217)
+//! 6. Mixed keyed/unkeyed interleave round-trip: shuffling keyed children in a
+//!    mixed list causes unkeyed children (elements and text nodes) to shift —
+//!    exercises diff_keyed_children with mixed lists (#219, #222)
 //!
 //! Note: Round-trip and patch-count tests now work with keyed trees too,
 //! since `apply_patches` resolves InsertChild/RemoveChild/MoveChild via
@@ -287,6 +290,164 @@ fn arb_keyed_mutation_pair() -> BoxedStrategy<(VNode, VNode)> {
         .boxed()
 }
 
+// ============================================================================
+// Mixed keyed/unkeyed interleave generator (#222)
+//
+// Produces a parent with a deliberate mix of keyed elements, unkeyed elements,
+// and text nodes as children. Tree B is derived by shuffling the keyed children
+// (which shifts the unkeyed children's positions), exercising the
+// diff_keyed_children path for mixed lists.
+// ============================================================================
+
+/// Generate a parent node with mixed keyed/unkeyed children.
+///
+/// Children are a mix of:
+/// - Keyed elements (unique keys "k0", "k1", ...)
+/// - Unkeyed elements (no key)
+/// - Text nodes
+fn arb_mixed_interleave_parent() -> BoxedStrategy<VNode> {
+    // Generate 2-6 keyed children and 1-3 unkeyed children (elements + text)
+    (
+        prop::collection::vec(
+            (
+                prop::sample::select(TAGS),
+                prop::collection::hash_map(prop::sample::select(ATTR_KEYS), "[a-z]{1,8}", 0..=2),
+            ),
+            2..=6,
+        ),
+        prop::collection::vec(
+            prop_oneof![
+                "[a-zA-Z0-9 ]{1,15}".prop_map(VNode::text),
+                (
+                    prop::sample::select(TAGS),
+                    prop::collection::hash_map(
+                        prop::sample::select(ATTR_KEYS),
+                        "[a-z]{1,8}",
+                        0..=2,
+                    ),
+                )
+                    .prop_map(|(tag, attrs)| {
+                        let mut node = VNode::element(tag);
+                        node.attrs = attrs.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+                        node
+                    }),
+            ],
+            1..=3,
+        ),
+        // Shuffle seed: determines where unkeyed children are interleaved
+        prop::collection::vec(any::<usize>(), 3..=8),
+    )
+        .prop_map(|(keyed_specs, unkeyed_children, positions)| {
+            // Build keyed children with unique keys
+            let mut children: Vec<VNode> = keyed_specs
+                .into_iter()
+                .enumerate()
+                .map(|(i, (tag, attrs))| {
+                    let mut node = VNode::element(tag);
+                    node.attrs = attrs.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+                    node.key = Some(format!("k{}", i));
+                    node
+                })
+                .collect();
+
+            // Interleave unkeyed children at pseudo-random positions
+            for (i, child) in unkeyed_children.into_iter().enumerate() {
+                let pos = positions.get(i).copied().unwrap_or(0) % (children.len() + 1);
+                children.insert(pos, child);
+            }
+
+            let mut parent = VNode::element("div");
+            parent.children = children;
+            parent
+        })
+        .boxed()
+}
+
+/// Mutate a mixed-interleave tree: shuffle keyed children, modify some
+/// unkeyed children's content/attrs, optionally add/remove a keyed child.
+fn mutate_mixed_tree(node: &VNode, rng: &mut impl Iterator<Item = u8>) -> VNode {
+    let mut result = node.clone();
+    let action = rng.next().unwrap_or(0);
+
+    // Separate keyed and unkeyed children, preserving relative order
+    let mut keyed: Vec<(usize, VNode)> = Vec::new();
+    let mut unkeyed: Vec<(usize, VNode)> = Vec::new();
+    for (i, child) in result.children.iter().enumerate() {
+        if child.key.is_some() {
+            keyed.push((i, child.clone()));
+        } else {
+            unkeyed.push((i, child.clone()));
+        }
+    }
+
+    match action % 5 {
+        // Shuffle keyed children
+        0 if keyed.len() >= 2 => {
+            let a = rng.next().unwrap_or(0) as usize % keyed.len();
+            let b = rng.next().unwrap_or(1) as usize % keyed.len();
+            if a != b {
+                keyed.swap(a, b);
+            }
+        }
+        // Reverse keyed children
+        1 if keyed.len() >= 2 => {
+            keyed.reverse();
+        }
+        // Remove a keyed child
+        2 if keyed.len() >= 3 => {
+            let idx = rng.next().unwrap_or(0) as usize % keyed.len();
+            keyed.remove(idx);
+        }
+        // Add a new keyed child
+        3 => {
+            let new_key = format!("k{}", keyed.len() + 10);
+            let mut child = VNode::element("div");
+            child.key = Some(new_key);
+            keyed.push((0, child));
+        }
+        _ => {}
+    }
+
+    // Modify some unkeyed children
+    for (_, child) in unkeyed.iter_mut() {
+        let modify = rng.next().unwrap_or(0);
+        if modify.is_multiple_of(3) {
+            if child.is_text() {
+                child.text = Some(format!("mod{}", modify));
+            } else {
+                child
+                    .attrs
+                    .insert("class".to_string(), format!("m{}", modify));
+            }
+        }
+    }
+
+    // Reassemble: interleave unkeyed among keyed at new positions
+    let mut children: Vec<VNode> = keyed.into_iter().map(|(_, n)| n).collect();
+    for (i, (_, child)) in unkeyed.into_iter().enumerate() {
+        let pos_seed = rng.next().unwrap_or(i as u8) as usize;
+        let pos = pos_seed % (children.len() + 1);
+        children.insert(pos, child);
+    }
+
+    result.children = children;
+    result
+}
+
+/// Strategy that generates a mixed keyed/unkeyed tree A then mutates into B.
+fn arb_mixed_interleave_pair() -> BoxedStrategy<(VNode, VNode)> {
+    arb_mixed_interleave_parent()
+        .prop_flat_map(|tree_a| {
+            let a = tree_a.clone();
+            prop::collection::vec(any::<u8>(), 30..100).prop_map(move |seed_bytes| {
+                let mut rng = seed_bytes.into_iter();
+                let tree_b = mutate_mixed_tree(&a, &mut rng);
+                (a.clone(), tree_b)
+            })
+        })
+        .boxed()
+}
+
 /// Assign unique djust_ids to all nodes in a tree (elements and text nodes).
 ///
 /// In production, only element nodes receive IDs (the parser skips text nodes).
@@ -494,6 +655,31 @@ proptest! {
         prop_assert!(
             structurally_equal(&patched, &b),
             "Keyed mutation round-trip failed.\nA: {:?}\nB: {:?}\nPatches: {:?}\nPatched: {:?}",
+            a, b, patches, patched,
+        );
+    }
+
+    /// Property 6: mixed keyed/unkeyed interleave round-trip (#219, #222).
+    /// Tree B is derived from tree A by shuffling keyed children and modifying
+    /// unkeyed children. This exercises diff_keyed_children with mixed lists
+    /// where keyed moves cause unkeyed children to shift positions.
+    #[test]
+    fn round_trip_mixed_interleave(
+        pair in arb_mixed_interleave_pair(),
+    ) {
+        let (mut a, mut b) = pair;
+
+        let mut counter = 0u64;
+        assign_ids(&mut a, &mut counter);
+        assign_ids(&mut b, &mut counter);
+
+        let patches = diff_nodes(&a, &b, &[]);
+        let mut patched = a.clone();
+        apply_patches(&mut patched, &patches);
+
+        prop_assert!(
+            structurally_equal(&patched, &b),
+            "Mixed interleave round-trip failed.\nA: {:?}\nB: {:?}\nPatches: {:?}\nPatched: {:?}",
             a, b, patches, patched,
         );
     }
