@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Auto-build client.js from src/ modules** — Pre-commit hook runs `build-client.sh` when `src/` files change, eliminating manual concatenation drift between `src/` and built JS files. ([#211](https://github.com/djust-org/djust/issues/211))
 - **Keyed-mutation fuzz test generator** — New proptest generator produces tree B by mutating tree A (reorder, insert, remove keyed children), guaranteeing key overlap and exercising keyed diff paths far more effectively than independent random generation. Proptest cases bumped from 500 to 1000. ([#216](https://github.com/djust-org/djust/issues/216), [#217](https://github.com/djust-org/djust/issues/217))
+- **Mixed keyed/unkeyed interleave fuzz generator** — New proptest generator (property 6) creates parent nodes with deliberately mixed keyed elements, unkeyed elements, and text nodes, then mutates by shuffling keyed children. Found and fixed a bug in `apply_patches` where sequential `MoveChild` processing corrupted indices. ([#222](https://github.com/djust-org/djust/issues/222))
 
 ### Fixed
 
