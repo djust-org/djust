@@ -125,6 +125,50 @@ fn count_attrs(node: &VNode) -> usize {
     node.attrs.len() + node.children.iter().map(count_attrs).sum::<usize>()
 }
 
+/// Regression test for issue #212: keyed child reorder round-trip failure.
+///
+/// Tree A:
+///   div
+///   ├── #text "a"
+///   └── a
+///       └── div (key="a")
+///
+/// Tree B:
+///   div
+///   ├── div (key="a")
+///   ├── #text "A"
+///   └── a (empty)
+#[test]
+fn issue_212_keyed_reorder_round_trip() {
+    let mut a = VNode::element("div").with_children(vec![
+        VNode::text("a"),
+        VNode::element("a").with_child(VNode::element("div").with_key("a")),
+    ]);
+
+    let mut b = VNode::element("div").with_children(vec![
+        VNode::element("div").with_key("a"),
+        VNode::text("A"),
+        VNode::element("a"),
+    ]);
+
+    let mut counter = 0u64;
+    assign_ids(&mut a, &mut counter);
+    assign_ids(&mut b, &mut counter);
+
+    let patches = diff_nodes(&a, &b, &[]);
+    let mut patched = a.clone();
+    apply_patches(&mut patched, &patches);
+
+    assert!(
+        structurally_equal(&patched, &b),
+        "Round-trip failed for issue #212.\nA: {:#?}\nB: {:#?}\nPatches: {:#?}\nPatched: {:#?}",
+        a,
+        b,
+        patches,
+        patched,
+    );
+}
+
 /// Structural equality check ignoring djust_id.
 fn structurally_equal(a: &VNode, b: &VNode) -> bool {
     if a.tag != b.tag || a.text != b.text {
