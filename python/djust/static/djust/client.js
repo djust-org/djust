@@ -1448,7 +1448,7 @@ function extractTypedParams(element) {
             }
         }
 
-        Object.defineProperty(params, key, { value, writable: true, enumerable: true, configurable: true });
+        params[key] = value;
     }
 
     return params;
