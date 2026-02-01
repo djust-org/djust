@@ -62,9 +62,17 @@ repos:
         args: ["-ll", "-ii", "-x", "tests/,python/tests/,python/djust/tests/", "-s", "B703,B308,B324,B301,B102"]
         files: ^python/
 
-  # JavaScript - Test and lint
+  # JavaScript - Build, test, and lint
   - repo: local
     hooks:
+      - id: build-js
+        name: build client.js from src/ modules
+        entry: bash -c 'bash scripts/build-client.sh && git add python/djust/static/djust/client.js python/djust/static/djust/debug-panel.js'
+        language: system
+        files: ^python/djust/static/djust/src/
+        types: [javascript]
+        pass_filenames: false
+
       - id: npm-test
         name: npm test
         entry: npm test
