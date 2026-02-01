@@ -15,6 +15,103 @@
 use crate::{vdom_trace, Patch, VNode};
 use std::collections::HashMap;
 
+/// Synchronize IDs from old VDOM to new VDOM for matched (non-replaced) elements.
+///
+/// After diffing, the new VDOM has fresh IDs from `parse_html_continue()` which
+/// don't match what the client has in its DOM. The client retains OLD IDs for
+/// elements that weren't replaced. This function copies old IDs to matched new
+/// nodes so that when the new VDOM is stored as `last_vdom`, subsequent diffs
+/// will use IDs that match the client DOM.
+///
+/// Only replaced nodes (tag mismatch) and newly inserted nodes keep their new IDs.
+pub fn sync_ids(old: &VNode, new: &mut VNode) {
+    // If tags differ, this node was replaced - keep new IDs
+    if old.tag != new.tag {
+        return;
+    }
+
+    // Copy old ID to new for matched elements (text nodes don't have IDs)
+    if !old.is_text() {
+        new.djust_id = old.djust_id.clone();
+        // Also sync the data-dj-id attribute to match
+        if let Some(ref id) = new.djust_id {
+            new.attrs.insert("data-dj-id".to_string(), id.clone());
+        }
+    }
+
+    // Check for data-djust-replace: children were fully replaced, don't sync
+    let should_replace = old.attrs.contains_key("data-djust-replace")
+        || new.attrs.contains_key("data-djust-replace");
+    if should_replace {
+        return;
+    }
+
+    // Check if children use keyed diffing
+    let has_keys = new.children.iter().any(|n| n.key.is_some());
+
+    if has_keys {
+        sync_ids_keyed(&old.children, &mut new.children);
+    } else {
+        sync_ids_indexed(&old.children, &mut new.children);
+    }
+}
+
+fn sync_ids_keyed(old: &[VNode], new: &mut [VNode]) {
+    let mut old_keys: HashMap<String, usize> = HashMap::new();
+    for (i, node) in old.iter().enumerate() {
+        if let Some(k) = &node.key {
+            old_keys.insert(k.clone(), i);
+        }
+    }
+
+    // Track processed indices for unkeyed matching
+    let mut processed_old: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut processed_new: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+    // Sync keyed children
+    for (new_idx, new_node) in new.iter_mut().enumerate() {
+        if let Some(key) = &new_node.key.clone() {
+            processed_new.insert(new_idx);
+            if let Some(&old_idx) = old_keys.get(key) {
+                processed_old.insert(old_idx);
+                sync_ids(&old[old_idx], new_node);
+            }
+            // New keyed node: keep its new IDs
+        }
+    }
+
+    // Collect unkeyed children by relative order (same logic as diff)
+    let old_unkeyed: Vec<usize> = old
+        .iter()
+        .enumerate()
+        .filter(|(i, n)| n.key.is_none() && !processed_old.contains(i))
+        .map(|(i, _)| i)
+        .collect();
+
+    let new_unkeyed_indices: Vec<usize> = new
+        .iter()
+        .enumerate()
+        .filter(|(i, n)| n.key.is_none() && !processed_new.contains(i))
+        .map(|(i, _)| i)
+        .collect();
+
+    let common_len = old_unkeyed.len().min(new_unkeyed_indices.len());
+    for i in 0..common_len {
+        let old_idx = old_unkeyed[i];
+        let new_idx = new_unkeyed_indices[i];
+        sync_ids(&old[old_idx], &mut new[new_idx]);
+    }
+    // Extra new unkeyed children: keep their new IDs
+}
+
+fn sync_ids_indexed(old: &[VNode], new: &mut [VNode]) {
+    let common = old.len().min(new.len());
+    for i in 0..common {
+        sync_ids(&old[i], &mut new[i]);
+    }
+    // Extra new children: keep their new IDs
+}
+
 /// Diff two VNodes and generate patches.
 ///
 /// Each patch includes:

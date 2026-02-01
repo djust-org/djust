@@ -335,7 +335,7 @@ class LiveViewWebSocket {
         console.log('[LiveView] Connecting to WebSocket:', url);
         this.ws = new WebSocket(url);
 
-        this.ws.onopen = (event) => {
+        this.ws.onopen = (_event) => {
             console.log('[LiveView] WebSocket connected');
             this.reconnectAttempts = 0;
 
@@ -346,7 +346,7 @@ class LiveViewWebSocket {
             this.stats.connectedAt = Date.now();
         };
 
-        this.ws.onclose = (event) => {
+        this.ws.onclose = (_event) => {
             console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
 
@@ -735,6 +735,7 @@ function buildCacheKey(eventName, params, keyParams = null) {
         // Try to use specified key params
         keyParams.forEach(key => {
             if (Object.prototype.hasOwnProperty.call(params, key)) {
+                // eslint-disable-next-line security/detect-object-injection
                 cacheParams[key] = params[key];
                 usedKeyParams = true;
             }
@@ -746,6 +747,7 @@ function buildCacheKey(eventName, params, keyParams = null) {
     if (!usedKeyParams) {
         Object.keys(params).forEach(key => {
             if (!key.startsWith('_')) {
+                // eslint-disable-next-line security/detect-object-injection
                 cacheParams[key] = params[key];
             }
         });
@@ -754,6 +756,7 @@ function buildCacheKey(eventName, params, keyParams = null) {
     // Build key: eventName:param1=value1:param2=value2
     const paramParts = Object.keys(cacheParams)
         .sort()
+        // eslint-disable-next-line security/detect-object-injection
         .map(k => `${k}=${JSON.stringify(cacheParams[k])}`)
         .join(':');
 
@@ -2016,10 +2019,18 @@ function getNodeByPath(path, djustId = null) {
 
     for (let i = 0; i < path.length; i++) {
         const index = path[i];
+        // Filter children to match server's Rust VDOM which strips whitespace-only
+        // text nodes (parser.rs). Must use same logic as getSignificantChildren().
+        // NOTE: \xa0 (non-breaking space / &nbsp;) is preserved by both server and
+        // client since it's semantically significant (e.g., syntax highlighting).
         const children = Array.from(node.childNodes).filter(child => {
             if (child.nodeType === Node.ELEMENT_NODE) return true;
             if (child.nodeType === Node.TEXT_NODE) {
-                return child.textContent.trim().length > 0;
+                if (isWhitespacePreserving(node)) return true;
+                // Preserve text nodes containing \xa0 (non-breaking space)
+                const text = child.textContent;
+                if (text.indexOf('\xa0') !== -1) return true;
+                return text.trim().length > 0;
             }
             return false;
         });
@@ -2637,6 +2648,7 @@ function isWhitespacePreserving(node) {
 
 // Export for testing
 window.djust.getSignificantChildren = getSignificantChildren;
+window.djust._getNodeByPath = getNodeByPath;
 window.djust._stampDjIds = _stampDjIds;
 window.djust._groupPatchesByParent = groupPatchesByParent;
 window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
@@ -2831,22 +2843,39 @@ function applyPatches(patches) {
         return true;
     }
 
-    // Sort patches: RemoveChild before InsertChild (Issue #142), and
-    // RemoveChild in descending index order to preserve indices during removal.
-    // Note: relies on stable sort (ES2019+) to preserve relative order of
-    // non-RemoveChild patches. The batching path below also enforces this
-    // separation explicitly as a safety net.
-    patches.sort((a, b) => {
-        const aIsRemove = a.type === 'RemoveChild' ? 1 : 0;
-        const bIsRemove = b.type === 'RemoveChild' ? 1 : 0;
-        if (aIsRemove !== bIsRemove) {
-            return bIsRemove - aIsRemove;  // RemoveChild first
+    // Sort patches to match server's Rust apply_patches() ordering (patch.rs):
+    //   Phase 1: RemoveChild (descending index to preserve earlier indices)
+    //   Phase 2: MoveChild
+    //   Phase 3: InsertChild (ascending index)
+    //   Phase 4: Everything else (SetText, SetAttr, etc.) — LAST
+    // SetText/SetAttr paths reference the FINAL tree layout, so they must
+    // be applied after all child mutations are complete. See Issue #142, #198.
+    function patchPhase(p) {
+        switch (p.type) {
+            case 'RemoveChild': return 0;
+            case 'MoveChild':   return 1;
+            case 'InsertChild': return 2;
+            default:            return 3;
         }
-        if (aIsRemove && bIsRemove) {
+    }
+    patches.sort((a, b) => {
+        const phaseA = patchPhase(a);
+        const phaseB = patchPhase(b);
+        if (phaseA !== phaseB) return phaseA - phaseB;
+        // Within RemoveChild: same-parent removes in descending index
+        if (phaseA === 0) {
             const pathA = JSON.stringify(a.path);
             const pathB = JSON.stringify(b.path);
             if (pathA === pathB) {
-                return b.index - a.index;  // Descending index
+                return b.index - a.index;
+            }
+        }
+        // Within InsertChild: same-parent inserts in ascending index
+        if (phaseA === 2) {
+            const pathA = JSON.stringify(a.path);
+            const pathB = JSON.stringify(b.path);
+            if (pathA === pathB) {
+                return a.index - b.index;
             }
         }
         return 0;
@@ -2869,12 +2898,12 @@ function applyPatches(patches) {
 
     // For larger patch sets, use batching
     let failedCount = 0;
-    let successCount = 0;
+    let _successCount = 0;
 
     // Group patches by parent for potential batching
     const patchGroups = groupPatchesByParent(patches);
 
-    for (const [parentPath, group] of patchGroups) {
+    for (const [_parentPath, group] of patchGroups) {
         // IMPORTANT: Apply RemoveChild patches first before any InsertChild.
         // For data-djust-replace, Rust emits all RemoveChild then all InsertChild.
         // If InsertChild runs first, old children shift indices and RemoveChild
@@ -2892,7 +2921,7 @@ function applyPatches(patches) {
         // Apply all RemoveChild patches first (already sorted descending by index)
         for (const patch of removePatches) {
             if (applySinglePatch(patch)) {
-                successCount++;
+                _successCount++;
             } else {
                 failedCount++;
             }
@@ -2920,7 +2949,7 @@ function applyPatches(patches) {
                         for (const patch of consecutiveGroup) {
                             const newChild = createNodeFromVNode(patch.node, svgContext);
                             fragment.appendChild(newChild);
-                            successCount++;
+                            _successCount++;
                         }
 
                         // Insert fragment at the first index position
@@ -2944,7 +2973,7 @@ function applyPatches(patches) {
                     } catch (error) {
                         console.error('[LiveView] Batch insert failed, falling back to individual patches:', error.message);
                         // On failure, patches remain for individual processing
-                        successCount -= consecutiveGroup.length;  // Undo count
+                        _successCount -= consecutiveGroup.length;  // Undo count
                     }
                 }
             }
@@ -2953,7 +2982,7 @@ function applyPatches(patches) {
         // Apply remaining non-remove patches individually
         for (const patch of remainingPatches) {
             if (applySinglePatch(patch)) {
-                successCount++;
+                _successCount++;
             } else {
                 failedCount++;
             }
