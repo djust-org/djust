@@ -4,7 +4,8 @@
  */
 
 (function() {
-    var DJUST_DEBUG_PANEL_BUILD = '20260201-1215';
+    // var (not const) avoids redeclaration error if script is loaded twice
+    var DJUST_DEBUG_PANEL_BUILD = '20260201-1830';
 
     // Check if we should load the debug panel
     if (!window.DEBUG_MODE) {
