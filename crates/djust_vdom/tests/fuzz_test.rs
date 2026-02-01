@@ -275,7 +275,9 @@ fn arb_keyed_mutation_pair() -> BoxedStrategy<(VNode, VNode)> {
     arb_fully_keyed_tree()
         .prop_flat_map(|tree_a| {
             let a = tree_a.clone();
-            prop::collection::vec(any::<u8>(), 10..30).prop_map(move |seed_bytes| {
+            // Use a large seed to avoid iterator exhaustion on deep trees,
+            // which would bias later mutations toward unwrap_or defaults.
+            prop::collection::vec(any::<u8>(), 50..200).prop_map(move |seed_bytes| {
                 let mut rng = seed_bytes.into_iter();
                 let mut key_counter = 0u32;
                 let tree_b = mutate_tree(&a, &mut rng, &mut key_counter);
