@@ -261,12 +261,6 @@ function handleServerResponse(data, eventName, triggerElement) {
             if (form) form.reset();
         }
 
-        // Clean up stale in-flight event guards (older than 1s)
-        const cleanupTime = Date.now();
-        for (const [key, ts] of inFlightEvents) {
-            if (cleanupTime - ts > 1000) inFlightEvents.delete(key);
-        }
-
         // Stop loading state
         globalLoadingManager.stopLoading(eventName, triggerElement);
         return true;
@@ -670,7 +664,6 @@ const optimisticUpdates = new Map(); // Map<eventName, {element, originalState}>
 const pendingEvents = new Set(); // Set<eventName> (for loading indicators)
 const resultCache = new Map(); // Map<cacheKey, {patches, expiresAt}>
 const pendingCacheRequests = new Map(); // Map<requestId, {cacheKey, ttl, timeoutId}>
-const inFlightEvents = new Map(); // Map<string, number> — guards against duplicate event sends
 const CACHE_MAX_SIZE = 100; // Maximum number of cached entries (LRU eviction)
 const PENDING_CACHE_TIMEOUT = 30000; // Cleanup pending cache requests after 30 seconds
 
@@ -1888,22 +1881,6 @@ async function handleEvent(eventName, params = {}) {
     if (globalThis.djustDebug) {
         console.log(`[LiveView] Handling event: ${eventName}`, params);
     }
-
-    // Guard against duplicate in-flight events (e.g., rapid clicks on delete button)
-    const guardParams = {};
-    for (const [k, v] of Object.entries(params)) {
-        if (k !== '_targetElement') guardParams[k] = v;
-    }
-    const inFlightKey = eventName + ':' + JSON.stringify(guardParams);
-    const now = Date.now();
-    const lastSent = inFlightEvents.get(inFlightKey);
-    if (lastSent && (now - lastSent) < 300) {
-        if (globalThis.djustDebug) {
-            console.log(`[LiveView] Duplicate event suppressed: ${eventName}`);
-        }
-        return;
-    }
-    inFlightEvents.set(inFlightKey, now);
 
     // Start loading state
     const triggerElement = params._targetElement;

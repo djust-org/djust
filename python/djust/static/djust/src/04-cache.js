@@ -11,7 +11,6 @@ const optimisticUpdates = new Map(); // Map<eventName, {element, originalState}>
 const pendingEvents = new Set(); // Set<eventName> (for loading indicators)
 const resultCache = new Map(); // Map<cacheKey, {patches, expiresAt}>
 const pendingCacheRequests = new Map(); // Map<requestId, {cacheKey, ttl, timeoutId}>
-const inFlightEvents = new Map(); // Map<string, number> — guards against duplicate event sends
 const CACHE_MAX_SIZE = 100; // Maximum number of cached entries (LRU eviction)
 const PENDING_CACHE_TIMEOUT = 30000; // Cleanup pending cache requests after 30 seconds
 

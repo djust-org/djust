@@ -5,22 +5,6 @@ async function handleEvent(eventName, params = {}) {
         console.log(`[LiveView] Handling event: ${eventName}`, params);
     }
 
-    // Guard against duplicate in-flight events (e.g., rapid clicks on delete button)
-    const guardParams = {};
-    for (const [k, v] of Object.entries(params)) {
-        if (k !== '_targetElement') guardParams[k] = v;
-    }
-    const inFlightKey = eventName + ':' + JSON.stringify(guardParams);
-    const now = Date.now();
-    const lastSent = inFlightEvents.get(inFlightKey);
-    if (lastSent && (now - lastSent) < 300) {
-        if (globalThis.djustDebug) {
-            console.log(`[LiveView] Duplicate event suppressed: ${eventName}`);
-        }
-        return;
-    }
-    inFlightEvents.set(inFlightKey, now);
-
     // Start loading state
     const triggerElement = params._targetElement;
 
