@@ -53,6 +53,13 @@ mypy python/
 bandit -r python/djust/ -ll
 ```
 
+### JavaScript
+- Run `eslint` for security linting (runs automatically via pre-commit hook)
+
+```bash
+npm run lint
+```
+
 ### Rust
 - Follow standard Rust conventions
 - Run `cargo fmt` before committing
