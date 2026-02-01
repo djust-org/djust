@@ -1510,7 +1510,7 @@ function bindLiveViewEvents() {
                 // Pass target element for optimistic updates (Phase 3)
                 params._targetElement = e.target;
 
-                await handleEvent(submitHandler, params);
+                await handleEvent(element.getAttribute('dj-submit'), params);
                 e.target.reset();
             });
         }
@@ -1560,7 +1560,7 @@ function bindLiveViewEvents() {
                 if (globalThis.djustDebug) {
                     console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
                 }
-                await handleEvent(changeHandler, params);
+                await handleEvent(element.getAttribute('dj-change'), params);
             });
         }
 
@@ -1584,7 +1584,7 @@ function bindLiveViewEvents() {
 
             const handler = async (e) => {
                 const params = buildFormEventParams(e.target, e.target.value);
-                await handleEvent(inputHandler, params);
+                await handleEvent(element.getAttribute('dj-input'), params);
             };
 
             // Apply rate limiting wrapper
@@ -1604,7 +1604,7 @@ function bindLiveViewEvents() {
             element.dataset.liveviewBlurBound = 'true';
             element.addEventListener('blur', async (e) => {
                 const params = buildFormEventParams(e.target, e.target.value);
-                await handleEvent(blurHandler, params);
+                await handleEvent(element.getAttribute('dj-blur'), params);
             });
         }
 
@@ -1614,7 +1614,7 @@ function bindLiveViewEvents() {
             element.dataset.liveviewFocusBound = 'true';
             element.addEventListener('focus', async (e) => {
                 const params = buildFormEventParams(e.target, e.target.value);
-                await handleEvent(focusHandler, params);
+                await handleEvent(element.getAttribute('dj-focus'), params);
             });
         }
 
@@ -1624,8 +1624,10 @@ function bindLiveViewEvents() {
             if (keyHandler && !element.dataset[`liveview${eventType}Bound`]) {
                 element.dataset[`liveview${eventType}Bound`] = 'true';
                 element.addEventListener(eventType, async (e) => {
+                    // Re-read attribute at event time to pick up SetAttribute patches
+                    const currentHandler = element.getAttribute(`dj-${eventType}`);
                     // Check for key modifiers (e.g. dj-keydown.enter)
-                    const modifiers = keyHandler.split('.');
+                    const modifiers = currentHandler.split('.');
                     const handlerName = modifiers[0];
                     const requiredKey = modifiers.length > 1 ? modifiers[1] : null;
 
