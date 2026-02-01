@@ -82,14 +82,20 @@ Complete the development tools suite.
 - Hot reload with template change detection
 - Performance warnings for patches >16ms
 - Server error display in toolbar (#112)
+- ✅ Handler discovery matches runtime `event_security` policy — only `@event_handler` and `_allowed_events` (#193, #197)
+- ✅ Auto-instantiation from `DJUST_DEBUG_INFO` bootstrap data (#194, #197)
+- ✅ Handlers tab supports dict format from server (#195, #197)
+- ✅ Live debug updates via WebSocket `_debug` payload — variables, handlers, patches, performance (#196, #197)
+- ✅ Network tab — WebSocket message inspection with directional color coding, expandable payloads, copy-to-clipboard, connection stats (#196, #197)
+- ✅ Event filtering by handler name and success/error status (#197)
+- ✅ Event replay — resend previous events with same parameters, inline status feedback (#197)
+- ✅ Per-view state persistence via localStorage (#197)
 
 **Missing:**
-- Event filtering by handler name, success/error status, time range
-- Event replay — resend previous events with same parameters
-- Network tab — raw WebSocket message inspection, connection status monitoring
+- Event filtering by time range
 - Performance warnings tab — slow patches (>5ms), state size alerts, memory tracking
 - State size visualization — session contents and size breakdown
-- Panel state persistence across TurboNav navigation
+- Panel state persistence across TurboNav navigation (per-view UI prefs persist, but event/patch histories clear on navigation)
 
 ## 7. WebSocket Security Hardening — ✅ Complete
 
