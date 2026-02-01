@@ -85,6 +85,7 @@ function reinitLiveViewForTurboNav() {
         console.log('[LiveView:TurboNav] Initializing new WebSocket connection');
         // Initialize WebSocket
         liveViewWS = new LiveViewWebSocket();
+        window.djust.liveViewInstance = liveViewWS;
         liveViewWS.connect();
 
         // Start heartbeat
