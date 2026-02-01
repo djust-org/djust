@@ -336,7 +336,7 @@ class LiveViewWebSocket {
         console.log('[LiveView] Connecting to WebSocket:', url);
         this.ws = new WebSocket(url);
 
-        this.ws.onopen = (event) => {
+        this.ws.onopen = (_event) => {
             console.log('[LiveView] WebSocket connected');
             this.reconnectAttempts = 0;
 
@@ -347,7 +347,7 @@ class LiveViewWebSocket {
             this.stats.connectedAt = Date.now();
         };
 
-        this.ws.onclose = (event) => {
+        this.ws.onclose = (_event) => {
             console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
 
@@ -736,6 +736,7 @@ function buildCacheKey(eventName, params, keyParams = null) {
         // Try to use specified key params
         keyParams.forEach(key => {
             if (Object.prototype.hasOwnProperty.call(params, key)) {
+                // eslint-disable-next-line security/detect-object-injection
                 cacheParams[key] = params[key];
                 usedKeyParams = true;
             }
@@ -747,6 +748,7 @@ function buildCacheKey(eventName, params, keyParams = null) {
     if (!usedKeyParams) {
         Object.keys(params).forEach(key => {
             if (!key.startsWith('_')) {
+                // eslint-disable-next-line security/detect-object-injection
                 cacheParams[key] = params[key];
             }
         });
@@ -755,6 +757,7 @@ function buildCacheKey(eventName, params, keyParams = null) {
     // Build key: eventName:param1=value1:param2=value2
     const paramParts = Object.keys(cacheParams)
         .sort()
+        // eslint-disable-next-line security/detect-object-injection
         .map(k => `${k}=${JSON.stringify(cacheParams[k])}`)
         .join(':');
 
@@ -2896,12 +2899,12 @@ function applyPatches(patches) {
 
     // For larger patch sets, use batching
     let failedCount = 0;
-    let successCount = 0;
+    let __successCount = 0;
 
     // Group patches by parent for potential batching
     const patchGroups = groupPatchesByParent(patches);
 
-    for (const [parentPath, group] of patchGroups) {
+    for (const [_parentPath, group] of patchGroups) {
         // IMPORTANT: Apply RemoveChild patches first before any InsertChild.
         // For data-djust-replace, Rust emits all RemoveChild then all InsertChild.
         // If InsertChild runs first, old children shift indices and RemoveChild
@@ -2919,7 +2922,7 @@ function applyPatches(patches) {
         // Apply all RemoveChild patches first (already sorted descending by index)
         for (const patch of removePatches) {
             if (applySinglePatch(patch)) {
-                successCount++;
+                _successCount++;
             } else {
                 failedCount++;
             }
@@ -2947,7 +2950,7 @@ function applyPatches(patches) {
                         for (const patch of consecutiveGroup) {
                             const newChild = createNodeFromVNode(patch.node, svgContext);
                             fragment.appendChild(newChild);
-                            successCount++;
+                            _successCount++;
                         }
 
                         // Insert fragment at the first index position
@@ -2971,7 +2974,7 @@ function applyPatches(patches) {
                     } catch (error) {
                         console.error('[LiveView] Batch insert failed, falling back to individual patches:', error.message);
                         // On failure, patches remain for individual processing
-                        successCount -= consecutiveGroup.length;  // Undo count
+                        _successCount -= consecutiveGroup.length;  // Undo count
                     }
                 }
             }
@@ -2980,7 +2983,7 @@ function applyPatches(patches) {
         // Apply remaining non-remove patches individually
         for (const patch of remainingPatches) {
             if (applySinglePatch(patch)) {
-                successCount++;
+                _successCount++;
             } else {
                 failedCount++;
             }
