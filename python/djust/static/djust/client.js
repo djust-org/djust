@@ -6,6 +6,8 @@
 
 // Create djust namespace at the top to ensure it's available for all exports
 window.djust = window.djust || {};
+window.djust.VERSION = '0.2.2rc3';
+window.djust.JS_BUILD = '20260201-1215';
 
 // ============================================================================
 // Double-Load Guard
@@ -16,6 +18,7 @@ if (window._djustClientLoaded) {
     console.log('[LiveView] client.js already loaded, skipping duplicate initialization');
 } else {
 window._djustClientLoaded = true;
+console.log(`[djust] client.js v${window.djust.VERSION} build ${window.djust.JS_BUILD}`);
 
 // ============================================================================
 // Security Constants
@@ -1470,10 +1473,12 @@ function bindLiveViewEvents() {
         const clickHandler = element.getAttribute('dj-click');
         if (clickHandler && !element.dataset.liveviewClickBound) {
             element.dataset.liveviewClickBound = 'true';
-            // Parse handler string to extract function name and arguments
-            const parsed = parseEventHandler(clickHandler);
             element.addEventListener('click', async (e) => {
                 e.preventDefault();
+
+                // Re-parse handler from DOM attribute at event time to pick up
+                // any changes made by SetAttribute patches since binding.
+                const parsed = parseEventHandler(element.getAttribute('dj-click'));
 
                 // Extract all data-* attributes with type coercion support
                 const params = extractTypedParams(element);
@@ -2344,9 +2349,10 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                 const eventType = attrParts[0];
                 const modifiers = attrParts.slice(1);
 
-                // Parse handler string to extract function name and arguments
-                // e.g., "set_period('month')" -> { name: 'set_period', args: ['month'] }
-                const parsed = parseEventHandler(value);
+                // Store the dj-* attribute key so the listener can re-read it
+                // at event time. This avoids stale closure args when SetAttribute
+                // patches update the attribute value after initial binding.
+                const djAttrKey = key;
                 elem.addEventListener(eventType, (e) => {
                     // Handle key modifiers for keydown/keyup events
                     if ((eventType === 'keydown' || eventType === 'keyup') && modifiers.length > 0) {
@@ -2356,6 +2362,10 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                         if (requiredKey === 'space' && e.key !== ' ') return;
                         if (requiredKey === 'tab' && e.key !== 'Tab') return;
                     }
+
+                    // Re-parse handler from DOM attribute at event time to pick up
+                    // any changes made by SetAttribute patches since binding.
+                    const parsed = parseEventHandler(elem.getAttribute(djAttrKey));
 
                     e.preventDefault();
                     const params = {};
@@ -2397,6 +2407,12 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
 
                     handleEvent(parsed.name, params);
                 });
+                // Set the dj-* attribute on the DOM so SetAttribute patches
+                // can update it and bindLiveViewEvents can re-read it.
+                elem.setAttribute(key, value);
+                // Mark as bound so bindLiveViewEvents() won't add a duplicate listener
+                const boundKey = `liveview${eventType.charAt(0).toUpperCase() + eventType.slice(1)}Bound`;
+                elem.dataset[boundKey] = 'true';
             } else {
                 if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
                     elem.value = value;
@@ -2675,6 +2691,9 @@ window.djust._stampDjIds = _stampDjIds;
 window.djust._getNodeByPath = getNodeByPath;
 window.djust._groupPatchesByParent = groupPatchesByParent;
 window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
+window.djust.createNodeFromVNode = createNodeFromVNode;
+window.djust.bindLiveViewEvents = bindLiveViewEvents;
+window.djust.handleEvent = handleEvent;
 window.djust._sortPatches = function(patches) {
     function patchPhase(p) {
         switch (p.type) {

@@ -4,11 +4,14 @@
  */
 
 (function() {
+    var DJUST_DEBUG_PANEL_BUILD = '20260201-1215';
+
     // Check if we should load the debug panel
     if (!window.DEBUG_MODE) {
         console.log('[djust] Debug panel disabled (DEBUG_MODE=false)');
         return;
     }
+    console.log(`[djust] debug-panel.js build ${DJUST_DEBUG_PANEL_BUILD}`);
     class DjustDebugPanel {
         constructor(config = {}) {
             this.config = {
@@ -254,6 +257,7 @@
                         <span class="djust-stat">Patches: <span id="patch-count">0</span></span>
                         <span class="djust-stat">Errors: <span id="error-count">0</span></span>
                         <span class="djust-stat warnings-stat">Warnings: <span id="warning-count">0</span></span>
+                        <span class="djust-stat version-stat" title="client.js build">v${(window.djust && window.djust.VERSION) || '?'}:${(window.djust && window.djust.JS_BUILD) || '?'}</span>
                     </div>
                 </div>
             `;
@@ -1738,17 +1742,18 @@
                 <div class="events-list">
                     ${filtered.length === 0 ? '<div class="empty-state">No events match the current filters.</div>' :
                     filtered.map((event, index) => {
-                        const hasDetails = event.params || event.error || event.result;
+                        const hasDetails = event.params || event.error || event.warning || event.result;
                         const paramCount = event.params ? Object.keys(event.params).length : 0;
 
                         return `
-                            <div class="event-item ${event.error ? 'error' : ''} ${hasDetails ? 'expandable' : ''}" data-index="${index}">
+                            <div class="event-item ${event.error ? 'error' : ''} ${event.warning ? 'warning' : ''} ${hasDetails ? 'expandable' : ''}" data-index="${index}">
                                 <div class="event-header" ${hasDetails ? 'onclick="window.djustDebugPanel.toggleExpand(this)"' : ''}>
                                     ${hasDetails ? '<span class="expand-icon">▶</span>' : ''}
                                     <span class="event-name">${event.handler || event.name || 'unknown'}</span>
                                     ${event.element ? this.renderElementBadge(event.element) : ''}
                                     ${event.duration ? `<span class="event-duration">${event.duration.toFixed(1)}ms</span>` : ''}
                                     ${paramCount > 0 ? `<span class="event-param-count">${paramCount} param${paramCount === 1 ? '' : 's'}</span>` : ''}
+                                    ${event.warning ? '<span class="event-status" title="html_update fallback">⚠️</span>' : ''}
                                     ${event.error ? '<span class="event-status">❌</span>' : ''}
                                     ${(event.handler || event.name) ? `<button class="event-replay-btn" data-event-index="${this.eventHistory.indexOf(event)}" onclick="event.stopPropagation(); window.djustDebugPanel.replayEvent(${this.eventHistory.indexOf(event)}, this)" title="Replay this event">⟳</button>` : ''}
                                     <span class="event-time">${this.formatTime(event.timestamp)}</span>
@@ -1787,6 +1792,12 @@
                                             <div class="event-section error">
                                                 <div class="event-section-title">Error:</div>
                                                 <div class="event-error-message">${event.error}</div>
+                                            </div>
+                                        ` : ''}
+                                        ${event.warning ? `
+                                            <div class="event-section warning">
+                                                <div class="event-section-title">⚠️ Warning:</div>
+                                                <div class="event-warning-message">${event.warning}</div>
                                             </div>
                                         ` : ''}
                                     </div>
@@ -2739,7 +2750,7 @@
 
             // Match response to pending events and capture completed event
             if (payload && this._pendingEvents) {
-                const isEventResponse = payload.type === 'patch' || payload.type === 'error' || payload.type === 'noop';
+                const isEventResponse = payload.type === 'patch' || payload.type === 'error' || payload.type === 'noop' || payload.type === 'html_update';
                 if (isEventResponse) {
                     // Find the most recent pending event (FIFO)
                     const keys = Object.keys(this._pendingEvents);
@@ -2748,13 +2759,21 @@
                         const pending = this._pendingEvents[key];
                         delete this._pendingEvents[key];
 
+                        const isHtmlFallback = payload.type === 'html_update';
                         this.captureEvent({
                             type: 'event',
                             handler: pending.handler,
                             params: pending.params,
                             duration: performance.now() - pending.startTime,
-                            error: payload.type === 'error' ? (payload.error || 'Server error') : null
+                            error: payload.type === 'error' ? (payload.error || 'Server error') : null,
+                            warning: isHtmlFallback ? 'html_update fallback — full HTML re-render instead of patches' : null
                         });
+
+                        if (isHtmlFallback) {
+                            this.warningCount++;
+                            this.updateCounter('warning-count', this.warningCount);
+                            console.warn(`[djust] html_update fallback for "${pending.handler}" — expected patches but got full HTML. This may indicate a VDOM version mismatch or double event firing.`);
+                        }
                     }
                 }
             }
