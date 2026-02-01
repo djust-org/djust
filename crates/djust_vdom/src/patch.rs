@@ -12,13 +12,12 @@ use crate::{Patch, VNode};
 /// by `djust_id` instead of index. This mirrors the client-side JS
 /// resolution strategy using `data-d` attributes.
 pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
-    // The keyed diff engine emits patches where RemoveChild indices reference
-    // the original tree and InsertChild indices reference the final tree.
-    // To apply them correctly with sequential index-based mutation, we
-    // reorder child mutations per parent: removes descending, then inserts
-    // ascending. Non-child patches (SetText, SetAttr, etc.) use paths that
-    // reference the final tree layout, so they are applied after child
-    // mutations.
+    // The keyed diff engine emits all paths referencing the FINAL tree layout.
+    // To apply them correctly we process patches level-by-level (shallowest
+    // parent path first). At each level we apply: removes (descending index),
+    // moves (by djust_id), then inserts (ascending index). This ensures that
+    // structural changes at a parent level establish the correct tree shape
+    // before deeper subtree patches navigate into children.
     //
     // For MoveChild, we snapshot children before mutations and resolve by
     // djust_id, mirroring the client-side data-d attribute strategy.
@@ -43,75 +42,129 @@ pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
         }
     }
 
-    // Collect child mutation patches.
-    let mut removes: Vec<(&Vec<usize>, usize)> = Vec::new();
-    let mut inserts: Vec<(&Vec<usize>, usize, &VNode)> = Vec::new();
-    let mut moves: Vec<&Patch> = Vec::new();
-    let mut other_patches: Vec<&Patch> = Vec::new();
+    // Categorize patches by their parent path depth for level-by-level application.
+    // Child mutation patches (Insert/Remove/Move) operate on the node at `path`,
+    // so their "level" is the length of `path`. Other patches (SetText, SetAttr)
+    // operate on the node AT `path`, so their level is path.len() - 1 (parent),
+    // but we apply them after all child mutations at the same depth.
+    struct LevelPatches<'a> {
+        removes: Vec<(&'a Vec<usize>, usize)>,
+        inserts: Vec<(&'a Vec<usize>, usize, &'a VNode)>,
+        moves: Vec<&'a Patch>,
+        others: Vec<&'a Patch>,
+    }
+
+    let mut levels: std::collections::BTreeMap<usize, LevelPatches<'_>> =
+        std::collections::BTreeMap::new();
 
     for patch in patches {
         match patch {
-            Patch::RemoveChild { path, index, .. } => removes.push((path, *index)),
+            Patch::RemoveChild { path, index, .. } => {
+                let level = levels.entry(path.len()).or_insert_with(|| LevelPatches {
+                    removes: Vec::new(),
+                    inserts: Vec::new(),
+                    moves: Vec::new(),
+                    others: Vec::new(),
+                });
+                level.removes.push((path, *index));
+            }
             Patch::InsertChild {
                 path, index, node, ..
-            } => inserts.push((path, *index, node)),
-            Patch::MoveChild { .. } => moves.push(patch),
-            _ => other_patches.push(patch),
-        }
-    }
-
-    // Apply removes in descending index order so earlier indices stay valid.
-    removes.sort_by(|a, b| a.0.cmp(b.0).then_with(|| b.1.cmp(&a.1)));
-    for (path, index) in &removes {
-        if let Some(target) = get_node_mut(root, path) {
-            if *index < target.children.len() {
-                target.children.remove(*index);
+            } => {
+                let level = levels.entry(path.len()).or_insert_with(|| LevelPatches {
+                    removes: Vec::new(),
+                    inserts: Vec::new(),
+                    moves: Vec::new(),
+                    others: Vec::new(),
+                });
+                level.inserts.push((path, *index, node));
+            }
+            Patch::MoveChild { path, .. } => {
+                let level = levels.entry(path.len()).or_insert_with(|| LevelPatches {
+                    removes: Vec::new(),
+                    inserts: Vec::new(),
+                    moves: Vec::new(),
+                    others: Vec::new(),
+                });
+                level.moves.push(patch);
+            }
+            _ => {
+                let depth = match patch {
+                    Patch::SetText { path, .. }
+                    | Patch::SetAttr { path, .. }
+                    | Patch::RemoveAttr { path, .. }
+                    | Patch::Replace { path, .. } => path.len(),
+                    _ => 0,
+                };
+                let level = levels.entry(depth).or_insert_with(|| LevelPatches {
+                    removes: Vec::new(),
+                    inserts: Vec::new(),
+                    moves: Vec::new(),
+                    others: Vec::new(),
+                });
+                level.others.push(patch);
             }
         }
     }
 
-    // Apply moves with djust_id resolution.
-    for patch in &moves {
-        if let Patch::MoveChild { path, from, to, .. } = patch {
-            let child_id = move_sources.get(path).and_then(|sources| {
-                sources
-                    .iter()
-                    .find(|(i, _)| *i == *from)
-                    .and_then(|(_, id)| id.clone())
-            });
-
+    // Process levels from shallowest to deepest.
+    for level in levels.values_mut() {
+        // Apply removes in descending index order so earlier indices stay valid.
+        level
+            .removes
+            .sort_by(|a, b| a.0.cmp(b.0).then_with(|| b.1.cmp(&a.1)));
+        for (path, index) in &level.removes {
             if let Some(target) = get_node_mut(root, path) {
-                if let Some(ref child_id) = child_id {
-                    if let Some(current_pos) = target
-                        .children
-                        .iter()
-                        .position(|c| c.djust_id.as_deref() == Some(child_id.as_str()))
-                    {
-                        let node = target.children.remove(current_pos);
-                        let insert_at = (*to).min(target.children.len());
-                        target.children.insert(insert_at, node);
-                    }
-                } else if *from < target.children.len() && *to <= target.children.len() {
-                    let node = target.children.remove(*from);
-                    target.children.insert(*to, node);
+                if *index < target.children.len() {
+                    target.children.remove(*index);
                 }
             }
         }
-    }
 
-    // Apply inserts in ascending index order.
-    inserts.sort_by(|a, b| a.0.cmp(b.0).then_with(|| a.1.cmp(&b.1)));
-    for (path, index, node) in &inserts {
-        if let Some(target) = get_node_mut(root, path) {
-            let insert_at = (*index).min(target.children.len());
-            target.children.insert(insert_at, (*node).clone());
+        // Apply moves with djust_id resolution.
+        for patch in &level.moves {
+            if let Patch::MoveChild { path, from, to, .. } = patch {
+                let child_id = move_sources.get(path).and_then(|sources| {
+                    sources
+                        .iter()
+                        .find(|(i, _)| *i == *from)
+                        .and_then(|(_, id)| id.clone())
+                });
+
+                if let Some(target) = get_node_mut(root, path) {
+                    if let Some(ref child_id) = child_id {
+                        if let Some(current_pos) = target
+                            .children
+                            .iter()
+                            .position(|c| c.djust_id.as_deref() == Some(child_id.as_str()))
+                        {
+                            let node = target.children.remove(current_pos);
+                            let insert_at = (*to).min(target.children.len());
+                            target.children.insert(insert_at, node);
+                        }
+                    } else if *from < target.children.len() && *to <= target.children.len() {
+                        let node = target.children.remove(*from);
+                        target.children.insert(*to, node);
+                    }
+                }
+            }
         }
-    }
 
-    // Apply non-child-mutation patches (SetText, SetAttr, etc.) after
-    // child mutations, since their paths reference the final tree layout.
-    for patch in &other_patches {
-        apply_patch(root, patch);
+        // Apply inserts in ascending index order.
+        level
+            .inserts
+            .sort_by(|a, b| a.0.cmp(b.0).then_with(|| a.1.cmp(&b.1)));
+        for (path, index, node) in &level.inserts {
+            if let Some(target) = get_node_mut(root, path) {
+                let insert_at = (*index).min(target.children.len());
+                target.children.insert(insert_at, (*node).clone());
+            }
+        }
+
+        // Apply non-child-mutation patches at this level.
+        for patch in &level.others {
+            apply_patch(root, patch);
+        }
     }
 }
 
