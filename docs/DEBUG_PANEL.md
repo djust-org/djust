@@ -432,18 +432,11 @@ console.log(window.DJUST_DEBUG_INFO);
 
 ### Event Handler Tab Empty
 
-**Symptom**: "No event handlers found" message
+**Symptom**: "No event handlers detected" message
 
-**Cause**: No handlers decorated with `@event_handler()`
+**Cause**: The view has no public methods beyond the base Django `View` methods, or the view hasn't mounted yet.
 
-**Solution**: Add decorator to event handlers:
-```python
-from djust.decorators import event_handler
-
-@event_handler()  # Add this!
-def my_handler(self, value: str = ""):
-    pass
-```
+**Note**: The debug panel automatically discovers all public methods on your view that aren't inherited from Django's base `View` class. You do **not** need the `@event_handler()` decorator for handlers to appear — any public method works. The `@event_handler()` decorator adds extra metadata (description, parameter hints) but is optional for discovery.
 
 ### Event History Not Logging Events
 
