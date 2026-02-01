@@ -329,6 +329,21 @@
     background: rgba(239, 68, 68, 0.05);
 }
 
+.event-item.warning {
+    border-left-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.08);
+}
+
+.event-item.warning .event-name {
+    color: #f59e0b;
+}
+
+.event-warning-message {
+    color: #f59e0b;
+    font-size: 12px;
+    padding: 4px 0;
+}
+
 .event-header {
     padding: 8px 12px;
     display: flex;

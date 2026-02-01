@@ -6,6 +6,8 @@
 
 // Create djust namespace at the top to ensure it's available for all exports
 window.djust = window.djust || {};
+window.djust.VERSION = '0.2.2rc3';
+window.djust.JS_BUILD = '20260201-1830';
 
 // ============================================================================
 // Double-Load Guard
@@ -16,6 +18,7 @@ if (window._djustClientLoaded) {
     console.log('[LiveView] client.js already loaded, skipping duplicate initialization');
 } else {
 window._djustClientLoaded = true;
+console.log(`[djust] client.js v${window.djust.VERSION} build ${window.djust.JS_BUILD}`);
 
 // ============================================================================
 // Security Constants
@@ -2669,6 +2672,8 @@ window.djust._groupPatchesByParent = groupPatchesByParent;
 window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
 window.djust.createNodeFromVNode = createNodeFromVNode;
 window.djust.bindLiveViewEvents = bindLiveViewEvents;
+window.djust.handleEvent = handleEvent;
+window.djust._sortPatches = sortPatches;
 
 /**
  * Group patches by their parent path for batching.
@@ -2848,6 +2853,39 @@ function applySinglePatch(patch) {
 }
 
 /**
+ * Sort patches into 4-phase order for correct DOM mutation sequencing:
+ *   Phase 0: RemoveChild  (descending index within same parent)
+ *   Phase 1: MoveChild
+ *   Phase 2: InsertChild  (ascending index within same parent)
+ *   Phase 3: SetText / SetAttribute / all others
+ *
+ * Descending removal prevents index shifting (Issue #142).
+ * Ascending insertion ensures earlier indices exist before later ones.
+ */
+function sortPatches(patches) {
+    const phaseOrder = { RemoveChild: 0, MoveChild: 1, InsertChild: 2 };
+
+    patches.sort((a, b) => {
+        const phaseA = phaseOrder[a.type] ?? 3;
+        const phaseB = phaseOrder[b.type] ?? 3;
+        if (phaseA !== phaseB) return phaseA - phaseB;
+
+        // Within same phase and same parent, sort by index
+        if (a.type === 'RemoveChild' && b.type === 'RemoveChild') {
+            const pathA = JSON.stringify(a.path);
+            const pathB = JSON.stringify(b.path);
+            if (pathA === pathB) return (b.index || 0) - (a.index || 0); // descending
+        }
+        if (a.type === 'InsertChild' && b.type === 'InsertChild') {
+            const pathA = JSON.stringify(a.path);
+            const pathB = JSON.stringify(b.path);
+            if (pathA === pathB) return (a.index || 0) - (b.index || 0); // ascending
+        }
+        return 0;
+    });
+}
+
+/**
  * Apply VDOM patches with optimized batching.
  *
  * Improvements over sequential application:
@@ -2860,43 +2898,7 @@ function applyPatches(patches) {
         return true;
     }
 
-    // Sort patches to match server's Rust apply_patches() ordering (patch.rs):
-    //   Phase 1: RemoveChild (descending index to preserve earlier indices)
-    //   Phase 2: MoveChild
-    //   Phase 3: InsertChild (ascending index)
-    //   Phase 4: Everything else (SetText, SetAttr, etc.) — LAST
-    // SetText/SetAttr paths reference the FINAL tree layout, so they must
-    // be applied after all child mutations are complete. See Issue #142, #198.
-    function patchPhase(p) {
-        switch (p.type) {
-            case 'RemoveChild': return 0;
-            case 'MoveChild':   return 1;
-            case 'InsertChild': return 2;
-            default:            return 3;
-        }
-    }
-    patches.sort((a, b) => {
-        const phaseA = patchPhase(a);
-        const phaseB = patchPhase(b);
-        if (phaseA !== phaseB) return phaseA - phaseB;
-        // Within RemoveChild: same-parent removes in descending index
-        if (phaseA === 0) {
-            const pathA = JSON.stringify(a.path);
-            const pathB = JSON.stringify(b.path);
-            if (pathA === pathB) {
-                return b.index - a.index;
-            }
-        }
-        // Within InsertChild: same-parent inserts in ascending index
-        if (phaseA === 2) {
-            const pathA = JSON.stringify(a.path);
-            const pathB = JSON.stringify(b.path);
-            if (pathA === pathB) {
-                return a.index - b.index;
-            }
-        }
-        return 0;
-    });
+    sortPatches(patches);
 
     // For small patch sets, apply directly without batching overhead
     if (patches.length <= 10) {
