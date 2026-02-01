@@ -268,6 +268,9 @@
             // Create new instance from the external debug-panel.js
             window.djustDebugPanel = new window.DjustDebugPanel();
 
+            // Bootstrap tabs from initial debug data injected by the server
+            window.djustDebugPanel.processDebugInfo(window.DJUST_DEBUG_INFO);
+
             // Hook into event sending to log events
             if (typeof handleEvent !== 'undefined') {
                 const originalHandleEvent = handleEvent;

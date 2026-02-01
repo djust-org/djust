@@ -378,5 +378,114 @@ class TestDebugPanelMetadata:
         assert limit_param["default"] == "10"
 
 
+class TestAttachDebugPayload:
+    """Test LiveViewConsumer._attach_debug_payload() method"""
+
+    def _make_consumer_with_view(self, debug=True):
+        """Create a minimal consumer mock with a view instance."""
+        from unittest.mock import MagicMock
+
+        class TestView(LiveView):
+            template_name = "test.html"
+            count = 0
+
+            @event_handler
+            def increment(self):
+                """Increment counter"""
+                self.count += 1
+
+        consumer = MagicMock()
+        consumer.view_instance = TestView()
+
+        # Bind the real method to our mock
+        from djust.websocket import LiveViewConsumer
+
+        consumer._attach_debug_payload = LiveViewConsumer._attach_debug_payload.__get__(
+            consumer, type(consumer)
+        )
+        return consumer
+
+    @patch("django.conf.settings")
+    def test_debug_payload_attached_when_debug_true(self, mock_settings):
+        """_debug field is added to response when DEBUG=True"""
+        mock_settings.DEBUG = True
+        consumer = self._make_consumer_with_view()
+
+        response = {"type": "patch", "patches": [{"op": "replace"}]}
+        consumer._attach_debug_payload(response, event_name="increment")
+
+        assert "_debug" in response
+        debug = response["_debug"]
+        assert debug["view_class"] == "TestView"
+        assert "handlers" in debug
+        assert "variables" in debug
+        assert debug["_eventName"] == "increment"
+
+    @patch("django.conf.settings")
+    def test_debug_payload_not_attached_when_debug_false(self, mock_settings):
+        """_debug field is NOT added when DEBUG=False"""
+        mock_settings.DEBUG = False
+        consumer = self._make_consumer_with_view()
+
+        response = {"type": "patch", "patches": []}
+        consumer._attach_debug_payload(response, event_name="increment")
+
+        assert "_debug" not in response
+
+    @patch("django.conf.settings")
+    def test_debug_payload_includes_patches(self, mock_settings):
+        """_debug includes patches from the response for Patches tab"""
+        mock_settings.DEBUG = True
+        consumer = self._make_consumer_with_view()
+
+        patches = [{"op": "replace", "path": "/0/1", "value": "1"}]
+        response = {"type": "patch", "patches": patches}
+        consumer._attach_debug_payload(response, event_name="increment")
+
+        assert response["_debug"]["patches"] == patches
+
+    @patch("django.conf.settings")
+    def test_debug_payload_includes_performance(self, mock_settings):
+        """_debug includes performance metrics when provided"""
+        mock_settings.DEBUG = True
+        consumer = self._make_consumer_with_view()
+
+        perf = {"total_ms": 1.5, "handler_ms": 0.3}
+        response = {"type": "patch", "patches": []}
+        consumer._attach_debug_payload(response, event_name="increment", performance=perf)
+
+        assert response["_debug"]["performance"] == perf
+
+    @patch("django.conf.settings")
+    def test_debug_payload_without_event_name(self, mock_settings):
+        """_debug is attached without _eventName when event_name is None"""
+        mock_settings.DEBUG = True
+        consumer = self._make_consumer_with_view()
+
+        response = {"type": "html_update", "html": "<div>test</div>"}
+        consumer._attach_debug_payload(response)
+
+        assert "_debug" in response
+        assert "_eventName" not in response["_debug"]
+
+    @patch("django.conf.settings")
+    def test_debug_payload_skipped_without_view(self, mock_settings):
+        """_debug is not attached when view_instance is None"""
+        mock_settings.DEBUG = True
+        from unittest.mock import MagicMock
+        from djust.websocket import LiveViewConsumer
+
+        consumer = MagicMock()
+        consumer.view_instance = None
+        consumer._attach_debug_payload = LiveViewConsumer._attach_debug_payload.__get__(
+            consumer, type(consumer)
+        )
+
+        response = {"type": "patch", "patches": []}
+        consumer._attach_debug_payload(response, event_name="test")
+
+        assert "_debug" not in response
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

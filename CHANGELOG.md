@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Debug Panel: Live Debug Payload in WebSocket Responses** — When `DEBUG=True`, WebSocket event responses now include a `_debug` field with updated variables, handlers, patches, and performance metrics, enabling the debug panel to refresh all tabs after each interaction. (#190)
 - **Debug Toolbar: Event Filtering** — Events tab now has filter controls to search by event/handler name (substring match) and filter by status (all/errors/success). Includes a clear button and match count display. (#176)
 - **Debug Toolbar: Event Replay** — Each event in the Events tab now has a replay button (⟳) that re-sends the event through the WebSocket with original params. Shows inline pending/success/error feedback. (#177)
 - **Debug Toolbar: Scoped State Persistence** — Panel UI state (open/closed, active tab) is now scoped per view class via localStorage. Data histories are not persisted, preventing stale data after navigation. (#178)

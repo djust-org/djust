@@ -307,3 +307,66 @@ describe('Debug Panel Harness — Network Message Inspection (real code)', () =>
         expect(parsed.event).toBe('increment');
     });
 });
+
+describe('Debug Panel Harness — Bootstrap from DJUST_DEBUG_INFO (#189)', () => {
+    let panel;
+
+    afterEach(() => {
+        if (panel) panel.destroy();
+        delete window.DJUST_DEBUG_INFO;
+    });
+
+    it('processDebugInfo populates handlers from initial debug data', () => {
+        panel = createPanel();
+        panel.processDebugInfo({
+            handlers: {
+                increment: { name: 'increment', description: 'Add one', params: [], decorators: {} },
+                decrement: { name: 'decrement', description: 'Sub one', params: [], decorators: {} },
+            },
+        });
+        expect(panel.handlers).toBeDefined();
+        expect(Object.keys(panel.handlers)).toContain('increment');
+        expect(Object.keys(panel.handlers)).toContain('decrement');
+    });
+
+    it('processDebugInfo populates variables from initial debug data', () => {
+        panel = createPanel();
+        panel.processDebugInfo({
+            variables: {
+                count: { name: 'count', type: 'int', value: '0' },
+                message: { name: 'message', type: 'str', value: "'hello'" },
+            },
+        });
+        expect(panel.variables).toBeDefined();
+        expect(panel.variables.count.value).toBe('0');
+        expect(panel.variables.message.type).toBe('str');
+    });
+
+    it('processDebugInfo populates components from initial debug data', () => {
+        panel = createPanel();
+        panel.processDebugInfo({
+            components: { root: { name: 'AppRoot', children: [] } },
+        });
+        expect(panel.components).toBeDefined();
+        expect(panel.components.root.name).toBe('AppRoot');
+    });
+
+    it('processDebugInfo is a no-op when called with null', () => {
+        panel = createPanel();
+        panel.processDebugInfo(null);
+        // handlers/variables should remain at their defaults (empty or undefined)
+        expect(panel.handlers).toBeFalsy();
+    });
+
+    it('captures initial state snapshot when variables are provided', () => {
+        panel = createPanel();
+        panel.processDebugInfo({
+            variables: {
+                count: { name: 'count', type: 'int', value: '42' },
+            },
+        });
+        // stateHistory should have one entry from the mount
+        expect(panel.stateHistory.length).toBe(1);
+        expect(panel.stateHistory[0].trigger).toBe('mount');
+    });
+});
