@@ -57,7 +57,7 @@ window.djustInitialized = false;
 // Track pending turbo:load reinit
 let pendingTurboReinit = false;
 
-window.addEventListener('turbo:load', function(event) {
+window.addEventListener('turbo:load', function(_event) {
     console.log('[LiveView:TurboNav] turbo:load event received!');
     console.log('[LiveView:TurboNav] djustInitialized:', window.djustInitialized);
 
@@ -894,7 +894,7 @@ class StateBus {
     }
 }
 
-const globalStateBus = new StateBus();
+const _globalStateBus = new StateBus();
 
 // DraftManager for localStorage-based draft saving
 class DraftManager {
@@ -1014,9 +1014,9 @@ function initDraftMode() {
             const field = document.querySelector(`[name="${fieldName}"]`);
             if (field) {
                 if (field.type === 'checkbox') {
-                    field.checked = savedDraft[fieldName];
+                    field.checked = savedDraft[fieldName]; // eslint-disable-line security/detect-object-injection
                 } else {
-                    field.value = savedDraft[fieldName];
+                    field.value = savedDraft[fieldName]; // eslint-disable-line security/detect-object-injection
                 }
             }
         });
@@ -1054,7 +1054,7 @@ function initDraftMode() {
     }
 }
 
-function collectFormData(container) {
+function _collectFormData(container) {
     const data = {};
 
     const fields = container.querySelectorAll('input, textarea, select');
@@ -1077,14 +1077,14 @@ function collectFormData(container) {
         const name = editable.getAttribute('name') || editable.id;
         // Prevent prototype pollution attacks
         if (name && !UNSAFE_KEYS.includes(name)) {
-            data[name] = editable.innerHTML;
+            data[name] = editable.innerHTML; // eslint-disable-line security/detect-object-injection
         }
     });
 
     return data;
 }
 
-function restoreFormData(container, data) {
+function _restoreFormData(container, data) {
     if (!data) return;
 
     Object.entries(data).forEach(([name, value]) => {
@@ -1127,7 +1127,7 @@ function initReactCounters() {
         let props = {};
         try {
             props = JSON.parse(propsJson.replace(/&quot;/g, '"'));
-        } catch (e) { }
+        } catch (_e) { }
 
         let count = props.initialCount || 0;
         const display = container.querySelector('.counter-display');
