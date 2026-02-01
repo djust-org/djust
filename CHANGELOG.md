@@ -7,39 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.2rc5] - 2026-02-01
+## [0.2.2] - 2026-02-01
 
 ### Fixed
 
-- **Stale Closure Args on VDOM-Patched Elements** — After deleting a todo, the remaining button's click handler sent the wrong `_args` (stale closure from bind time) because `SetAttribute` patches updated the `dj-click` DOM attribute but not the listener closure. Event listeners now re-parse `dj-*` attributes from the DOM at event time. Also sets `dj-*` as DOM attributes in `createNodeFromVNode` and marks elements as bound to prevent duplicate listeners. (#201)
-- **Fuzz Test: Overlapping ID Assignment** — Proptest `round_trip_correctness` assigned IDs to both trees starting from counter 0, causing false failures when `djust_id` values collided. Now continues the counter from tree A into tree B, matching real `parse_html_continue()` behavior. (#200)
-- **VDOM: Non-breaking Space Text Nodes Stripped** — Rust parser stripped `&nbsp;`-only text nodes (used in syntax highlighting) because `char::is_whitespace()` includes U+00A0. Now preserves `\u00A0` text nodes in parser, `to_html()`, and client-side path traversal. Also adds `sync_ids()` to prevent ID drift between server VDOM and client DOM after diffing, and 4-phase patch ordering matching Rust's `apply_patches()`. (#198, #199)
-- **Debug Toolbar: Received WebSocket Messages Not Captured** — Network tab now captures both sent and received WebSocket messages by intercepting the `onmessage` property setter (not just `addEventListener`). (#186)
-- **Debug Toolbar: Events Tab Always Empty** — Events tab now populates by extracting event data from sent WebSocket messages and matching responses, replacing the broken `window.liveView` hook. Event replay now uses `window.djust.liveViewInstance`. (#187)
-- **Debug Panel: Handler Discovery Too Restrictive** — Handler discovery now finds all public methods on the view, not just those with `@event_handler()` decorator. Matches runtime handler resolution logic. (#193)
-- **Debug Panel: JS Not Auto-loaded** — `_inject_client_script` now includes `debug-panel.js` (before `client-dev.js`) so the panel auto-instantiates without manual setup. (#194)
-- **Debug Panel: Handlers Tab Crash** — Fixed `TypeError: this.handlers.map` by normalizing server-returned handler dict to array. (#195)
-- **Debug Panel: Events/Patches/Network Tabs Empty** — Added retroactive WebSocket instance hooking for connections established before the panel loads. Fixed patch counter DOM id mismatch and added patches processing from `_debug` payload. (#196)
-
-### Added
-
-- **Debug Panel: Live Debug Payload in WebSocket Responses** — When `DEBUG=True`, WebSocket event responses now include a `_debug` field with updated variables, handlers, patches, and performance metrics, enabling the debug panel to refresh all tabs after each interaction. (#190)
-- **Debug Toolbar: Event Filtering** — Events tab now has filter controls to search by event/handler name (substring match) and filter by status (all/errors/success). Includes a clear button and match count display. (#176)
-- **Debug Toolbar: Event Replay** — Each event in the Events tab now has a replay button (⟳) that re-sends the event through the WebSocket with original params. Shows inline pending/success/error feedback. (#177)
-- **Debug Toolbar: Scoped State Persistence** — Panel UI state (open/closed, active tab) is now scoped per view class via localStorage. Data histories are not persisted, preventing stale data after navigation. (#178)
-- **Debug Toolbar: Network Message Inspection** — Network tab messages now have directional color coding (amber for sent, cyan for received), and expanded payloads include a copy-to-clipboard button with visual feedback. (#179)
-- **Debug Toolbar: Test Harness** — Added a test harness that evaluates the real debug-panel.js IIFE in a DOM environment, replacing replicated-logic tests with integration tests against the actual `DjustDebugPanel` class. (#184)
-
-## [0.2.2rc3] - 2026-01-31
-
-### Fixed
-
+- **Stale Closure Args on VDOM-Patched Elements** — After deleting a todo, the remaining button's click handler sent the wrong `_args` (stale closure from bind time) because `SetAttribute` patches updated the `dj-click` DOM attribute but not the listener closure. Event listeners now re-parse `dj-*` attributes from the DOM at event time. Also sets `dj-*` as DOM attributes in `createNodeFromVNode` and marks elements as bound to prevent duplicate listeners. ([#205](https://github.com/djust-org/djust/pull/205))
+- **VDOM: Non-breaking Space Text Nodes Stripped** — Rust parser stripped `&nbsp;`-only text nodes (used in syntax highlighting) because `char::is_whitespace()` includes U+00A0. Now preserves `\u00A0` text nodes in parser, `to_html()`, and client-side path traversal. Also adds `sync_ids()` to prevent ID drift between server VDOM and client DOM after diffing, and 4-phase patch ordering matching Rust's `apply_patches()`. ([#199](https://github.com/djust-org/djust/pull/199))
+- **CSRF Token Lookup on Formless Pages** — Pages without a `<form>` element failed to send CSRF tokens with WebSocket events. Token lookup now falls back to the `csrftoken` cookie. ([#210](https://github.com/djust-org/djust/pull/210))
 - **Codegen Crash on Numeric Index Paths** — Template expressions like `{{ posts.0.url }}` produced paths starting with a numeric index (`0.url`), generating invalid Python (`obj.0`). Codegen now skips numeric-leading paths since list items are serialized individually.
-
-## [0.2.2rc2] - 2026-01-31
-
-### Fixed
-
 - **JIT Serialization Pipeline** — Fixed multiple issues in JIT auto-serialization: ([#140](https://github.com/djust-org/djust/pull/140))
   - M2M `.all()` traversal now generates correct iteration code in codegen serializers
   - `@property` attributes are now serialized via Rust→Python codegen fallback when Rust can't access them
@@ -48,14 +23,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `_djust_annotations` model class attribute for declaring computed annotations (e.g., `Count`) applied during query optimization
   - `{% include %}` templates are now inlined for variable extraction, so included template variables get JIT optimization
   - Rust template parser now correctly prefixes loop variable paths (e.g., `item.field` inside `{% for item in items %}`)
-
 - **`{% include %}` After Cache Restore** — `template_dirs` was not included in msgpack serialization of `RustLiveView`. After a cache hit, the restored view had empty search paths, causing `{% include %}` tags to fail with "Template not found". Now calls `set_template_dirs()` on both WebSocket and HTTP cache-hit paths.
-
 - **VDOM Replace Sibling Grouping** — Fixed `data-djust-replace` inserting children into wrong parent when the replace container has siblings. `groupPatchesByParent()` now uses the full path for child-operation patches, and `groupConsecutiveInserts()` checks parent identity before batching. ([#144](https://github.com/djust-org/djust/pull/144))
-
 - **VDOM Replace Child Removal** — Fixed `data-djust-replace` not removing old children before inserting new ones, causing duplicate content on re-render. ([#142](https://github.com/djust-org/djust/pull/142), [#143](https://github.com/djust-org/djust/pull/143))
-
 - **Context Processor Precedence** — View context now takes precedence over context processors. Previously, context processors could overwrite view-defined variables (e.g., Django's messages processor overwriting a view's `messages` variable).
+- **VDOM Keyed Diff Insert Ordering** — Fixed `apply_patches` for keyed diff insert ordering where items were inserted in the wrong position. ([#154](https://github.com/djust-org/djust/pull/154))
+- **VDOM MoveChild Resolution** — Fixed `MoveChild` in `apply_patch` by resolving children via `djust_id` instead of index. ([#150](https://github.com/djust-org/djust/pull/150))
+- **Debug Toolbar: Received WebSocket Messages Not Captured** — Network tab now captures both sent and received WebSocket messages by intercepting the `onmessage` property setter (not just `addEventListener`). ([#188](https://github.com/djust-org/djust/pull/188))
+- **Debug Toolbar: Events Tab Always Empty** — Events tab now populates by extracting event data from sent WebSocket messages and matching responses, replacing the broken `window.liveView` hook. ([#188](https://github.com/djust-org/djust/pull/188))
+- **Debug Panel: Handler Discovery, Auto-loading, Tab Crashes** — Handler discovery now finds all public methods; `debug-panel.js` auto-loads; handler dict normalized to array; retroactive WebSocket hooking for late-loading panels. ([#191](https://github.com/djust-org/djust/pull/191), [#197](https://github.com/djust-org/djust/pull/197))
+
+### Added
+
+- **Debug Panel: Live Debug Payload** — When `DEBUG=True`, WebSocket event responses now include a `_debug` field with updated variables, handlers, patches, and performance metrics. ([#191](https://github.com/djust-org/djust/pull/191))
+- **Debug Toolbar: Event Filtering** — Events tab filter controls to search by event/handler name and filter by status. ([#180](https://github.com/djust-org/djust/pull/180))
+- **Debug Toolbar: Event Replay** — Replay button (⟳) that re-sends events through the WebSocket with original params. ([#181](https://github.com/djust-org/djust/pull/181))
+- **Debug Toolbar: Scoped State Persistence** — Panel UI state scoped per view class via localStorage. ([#182](https://github.com/djust-org/djust/pull/182))
+- **Debug Toolbar: Network Message Inspection** — Directional color coding and copy-to-clipboard for expanded payloads. ([#183](https://github.com/djust-org/djust/pull/183))
+- **Debug Toolbar: Test Harness** — Integration tests against the actual `DjustDebugPanel` class. ([#185](https://github.com/djust-org/djust/pull/185))
+- **VDOM Proptest/Fuzzing** — Property-based testing for the VDOM diff algorithm with `proptest`. ([#153](https://github.com/djust-org/djust/pull/153))
+- **Duplicate Key Detection** — VDOM keyed diff now warns on duplicate keys. ([#149](https://github.com/djust-org/djust/pull/149))
+- **Branding Assets** — Official logo variants (dark, light, icon, wordmark, transparent). ([#208](https://github.com/djust-org/djust/pull/208), [#213](https://github.com/djust-org/djust/pull/213))
 
 ### Deprecated
 
@@ -64,9 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Internal: LiveView Mixin Extraction** — Refactored monolithic `live_view.py` into focused mixins: `RequestMixin`, `ContextMixin`, `JITMixin`, `TemplateMixin`, `RustBridgeMixin`, `ComponentMixin`, `LifecycleMixin`. No public API changes. ([#130](https://github.com/djust-org/djust/pull/130))
-
 - **Internal: Module Splits** — Split `client.js` into source modules with concat build, extracted `websocket_utils.py`, `session_utils.py`, `serialization.py`, split `state_backend.py` into `state_backends` package, split `template_backend.py` into `template` package. ([#124](https://github.com/djust-org/djust/pull/124), [#125](https://github.com/djust-org/djust/pull/125), [#126](https://github.com/djust-org/djust/pull/126), [#128](https://github.com/djust-org/djust/pull/128), [#129](https://github.com/djust-org/djust/pull/129))
-
 - **Dependencies** — Upgraded uuid 1.19→1.20, thiserror 1→2, bincode 1→2, happy-dom 20.3.7→20.4.0, actions/setup-python 5→6, actions/upload-artifact 4→6, actions/checkout 4→6, softprops/action-gh-release 1→2
 
 ## [0.2.1] - 2026-01-29
@@ -252,11 +238,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bug fixes and stability improvements
 
-[Unreleased]: https://github.com/djust-org/djust/compare/v0.2.2rc5...HEAD
-[0.2.2rc5]: https://github.com/djust-org/djust/compare/v0.2.2rc3...v0.2.2rc5
-[0.2.2rc3]: https://github.com/djust-org/djust/compare/v0.2.2rc2...v0.2.2rc3
-[0.2.2rc2]: https://github.com/djust-org/djust/compare/v0.2.2rc1...v0.2.2rc2
-[0.2.2rc1]: https://github.com/djust-org/djust/compare/v0.2.1...v0.2.2rc1
+[Unreleased]: https://github.com/djust-org/djust/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/djust-org/djust/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/djust-org/djust/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/djust-org/djust/compare/v0.2.0a2...v0.2.0
 [0.2.0a2]: https://github.com/djust-org/djust/compare/v0.2.0a1...v0.2.0a2
