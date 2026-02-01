@@ -57,7 +57,7 @@ window.djustInitialized = false;
 // Track pending turbo:load reinit
 let pendingTurboReinit = false;
 
-window.addEventListener('turbo:load', function(event) {
+window.addEventListener('turbo:load', function(_event) {
     console.log('[LiveView:TurboNav] turbo:load event received!');
     console.log('[LiveView:TurboNav] djustInitialized:', window.djustInitialized);
 
@@ -894,7 +894,7 @@ class StateBus {
     }
 }
 
-const globalStateBus = new StateBus();
+const _globalStateBus = new StateBus();
 
 // DraftManager for localStorage-based draft saving
 class DraftManager {
@@ -1014,9 +1014,9 @@ function initDraftMode() {
             const field = document.querySelector(`[name="${fieldName}"]`);
             if (field) {
                 if (field.type === 'checkbox') {
-                    field.checked = savedDraft[fieldName];
+                    field.checked = savedDraft[fieldName]; // eslint-disable-line security/detect-object-injection
                 } else {
-                    field.value = savedDraft[fieldName];
+                    field.value = savedDraft[fieldName]; // eslint-disable-line security/detect-object-injection
                 }
             }
         });
@@ -1054,7 +1054,7 @@ function initDraftMode() {
     }
 }
 
-function collectFormData(container) {
+function _collectFormData(container) {
     const data = {};
 
     const fields = container.querySelectorAll('input, textarea, select');
@@ -1077,14 +1077,14 @@ function collectFormData(container) {
         const name = editable.getAttribute('name') || editable.id;
         // Prevent prototype pollution attacks
         if (name && !UNSAFE_KEYS.includes(name)) {
-            data[name] = editable.innerHTML;
+            data[name] = editable.innerHTML; // eslint-disable-line security/detect-object-injection
         }
     });
 
     return data;
 }
 
-function restoreFormData(container, data) {
+function _restoreFormData(container, data) {
     if (!data) return;
 
     Object.entries(data).forEach(([name, value]) => {
@@ -1127,7 +1127,7 @@ function initReactCounters() {
         let props = {};
         try {
             props = JSON.parse(propsJson.replace(/&quot;/g, '"'));
-        } catch (e) { }
+        } catch (_e) { }
 
         let count = props.initialCount || 0;
         const display = container.querySelector('.counter-display');
@@ -1463,10 +1463,12 @@ function bindLiveViewEvents() {
         const clickHandler = element.getAttribute('dj-click');
         if (clickHandler && !element.dataset.liveviewClickBound) {
             element.dataset.liveviewClickBound = 'true';
-            // Parse handler string to extract function name and arguments
-            const parsed = parseEventHandler(clickHandler);
             element.addEventListener('click', async (e) => {
                 e.preventDefault();
+
+                // Re-parse handler from DOM attribute at event time to pick up
+                // any changes made by SetAttribute patches since binding.
+                const parsed = parseEventHandler(element.getAttribute('dj-click'));
 
                 // Extract all data-* attributes with type coercion support
                 const params = extractTypedParams(element);
@@ -1508,7 +1510,7 @@ function bindLiveViewEvents() {
                 // Pass target element for optimistic updates (Phase 3)
                 params._targetElement = e.target;
 
-                await handleEvent(submitHandler, params);
+                await handleEvent(element.getAttribute('dj-submit'), params);
                 e.target.reset();
             });
         }
@@ -1558,7 +1560,7 @@ function bindLiveViewEvents() {
                 if (globalThis.djustDebug) {
                     console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
                 }
-                await handleEvent(changeHandler, params);
+                await handleEvent(element.getAttribute('dj-change'), params);
             });
         }
 
@@ -1582,7 +1584,7 @@ function bindLiveViewEvents() {
 
             const handler = async (e) => {
                 const params = buildFormEventParams(e.target, e.target.value);
-                await handleEvent(inputHandler, params);
+                await handleEvent(element.getAttribute('dj-input'), params);
             };
 
             // Apply rate limiting wrapper
@@ -1602,7 +1604,7 @@ function bindLiveViewEvents() {
             element.dataset.liveviewBlurBound = 'true';
             element.addEventListener('blur', async (e) => {
                 const params = buildFormEventParams(e.target, e.target.value);
-                await handleEvent(blurHandler, params);
+                await handleEvent(element.getAttribute('dj-blur'), params);
             });
         }
 
@@ -1612,7 +1614,7 @@ function bindLiveViewEvents() {
             element.dataset.liveviewFocusBound = 'true';
             element.addEventListener('focus', async (e) => {
                 const params = buildFormEventParams(e.target, e.target.value);
-                await handleEvent(focusHandler, params);
+                await handleEvent(element.getAttribute('dj-focus'), params);
             });
         }
 
@@ -1622,8 +1624,10 @@ function bindLiveViewEvents() {
             if (keyHandler && !element.dataset[`liveview${eventType}Bound`]) {
                 element.dataset[`liveview${eventType}Bound`] = 'true';
                 element.addEventListener(eventType, async (e) => {
+                    // Re-read attribute at event time to pick up SetAttribute patches
+                    const currentHandler = element.getAttribute(`dj-${eventType}`);
                     // Check for key modifiers (e.g. dj-keydown.enter)
-                    const modifiers = keyHandler.split('.');
+                    const modifiers = currentHandler.split('.');
                     const handlerName = modifiers[0];
                     const requiredKey = modifiers.length > 1 ? modifiers[1] : null;
 
@@ -2321,9 +2325,10 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                 const eventType = attrParts[0];
                 const modifiers = attrParts.slice(1);
 
-                // Parse handler string to extract function name and arguments
-                // e.g., "set_period('month')" -> { name: 'set_period', args: ['month'] }
-                const parsed = parseEventHandler(value);
+                // Store the dj-* attribute key so the listener can re-read it
+                // at event time. This avoids stale closure args when SetAttribute
+                // patches update the attribute value after initial binding.
+                const djAttrKey = key;
                 elem.addEventListener(eventType, (e) => {
                     // Handle key modifiers for keydown/keyup events
                     if ((eventType === 'keydown' || eventType === 'keyup') && modifiers.length > 0) {
@@ -2333,6 +2338,10 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                         if (requiredKey === 'space' && e.key !== ' ') return;
                         if (requiredKey === 'tab' && e.key !== 'Tab') return;
                     }
+
+                    // Re-parse handler from DOM attribute at event time to pick up
+                    // any changes made by SetAttribute patches since binding.
+                    const parsed = parseEventHandler(elem.getAttribute(djAttrKey));
 
                     e.preventDefault();
                     const params = {};
@@ -2374,6 +2383,12 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
 
                     handleEvent(parsed.name, params);
                 });
+                // Set the dj-* attribute on the DOM so SetAttribute patches
+                // can update it and bindLiveViewEvents can re-read it.
+                elem.setAttribute(key, value);
+                // Mark as bound so bindLiveViewEvents() won't add a duplicate listener
+                const boundKey = `liveview${eventType.charAt(0).toUpperCase() + eventType.slice(1)}Bound`;
+                elem.dataset[boundKey] = 'true';
             } else {
                 if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
                     elem.value = value;
@@ -2652,6 +2667,8 @@ window.djust._getNodeByPath = getNodeByPath;
 window.djust._stampDjIds = _stampDjIds;
 window.djust._groupPatchesByParent = groupPatchesByParent;
 window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
+window.djust.createNodeFromVNode = createNodeFromVNode;
+window.djust.bindLiveViewEvents = bindLiveViewEvents;
 
 /**
  * Group patches by their parent path for batching.
