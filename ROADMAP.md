@@ -21,11 +21,44 @@ Understand memory pressure and evaluate client-side or external storage.
 - States >100KB trigger warnings; >10KB get zstd compressed
 - TTL-based expiration with `cleanup_liveview_sessions` management command
 
+**Current problem:** Even with the Redis backend, the `RustLiveView` stays in Rust heap memory for the full WebSocket connection lifetime. Redis is only used for persistence across reconnects — active connections still hold 200-400KB in Rust memory (template source + serialized state + full VDOM tree). At 1000 concurrent users that's 200-400MB of server memory.
+
+**Where memory lives per connection:**
+| Component | Location | Size | Persistent? |
+|-----------|----------|------|-------------|
+| Python `LiveView` attributes | Python heap | 1-5KB | Yes (connection lifetime) |
+| PyO3 wrapper (`_rust_view`) | Python heap | ~100B pointer | Yes |
+| `RustLiveViewBackend.template_source` | Rust heap | 10KB-1MB | Yes |
+| `RustLiveViewBackend.state` | Rust heap | 10-500KB | Yes |
+| `RustLiveViewBackend.last_vdom` | Rust heap | 50-500KB | Yes |
+| ASGI scope + request | Python heap | 5-50KB | Yes |
+
+**Proposed: configurable hybrid state offloading**
+
+Add a `STATE_OFFLOAD` config option that controls whether the `RustLiveView` is kept in memory or deserialized on demand:
+
+| Mode | Behavior | Per-connection memory | Event latency |
+|------|----------|----------------------|---------------|
+| `"none"` (default) | Current behavior — Rust object lives in memory | 200-400KB | Fastest |
+| `"between_events"` | Serialize to Redis/DB after each event, drop Rust object, deserialize on next event | 1-5KB | +1-3ms (Redis) / +3-8ms (DB) |
+| `"adaptive"` | Keep hot sessions in memory (LRU), offload idle sessions after configurable timeout | 1-5KB idle, 200-400KB hot | 0ms hot / +1-8ms cold |
+
+The `"adaptive"` mode with an LRU cache would give the best of both worlds: fast responses for active users, minimal memory for idle connections waiting for the next interaction.
+
+**Implementation steps:**
+1. Add a `DatabaseStateBackend` using Django ORM (`BinaryField` for msgpack bytes)
+2. Add `STATE_OFFLOAD` config option to control offload behavior
+3. Implement `"between_events"` mode: serialize/drop after `_send_update`, deserialize in `receive_json`
+4. Implement `"adaptive"` mode: LRU cache with configurable max size and idle timeout
+5. Benchmark serialize/deserialize round-trip cost for realistic view sizes
+
 **Questions to answer:**
 - Can template context be reconstructed from DB rather than stored in memory/Redis?
 - Can any state move client-side (signed cookies, JWT)?
-- What is the Redis serialization cost vs memory backend? Is there a hybrid approach?
+- What is the Redis serialization cost vs memory backend?
 - What is a typical session size and how does it scale with concurrent users?
+- What is the msgpack serialize/deserialize overhead for 100KB-500KB views?
+- Can the VDOM be reconstructed from a fresh render instead of stored? (trade CPU for memory)
 
 ## 3. TurboNav Integration
 
