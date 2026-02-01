@@ -1773,43 +1773,58 @@ mod tests {
 
     #[test]
     fn test_keyed_unkeyed_interleave_move() {
-        // Regression test for #219: when keyed children move, unkeyed children
-        // at the same level must also get MoveChild patches so that subsequent
-        // content patches target the correct nodes.
+        // Regression test for #219: when keyed children move, unkeyed element
+        // children at the same level must also get MoveChild patches so that
+        // subsequent content patches target the correct nodes.
         //
-        // Tree A: [text("hello"), section(key=a), ul(key=b)]
-        // Tree B: [ul(key=b), section(key=a), text("world")]
+        // Uses an unkeyed *element* (span) rather than a text node because
+        // in production assign_ids only gives djust_ids to elements — text
+        // nodes never have djust_ids and are handled via path-based fallback.
         //
-        // After keyed moves, the text node moves from index 0 to index 2.
-        // Without the fix, SetText targets index 2 which is section, not text.
+        // Tree A: [span(no key), section(key=a), ul(key=b)]
+        // Tree B: [ul(key=b), section(key=a), span(no key, attr changed)]
+        //
+        // After keyed moves, the span moves from index 0 to index 2.
         use crate::patch::apply_patches;
+
+        let mut old_span = VNode::element("span");
+        old_span.djust_id = Some("sp1".to_string());
+        old_span
+            .attrs
+            .insert("class".to_string(), "old".to_string());
 
         let old = VNode::element("div")
             .with_djust_id("root")
             .with_children(vec![
-                VNode::text("hello").with_djust_id("t1"),
+                old_span,
                 VNode::element("section").with_key("a").with_djust_id("s1"),
                 VNode::element("ul").with_key("b").with_djust_id("u1"),
             ]);
+
+        let mut new_span = VNode::element("span");
+        new_span.djust_id = Some("sp1".to_string());
+        new_span
+            .attrs
+            .insert("class".to_string(), "new".to_string());
 
         let new = VNode::element("div")
             .with_djust_id("root")
             .with_children(vec![
                 VNode::element("ul").with_key("b").with_djust_id("u1"),
                 VNode::element("section").with_key("a").with_djust_id("s1"),
-                VNode::text("world").with_djust_id("t1"),
+                new_span,
             ]);
 
         let patches = diff_nodes(&old, &new, &[]);
 
-        // The unkeyed text node moved from index 0 to index 2 — verify a
+        // The unkeyed span moved from index 0 to index 2 — verify a
         // MoveChild patch is emitted for it.
         let has_unkeyed_move = patches
             .iter()
             .any(|p| matches!(p, Patch::MoveChild { from: 0, to: 2, .. }));
         assert!(
             has_unkeyed_move,
-            "Expected MoveChild(0→2) for unkeyed text node, got: {:?}",
+            "Expected MoveChild(0→2) for unkeyed span, got: {:?}",
             patches
         );
 
@@ -1828,9 +1843,12 @@ mod tests {
                 i, got.tag, want.tag
             );
             assert_eq!(
-                got.text, want.text,
-                "Text mismatch at child {}: got {:?}, want {:?}",
-                i, got.text, want.text
+                got.attrs.get("class"),
+                want.attrs.get("class"),
+                "Attr mismatch at child {}: got {:?}, want {:?}",
+                i,
+                got.attrs.get("class"),
+                want.attrs.get("class")
             );
         }
     }
