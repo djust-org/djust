@@ -189,7 +189,7 @@ proptest! {
 
         let mut counter = 0u64;
         assign_ids(&mut a, &mut counter);
-        counter = 0;
+        // Continue counter from tree A so IDs don't overlap (mirrors real parse_html_continue)
         assign_ids(&mut b, &mut counter);
 
         let patches = diff_nodes(&a, &b, &[]);
@@ -213,7 +213,7 @@ proptest! {
         let mut b = tree_b;
         let mut counter = 0u64;
         assign_ids(&mut a, &mut counter);
-        counter = 0;
+        // Continue counter from tree A so IDs don't overlap (mirrors real parse_html_continue)
         assign_ids(&mut b, &mut counter);
 
         let _patches = diff_nodes(&a, &b, &[]);
@@ -230,7 +230,7 @@ proptest! {
         let mut b = tree_b;
         let mut counter = 0u64;
         assign_ids(&mut a, &mut counter);
-        counter = 0;
+        // Continue counter from tree A so IDs don't overlap (mirrors real parse_html_continue)
         assign_ids(&mut b, &mut counter);
 
         let total_nodes = count_nodes(&a) + count_nodes(&b);
