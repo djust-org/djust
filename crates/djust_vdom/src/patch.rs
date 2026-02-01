@@ -7,131 +7,133 @@ use crate::{Patch, VNode};
 
 /// Apply a list of patches to a virtual DOM tree (for testing purposes).
 ///
-/// This function handles `MoveChild` patches correctly by snapshotting
-/// the original children order before applying moves, resolving children
-/// by `djust_id` instead of index. This mirrors the client-side JS
-/// resolution strategy using `data-d` attributes.
+/// The diff engine emits patches with indices referencing the **new** (target)
+/// tree. Child mutations (Insert/Remove/Move) are grouped by parent and applied
+/// in the order: removes (descending index), inserts (ascending index), then
+/// moves (resolved by djust_id). Attribute/text patches are applied last, using
+/// djust_id-based node lookup when available so that path indices invalidated by
+/// earlier structural changes don't cause mis-targeting.
 pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
-    // The keyed diff engine emits all paths referencing the FINAL tree layout.
-    // To apply them correctly we process patches level-by-level (shallowest
-    // parent path first). At each level we apply: removes (descending index),
-    // moves (by djust_id), then inserts (ascending index). This ensures that
-    // structural changes at a parent level establish the correct tree shape
-    // before deeper subtree patches navigate into children.
-    //
-    // For MoveChild, we snapshot children before mutations and resolve by
-    // djust_id, mirroring the client-side data-d attribute strategy.
-
-    // Snapshot djust_ids of children for MoveChild resolution.
-    let mut move_sources: std::collections::HashMap<Vec<usize>, Vec<(usize, Option<String>)>> =
+    // Snapshot (parent_djust_id, old_child_index) → child_djust_id for moves.
+    let mut move_id_map: std::collections::HashMap<(String, usize), String> =
         std::collections::HashMap::new();
     for patch in patches {
-        if let Patch::MoveChild { path, .. } = patch {
-            move_sources.entry(path.clone()).or_insert_with(|| {
-                if let Some(target) = get_node(root, path) {
-                    target
-                        .children
-                        .iter()
-                        .enumerate()
-                        .map(|(i, c)| (i, c.djust_id.clone()))
-                        .collect()
-                } else {
-                    Vec::new()
+        if let Patch::MoveChild {
+            d: Some(parent_id),
+            from,
+            ..
+        } = patch
+        {
+            let key = (parent_id.clone(), *from);
+            if let std::collections::hash_map::Entry::Vacant(e) = move_id_map.entry(key) {
+                if let Some(target) = find_by_djust_id(root, parent_id) {
+                    if let Some(child) = target.children.get(*from) {
+                        if let Some(ref id) = child.djust_id {
+                            e.insert(id.clone());
+                        }
+                    }
                 }
-            });
+            }
         }
     }
 
-    // Categorize patches by their parent path depth for level-by-level application.
-    // Child mutation patches (Insert/Remove/Move) operate on the node at `path`,
-    // so their "level" is the length of `path`. Other patches (SetText, SetAttr)
-    // operate on the node AT `path`, so their level is path.len() - 1 (parent),
-    // but we apply them after all child mutations at the same depth.
-    struct LevelPatches<'a> {
-        removes: Vec<(&'a Vec<usize>, usize)>,
-        inserts: Vec<(&'a Vec<usize>, usize, &'a VNode)>,
+    // Group child-mutation patches by parent djust_id, preserving order within
+    // each group. Use BTreeMap keyed by first-seen order to process parents in
+    // the order they appear in the patch list (shallowest first due to diff
+    // engine's top-down traversal).
+    struct ParentGroup<'a> {
+        removes: Vec<(&'a Patch, usize)>, // (patch, index)
+        inserts: Vec<(&'a Patch, usize)>, // (patch, index)
         moves: Vec<&'a Patch>,
-        others: Vec<&'a Patch>,
     }
 
-    let mut levels: std::collections::BTreeMap<usize, LevelPatches<'_>> =
-        std::collections::BTreeMap::new();
+    let mut parent_order: Vec<String> = Vec::new();
+    let mut parent_groups: std::collections::HashMap<String, ParentGroup<'_>> =
+        std::collections::HashMap::new();
+    let mut non_child_patches: Vec<&Patch> = Vec::new();
 
     for patch in patches {
         match patch {
-            Patch::RemoveChild { path, index, .. } => {
-                let level = levels.entry(path.len()).or_insert_with(|| LevelPatches {
-                    removes: Vec::new(),
-                    inserts: Vec::new(),
-                    moves: Vec::new(),
-                    others: Vec::new(),
-                });
-                level.removes.push((path, *index));
+            Patch::RemoveChild { d, index, .. } => {
+                if let Some(ref pid) = d {
+                    let group = parent_groups.entry(pid.clone()).or_insert_with(|| {
+                        parent_order.push(pid.clone());
+                        ParentGroup {
+                            removes: Vec::new(),
+                            inserts: Vec::new(),
+                            moves: Vec::new(),
+                        }
+                    });
+                    group.removes.push((patch, *index));
+                }
             }
-            Patch::InsertChild {
-                path, index, node, ..
-            } => {
-                let level = levels.entry(path.len()).or_insert_with(|| LevelPatches {
-                    removes: Vec::new(),
-                    inserts: Vec::new(),
-                    moves: Vec::new(),
-                    others: Vec::new(),
-                });
-                level.inserts.push((path, *index, node));
+            Patch::InsertChild { d, index, .. } => {
+                if let Some(ref pid) = d {
+                    let group = parent_groups.entry(pid.clone()).or_insert_with(|| {
+                        parent_order.push(pid.clone());
+                        ParentGroup {
+                            removes: Vec::new(),
+                            inserts: Vec::new(),
+                            moves: Vec::new(),
+                        }
+                    });
+                    group.inserts.push((patch, *index));
+                }
             }
-            Patch::MoveChild { path, .. } => {
-                let level = levels.entry(path.len()).or_insert_with(|| LevelPatches {
-                    removes: Vec::new(),
-                    inserts: Vec::new(),
-                    moves: Vec::new(),
-                    others: Vec::new(),
-                });
-                level.moves.push(patch);
+            Patch::MoveChild { d, .. } => {
+                if let Some(ref pid) = d {
+                    let group = parent_groups.entry(pid.clone()).or_insert_with(|| {
+                        parent_order.push(pid.clone());
+                        ParentGroup {
+                            removes: Vec::new(),
+                            inserts: Vec::new(),
+                            moves: Vec::new(),
+                        }
+                    });
+                    group.moves.push(patch);
+                }
             }
             _ => {
-                let depth = match patch {
-                    Patch::SetText { path, .. }
-                    | Patch::SetAttr { path, .. }
-                    | Patch::RemoveAttr { path, .. }
-                    | Patch::Replace { path, .. } => path.len(),
-                    _ => 0,
-                };
-                let level = levels.entry(depth).or_insert_with(|| LevelPatches {
-                    removes: Vec::new(),
-                    inserts: Vec::new(),
-                    moves: Vec::new(),
-                    others: Vec::new(),
-                });
-                level.others.push(patch);
+                non_child_patches.push(patch);
             }
         }
     }
 
-    // Process levels from shallowest to deepest.
-    for level in levels.values_mut() {
-        // Apply removes in descending index order so earlier indices stay valid.
-        level
-            .removes
-            .sort_by(|a, b| a.0.cmp(b.0).then_with(|| b.1.cmp(&a.1)));
-        for (path, index) in &level.removes {
-            if let Some(target) = get_node_mut(root, path) {
+    // Apply child mutations parent-by-parent in order.
+    for pid in &parent_order {
+        let group = parent_groups.get(pid).unwrap();
+
+        // Removes: descending index order
+        let mut removes: Vec<_> = group.removes.iter().collect();
+        removes.sort_by(|a, b| b.1.cmp(&a.1));
+        for (_, index) in &removes {
+            if let Some(target) = find_by_djust_id_mut(root, pid) {
                 if *index < target.children.len() {
                     target.children.remove(*index);
                 }
             }
         }
 
-        // Apply moves with djust_id resolution.
-        for patch in &level.moves {
-            if let Patch::MoveChild { path, from, to, .. } = patch {
-                let child_id = move_sources.get(path).and_then(|sources| {
-                    sources
-                        .iter()
-                        .find(|(i, _)| *i == *from)
-                        .and_then(|(_, id)| id.clone())
-                });
+        // Inserts: ascending index order
+        let mut inserts: Vec<_> = group.inserts.iter().collect();
+        inserts.sort_by(|a, b| a.1.cmp(&b.1));
+        for (patch, _) in &inserts {
+            if let Patch::InsertChild { index, node, .. } = patch {
+                if let Some(target) = find_by_djust_id_mut(root, pid) {
+                    let insert_at = (*index).min(target.children.len());
+                    target.children.insert(insert_at, (*node).clone());
+                }
+            }
+        }
 
-                if let Some(target) = get_node_mut(root, path) {
+        // Moves: by djust_id
+        for patch in &group.moves {
+            if let Patch::MoveChild { d, from, to, .. } = patch {
+                let child_id = d
+                    .as_ref()
+                    .and_then(|pid| move_id_map.get(&(pid.clone(), *from)).cloned());
+
+                if let Some(target) = find_by_djust_id_mut(root, pid) {
                     if let Some(ref child_id) = child_id {
                         if let Some(current_pos) = target
                             .children
@@ -142,30 +144,94 @@ pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
                             let insert_at = (*to).min(target.children.len());
                             target.children.insert(insert_at, node);
                         }
-                    } else if *from < target.children.len() && *to <= target.children.len() {
+                    } else if *from < target.children.len() {
                         let node = target.children.remove(*from);
-                        target.children.insert(*to, node);
+                        let insert_at = (*to).min(target.children.len());
+                        target.children.insert(insert_at, node);
                     }
                 }
             }
         }
+    }
 
-        // Apply inserts in ascending index order.
-        level
-            .inserts
-            .sort_by(|a, b| a.0.cmp(b.0).then_with(|| a.1.cmp(&b.1)));
-        for (path, index, node) in &level.inserts {
-            if let Some(target) = get_node_mut(root, path) {
-                let insert_at = (*index).min(target.children.len());
-                target.children.insert(insert_at, (*node).clone());
+    // Apply non-child patches using djust_id resolution when available,
+    // falling back to path-based traversal for text nodes (d=None).
+    for patch in &non_child_patches {
+        match patch {
+            Patch::SetText { path, d, text } => {
+                let target = resolve_node_mut(root, path, d.as_deref());
+                if let Some(target) = target {
+                    target.text = Some(text.clone());
+                }
             }
-        }
-
-        // Apply non-child-mutation patches at this level.
-        for patch in &level.others {
-            apply_patch(root, patch);
+            Patch::SetAttr {
+                path,
+                d,
+                key,
+                value,
+            } => {
+                let target = resolve_node_mut(root, path, d.as_deref());
+                if let Some(target) = target {
+                    target.attrs.insert(key.clone(), value.clone());
+                }
+            }
+            Patch::RemoveAttr { path, d, key } => {
+                let target = resolve_node_mut(root, path, d.as_deref());
+                if let Some(target) = target {
+                    target.attrs.remove(key);
+                }
+            }
+            Patch::Replace { path, d, node } => {
+                let target = resolve_node_mut(root, path, d.as_deref());
+                if let Some(target) = target {
+                    *target = node.clone();
+                }
+            }
+            _ => {}
         }
     }
+}
+
+/// Resolve a node: try djust_id first, fall back to path traversal.
+fn resolve_node_mut<'a>(
+    root: &'a mut VNode,
+    path: &[usize],
+    djust_id: Option<&str>,
+) -> Option<&'a mut VNode> {
+    let use_id = djust_id
+        .map(|id| find_by_djust_id(root, id).is_some())
+        .unwrap_or(false);
+    if use_id {
+        find_by_djust_id_mut(root, djust_id.unwrap())
+    } else {
+        get_node_mut(root, path)
+    }
+}
+
+/// Find a node by its djust_id (immutable).
+fn find_by_djust_id<'a>(root: &'a VNode, id: &str) -> Option<&'a VNode> {
+    if root.djust_id.as_deref() == Some(id) {
+        return Some(root);
+    }
+    for child in &root.children {
+        if let Some(found) = find_by_djust_id(child, id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Find a node by its djust_id (mutable).
+fn find_by_djust_id_mut<'a>(root: &'a mut VNode, id: &str) -> Option<&'a mut VNode> {
+    if root.djust_id.as_deref() == Some(id) {
+        return Some(root);
+    }
+    for child in &mut root.children {
+        if let Some(found) = find_by_djust_id_mut(child, id) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// Apply a single patch to a virtual DOM tree (for testing purposes)
@@ -222,27 +288,14 @@ pub fn apply_patch(root: &mut VNode, patch: &Patch) {
 
         Patch::MoveChild { path, from, to, .. } => {
             if let Some(target) = get_node_mut(root, path) {
-                if *from < target.children.len() && *to <= target.children.len() {
+                if *from < target.children.len() {
                     let node = target.children.remove(*from);
-                    target.children.insert(*to, node);
+                    let insert_at = (*to).min(target.children.len());
+                    target.children.insert(insert_at, node);
                 }
             }
         }
     }
-}
-
-fn get_node<'a>(root: &'a VNode, path: &[usize]) -> Option<&'a VNode> {
-    let mut current = root;
-
-    for &index in path {
-        if index < current.children.len() {
-            current = &current.children[index];
-        } else {
-            return None;
-        }
-    }
-
-    Some(current)
 }
 
 fn get_node_mut<'a>(root: &'a mut VNode, path: &[usize]) -> Option<&'a mut VNode> {
