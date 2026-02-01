@@ -65,7 +65,7 @@ class LiveViewWebSocket {
         console.log('[LiveView] Connecting to WebSocket:', url);
         this.ws = new WebSocket(url);
 
-        this.ws.onopen = (event) => {
+        this.ws.onopen = (_event) => {
             console.log('[LiveView] WebSocket connected');
             this.reconnectAttempts = 0;
 
@@ -76,7 +76,7 @@ class LiveViewWebSocket {
             this.stats.connectedAt = Date.now();
         };
 
-        this.ws.onclose = (event) => {
+        this.ws.onclose = (_event) => {
             console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
 

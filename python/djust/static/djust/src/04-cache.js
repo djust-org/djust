@@ -85,6 +85,7 @@ function buildCacheKey(eventName, params, keyParams = null) {
         // Try to use specified key params
         keyParams.forEach(key => {
             if (Object.prototype.hasOwnProperty.call(params, key)) {
+                // eslint-disable-next-line security/detect-object-injection
                 cacheParams[key] = params[key];
                 usedKeyParams = true;
             }
@@ -96,6 +97,7 @@ function buildCacheKey(eventName, params, keyParams = null) {
     if (!usedKeyParams) {
         Object.keys(params).forEach(key => {
             if (!key.startsWith('_')) {
+                // eslint-disable-next-line security/detect-object-injection
                 cacheParams[key] = params[key];
             }
         });
@@ -104,6 +106,7 @@ function buildCacheKey(eventName, params, keyParams = null) {
     // Build key: eventName:param1=value1:param2=value2
     const paramParts = Object.keys(cacheParams)
         .sort()
+        // eslint-disable-next-line security/detect-object-injection
         .map(k => `${k}=${JSON.stringify(cacheParams[k])}`)
         .join(':');
 

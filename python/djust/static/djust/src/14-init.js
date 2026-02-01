@@ -22,6 +22,7 @@ function djustInit() {
     if (eagerContainers.length > 0) {
         // Initialize WebSocket
         liveViewWS = new LiveViewWebSocket();
+        window.djust.liveViewInstance = liveViewWS;
         liveViewWS.connect();
 
         // Start heartbeat
