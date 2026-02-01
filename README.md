@@ -1,6 +1,8 @@
-# 🚀 djust
+<p align="center">
+  <img src="branding/logo/djust-wordmark-dark.png" alt="djust" width="300" />
+</p>
 
-**Blazing fast reactive server-side rendering for Django, powered by Rust**
+<p align="center"><strong>Blazing fast reactive server-side rendering for Django, powered by Rust</strong></p>
 
 djust brings Phoenix LiveView-style reactive components to Django, with performance that feels native. Write server-side Python code with automatic, instant client updates—no JavaScript bundling, no build step, no complexity.
 
@@ -15,7 +17,7 @@ djust brings Phoenix LiveView-style reactive components to Django, with performa
 - ⚡ **10-100x Faster** - Rust-powered template engine and Virtual DOM diffing
 - 🔄 **Reactive Components** - Phoenix LiveView-style server-side reactivity
 - 🔌 **Django Compatible** - Works with existing Django templates and components
-- 📦 **Zero Build Step** - Just ~5KB of client JavaScript, no bundling needed
+- 📦 **Zero Build Step** - ~29KB gzipped client JavaScript, no bundling needed
 - 🌐 **WebSocket Updates** - Real-time DOM patches over WebSocket (with HTTP fallback)
 - 🎯 **Minimal Client Code** - Smart diffing sends only what changed
 - 🔒 **Type Safe** - Rust guarantees for core performance-critical code
@@ -74,7 +76,7 @@ python benchmark.py
 - Rust 1.70+ (for building from source)
 - Django 3.2+
 
-### Install from PyPI (when published)
+### Install from PyPI
 
 ```bash
 pip install djust
@@ -472,7 +474,7 @@ class ProductSearchView(LiveView):
 
 - ✅ **Zero JavaScript Required** - Common patterns work without writing any JS
 - ✅ **87% Code Reduction** - Decorators replace hundreds of lines of manual JavaScript
-- ✅ **Smallest Bundle** - 7.1 KB client.js (vs Phoenix ~30KB, Livewire ~50KB)
+- ✅ **Lightweight Bundle** - ~29KB gzipped client.js (vs Livewire ~50KB)
 - ✅ **Competitive DX** - Matches Phoenix LiveView and Laravel Livewire developer experience
 
 #### Available Decorators
@@ -558,7 +560,7 @@ def search(self, query: str = "", **kwargs):
 ```
 ┌─────────────────────────────────────────────┐
 │  Browser                                    │
-│  ├── Client.js (5KB) - Event & DOM patches │
+│  ├── Client.js (~29KB gz) - Events & DOM   │
 │  └── WebSocket Connection                   │
 └─────────────────────────────────────────────┘
            ↕️ WebSocket (Binary/JSON)
@@ -604,20 +606,22 @@ Visit http://localhost:8000
 ```
 djust/
 ├── crates/
-│   ├── djust_core/      # Core types & utilities
-│   ├── djust_templates/ # Template engine
-│   ├── djust_vdom/      # Virtual DOM & diffing
-│   └── djust_live/      # Main PyO3 bindings
+│   ├── djust_core/        # Core types & utilities
+│   ├── djust_templates/   # Template engine
+│   ├── djust_vdom/        # Virtual DOM & diffing
+│   ├── djust_components/  # Reusable component library
+│   └── djust_live/        # Main PyO3 bindings
 ├── python/
-│   └── djust/      # Python package
-│       ├── live_view.py       # LiveView base class
-│       ├── component.py       # Component system
-│       ├── websocket.py       # WebSocket consumer
+│   └── djust/             # Python package
+│       ├── live_view.py         # LiveView base class
+│       ├── component.py         # Component system
+│       ├── websocket.py         # WebSocket consumer
 │       └── static/
-│           └── client.js      # Client runtime
-├── examples/                  # Example projects
-├── benchmarks/               # Performance benchmarks
-└── tests/                    # Tests
+│           └── client.js        # Client runtime
+├── branding/                    # Logo and brand assets
+├── examples/                    # Example projects
+├── benchmarks/                  # Performance benchmarks
+└── tests/                       # Tests
 ```
 
 ### Running Tests
@@ -666,6 +670,10 @@ Areas we'd love help with:
 - [x] `{% url %}` and `{% include %}` tags
 - [x] Comparison operators in `{% if %}` tags
 - [x] More Django template filters (`urlencode`)
+- [x] Security hardening (WebSocket origin validation, HMAC signing, rate limiting)
+- [x] Developer debug panel with event history and VDOM inspection
+- [x] Reusable component library (`djust_components` crate)
+- [x] JIT pipeline improvements and stale-closure fixes
 - [ ] File upload handling
 - [ ] Server-sent events (SSE) fallback
 - [ ] React/Vue component compatibility
@@ -678,7 +686,9 @@ Areas we'd love help with:
 - CSRF protection via Django middleware
 - XSS protection via automatic template escaping
 - WebSocket authentication via Django sessions
-- Rate limiting support
+- WebSocket origin validation and HMAC message signing (v0.2.1)
+- Per-view and global rate limiting support
+- Configurable allowed origins for WebSocket connections
 
 Report security issues to: security@djust.org
 

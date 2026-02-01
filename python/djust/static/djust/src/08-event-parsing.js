@@ -6,7 +6,7 @@ function initReactCounters() {
         let props = {};
         try {
             props = JSON.parse(propsJson.replace(/&quot;/g, '"'));
-        } catch (e) { }
+        } catch { }
 
         let count = props.initialCount || 0;
         const display = container.querySelector('.counter-display');
@@ -109,7 +109,7 @@ function parseArguments(argsStr) {
     let i = 0;
 
     while (i < argsStr.length) {
-        const char = argsStr[i];
+        const char = argsStr.charAt(i);
 
         if (inString) {
             if (char === '\\' && i + 1 < argsStr.length) {
@@ -222,7 +222,7 @@ window.djust.parseEventHandler = parseEventHandler;
  * @returns {Object} - Parameters with coerced types
  */
 function extractTypedParams(element) {
-    const params = {};
+    const params = Object.create(null); // null prototype prevents prototype-pollution
 
     for (const attr of element.attributes) {
         if (!attr.name.startsWith('data-')) continue;
@@ -306,7 +306,7 @@ function extractTypedParams(element) {
                 case 'array':
                     try {
                         value = JSON.parse(value);
-                    } catch (e) {
+                    } catch {
                         console.warn(`[LiveView] Failed to parse JSON for ${safeAttrName}: "${value}"`);
                         // Keep as string if JSON parse fails - server will validate
                     }

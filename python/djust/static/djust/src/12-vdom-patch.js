@@ -44,7 +44,7 @@ function getNodeByPath(path, djustId = null) {
     }
 
     for (let i = 0; i < path.length; i++) {
-        const index = path[i];
+        const index = path[i]; // eslint-disable-line security/detect-object-injection -- path is a server-provided integer array
         const children = Array.from(node.childNodes).filter(child => {
             if (child.nodeType === Node.ELEMENT_NODE) return true;
             if (child.nodeType === Node.TEXT_NODE) {
