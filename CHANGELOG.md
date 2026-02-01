@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2rc5] - 2026-02-01
+
 ### Fixed
 
 - **Stale Closure Args on VDOM-Patched Elements** — After deleting a todo, the remaining button's click handler sent the wrong `_args` (stale closure from bind time) because `SetAttribute` patches updated the `dj-click` DOM attribute but not the listener closure. Event listeners now re-parse `dj-*` attributes from the DOM at event time. Also sets `dj-*` as DOM attributes in `createNodeFromVNode` and marks elements as bound to prevent duplicate listeners. (#201)
@@ -250,7 +252,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bug fixes and stability improvements
 
-[Unreleased]: https://github.com/djust-org/djust/compare/v0.2.2rc3...HEAD
+[Unreleased]: https://github.com/djust-org/djust/compare/v0.2.2rc5...HEAD
+[0.2.2rc5]: https://github.com/djust-org/djust/compare/v0.2.2rc3...v0.2.2rc5
 [0.2.2rc3]: https://github.com/djust-org/djust/compare/v0.2.2rc2...v0.2.2rc3
 [0.2.2rc2]: https://github.com/djust-org/djust/compare/v0.2.2rc1...v0.2.2rc2
 [0.2.2rc1]: https://github.com/djust-org/djust/compare/v0.2.1...v0.2.2rc1
