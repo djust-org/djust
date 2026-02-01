@@ -72,6 +72,11 @@
             this.hookIntoLiveView();
             this.loadState();
 
+            // Bootstrap handlers/variables from initial page data if available
+            if (window.DJUST_DEBUG_INFO) {
+                this.processDebugInfo(window.DJUST_DEBUG_INFO);
+            }
+
             console.log('[djust] Developer Bar initialized 🐍');
         }
 
@@ -2287,13 +2292,20 @@
         }
 
         renderHandlersTab() {
-            if (!this.handlers || this.handlers.length === 0) {
+            // Normalize handlers: server may return an object (dict) or array
+            const handlersList = Array.isArray(this.handlers)
+                ? this.handlers
+                : (this.handlers && typeof this.handlers === 'object')
+                    ? Object.entries(this.handlers).map(([name, info]) => ({ name, ...info }))
+                    : [];
+
+            if (handlersList.length === 0) {
                 return '<div class="empty-state">No event handlers detected. Handlers will appear after the view is mounted.</div>';
             }
 
             return `
                 <div class="handlers-list">
-                    ${this.handlers.map(handler => `
+                    ${handlersList.map(handler => `
                         <div class="handler-item">
                             <div class="handler-header">
                                 <div class="handler-name">${handler.name}</div>
@@ -2516,6 +2528,9 @@
                 this.eventHistory.pop();
             }
 
+            // Update status bar counter
+            this.updateCounter('event-count', this.eventHistory.length);
+
             // Update UI if events tab is active
             if (this.state.activeTab === 'events') {
                 this.renderTabContent();
@@ -2569,7 +2584,7 @@
             }
 
             // Update counter
-            this.updateCounter('patches', this.patchHistory.length);
+            this.updateCounter('patch-count', this.patchHistory.length);
 
             // Update UI if patches tab is active
             if (this.state.activeTab === 'patches') {
@@ -2660,6 +2675,53 @@
 
             // Initialize pending events tracker for matching sent events to responses
             this._pendingEvents = {};
+
+            // Retroactively hook into any existing WebSocket connection
+            // (LiveView may have already connected before the debug panel loaded)
+            this._hookExistingWebSocket();
+        }
+
+        _hookExistingWebSocket() {
+            const self = this;
+            const instance = window.djust && window.djust.liveViewInstance;
+            if (!instance || !instance.ws) return;
+
+            const ws = instance.ws;
+
+            // Patch send on the existing instance
+            if (!ws._djustDebugHooked) {
+                const originalSend = ws.send.bind(ws);
+                ws.send = function(data) {
+                    const payload = self.parsePayload(data);
+                    self.captureNetworkMessage({
+                        direction: 'sent',
+                        type: self.detectMessageType(data),
+                        size: new Blob([data]).size,
+                        payload: payload
+                    });
+                    if (payload && payload.type === 'event') {
+                        self._pendingEvents = self._pendingEvents || {};
+                        const eventKey = (payload.event || payload.handler) + '_' + Date.now();
+                        self._pendingEvents[eventKey] = {
+                            handler: payload.event || payload.handler,
+                            params: payload.params || payload.data || {},
+                            startTime: performance.now()
+                        };
+                    }
+                    return originalSend(data);
+                };
+
+                // Hook into message receive on the existing instance
+                const originalOnmessage = ws.onmessage;
+                ws.onmessage = function(event) {
+                    self._handleReceivedMessage(event);
+                    if (originalOnmessage) {
+                        return originalOnmessage.call(this, event);
+                    }
+                };
+
+                ws._djustDebugHooked = true;
+            }
         }
 
         _handleReceivedMessage(event) {
@@ -2735,6 +2797,14 @@
                 }
             }
 
+            // Update patches from _debug payload
+            if (debugInfo.patches && Array.isArray(debugInfo.patches) && debugInfo.patches.length > 0) {
+                const duration = debugInfo.performance
+                    ? (debugInfo.performance.render_time || 0) + (debugInfo.performance.diff_time || 0)
+                    : 0;
+                this.logPatches(debugInfo.patches, duration, debugInfo.performance || null);
+            }
+
             // Update performance metrics
             if (debugInfo.performance) {
                 this.performance = debugInfo.performance;
@@ -2787,7 +2857,11 @@
         }
 
         updateCounter(id, count) {
-            const counter = document.getElementById(id);
+            // Try document-level first, then fall back to panel-scoped search
+            let counter = document.getElementById(id);
+            if (!counter && this.panel) {
+                counter = this.panel.querySelector('#' + id);
+            }
             if (counter) {
                 counter.textContent = count;
             }

@@ -22,9 +22,17 @@ class PostProcessingMixin:
             Dict with debug information
         """
         from ..validation import get_handler_signature_info
+        from django.views import View
 
         handlers = {}
         variables = {}
+
+        # Collect method names from base Django View (and its parents) to exclude
+        base_view_methods = set()
+        for cls in View.__mro__:
+            for name in vars(cls):
+                if not name.startswith("_"):
+                    base_view_methods.add(name)
 
         for name in dir(self):
             if name.startswith("_"):
@@ -35,20 +43,24 @@ class PostProcessingMixin:
             except AttributeError:
                 continue
 
-            if (
-                callable(attr)
-                and hasattr(attr, "_djust_decorators")
-                and "event_handler" in getattr(attr, "_djust_decorators", {})
-            ):
-                sig_info = get_handler_signature_info(attr)
+            if callable(attr) and hasattr(attr, "__func__"):
+                # Discover handlers matching runtime resolution logic:
+                # any public method that is not inherited from base Django View classes
+                is_decorated = hasattr(attr, "_djust_decorators") and "event_handler" in getattr(
+                    attr, "_djust_decorators", {}
+                )
+                is_potential_handler = is_decorated or name not in base_view_methods
 
-                handlers[name] = {
-                    "name": name,
-                    "params": sig_info["params"],
-                    "description": sig_info["description"],
-                    "accepts_kwargs": sig_info["accepts_kwargs"],
-                    "decorators": getattr(attr, "_djust_decorators", {}),
-                }
+                if is_potential_handler:
+                    sig_info = get_handler_signature_info(attr)
+
+                    handlers[name] = {
+                        "name": name,
+                        "params": sig_info["params"],
+                        "description": sig_info["description"],
+                        "accepts_kwargs": sig_info["accepts_kwargs"],
+                        "decorators": getattr(attr, "_djust_decorators", {}),
+                    }
 
             elif (
                 not callable(attr)
@@ -189,6 +201,15 @@ class PostProcessingMixin:
         script = f'<script src="{client_js_url}" defer data-turbo-track="reload"></script>'
 
         if settings.DEBUG:
+            # debug-panel.js MUST load before client-dev.js so that
+            # DjustDebugPanel is defined when client-dev.js calls
+            # initDebugPanel() (fixes #193 and #196).
+            try:
+                debug_panel_js_url = static("djust/debug-panel.js")
+            except (ValueError, AttributeError):
+                debug_panel_js_url = "/static/djust/debug-panel.js"
+            script += f'\n        <script src="{debug_panel_js_url}" defer data-turbo-track="reload"></script>'
+
             try:
                 client_dev_js_url = static("djust/client-dev.js")
             except (ValueError, AttributeError):
