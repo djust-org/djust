@@ -22,17 +22,17 @@ class PostProcessingMixin:
             Dict with debug information
         """
         from ..validation import get_handler_signature_info
-        from django.views import View
 
         handlers = {}
         variables = {}
 
-        # Collect method names from base Django View (and its parents) to exclude
-        base_view_methods = set()
-        for cls in View.__mro__:
+        # Collect method names defined on LiveView and its base classes (but not
+        # on the user's subclass) so we only surface user-defined handlers.
+        base_methods = set()
+        for cls in type(self).__mro__[1:]:  # skip the user's class itself
             for name in vars(cls):
                 if not name.startswith("_"):
-                    base_view_methods.add(name)
+                    base_methods.add(name)
 
         for name in dir(self):
             if name.startswith("_"):
@@ -49,7 +49,7 @@ class PostProcessingMixin:
                 is_decorated = hasattr(attr, "_djust_decorators") and "event_handler" in getattr(
                     attr, "_djust_decorators", {}
                 )
-                is_potential_handler = is_decorated or name not in base_view_methods
+                is_potential_handler = is_decorated or name not in base_methods
 
                 if is_potential_handler:
                     sig_info = get_handler_signature_info(attr)

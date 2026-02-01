@@ -199,6 +199,10 @@ class TestGetDebugInfo:
         assert "setup" not in debug_info["handlers"]
         assert "http_method_not_allowed" not in debug_info["handlers"]
 
+        # LiveView/mixin methods should also be excluded
+        assert "get_context_data" not in debug_info["handlers"]
+        assert "mount" not in debug_info["handlers"]
+
         # Custom method should be included
         assert "my_handler" in debug_info["handlers"]
 

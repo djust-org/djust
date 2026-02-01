@@ -433,3 +433,53 @@ describe('Debug Panel Harness — processDebugInfo patches (#196)', () => {
         expect(panel.patchHistory.length).toBe(0);
     });
 });
+
+describe('Debug Panel Harness — _hookExistingWebSocket (#196)', () => {
+    let panel;
+
+    afterEach(() => {
+        if (panel) panel.destroy();
+        delete window.djust;
+    });
+
+    it('hooks into existing WebSocket instance', () => {
+        const mockSend = vi.fn();
+        const mockWs = {
+            send: mockSend,
+            onmessage: null,
+            readyState: 1,
+        };
+        window.djust = { liveViewInstance: { ws: mockWs } };
+
+        panel = createPanel();
+        // hookIntoLiveView is called during init, which calls _hookExistingWebSocket
+
+        expect(mockWs._djustDebugHooked).toBe(true);
+        // Original send should still be callable through the wrapper
+        mockWs.send(JSON.stringify({ type: 'ping' }));
+        expect(mockSend).toHaveBeenCalled();
+    });
+
+    it('does not double-hook the same WebSocket', () => {
+        const mockWs = {
+            send: vi.fn(),
+            onmessage: null,
+            readyState: 1,
+        };
+        window.djust = { liveViewInstance: { ws: mockWs } };
+
+        panel = createPanel();
+        const hookedSend = mockWs.send;
+
+        // Call again — should not re-wrap
+        panel._hookExistingWebSocket();
+        expect(mockWs.send).toBe(hookedSend);
+    });
+
+    it('no-ops when no LiveView instance exists', () => {
+        window.djust = {};
+        panel = createPanel();
+        // Should not throw
+        expect(panel).toBeDefined();
+    });
+});
