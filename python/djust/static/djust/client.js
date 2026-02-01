@@ -1130,7 +1130,7 @@ function initReactCounters() {
         let props = {};
         try {
             props = JSON.parse(propsJson.replace(/&quot;/g, '"'));
-        } catch (_e) { }
+        } catch { }
 
         let count = props.initialCount || 0;
         const display = container.querySelector('.counter-display');
@@ -1233,7 +1233,7 @@ function parseArguments(argsStr) {
     let i = 0;
 
     while (i < argsStr.length) {
-        const char = argsStr[i];
+        const char = argsStr.charAt(i);
 
         if (inString) {
             if (char === '\\' && i + 1 < argsStr.length) {
@@ -1430,7 +1430,7 @@ function extractTypedParams(element) {
                 case 'array':
                     try {
                         value = JSON.parse(value);
-                    } catch (e) {
+                    } catch {
                         console.warn(`[LiveView] Failed to parse JSON for ${safeAttrName}: "${value}"`);
                         // Keep as string if JSON parse fails - server will validate
                     }
@@ -1448,7 +1448,7 @@ function extractTypedParams(element) {
             }
         }
 
-        params[key] = value;
+        Object.defineProperty(params, key, { value, writable: true, enumerable: true, configurable: true });
     }
 
     return params;
@@ -1574,7 +1574,7 @@ function bindLiveViewEvents() {
 
             // Determine rate limit strategy
             const inputType = element.type || element.tagName.toLowerCase();
-            const rateLimit = DEFAULT_RATE_LIMITS[inputType] || { type: 'debounce', ms: 300 };
+            const rateLimit = Object.hasOwn(DEFAULT_RATE_LIMITS, inputType) ? DEFAULT_RATE_LIMITS[inputType] : { type: 'debounce', ms: 300 };
 
             // Check for explicit overrides
             if (element.hasAttribute('data-debounce')) {
@@ -1695,7 +1695,6 @@ function getLiveViewRoot() {
 // Helper: Clear optimistic state
 function clearOptimisticState(eventName) {
     if (eventName && optimisticUpdates.has(eventName)) {
-        const { element, originalState } = optimisticUpdates.get(eventName);
         // Restore original state if needed (e.g. on error)
         // For now, we just clear the tracking
         optimisticUpdates.delete(eventName);
@@ -2025,7 +2024,7 @@ function getNodeByPath(path, djustId = null) {
     }
 
     for (let i = 0; i < path.length; i++) {
-        const index = path[i];
+        const index = Number(path[i]);
         // Filter children to match server's Rust VDOM which strips whitespace-only
         // text nodes (parser.rs). Must use same logic as getSignificantChildren().
         // NOTE: \xa0 (non-breaking space / &nbsp;) is preserved by both server and

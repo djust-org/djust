@@ -44,7 +44,7 @@ function getNodeByPath(path, djustId = null) {
     }
 
     for (let i = 0; i < path.length; i++) {
-        const index = path[i];
+        const index = Number(path[i]);
         const children = Array.from(node.childNodes).filter(child => {
             if (child.nodeType === Node.ELEMENT_NODE) return true;
             if (child.nodeType === Node.TEXT_NODE) {

@@ -113,7 +113,7 @@ function bindLiveViewEvents() {
 
             // Determine rate limit strategy
             const inputType = element.type || element.tagName.toLowerCase();
-            const rateLimit = DEFAULT_RATE_LIMITS[inputType] || { type: 'debounce', ms: 300 };
+            const rateLimit = Object.hasOwn(DEFAULT_RATE_LIMITS, inputType) ? DEFAULT_RATE_LIMITS[inputType] : { type: 'debounce', ms: 300 };
 
             // Check for explicit overrides
             if (element.hasAttribute('data-debounce')) {
@@ -232,7 +232,6 @@ function getLiveViewRoot() {
 // Helper: Clear optimistic state
 function clearOptimisticState(eventName) {
     if (eventName && optimisticUpdates.has(eventName)) {
-        const { element, originalState } = optimisticUpdates.get(eventName);
         // Restore original state if needed (e.g. on error)
         // For now, we just clear the tracking
         optimisticUpdates.delete(eventName);
