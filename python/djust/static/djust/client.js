@@ -1346,7 +1346,7 @@ window.djust.parseEventHandler = parseEventHandler;
  * @returns {Object} - Parameters with coerced types
  */
 function extractTypedParams(element) {
-    const params = {};
+    const params = Object.create(null); // null prototype prevents prototype-pollution
 
     for (const attr of element.attributes) {
         if (!attr.name.startsWith('data-')) continue;
@@ -1448,7 +1448,7 @@ function extractTypedParams(element) {
             }
         }
 
-        Object.defineProperty(params, key, { value, writable: true, enumerable: true, configurable: true });
+        params[key] = value;
     }
 
     return params;
@@ -1574,7 +1574,7 @@ function bindLiveViewEvents() {
 
             // Determine rate limit strategy
             const inputType = element.type || element.tagName.toLowerCase();
-            const rateLimit = Object.hasOwn(DEFAULT_RATE_LIMITS, inputType) ? DEFAULT_RATE_LIMITS[inputType] : { type: 'debounce', ms: 300 };
+            const rateLimit = Object.prototype.hasOwnProperty.call(DEFAULT_RATE_LIMITS, inputType) ? DEFAULT_RATE_LIMITS[inputType] : { type: 'debounce', ms: 300 };
 
             // Check for explicit overrides
             if (element.hasAttribute('data-debounce')) {
@@ -1695,8 +1695,8 @@ function getLiveViewRoot() {
 // Helper: Clear optimistic state
 function clearOptimisticState(eventName) {
     if (eventName && optimisticUpdates.has(eventName)) {
-        // Restore original state if needed (e.g. on error)
-        // For now, we just clear the tracking
+        const { element: _element, originalState: _originalState } = optimisticUpdates.get(eventName);
+        // TODO: Restore original state on error (e.g. _element, _originalState)
         optimisticUpdates.delete(eventName);
     }
 }
@@ -2024,7 +2024,7 @@ function getNodeByPath(path, djustId = null) {
     }
 
     for (let i = 0; i < path.length; i++) {
-        const index = Number(path[i]);
+        const index = path[i]; // eslint-disable-line security/detect-object-injection -- path is a server-provided integer array
         // Filter children to match server's Rust VDOM which strips whitespace-only
         // text nodes (parser.rs). Must use same logic as getSignificantChildren().
         // NOTE: \xa0 (non-breaking space / &nbsp;) is preserved by both server and

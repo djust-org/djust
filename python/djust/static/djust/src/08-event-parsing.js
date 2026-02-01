@@ -222,7 +222,7 @@ window.djust.parseEventHandler = parseEventHandler;
  * @returns {Object} - Parameters with coerced types
  */
 function extractTypedParams(element) {
-    const params = {};
+    const params = Object.create(null); // null prototype prevents prototype-pollution
 
     for (const attr of element.attributes) {
         if (!attr.name.startsWith('data-')) continue;
@@ -324,7 +324,7 @@ function extractTypedParams(element) {
             }
         }
 
-        Object.defineProperty(params, key, { value, writable: true, enumerable: true, configurable: true });
+        params[key] = value;
     }
 
     return params;

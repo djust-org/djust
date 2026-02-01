@@ -474,7 +474,7 @@ class ProductSearchView(LiveView):
 
 - ✅ **Zero JavaScript Required** - Common patterns work without writing any JS
 - ✅ **87% Code Reduction** - Decorators replace hundreds of lines of manual JavaScript
-- ✅ **Smallest Bundle** - ~29KB gzipped client.js (vs Phoenix ~30KB, Livewire ~50KB)
+- ✅ **Lightweight Bundle** - ~29KB gzipped client.js (vs Livewire ~50KB)
 - ✅ **Competitive DX** - Matches Phoenix LiveView and Laravel Livewire developer experience
 
 #### Available Decorators
