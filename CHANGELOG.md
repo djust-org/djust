@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **VDOM diff/patch round-trip failure on keyed child reorder** — `apply_patches` now processes patches level-by-level (shallowest parent first) so structural changes establish correct tree shape before deeper patches navigate into children. ([#212](https://github.com/djust-org/djust/issues/212))
 - **apply_patches djust_id-based resolution** — Rewrote `apply_patches` to resolve parent nodes by `djust_id` instead of path-based traversal, preventing mis-targeting when structural patches at shallower levels invalidate deeper path indices. Fixed patch application order (removes → inserts → moves) and MoveChild index clamping. ([#216](https://github.com/djust-org/djust/issues/216))
 - **Diff engine keyed+unkeyed interleaving** — The diff engine now emits `MoveChild` patches for unkeyed element children (with `djust_id`) when their absolute position changes due to keyed sibling moves, fixing incorrect patch targeting in mixed keyed/unkeyed child lists. ([#219](https://github.com/djust-org/djust/issues/219))
+- **Text node targeting after keyed moves** — `SetText` patches now carry `djust_id` when available (for test infrastructure), and `sync_ids` propagates IDs to text nodes. Test `assign_ids` gives synthetic IDs to text nodes so `apply_patches` resolves them by ID after structural changes shift path indices. ([#221](https://github.com/djust-org/djust/issues/221))
 
 ## [0.2.2] - 2026-02-01
 
