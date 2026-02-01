@@ -4,8 +4,6 @@
  */
 
 (function() {
-    'use strict';
-
     // Check if we should load the debug panel
     if (!window.DEBUG_MODE) {
         console.log('[djust] Debug panel disabled (DEBUG_MODE=false)');
