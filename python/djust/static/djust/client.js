@@ -2016,13 +2016,11 @@ function getNodeByPath(path, djustId = null) {
 
     for (let i = 0; i < path.length; i++) {
         const index = path[i];
-        const children = Array.from(node.childNodes).filter(child => {
-            if (child.nodeType === Node.ELEMENT_NODE) return true;
-            if (child.nodeType === Node.TEXT_NODE) {
-                return child.textContent.trim().length > 0;
-            }
-            return false;
-        });
+        // Use childNodes directly (not filtered) to match the server's Rust VDOM
+        // which counts ALL children including whitespace text nodes when computing
+        // path indices. Filtering out whitespace here causes index mismatches
+        // when the ID-based lookup fails. See: #198
+        const children = node.childNodes;
 
         if (index >= children.length) {
             if (globalThis.djustDebug) {
@@ -2637,6 +2635,7 @@ function isWhitespacePreserving(node) {
 
 // Export for testing
 window.djust.getSignificantChildren = getSignificantChildren;
+window.djust._getNodeByPath = getNodeByPath;
 window.djust._stampDjIds = _stampDjIds;
 window.djust._groupPatchesByParent = groupPatchesByParent;
 window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
