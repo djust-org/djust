@@ -6,6 +6,8 @@
 
 // Create djust namespace at the top to ensure it's available for all exports
 window.djust = window.djust || {};
+window.djust.VERSION = '0.2.2rc3';
+window.djust.JS_BUILD = '20260201-1215';
 
 // ============================================================================
 // Double-Load Guard
@@ -16,6 +18,7 @@ if (window._djustClientLoaded) {
     console.log('[LiveView] client.js already loaded, skipping duplicate initialization');
 } else {
 window._djustClientLoaded = true;
+console.log(`[djust] client.js v${window.djust.VERSION} build ${window.djust.JS_BUILD}`);
 
 // ============================================================================
 // Security Constants
@@ -2669,6 +2672,29 @@ window.djust._groupPatchesByParent = groupPatchesByParent;
 window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
 window.djust.createNodeFromVNode = createNodeFromVNode;
 window.djust.bindLiveViewEvents = bindLiveViewEvents;
+window.djust.handleEvent = handleEvent;
+window.djust._sortPatches = function(patches) {
+    function patchPhase(p) {
+        switch (p.type) {
+            case 'RemoveChild': return 0;
+            case 'MoveChild':   return 1;
+            case 'InsertChild': return 2;
+            default:            return 3;
+        }
+    }
+    patches.sort((a, b) => {
+        const phaseA = patchPhase(a);
+        const phaseB = patchPhase(b);
+        if (phaseA !== phaseB) return phaseA - phaseB;
+        if (phaseA === 0) {
+            const pathA = JSON.stringify(a.path);
+            const pathB = JSON.stringify(b.path);
+            if (pathA === pathB) return b.index - a.index;
+        }
+        return 0;
+    });
+    return patches;
+};
 
 /**
  * Group patches by their parent path for batching.
