@@ -14,29 +14,6 @@ use crate::{Patch, VNode};
 /// djust_id-based node lookup when available so that path indices invalidated by
 /// earlier structural changes don't cause mis-targeting.
 pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
-    // Snapshot (parent_djust_id, old_child_index) → child_djust_id for moves.
-    let mut move_id_map: std::collections::HashMap<(String, usize), String> =
-        std::collections::HashMap::new();
-    for patch in patches {
-        if let Patch::MoveChild {
-            d: Some(parent_id),
-            from,
-            ..
-        } = patch
-        {
-            let key = (parent_id.clone(), *from);
-            if let std::collections::hash_map::Entry::Vacant(e) = move_id_map.entry(key) {
-                if let Some(target) = find_by_djust_id(root, parent_id) {
-                    if let Some(child) = target.children.get(*from) {
-                        if let Some(ref id) = child.djust_id {
-                            e.insert(id.clone());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // Group child-mutation patches by parent djust_id, preserving order within
     // each group. Use BTreeMap keyed by first-seen order to process parents in
     // the order they appear in the patch list (shallowest first due to diff
@@ -140,19 +117,18 @@ pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
             }
         }
 
-        // Moves: by djust_id
+        // Moves: by child_d (djust_id of the child to move)
         for patch in &group.moves {
-            if let Patch::MoveChild { d, from, to, .. } = patch {
-                let child_id = d
-                    .as_ref()
-                    .and_then(|pid| move_id_map.get(&(pid.clone(), *from)).cloned());
-
+            if let Patch::MoveChild {
+                from, to, child_d, ..
+            } = patch
+            {
                 if let Some(target) = find_by_djust_id_mut(root, pid) {
-                    if let Some(ref child_id) = child_id {
+                    if let Some(ref cid) = child_d {
                         if let Some(current_pos) = target
                             .children
                             .iter()
-                            .position(|c| c.djust_id.as_deref() == Some(child_id.as_str()))
+                            .position(|c| c.djust_id.as_deref() == Some(cid.as_str()))
                         {
                             let node = target.children.remove(current_pos);
                             let insert_at = (*to).min(target.children.len());
