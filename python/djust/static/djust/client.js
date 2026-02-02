@@ -142,7 +142,7 @@ function reinitLiveViewForTurboNav() {
  * @param {HTMLElement} triggerElement - Element that triggered the event
  * @returns {boolean} - True if handled successfully, false otherwise
  */
-function handleServerResponse(data, eventName, triggerElement) {
+function handleServerResponse(data, eventName, triggerElement, context = {}) {
     try {
         // Handle cache storage (from @cache decorator)
         if (data.cache_request_id && pendingCacheRequests.has(data.cache_request_id)) {
@@ -192,7 +192,20 @@ function handleServerResponse(data, eventName, triggerElement) {
             clientVdomVersion = data.version;
         }
 
-        // Clear optimistic state BEFORE applying changes
+        // Handle optimistic updates
+        const { optimisticUpdateId, targetSelector } = context;
+        if (optimisticUpdateId && window.djust.optimistic) {
+            if (data.error) {
+                // Server returned an error, revert optimistic update
+                window.djust.optimistic.revertOptimisticUpdate(optimisticUpdateId);
+                showFlashMessage(data.error_message || 'An error occurred', 'error');
+            } else {
+                // Success, clear the optimistic update (server state is now applied)
+                window.djust.optimistic.clearOptimisticUpdate(optimisticUpdateId);
+            }
+        }
+
+        // Clear legacy optimistic state
         clearOptimisticState(eventName);
 
         // Global cleanup of lingering optimistic-pending classes
@@ -209,7 +222,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             // Store comprehensive performance data if available
             window._lastPerformanceData = data.performance;
 
-            const success = applyPatches(data.patches);
+            const success = applyPatches(data.patches, targetSelector);
             if (success === false) {
                 console.error('[LiveView] Patches failed, reloading page...');
                 globalLoadingManager.stopLoading(eventName, triggerElement);
@@ -1487,13 +1500,20 @@ function bindLiveViewEvents() {
             element.dataset.liveviewClickBound = 'true';
             // Parse handler string to extract function name and arguments
             const parsed = parseEventHandler(clickHandler);
-            element.addEventListener('click', async (e) => {
+            
+            const clickHandlerFn = async (e) => {
                 e.preventDefault();
 
                 // dj-confirm: show confirmation dialog before sending event
                 const confirmMsg = element.getAttribute('dj-confirm');
                 if (confirmMsg && !window.confirm(confirmMsg)) {
                     return; // User cancelled
+                }
+
+                // Apply optimistic update if specified
+                let optimisticUpdateId = null;
+                if (window.djust.optimistic) {
+                    optimisticUpdateId = window.djust.optimistic.applyOptimisticUpdate(e.currentTarget, parsed.name);
                 }
 
                 // Extract all data-* attributes with type coercion support
@@ -1511,11 +1531,25 @@ function bindLiveViewEvents() {
                     params.component_id = componentId;
                 }
 
-                // Pass target element for optimistic updates (Phase 3)
+                // Pass target element and optimistic update ID
                 params._targetElement = e.currentTarget;
+                params._optimisticUpdateId = optimisticUpdateId;
+
+                // Handle dj-target for scoped updates
+                const targetSelector = element.getAttribute('dj-target');
+                if (targetSelector) {
+                    params._djTargetSelector = targetSelector;
+                }
 
                 await handleEvent(parsed.name, params);
-            });
+            };
+
+            // Apply rate limiting if specified
+            const wrappedHandler = window.djust.rateLimit 
+                ? window.djust.rateLimit.wrapWithRateLimit(element, 'click', clickHandlerFn)
+                : clickHandlerFn;
+
+            element.addEventListener('click', wrappedHandler);
         }
 
         // Handle dj-submit events on forms
@@ -1578,16 +1612,32 @@ function bindLiveViewEvents() {
         const changeHandler = element.getAttribute('dj-change');
         if (changeHandler && !element.dataset.liveviewChangeBound) {
             element.dataset.liveviewChangeBound = 'true';
-            element.addEventListener('change', async (e) => {
+            
+            const changeHandlerFn = async (e) => {
                 const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
                 const params = buildFormEventParams(e.target, value);
+                
                 // Add target element for loading state (consistent with other handlers)
                 params._targetElement = e.target;
+
+                // Handle dj-target for scoped updates
+                const targetSelector = element.getAttribute('dj-target');
+                if (targetSelector) {
+                    params._djTargetSelector = targetSelector;
+                }
+
                 if (globalThis.djustDebug) {
                     console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
                 }
                 await handleEvent(changeHandler, params);
-            });
+            };
+
+            // Apply rate limiting if specified
+            const wrappedHandler = window.djust.rateLimit 
+                ? window.djust.rateLimit.wrapWithRateLimit(element, 'change', changeHandlerFn)
+                : changeHandlerFn;
+
+            element.addEventListener('change', wrappedHandler);
         }
 
         // Handle dj-input events (with smart debouncing/throttling)
@@ -1649,7 +1699,8 @@ function bindLiveViewEvents() {
             const keyHandler = element.getAttribute(`dj-${eventType}`);
             if (keyHandler && !element.dataset[`liveview${eventType}Bound`]) {
                 element.dataset[`liveview${eventType}Bound`] = 'true';
-                element.addEventListener(eventType, async (e) => {
+                
+                const keyHandlerFn = async (e) => {
                     // Check for key modifiers (e.g. dj-keydown.enter)
                     const modifiers = keyHandler.split('.');
                     const handlerName = modifiers[0];
@@ -1676,8 +1727,22 @@ function bindLiveViewEvents() {
                         params.component_id = componentId;
                     }
 
+                    // Add target element and handle dj-target
+                    params._targetElement = e.target;
+                    const targetSelector = element.getAttribute('dj-target');
+                    if (targetSelector) {
+                        params._djTargetSelector = targetSelector;
+                    }
+
                     await handleEvent(handlerName, params);
-                });
+                };
+
+                // Apply rate limiting if specified
+                const wrappedHandler = window.djust.rateLimit 
+                    ? window.djust.rateLimit.wrapWithRateLimit(element, eventType, keyHandlerFn)
+                    : keyHandlerFn;
+
+                element.addEventListener(eventType, wrappedHandler);
             }
         });
     });
@@ -2037,13 +2102,21 @@ async function handleEvent(eventName, params = {}) {
         console.log(`[LiveView] Handling event: ${eventName}`, params);
     }
 
-    // Start loading state
+    // Extract optimistic update ID and target element
     const triggerElement = params._targetElement;
+    const optimisticUpdateId = params._optimisticUpdateId;
+    const targetSelector = params._djTargetSelector;
+
+    // Clean up internal params before sending to server
+    const serverParams = { ...params };
+    delete serverParams._targetElement;
+    delete serverParams._optimisticUpdateId;
+    delete serverParams._djTargetSelector;
 
     // Check client-side cache first
     const config = cacheConfig.get(eventName);
     const keyParams = config?.key_params || null;
-    const cacheKey = buildCacheKey(eventName, params, keyParams);
+    const cacheKey = buildCacheKey(eventName, serverParams, keyParams);
     const cached = getCachedResult(cacheKey);
 
     if (cached) {
@@ -2055,9 +2128,14 @@ async function handleEvent(eventName, params = {}) {
         // Still show brief loading state for UX consistency
         globalLoadingManager.startLoading(eventName, triggerElement);
 
+        // Clear optimistic update (server state is now applied)
+        if (optimisticUpdateId && window.djust.optimistic) {
+            window.djust.optimistic.clearOptimisticUpdate(optimisticUpdateId);
+        }
+
         // Apply cached patches
         if (cached.patches && cached.patches.length > 0) {
-            applyPatches(cached.patches);
+            applyPatches(cached.patches, targetSelector);
             initReactCounters();
             initTodoItems();
             bindLiveViewEvents();
@@ -2075,7 +2153,7 @@ async function handleEvent(eventName, params = {}) {
     globalLoadingManager.startLoading(eventName, triggerElement);
 
     // Prepare params for request
-    let paramsWithCache = params;
+    let paramsWithCache = serverParams;
 
     // Only set up caching for events with @cache decorator
     if (config) {
@@ -2097,7 +2175,12 @@ async function handleEvent(eventName, params = {}) {
         pendingCacheRequests.set(cacheRequestId, { cacheKey, ttl, timeoutId });
 
         // Add cache request ID to params
-        paramsWithCache = { ...params, _cacheRequestId: cacheRequestId };
+        paramsWithCache = { ...serverParams, _cacheRequestId: cacheRequestId };
+    }
+
+    // Store optimistic update context for later handling
+    if (optimisticUpdateId) {
+        paramsWithCache._optimistic_context = { updateId: optimisticUpdateId, targetSelector };
     }
 
     // Try WebSocket first
@@ -2117,22 +2200,101 @@ async function handleEvent(eventName, params = {}) {
             headers: {
                 'Content-Type': 'application/json',
                 'X-CSRFToken': csrfToken,
-                'X-Djust-Event': eventName
+                'X-Djust-Event': eventName,
+                'X-Djust-Target': targetSelector || ''
             },
             body: JSON.stringify(paramsWithCache)
         });
 
         if (!response.ok) {
+            // Revert optimistic update on HTTP error
+            if (optimisticUpdateId && window.djust.optimistic) {
+                window.djust.optimistic.revertOptimisticUpdate(optimisticUpdateId);
+                showFlashMessage('An error occurred. Please try again.', 'error');
+            }
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 
         const data = await response.json();
-        handleServerResponse(data, eventName, triggerElement);
+        handleServerResponse(data, eventName, triggerElement, { optimisticUpdateId, targetSelector });
 
     } catch (error) {
         console.error('[LiveView] HTTP fallback failed:', error);
+        
+        // Revert optimistic update on error
+        if (optimisticUpdateId && window.djust.optimistic) {
+            window.djust.optimistic.revertOptimisticUpdate(optimisticUpdateId);
+            showFlashMessage('Connection error. Please try again.', 'error');
+        }
+        
         globalLoadingManager.stopLoading(eventName, triggerElement);
     }
+}
+
+/**
+ * Show flash message to user
+ * @param {string} message - Message to show
+ * @param {string} type - Message type (error, success, info)
+ */
+function showFlashMessage(message, type = 'info') {
+    // Try to find existing flash container
+    let flashContainer = document.querySelector('.djust-flash-messages');
+    
+    if (!flashContainer) {
+        // Create flash container if it doesn't exist
+        flashContainer = document.createElement('div');
+        flashContainer.className = 'djust-flash-messages';
+        flashContainer.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 10000;
+        `;
+        document.body.appendChild(flashContainer);
+    }
+
+    // Create flash message element
+    const flashElement = document.createElement('div');
+    flashElement.className = `djust-flash djust-flash-${type}`;
+    flashElement.style.cssText = `
+        background: ${type === 'error' ? '#ef4444' : type === 'success' ? '#10b981' : '#3b82f6'};
+        color: white;
+        padding: 12px 16px;
+        border-radius: 4px;
+        margin-bottom: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        animation: djust-flash-slide-in 0.3s ease-out;
+    `;
+    flashElement.textContent = message;
+
+    // Add CSS animation if not already added
+    if (!document.querySelector('#djust-flash-styles')) {
+        const style = document.createElement('style');
+        style.id = 'djust-flash-styles';
+        style.textContent = `
+            @keyframes djust-flash-slide-in {
+                from { transform: translateX(100%); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+            }
+            @keyframes djust-flash-slide-out {
+                from { transform: translateX(0); opacity: 1; }
+                to { transform: translateX(100%); opacity: 0; }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    flashContainer.appendChild(flashElement);
+
+    // Auto remove after 5 seconds
+    setTimeout(() => {
+        flashElement.style.animation = 'djust-flash-slide-out 0.3s ease-out';
+        setTimeout(() => {
+            if (flashElement.parentNode) {
+                flashElement.parentNode.removeChild(flashElement);
+            }
+        }, 300);
+    }, 5000);
 }
 
 // === VDOM Patch Application ===
@@ -2158,10 +2320,11 @@ function sanitizeIdForLog(id) {
  * @param {string|null} djustId - Compact djust ID for direct lookup (e.g., "1a")
  * @returns {Node|null} - Found node or null
  */
-function getNodeByPath(path, djustId = null) {
+function getNodeByPath(path, djustId = null, targetSelector = null) {
     // Strategy 1: ID-based resolution (fast, reliable)
     if (djustId) {
-        const byId = document.querySelector(`[data-dj-id="${CSS.escape(djustId)}"]`);
+        const scope = targetSelector ? document.querySelector(targetSelector) : document;
+        const byId = scope ? scope.querySelector(`[data-dj-id="${CSS.escape(djustId)}"]`) : null;
         if (byId) {
             return byId;
         }
@@ -2173,7 +2336,7 @@ function getNodeByPath(path, djustId = null) {
     }
 
     // Strategy 2: Index-based path traversal (fallback)
-    let node = getLiveViewRoot();
+    let node = targetSelector ? document.querySelector(targetSelector) : getLiveViewRoot();
 
     if (path.length === 0) {
         return node;
@@ -2882,9 +3045,9 @@ function groupConsecutiveInserts(inserts) {
  * - `path`: Index-based path (fallback)
  * - `d`: Compact djust ID for O(1) querySelector lookup
  */
-function applySinglePatch(patch) {
+function applySinglePatch(patch, targetSelector = null) {
     // Use ID-based resolution (d field) with path as fallback
-    const node = getNodeByPath(patch.path, patch.d);
+    const node = getNodeByPath(patch.path, patch.d, targetSelector);
     if (!node) {
         // Sanitize for logging (patches come from trusted server, but log defensively)
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
@@ -3028,7 +3191,7 @@ function applySinglePatch(patch) {
  * - Uses DocumentFragment for consecutive InsertChild patches on same parent
  * - Skips batching overhead for small patch sets (<=10 patches)
  */
-function applyPatches(patches) {
+function applyPatches(patches, targetSelector = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
@@ -3049,7 +3212,7 @@ function applyPatches(patches) {
     if (patches.length <= 10) {
         let failedCount = 0;
         for (const patch of patches) {
-            if (!applySinglePatch(patch)) {
+            if (!applySinglePatch(patch, targetSelector)) {
                 failedCount++;
             }
         }
@@ -3122,7 +3285,7 @@ function applyPatches(patches) {
 
         // Apply remaining patches individually
         for (const patch of group) {
-            if (applySinglePatch(patch)) {
+            if (applySinglePatch(patch, targetSelector)) {
                 successCount++;
             } else {
                 failedCount++;
@@ -3843,3 +4006,369 @@ if (document.readyState === 'loading') {
     };
 
 })();
+// ============================================================================
+// Optimistic UI and Enhanced Debounce
+// ============================================================================
+
+// Global storage for optimistic updates
+const optimisticUpdates = new Map();
+const optimisticCounters = new Map();
+
+/**
+ * Apply optimistic update to DOM element based on dj-optimistic attribute
+ * @param {HTMLElement} element - Target element
+ * @param {string} eventName - Name of the event being triggered
+ */
+function applyOptimisticUpdate(element, eventName) {
+    const optimisticAttr = element.getAttribute('dj-optimistic');
+    if (!optimisticAttr) {
+        return null;
+    }
+
+    // Parse optimistic attribute: "field:value" or "field:!field"
+    const [fieldPath, valueExpr] = optimisticAttr.split(':', 2);
+    if (!fieldPath || valueExpr === undefined) {
+        console.warn('[djust:optimistic] Invalid dj-optimistic format, expected "field:value"');
+        return null;
+    }
+
+    // Find target element for the update (could be the element itself or a data-target)
+    const targetSelector = element.getAttribute('dj-target');
+    const targetElement = targetSelector 
+        ? document.querySelector(targetSelector)
+        : element;
+
+    if (!targetElement) {
+        console.warn('[djust:optimistic] Target element not found for optimistic update');
+        return null;
+    }
+
+    // Store original state before applying optimistic update
+    const updateId = `${eventName}-${Date.now()}-${Math.random()}`;
+    const originalState = {
+        attributes: new Map(),
+        textContent: targetElement.textContent,
+        innerHTML: targetElement.innerHTML,
+        dataset: { ...targetElement.dataset }
+    };
+
+    // Store all current attributes
+    for (let attr of targetElement.attributes) {
+        originalState.attributes.set(attr.name, attr.value);
+    }
+
+    optimisticUpdates.set(updateId, {
+        element: targetElement,
+        originalState,
+        fieldPath,
+        valueExpr
+    });
+
+    // Apply the optimistic update
+    applyOptimisticValue(targetElement, fieldPath, valueExpr, originalState);
+
+    return updateId;
+}
+
+/**
+ * Apply optimistic value to the target element
+ * @param {HTMLElement} targetElement - Element to update
+ * @param {string} fieldPath - Field path (supports dot notation)
+ * @param {string} valueExpr - Value expression (literal value or !field for toggle)
+ * @param {Object} originalState - Original state for reference
+ */
+function applyOptimisticValue(targetElement, fieldPath, valueExpr, originalState) {
+    // Handle toggle expressions like "!liked"
+    if (valueExpr.startsWith('!')) {
+        const toggleField = valueExpr.slice(1);
+        const currentValue = getFieldValue(targetElement, toggleField, originalState);
+        const newValue = !coerceToBoolean(currentValue);
+        setFieldValue(targetElement, fieldPath, newValue);
+        return;
+    }
+
+    // Handle literal values
+    const newValue = parseOptimisticValue(valueExpr);
+    setFieldValue(targetElement, fieldPath, newValue);
+}
+
+/**
+ * Get current field value from element
+ * @param {HTMLElement} element - Target element
+ * @param {string} fieldPath - Field path
+ * @param {Object} originalState - Original state for fallback
+ * @returns {any} Current field value
+ */
+function getFieldValue(element, fieldPath, originalState) {
+    // Handle data attributes
+    if (fieldPath.startsWith('data-')) {
+        const dataKey = fieldPath.slice(5).replace(/-/g, '');
+        return element.dataset[dataKey] || originalState.dataset[dataKey];
+    }
+
+    // Handle class-related fields
+    if (fieldPath === 'class') {
+        return element.className;
+    }
+
+    // Handle text content
+    if (fieldPath === 'textContent' || fieldPath === 'text') {
+        return element.textContent;
+    }
+
+    // Handle innerHTML
+    if (fieldPath === 'innerHTML' || fieldPath === 'html') {
+        return element.innerHTML;
+    }
+
+    // Handle other attributes
+    return element.getAttribute(fieldPath) || originalState.attributes.get(fieldPath);
+}
+
+/**
+ * Set field value on element
+ * @param {HTMLElement} element - Target element
+ * @param {string} fieldPath - Field path
+ * @param {any} value - New value
+ */
+function setFieldValue(element, fieldPath, value) {
+    // Handle data attributes
+    if (fieldPath.startsWith('data-')) {
+        const dataKey = fieldPath.slice(5).replace(/-/g, '');
+        element.dataset[dataKey] = String(value);
+        return;
+    }
+
+    // Handle class-related fields
+    if (fieldPath === 'class') {
+        element.className = String(value);
+        return;
+    }
+
+    // Handle text content
+    if (fieldPath === 'textContent' || fieldPath === 'text') {
+        element.textContent = String(value);
+        return;
+    }
+
+    // Handle innerHTML
+    if (fieldPath === 'innerHTML' || fieldPath === 'html') {
+        element.innerHTML = String(value);
+        return;
+    }
+
+    // Handle boolean attributes
+    if (typeof value === 'boolean') {
+        if (value) {
+            element.setAttribute(fieldPath, '');
+        } else {
+            element.removeAttribute(fieldPath);
+        }
+        return;
+    }
+
+    // Handle other attributes
+    element.setAttribute(fieldPath, String(value));
+}
+
+/**
+ * Parse optimistic value from string
+ * @param {string} valueExpr - Value expression
+ * @returns {any} Parsed value
+ */
+function parseOptimisticValue(valueExpr) {
+    // Handle quoted strings
+    if ((valueExpr.startsWith('"') && valueExpr.endsWith('"')) ||
+        (valueExpr.startsWith("'") && valueExpr.endsWith("'"))) {
+        return valueExpr.slice(1, -1);
+    }
+
+    // Handle booleans
+    if (valueExpr === 'true') return true;
+    if (valueExpr === 'false') return false;
+
+    // Handle null
+    if (valueExpr === 'null') return null;
+
+    // Handle numbers
+    if (/^-?\d+$/.test(valueExpr)) {
+        return parseInt(valueExpr, 10);
+    }
+    if (/^-?\d*\.\d+$/.test(valueExpr)) {
+        return parseFloat(valueExpr);
+    }
+
+    // Return as string
+    return valueExpr;
+}
+
+/**
+ * Coerce value to boolean
+ * @param {any} value - Value to coerce
+ * @returns {boolean} Boolean value
+ */
+function coerceToBoolean(value) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+        return ['true', '1', 'yes', 'on', 'checked'].includes(value.toLowerCase());
+    }
+    return Boolean(value);
+}
+
+/**
+ * Revert optimistic update
+ * @param {string} updateId - Update ID to revert
+ */
+function revertOptimisticUpdate(updateId) {
+    const update = optimisticUpdates.get(updateId);
+    if (!update) {
+        return;
+    }
+
+    const { element, originalState } = update;
+
+    // Restore original attributes
+    // First, remove all current attributes
+    const currentAttrs = [...element.attributes];
+    currentAttrs.forEach(attr => {
+        if (!originalState.attributes.has(attr.name)) {
+            element.removeAttribute(attr.name);
+        }
+    });
+
+    // Then restore original attributes
+    for (let [name, value] of originalState.attributes) {
+        element.setAttribute(name, value);
+    }
+
+    // Restore dataset
+    Object.keys(element.dataset).forEach(key => {
+        delete element.dataset[key];
+    });
+    Object.assign(element.dataset, originalState.dataset);
+
+    // Restore content
+    element.innerHTML = originalState.innerHTML;
+
+    optimisticUpdates.delete(updateId);
+}
+
+/**
+ * Clear optimistic update without reverting (called on successful server response)
+ * @param {string} updateId - Update ID to clear
+ */
+function clearOptimisticUpdate(updateId) {
+    optimisticUpdates.delete(updateId);
+}
+
+/**
+ * Enhanced debounce function that works with any event type
+ * @param {HTMLElement} element - Target element
+ * @param {string} eventType - Event type (click, input, change, etc.)
+ * @param {Function} handler - Event handler function
+ * @param {number} delay - Delay in milliseconds
+ * @returns {Function} Debounced event handler
+ */
+function createDebouncedHandler(element, eventType, handler, delay) {
+    const debounceKey = `${eventType}-${element.id || Math.random()}`;
+    
+    return function debouncedHandler(...args) {
+        // Clear existing timeout for this element/event combination
+        if (window.djustDebounceTimeouts) {
+            clearTimeout(window.djustDebounceTimeouts[debounceKey]);
+        } else {
+            window.djustDebounceTimeouts = {};
+        }
+
+        // Set new timeout
+        window.djustDebounceTimeouts[debounceKey] = setTimeout(() => {
+            handler.apply(this, args);
+            delete window.djustDebounceTimeouts[debounceKey];
+        }, delay);
+    };
+}
+
+/**
+ * Enhanced throttle function that works with any event type
+ * @param {HTMLElement} element - Target element
+ * @param {string} eventType - Event type (click, input, change, etc.)
+ * @param {Function} handler - Event handler function
+ * @param {number} delay - Delay in milliseconds
+ * @returns {Function} Throttled event handler
+ */
+function createThrottledHandler(element, eventType, handler, delay) {
+    const throttleKey = `${eventType}-${element.id || Math.random()}`;
+    
+    return function throttledHandler(...args) {
+        if (!window.djustThrottleTimestamps) {
+            window.djustThrottleTimestamps = {};
+        }
+
+        const now = Date.now();
+        const lastCall = window.djustThrottleTimestamps[throttleKey] || 0;
+
+        if (now - lastCall >= delay) {
+            window.djustThrottleTimestamps[throttleKey] = now;
+            handler.apply(this, args);
+        }
+    };
+}
+
+/**
+ * Get debounce/throttle configuration for an element
+ * @param {HTMLElement} element - Target element
+ * @returns {Object|null} Configuration object with type and delay, or null
+ */
+function getRateLimitConfig(element) {
+    // Check for explicit dj-debounce
+    if (element.hasAttribute('dj-debounce')) {
+        const delay = parseInt(element.getAttribute('dj-debounce'), 10);
+        return delay > 0 ? { type: 'debounce', delay } : null;
+    }
+
+    // Check for explicit dj-throttle
+    if (element.hasAttribute('dj-throttle')) {
+        const delay = parseInt(element.getAttribute('dj-throttle'), 10);
+        return delay > 0 ? { type: 'throttle', delay } : null;
+    }
+
+    return null;
+}
+
+/**
+ * Wrap event handler with rate limiting if configured
+ * @param {HTMLElement} element - Target element
+ * @param {string} eventType - Event type
+ * @param {Function} handler - Original handler
+ * @returns {Function} Wrapped handler (or original if no rate limiting)
+ */
+function wrapWithRateLimit(element, eventType, handler) {
+    const config = getRateLimitConfig(element);
+    if (!config) {
+        return handler;
+    }
+
+    if (config.type === 'debounce') {
+        return createDebouncedHandler(element, eventType, handler, config.delay);
+    } else if (config.type === 'throttle') {
+        return createThrottledHandler(element, eventType, handler, config.delay);
+    }
+
+    return handler;
+}
+
+// Export to global namespace
+window.djust = window.djust || {};
+window.djust.optimistic = {
+    applyOptimisticUpdate,
+    revertOptimisticUpdate,
+    clearOptimisticUpdate,
+    optimisticUpdates
+};
+
+window.djust.rateLimit = {
+    createDebouncedHandler,
+    createThrottledHandler,
+    getRateLimitConfig,
+    wrapWithRateLimit
+};

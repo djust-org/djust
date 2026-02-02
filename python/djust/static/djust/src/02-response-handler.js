@@ -12,7 +12,7 @@
  * @param {HTMLElement} triggerElement - Element that triggered the event
  * @returns {boolean} - True if handled successfully, false otherwise
  */
-function handleServerResponse(data, eventName, triggerElement) {
+function handleServerResponse(data, eventName, triggerElement, context = {}) {
     try {
         // Handle cache storage (from @cache decorator)
         if (data.cache_request_id && pendingCacheRequests.has(data.cache_request_id)) {
@@ -62,7 +62,20 @@ function handleServerResponse(data, eventName, triggerElement) {
             clientVdomVersion = data.version;
         }
 
-        // Clear optimistic state BEFORE applying changes
+        // Handle optimistic updates
+        const { optimisticUpdateId, targetSelector } = context;
+        if (optimisticUpdateId && window.djust.optimistic) {
+            if (data.error) {
+                // Server returned an error, revert optimistic update
+                window.djust.optimistic.revertOptimisticUpdate(optimisticUpdateId);
+                showFlashMessage(data.error_message || 'An error occurred', 'error');
+            } else {
+                // Success, clear the optimistic update (server state is now applied)
+                window.djust.optimistic.clearOptimisticUpdate(optimisticUpdateId);
+            }
+        }
+
+        // Clear legacy optimistic state
         clearOptimisticState(eventName);
 
         // Global cleanup of lingering optimistic-pending classes
@@ -79,7 +92,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             // Store comprehensive performance data if available
             window._lastPerformanceData = data.performance;
 
-            const success = applyPatches(data.patches);
+            const success = applyPatches(data.patches, targetSelector);
             if (success === false) {
                 console.error('[LiveView] Patches failed, reloading page...');
                 globalLoadingManager.stopLoading(eventName, triggerElement);

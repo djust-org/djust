@@ -24,6 +24,7 @@ from .websocket_utils import (
     _validate_event_security,
     get_handler_coerce_setting,
 )
+from .presence import PresenceManager
 
 logger = logging.getLogger(__name__)
 hotreload_logger = logging.getLogger("djust.hotreload")
@@ -257,6 +258,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if self._view_group:
             await self.channel_layer.group_discard(self._view_group, self.channel_name)
 
+        # Leave presence group and clean up presence
+        if self._presence_group:
+            await self.channel_layer.group_discard(self._presence_group, self.channel_name)
+        
+        # Clean up presence tracking if view supports it
+        if self.view_instance and hasattr(self.view_instance, 'untrack_presence'):
+            try:
+                await sync_to_async(self.view_instance.untrack_presence)()
+            except Exception as e:
+                logger.warning(f"Error cleaning up presence: {e}")
+
         # Cancel tick task and wait for it to finish
         if self._tick_task:
             self._tick_task.cancel()
@@ -346,6 +358,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.send_json({"type": "pong"})
             elif msg_type == "upload_register":
                 await self._handle_upload_register(data)
+            elif msg_type == "presence_heartbeat":
+                await self.handle_presence_heartbeat(data)
+            elif msg_type == "cursor_move":
+                await self.handle_cursor_move(data)
             else:
                 logger.warning(f"Unknown message type: {msg_type}")
                 await self.send_error(f"Unknown message type: {msg_type}")
@@ -440,6 +456,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._view_path = view_path
             self._view_group = view_group_name(view_path)
             await self.channel_layer.group_add(self._view_group, self.channel_name)
+
+            # Join presence group if view supports presence tracking
+            self._presence_group = None
+            if hasattr(self.view_instance, 'get_presence_key'):
+                try:
+                    presence_key = self.view_instance.get_presence_key()
+                    self._presence_group = PresenceManager.presence_group_name(presence_key)
+                    await self.channel_layer.group_add(self._presence_group, self.channel_name)
+                except Exception as e:
+                    logger.warning(f"Error setting up presence group: {e}")
 
             # Start periodic tick if subclass overrides handle_tick
             tick_interval = getattr(view_class, "tick_interval", None)
@@ -670,6 +696,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if not self.view_instance:
             await self.send_error("View not mounted. Please reload the page.")
             return
+
+        # Route to embedded child view if view_id is specified
+        view_id = params.pop("view_id", None)
+        target_view = self.view_instance
+        if view_id and view_id != getattr(self.view_instance, "_view_id", None):
+            # Look up child view by view_id
+            all_children = {}
+            if hasattr(self.view_instance, "_get_all_child_views"):
+                all_children = self.view_instance._get_all_child_views()
+            target_view = all_children.get(view_id)
+            if target_view is None:
+                await self.send_error(f"Embedded view not found: {view_id}")
+                return
 
         # Handle the event
 
@@ -1258,6 +1297,40 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     "file": file_path,
                 }
             )
+
+    async def handle_presence_heartbeat(self, data: Dict[str, Any]):
+        """Handle presence heartbeat from client."""
+        if not self.view_instance or not hasattr(self.view_instance, 'update_presence_heartbeat'):
+            return
+        
+        try:
+            await sync_to_async(self.view_instance.update_presence_heartbeat)()
+        except Exception as e:
+            logger.error(f"Error updating presence heartbeat: {e}")
+
+    async def handle_cursor_move(self, data: Dict[str, Any]):
+        """Handle cursor movement for live cursors."""
+        if not self.view_instance or not hasattr(self.view_instance, 'handle_cursor_move'):
+            return
+        
+        try:
+            x = data.get("x", 0)
+            y = data.get("y", 0)
+            await sync_to_async(self.view_instance.handle_cursor_move)(x, y)
+        except Exception as e:
+            logger.error(f"Error handling cursor move: {e}")
+
+    async def presence_event(self, event):
+        """
+        Handle presence-related events from the channel layer.
+        
+        These events are broadcasted to all users in a presence group.
+        """
+        await self.send_json({
+            "type": "presence_event",
+            "event": event.get("event", ""),
+            "payload": event.get("payload", {}),
+        })
 
     async def server_push(self, event):
         """

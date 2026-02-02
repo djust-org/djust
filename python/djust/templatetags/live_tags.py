@@ -1,8 +1,9 @@
 """
-Django template tags for LiveView forms.
+Django template tags for LiveView forms and embedded views.
 
 These tags provide a cleaner syntax for rendering LiveView forms with
-automatic validation, error display, and framework-specific styling.
+automatic validation, error display, and framework-specific styling,
+as well as embedding child LiveViews within parent templates.
 
 Usage:
     {% load live_tags %}
@@ -15,12 +16,61 @@ Usage:
 
     <!-- Render with options -->
     {% live_field view "email" label="Email Address" wrapper_class="custom-class" %}
+
+    <!-- Embed a child LiveView -->
+    {% live_render "myapp.views.SearchBar" query="" %}
+    {% live_render "myapp.views.NotificationBell" %}
 """
 
 from django import template
 from typing import Any
 
 register = template.Library()
+
+
+@register.simple_tag(takes_context=True)
+def live_render(context, view_path, **kwargs):
+    """
+    Embed a child LiveView inside a parent LiveView's template.
+
+    Each embedded view has its own state, mount(), and event handlers.
+    It re-renders independently and shares the parent's WebSocket connection.
+
+    Args:
+        view_path: Dotted path to the LiveView class (e.g., "myapp.views.SearchBar")
+        **kwargs: Initial keyword arguments passed to the child's mount()
+
+    Returns:
+        HTML string with the embedded view wrapped in a scoped container
+
+    Example:
+        {% load live_tags %}
+        {% live_render "myapp.views.SearchBar" query="" placeholder="Search..." %}
+        {% live_render "myapp.views.NotificationBell" %}
+    """
+    from ..embedded import render_embedded_view
+
+    # Get parent view from template context
+    parent_view = context.get("view")
+    if parent_view is None:
+        # Try common context variable names
+        for key in ("self", "liveview", "live_view"):
+            parent_view = context.get(key)
+            if parent_view is not None:
+                break
+
+    if parent_view is None:
+        return "<!-- ERROR: live_render requires a parent LiveView in context as 'view' -->"
+
+    # Get request from context
+    request = context.get("request")
+
+    return render_embedded_view(
+        parent_view=parent_view,
+        view_path=view_path,
+        request=request,
+        **kwargs,
+    )
 
 
 @register.simple_tag

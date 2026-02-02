@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Presence Tracking Demo | djust</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f7fa;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem;
+            text-align: center;
+        }
+
+        .header h1 {
+            margin: 0 0 0.5rem;
+            font-size: 2.5rem;
+            font-weight: 600;
+        }
+
+        .header p {
+            margin: 0;
+            opacity: 0.9;
+            font-size: 1.1rem;
+        }
+
+        .content {
+            padding: 2rem;
+        }
+
+        .presence-bar {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            padding: 1.5rem;
+            border-radius: 12px;
+            margin-bottom: 2rem;
+            text-align: center;
+        }
+
+        .presence-bar h3 {
+            margin: 0 0 1rem;
+            font-size: 1.4rem;
+            font-weight: 500;
+        }
+
+        .user-avatars {
+            display: flex;
+            justify-content: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        .avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 16px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            transition: transform 0.2s ease;
+            cursor: pointer;
+        }
+
+        .avatar:hover {
+            transform: scale(1.1);
+        }
+
+        .demo-section {
+            background: #f8f9fa;
+            padding: 2rem;
+            border-radius: 12px;
+            margin-bottom: 2rem;
+        }
+
+        .demo-section h4 {
+            margin: 0 0 1rem;
+            color: #333;
+            font-size: 1.3rem;
+        }
+
+        .demo-section p {
+            color: #666;
+            margin-bottom: 1.5rem;
+            line-height: 1.6;
+        }
+
+        .editor-mockup {
+            background: white;
+            border: 2px solid #e1e8ed;
+            border-radius: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .editor-header {
+            background: #f8f9fa;
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid #e1e8ed;
+            font-size: 0.9rem;
+            color: #666;
+        }
+
+        .editor-content {
+            padding: 1rem;
+        }
+
+        .editor-content textarea {
+            width: 100%;
+            height: 200px;
+            border: none;
+            outline: none;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            resize: vertical;
+            background: transparent;
+        }
+
+        .demo-actions {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: background 0.2s ease;
+        }
+
+        .btn:hover {
+            background: #5a6fd8;
+        }
+
+        .btn.secondary {
+            background: #6c757d;
+        }
+
+        .btn.secondary:hover {
+            background: #5a6268;
+        }
+
+        .flash-messages {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            max-width: 350px;
+        }
+
+        .flash-message {
+            background: white;
+            border-left: 4px solid #28a745;
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            border-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .flash-message.info {
+            border-color: #17a2b8;
+        }
+
+        .flash-message.success {
+            border-color: #28a745;
+        }
+
+        .code-section {
+            margin-top: 3rem;
+        }
+
+        .code-section h4 {
+            color: #333;
+            margin-bottom: 1rem;
+            font-size: 1.2rem;
+        }
+
+        .code-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .code-tab {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 0.5rem 1rem;
+            border-radius: 6px 6px 0 0;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        .code-tab.active {
+            background: white;
+            border-bottom-color: white;
+        }
+
+        .code-content {
+            background: white;
+            border: 1px solid #dee2e6;
+            border-radius: 0 6px 6px 6px;
+            overflow: hidden;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes presence-join {
+            0% { transform: scale(0); opacity: 0; }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .avatar.new {
+            animation: presence-join 0.5s ease-out;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            background: #28a745;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .instructions {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1.5rem;
+        }
+
+        .instructions strong {
+            display: block;
+            margin-bottom: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Presence Tracking Demo</h1>
+            <p>Real-time user awareness with djust LiveView</p>
+        </div>
+
+        <div class="content">
+            <!-- Presence Bar -->
+            <div class="presence-bar">
+                <h3>
+                    <span class="status-indicator"></span>
+                    {{ presence_count }} user{{ presence_count|pluralize }} online
+                </h3>
+                <div class="user-avatars">
+                    {% for p in presences %}
+                        <span class="avatar" 
+                              style="background: {{ p.meta.color }}"
+                              title="{{ p.meta.name }} (joined {{ p.joined_at|timesince }} ago)">
+                            {{ p.meta.name.0|upper }}
+                        </span>
+                    {% endfor %}
+                    {% if presence_count == 0 %}
+                        <span style="opacity: 0.7; font-style: italic;">No users online</span>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Demo Instructions -->
+            <div class="instructions">
+                <strong>💡 Try this:</strong>
+                Open this page in multiple browser tabs or share the URL with others to see real-time presence tracking in action!
+            </div>
+
+            <!-- Collaborative Editor Demo -->
+            <div class="demo-section">
+                <h4>📝 Collaborative Editor</h4>
+                <p>This simulates a collaborative editing environment where you can see who else is working on the document.</p>
+                
+                <div class="editor-mockup">
+                    <div class="editor-header">
+                        📄 document.md - {{ presence_count }} user{{ presence_count|pluralize }} editing
+                    </div>
+                    <div class="editor-content">
+                        <textarea placeholder="# Welcome to djust Presence Demo
+
+Start typing to simulate collaboration...
+
+## Features
+- Real-time presence tracking
+- User avatars with colors  
+- Join/leave notifications
+- Scalable presence groups
+
+## Try It
+1. Open this page in multiple tabs
+2. Watch the presence counter update
+3. See user avatars appear and disappear
+
+Pretty cool, right? 🎉"></textarea>
+                    </div>
+                </div>
+
+                <div class="demo-actions">
+                    <button class="btn" dj-click="simulate_activity">
+                        📢 Simulate Activity
+                    </button>
+                    <button class="btn secondary" onclick="location.reload()">
+                        🔄 Refresh Page
+                    </button>
+                </div>
+            </div>
+
+            <!-- Code Examples -->
+            <div class="code-section">
+                <h4>📚 Implementation Code</h4>
+                
+                <div class="code-tabs">
+                    <div class="code-tab active" onclick="showCodeTab('python')">Python</div>
+                    <div class="code-tab" onclick="showCodeTab('html')">HTML</div>
+                    <div class="code-tab" onclick="showCodeTab('css')">CSS</div>
+                </div>
+
+                <div class="code-content">
+                    <div id="python-code" class="code-block">
+                        {{ presence_code_python }}
+                    </div>
+                    <div id="html-code" class="code-block" style="display: none;">
+                        {{ presence_code_html }}
+                    </div>
+                    <div id="css-code" class="code-block" style="display: none;">
+                        {{ presence_code_css }}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Flash Messages -->
+    <div class="flash-messages" id="flash-messages">
+        <!-- Messages will appear here -->
+    </div>
+
+    <script>
+        // Code tab switching
+        function showCodeTab(tab) {
+            // Hide all code blocks
+            document.querySelectorAll('.code-block').forEach(block => {
+                block.style.display = 'none';
+            });
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.code-tab').forEach(tabEl => {
+                tabEl.classList.remove('active');
+            });
+            
+            // Show selected code block and activate tab
+            document.getElementById(tab + '-code').style.display = 'block';
+            event.target.classList.add('active');
+        }
+
+        // Handle flash messages from the server
+        document.addEventListener('djust:flash', (e) => {
+            const { message, type = 'info' } = e.detail.payload;
+            showFlashMessage(message, type);
+        });
+
+        // Handle activity notifications
+        document.addEventListener('djust:activity', (e) => {
+            const { message } = e.detail.payload;
+            showFlashMessage(message, 'info');
+        });
+
+        function showFlashMessage(message, type = 'info') {
+            const flashContainer = document.getElementById('flash-messages');
+            
+            const flashEl = document.createElement('div');
+            flashEl.className = `flash-message ${type}`;
+            flashEl.textContent = message;
+            
+            flashContainer.appendChild(flashEl);
+            
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (flashEl.parentNode) {
+                    flashEl.style.animation = 'slideIn 0.3s ease-out reverse';
+                    setTimeout(() => {
+                        if (flashEl.parentNode) {
+                            flashEl.parentNode.removeChild(flashEl);
+                        }
+                    }, 300);
+                }
+            }, 5000);
+        }
+
+        // Auto-refresh presence heartbeat every 30 seconds
+        setInterval(() => {
+            if (window.djustWebSocket && window.djustWebSocket.readyState === WebSocket.OPEN) {
+                window.djustWebSocket.send(JSON.stringify({
+                    type: 'presence_heartbeat'
+                }));
+            }
+        }, 30000);
+
+        // Show welcome message
+        setTimeout(() => {
+            showFlashMessage('Welcome to the presence demo! Open this page in multiple tabs to see it in action.', 'success');
+        }, 1000);
+    </script>
+</body>
+</html>

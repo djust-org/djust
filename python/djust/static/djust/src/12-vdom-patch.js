@@ -22,10 +22,11 @@ function sanitizeIdForLog(id) {
  * @param {string|null} djustId - Compact djust ID for direct lookup (e.g., "1a")
  * @returns {Node|null} - Found node or null
  */
-function getNodeByPath(path, djustId = null) {
+function getNodeByPath(path, djustId = null, targetSelector = null) {
     // Strategy 1: ID-based resolution (fast, reliable)
     if (djustId) {
-        const byId = document.querySelector(`[data-dj-id="${CSS.escape(djustId)}"]`);
+        const scope = targetSelector ? document.querySelector(targetSelector) : document;
+        const byId = scope ? scope.querySelector(`[data-dj-id="${CSS.escape(djustId)}"]`) : null;
         if (byId) {
             return byId;
         }
@@ -37,7 +38,7 @@ function getNodeByPath(path, djustId = null) {
     }
 
     // Strategy 2: Index-based path traversal (fallback)
-    let node = getLiveViewRoot();
+    let node = targetSelector ? document.querySelector(targetSelector) : getLiveViewRoot();
 
     if (path.length === 0) {
         return node;
@@ -746,9 +747,9 @@ function groupConsecutiveInserts(inserts) {
  * - `path`: Index-based path (fallback)
  * - `d`: Compact djust ID for O(1) querySelector lookup
  */
-function applySinglePatch(patch) {
+function applySinglePatch(patch, targetSelector = null) {
     // Use ID-based resolution (d field) with path as fallback
-    const node = getNodeByPath(patch.path, patch.d);
+    const node = getNodeByPath(patch.path, patch.d, targetSelector);
     if (!node) {
         // Sanitize for logging (patches come from trusted server, but log defensively)
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
@@ -892,7 +893,7 @@ function applySinglePatch(patch) {
  * - Uses DocumentFragment for consecutive InsertChild patches on same parent
  * - Skips batching overhead for small patch sets (<=10 patches)
  */
-function applyPatches(patches) {
+function applyPatches(patches, targetSelector = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
@@ -913,7 +914,7 @@ function applyPatches(patches) {
     if (patches.length <= 10) {
         let failedCount = 0;
         for (const patch of patches) {
-            if (!applySinglePatch(patch)) {
+            if (!applySinglePatch(patch, targetSelector)) {
                 failedCount++;
             }
         }
@@ -986,7 +987,7 @@ function applyPatches(patches) {
 
         // Apply remaining patches individually
         for (const patch of group) {
-            if (applySinglePatch(patch)) {
+            if (applySinglePatch(patch, targetSelector)) {
                 successCount++;
             } else {
                 failedCount++;

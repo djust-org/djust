@@ -132,6 +132,80 @@ Applies: `fade-enter-from` → `fade-enter-to` on mount, `fade-leave-from` → `
 - `.show` — show element only while loading (hidden otherwise)
 - `.remove` / `.hide` — hide element while loading
 
+### 7. `dj-optimistic` — Optimistic UI Updates
+
+**What:** Apply client-side state updates immediately before server confirmation, with automatic rollback on errors.
+
+**Usage:**
+```html
+<button dj-click="toggle_like" dj-optimistic="liked:!liked">❤️</button>
+<button dj-click="increment" dj-optimistic="count:count+1">+1</button>
+<span dj-click="mark_read" dj-optimistic="class:read">Mark as read</span>
+```
+
+**Syntax:**
+- `dj-optimistic="field:value"` — set field to literal value
+- `dj-optimistic="field:!field"` — toggle boolean field
+- Works with attributes, classes, text content, and data attributes
+
+**Features:**
+- Immediate DOM updates for better perceived performance
+- Automatic rollback if server returns error or different state
+- Flash notification on errors
+- Works with `dj-target` for scoped updates
+
+### 8. Universal `dj-debounce` and `dj-throttle`
+
+**What:** Add debouncing and throttling to any event type, not just form inputs.
+
+**Usage:**
+```html
+<input dj-input="search" dj-debounce="300" />
+<button dj-click="save" dj-debounce="1000" />
+<div dj-scroll="handle_scroll" dj-throttle="100" />
+<input dj-keydown="validate" dj-debounce="500" />
+```
+
+**Features:**
+- `dj-debounce="N"` — delay event N milliseconds, reset on new trigger
+- `dj-throttle="N"` — limit to maximum once per N milliseconds
+- Works with all event types: `dj-click`, `dj-input`, `dj-change`, `dj-keydown`, etc.
+- Replaces existing smart defaults for form inputs
+- Per-element timing control
+
+### 9. `dj-target` — Scoped Updates
+
+**What:** Specify which part of the DOM should be updated, reducing patch size for large pages.
+
+**Usage:**
+```html
+<div id="search-results" dj-target>
+  <!-- Only this section re-renders -->
+</div>
+<input dj-input="search" dj-target="#search-results" />
+
+<section class="comments" dj-target>
+  <!-- Comments area -->
+</section>
+<button dj-click="add_comment" dj-target=".comments">Add Comment</button>
+```
+
+**Features:**
+- Scopes VDOM patches to specific DOM sections
+- Reduces network payload and update time
+- Works with any CSS selector
+- Compatible with optimistic updates
+- Server-side: patches automatically scoped to target element
+
+**Server Integration:**
+```python
+class MyView(LiveView):
+    @event_handler 
+    def search(self, value):
+        # Server automatically scopes patches to dj-target
+        self.search_results = filter_results(value)
+```
+
 ---
 
 ## Proposed (Not Yet Implemented)

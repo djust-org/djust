@@ -31,6 +31,7 @@ from .mixins import (
     ModelBindingMixin,
     PushEventMixin,
 )
+from .embedded import EmbeddedViewMixin, LiveSession
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ except ImportError:
 
 
 class LiveView(
+    EmbeddedViewMixin,
     StreamsMixin,
     TemplateMixin,
     ComponentMixin,
@@ -150,6 +152,8 @@ class LiveView(
         self._temporary_assigns_initialized: bool = False  # Track if temp assigns are set up
         self._streams: Dict[str, Stream] = {}  # Stream collections
         self._stream_operations: list = []  # Pending stream operations for this render
+        # Initialize embedded LiveView support (parent/child, live_session)
+        self._init_embedded()
 
     def handle_tick(self):
         """Override for periodic server-side updates. Called every tick_interval ms."""
