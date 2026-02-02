@@ -463,3 +463,322 @@ def form_field(field_name: str, **field_kwargs):
         return ""
 
     return render
+
+
+# =============================================================================
+# LiveForm — Standalone form validation (no Django Form dependency)
+# =============================================================================
+
+import re
+from typing import Callable, Union
+
+
+# Built-in validator functions
+def _validate_required(value: Any, _opts: Any) -> Optional[str]:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return "This field is required."
+    return None
+
+
+def _validate_min_length(value: Any, min_len: int) -> Optional[str]:
+    if value and isinstance(value, str) and len(value) < min_len:
+        return f"Must be at least {min_len} characters."
+    return None
+
+
+def _validate_max_length(value: Any, max_len: int) -> Optional[str]:
+    if value and isinstance(value, str) and len(value) > max_len:
+        return f"Must be at most {max_len} characters."
+    return None
+
+
+def _validate_pattern(value: Any, pattern: str) -> Optional[str]:
+    if value and isinstance(value, str) and not re.match(pattern, value):
+        return "Invalid format."
+    return None
+
+
+def _validate_email(value: Any, _opts: Any) -> Optional[str]:
+    if value and isinstance(value, str):
+        if not re.match(r"^[\w.+-]+@[\w.-]+\.\w+$", value):
+            return "Enter a valid email address."
+    return None
+
+
+def _validate_url(value: Any, _opts: Any) -> Optional[str]:
+    if value and isinstance(value, str):
+        if not re.match(r"^https?://[\w.-]+(?:/[\w./?%&=+-]*)?$", value):
+            return "Enter a valid URL."
+    return None
+
+
+def _validate_min(value: Any, min_val: Union[int, float]) -> Optional[str]:
+    try:
+        num = float(value) if value else None
+    except (ValueError, TypeError):
+        return f"Must be a number."
+    if num is not None and num < min_val:
+        return f"Must be at least {min_val}."
+    return None
+
+
+def _validate_max(value: Any, max_val: Union[int, float]) -> Optional[str]:
+    try:
+        num = float(value) if value else None
+    except (ValueError, TypeError):
+        return f"Must be a number."
+    if num is not None and num > max_val:
+        return f"Must be at most {max_val}."
+    return None
+
+
+def _validate_choices(value: Any, choices: list) -> Optional[str]:
+    if value and value not in choices:
+        return f"Must be one of: {', '.join(str(c) for c in choices)}."
+    return None
+
+
+# Map of built-in rule names to validator functions
+_BUILTIN_VALIDATORS = {
+    "required": _validate_required,
+    "min_length": _validate_min_length,
+    "max_length": _validate_max_length,
+    "pattern": _validate_pattern,
+    "email": _validate_email,
+    "url": _validate_url,
+    "min": _validate_min,
+    "max": _validate_max,
+    "choices": _validate_choices,
+}
+
+
+class LiveForm:
+    """
+    Standalone form with validation rules — no Django Form dependency required.
+
+    Inspired by Phoenix LiveView changesets: define fields with declarative
+    validation rules, validate on change/blur for live inline feedback,
+    validate all on submit.
+
+    Usage::
+
+        form = LiveForm({
+            "name": {"required": True, "min_length": 2},
+            "email": {"required": True, "email": True},
+            "age": {"required": True, "min": 18, "max": 120},
+            "role": {"choices": ["admin", "user", "guest"]},
+            "bio": {"max_length": 500, "validators": [lambda v: "No spam" if "buy now" in (v or "").lower() else None]},
+        })
+
+    Template::
+
+        <form dj-submit="submit_form">
+            <input name="name" dj-change="validate" dj-debounce="300"
+                   class="{% if form.errors.name %}border-red-500{% endif %}" />
+            {% if form.errors.name %}
+                <span class="text-red-400 text-sm">{{ form.errors.name }}</span>
+            {% endif %}
+            <button type="submit" {% if not form.valid %}disabled{% endif %}>Send</button>
+        </form>
+    """
+
+    def __init__(self, fields: Dict[str, Dict[str, Any]], initial: Optional[Dict[str, Any]] = None):
+        """
+        Args:
+            fields: Mapping of field_name -> rules dict.
+                    Rules: required, min_length, max_length, pattern, email, url,
+                           min, max, choices, validators (list of callables).
+            initial: Optional initial values.
+        """
+        self._fields = fields
+        self._values: Dict[str, Any] = {}
+        self._errors: Dict[str, str] = {}
+        self._custom_validators: Dict[str, List[Callable]] = {}
+
+        # Separate custom validators from rules
+        for name, rules in fields.items():
+            self._values[name] = "" if initial is None else initial.get(name, "")
+            if "validators" in rules:
+                self._custom_validators[name] = rules["validators"]
+
+        if initial:
+            self._values.update(initial)
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def data(self) -> Dict[str, Any]:
+        """Current field values."""
+        return dict(self._values)
+
+    @property
+    def errors(self) -> Dict[str, str]:
+        """Current field errors (field_name -> first error message)."""
+        return dict(self._errors)
+
+    @property
+    def valid(self) -> bool:
+        """True if no errors and all required fields have been validated."""
+        if self._errors:
+            return False
+        # Check that required fields have values
+        for name, rules in self._fields.items():
+            if rules.get("required"):
+                val = self._values.get(name)
+                if val is None or (isinstance(val, str) and not val.strip()):
+                    return False
+        return True
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+
+    def validate_field(self, name: str, value: Any = None) -> Optional[str]:
+        """
+        Validate a single field, updating internal state.
+
+        Args:
+            name: Field name.
+            value: New value (if provided, updates stored value).
+
+        Returns:
+            Error message string, or None if valid.
+        """
+        if name not in self._fields:
+            return None
+
+        if value is not None:
+            self._values[name] = value
+
+        current_value = self._values.get(name)
+        rules = self._fields[name]
+
+        # Run built-in validators in order
+        for rule_name, rule_value in rules.items():
+            if rule_name == "validators":
+                continue  # handled below
+            validator = _BUILTIN_VALIDATORS.get(rule_name)
+            if validator and rule_value:
+                error = validator(current_value, rule_value)
+                if error:
+                    self._errors[name] = error
+                    return error
+
+        # Run custom validators
+        for validator_fn in self._custom_validators.get(name, []):
+            error = validator_fn(current_value)
+            if error:
+                self._errors[name] = error
+                return error
+
+        # Clear error if valid
+        self._errors.pop(name, None)
+        return None
+
+    def validate_all(self) -> bool:
+        """
+        Validate all fields.
+
+        Returns:
+            True if all fields are valid.
+        """
+        all_valid = True
+        for name in self._fields:
+            error = self.validate_field(name)
+            if error:
+                all_valid = False
+        return all_valid
+
+    # ------------------------------------------------------------------
+    # Mutation
+    # ------------------------------------------------------------------
+
+    def set_values(self, values: Dict[str, Any]) -> None:
+        """Bulk set field values (does not trigger validation)."""
+        self._values.update(values)
+
+    def reset(self) -> None:
+        """Clear all values and errors."""
+        for name in self._fields:
+            self._values[name] = ""
+        self._errors.clear()
+
+    # ------------------------------------------------------------------
+    # Repr
+    # ------------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        return f"<LiveForm fields={list(self._fields.keys())} valid={self.valid} errors={self._errors}>"
+
+
+def live_form_from_model(model_class, exclude: Optional[List[str]] = None,
+                         include: Optional[List[str]] = None,
+                         initial: Optional[Dict[str, Any]] = None) -> LiveForm:
+    """
+    Create a LiveForm from a Django model class by inspecting its fields.
+
+    Args:
+        model_class: Django Model class.
+        exclude: Field names to exclude.
+        include: If set, only include these field names.
+        initial: Optional initial values.
+
+    Returns:
+        LiveForm instance with rules derived from model field constraints.
+
+    Example::
+
+        from djust.forms import live_form_from_model
+        from myapp.models import Contact
+
+        form = live_form_from_model(Contact, exclude=["id", "created_at"])
+    """
+    from django.db import models as django_models
+
+    exclude = set(exclude or [])
+    fields_spec: Dict[str, Dict[str, Any]] = {}
+
+    for field in model_class._meta.get_fields():
+        # Skip relations and excluded fields
+        if not hasattr(field, "column"):
+            continue
+        if field.name in exclude:
+            continue
+        if include and field.name not in include:
+            continue
+
+        rules: Dict[str, Any] = {}
+
+        # Required
+        if not getattr(field, "blank", True):
+            rules["required"] = True
+
+        # Max length
+        max_length = getattr(field, "max_length", None)
+        if max_length:
+            rules["max_length"] = max_length
+
+        # Field-type specific rules
+        if isinstance(field, django_models.EmailField):
+            rules["email"] = True
+        elif isinstance(field, django_models.URLField):
+            rules["url"] = True
+        elif isinstance(field, (django_models.IntegerField, django_models.FloatField, django_models.DecimalField)):
+            # Check for validators with limit_value
+            for v in getattr(field, "validators", []):
+                if hasattr(v, "limit_value"):
+                    if "Min" in type(v).__name__:
+                        rules["min"] = v.limit_value
+                    elif "Max" in type(v).__name__:
+                        rules["max"] = v.limit_value
+
+        # Choices
+        choices = getattr(field, "choices", None)
+        if choices:
+            rules["choices"] = [c[0] for c in choices]
+
+        fields_spec[field.name] = rules
+
+    return LiveForm(fields_spec, initial=initial)

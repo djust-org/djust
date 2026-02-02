@@ -1659,6 +1659,26 @@ function bindLiveViewEvents() {
                 : changeHandlerFn;
 
             element.addEventListener('change', wrappedHandler);
+
+            // Also fire dj-change on blur for text-like inputs
+            // This ensures validation triggers even when the user tabs away
+            // without changing the value (e.g., required field left empty).
+            const textTypes = ['text', 'email', 'url', 'tel', 'search', 'password', 'number'];
+            const tagName = element.tagName.toLowerCase();
+            const inputType = (element.getAttribute('type') || 'text').toLowerCase();
+            if (tagName === 'textarea' || (tagName === 'input' && textTypes.includes(inputType))) {
+                element.addEventListener('blur', (e) => {
+                    // Only fire if change hasn't already fired (avoid duplicate events)
+                    // We track this via a simple flag
+                    if (!element._djChangeBlurGuard) {
+                        changeHandlerFn(e);
+                    }
+                    element._djChangeBlurGuard = false;
+                });
+                element.addEventListener('change', () => {
+                    element._djChangeBlurGuard = true;
+                });
+            }
         }
 
         // Handle dj-input events (with smart debouncing/throttling)

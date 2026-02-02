@@ -2,7 +2,64 @@
 
 ## Implemented in this branch
 
-### ✨ Presence Tracking and Live Cursors (LATEST)
+### ✨ LiveForm — Standalone Form Validation (LATEST)
+
+**What:** A standalone `LiveForm` class for declarative form validation with live inline feedback — no Django Form required. Inspired by Phoenix LiveView changesets. Also includes `live_form_from_model()` for auto-generating forms from Django models, and enhanced `dj-change` to fire on blur for text inputs.
+
+**Usage:**
+```python
+from djust.forms import LiveForm
+
+class ContactView(LiveView):
+    def mount(self, request, **kwargs):
+        self.form = LiveForm({
+            "name": {"required": True, "min_length": 2},
+            "email": {"required": True, "email": True},
+            "message": {"required": True, "min_length": 10, "max_length": 500},
+        })
+
+    @event_handler
+    def validate(self, field=None, value=None, **kwargs):
+        self.form.validate_field(field, value)
+
+    @event_handler
+    def submit_form(self, **kwargs):
+        self.form.set_values(kwargs)
+        if self.form.validate_all():
+            # process self.form.data
+            self.form.reset()
+```
+
+**Template:**
+```html
+<form dj-submit="submit_form">
+    <input name="name" dj-change="validate" dj-debounce="300"
+           class="{% if form.errors.name %}border-red-500{% endif %}" />
+    {% if form.errors.name %}
+        <span class="text-red-400 text-sm">{{ form.errors.name }}</span>
+    {% endif %}
+    <button type="submit" {% if not form.valid %}disabled{% endif %}>Send</button>
+</form>
+```
+
+**Built-in validators:** `required`, `min_length`, `max_length`, `pattern`, `email`, `url`, `min`, `max`, `choices`
+**Custom validators:** `"validators": [lambda v: "Error" if bad else None]`
+
+**Model integration:**
+```python
+from djust.forms import live_form_from_model
+form = live_form_from_model(Contact, exclude=["id", "created_at"])
+```
+
+**JS improvements:**
+- `dj-change` now also fires on `blur` for text inputs (validates required fields even when user tabs away without typing)
+- `dj-debounce` works on `dj-change` handlers
+
+**Files:** `python/djust/forms.py` (LiveForm class), `python/tests/test_live_form.py` (29 tests)
+
+---
+
+### ✨ Presence Tracking and Live Cursors
 
 **What:** Real-time presence tracking system showing who's viewing/editing a page, with optional live cursor tracking for collaborative features. Similar to Phoenix LiveView's Presence system.
 
