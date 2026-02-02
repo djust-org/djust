@@ -415,6 +415,7 @@ fn diff_keyed_children(
                             d: parent_id.clone(),
                             from: old_idx,
                             to: new_idx,
+                            child_d: old[old_idx].djust_id.clone(),
                         });
                     }
 
@@ -471,6 +472,8 @@ fn diff_keyed_children(
 
         // Only emit MoveChild for nodes that have a djust_id, so
         // apply_patches can locate them reliably after structural changes.
+        // Text nodes lack djust_id in production and are handled via
+        // path-based fallback in SetText patches.
         if old_idx != new_idx && old[old_idx].djust_id.is_some() {
             vdom_trace!("  MOVE unkeyed from {} to {}", old_idx, new_idx);
             patches.push(Patch::MoveChild {
@@ -478,6 +481,7 @@ fn diff_keyed_children(
                 d: parent_id.clone(),
                 from: old_idx,
                 to: new_idx,
+                child_d: old[old_idx].djust_id.clone(),
             });
         }
 
@@ -1859,6 +1863,77 @@ mod tests {
                 want.attrs.get("class")
             );
         }
+    }
+
+    #[test]
+    fn test_move_child_has_child_d() {
+        // Regression test for #225: MoveChild patches must carry child_d
+        // (the child's djust_id) so the client can resolve the child by
+        // data-dj-id instead of stale index after earlier moves.
+        //
+        // Tree A: [span(dj-id=sp1), section(key=a, dj-id=s1), ul(key=b, dj-id=u1)]
+        // Tree B: [ul(key=b), section(key=a), span(attr changed)]
+        use crate::patch::apply_patches;
+
+        let old = VNode::element("div")
+            .with_djust_id("root")
+            .with_children(vec![
+                VNode::element("span")
+                    .with_djust_id("sp1")
+                    .with_attr("class", "old"),
+                VNode::element("section").with_key("a").with_djust_id("s1"),
+                VNode::element("ul").with_key("b").with_djust_id("u1"),
+            ]);
+
+        let new = VNode::element("div")
+            .with_djust_id("root")
+            .with_children(vec![
+                VNode::element("ul").with_key("b").with_djust_id("u1"),
+                VNode::element("section").with_key("a").with_djust_id("s1"),
+                VNode::element("span")
+                    .with_djust_id("sp1")
+                    .with_attr("class", "new"),
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        // All MoveChild patches should have child_d set (all children have djust_id)
+        let move_patches: Vec<_> = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::MoveChild { .. }))
+            .collect();
+        assert!(
+            !move_patches.is_empty(),
+            "Expected MoveChild patches, got: {:?}",
+            patches
+        );
+        for p in &move_patches {
+            if let Patch::MoveChild { child_d, .. } = p {
+                assert!(child_d.is_some(), "MoveChild should have child_d: {:?}", p);
+            }
+        }
+
+        // The SetAttr for span's class change should target "sp1"
+        let set_attr = patches.iter().find(|p| {
+            matches!(p, Patch::SetAttr { d: Some(id), key, .. } if id == "sp1" && key == "class")
+        });
+        assert!(
+            set_attr.is_some(),
+            "Expected SetAttr on sp1, got: {:?}",
+            patches
+        );
+
+        // Round-trip: apply patches to old tree
+        let mut patched = old.clone();
+        apply_patches(&mut patched, &patches);
+        assert_eq!(patched.children.len(), 3);
+        assert_eq!(patched.children[0].tag, "ul");
+        assert_eq!(patched.children[1].tag, "section");
+        assert_eq!(patched.children[2].tag, "span");
+        assert_eq!(
+            patched.children[2].attrs.get("class"),
+            Some(&"new".to_string())
+        );
     }
 
     #[test]

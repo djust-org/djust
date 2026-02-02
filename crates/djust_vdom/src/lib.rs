@@ -309,6 +309,11 @@ pub enum Patch {
         d: Option<String>,
         from: usize,
         to: usize,
+        /// The child's djust_id for ID-based resolution on the client.
+        /// Prevents stale-index mis-targeting when multiple MoveChild patches
+        /// shift DOM positions before subsequent patches are applied.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        child_d: Option<String>,
     },
 }
 

@@ -2667,6 +2667,7 @@ function isWhitespacePreserving(node) {
 
 // Export for testing
 window.djust.getSignificantChildren = getSignificantChildren;
+window.djust._applySinglePatch = applySinglePatch;
 window.djust._getNodeByPath = getNodeByPath;
 window.djust._stampDjIds = _stampDjIds;
 window.djust._groupPatchesByParent = groupPatchesByParent;
@@ -2825,9 +2826,18 @@ function applySinglePatch(patch) {
             }
 
             case 'MoveChild': {
-                const children = getSignificantChildren(node);
-                const child = children[patch.from];
+                let child;
+                if (patch.child_d) {
+                    // ID-based resolution: find child by data-dj-id (resilient to index shifts)
+                    child = node.querySelector(`[data-dj-id="${CSS.escape(patch.child_d)}"]`);
+                }
+                if (!child) {
+                    // Fallback: index-based
+                    const fallbackChildren = getSignificantChildren(node);
+                    child = fallbackChildren[patch.from];
+                }
                 if (child) {
+                    const children = getSignificantChildren(node);
                     const refChild = children[patch.to];
                     if (refChild) {
                         node.insertBefore(child, refChild);
