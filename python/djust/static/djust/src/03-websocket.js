@@ -114,6 +114,7 @@ class LiveViewWebSocket {
             } else {
                 console.warn('[LiveView] Max reconnection attempts reached. Falling back to HTTP mode.');
                 this.enabled = false;
+                this._showConnectionErrorOverlay();
             }
         };
 
@@ -441,6 +442,50 @@ class LiveViewWebSocket {
 
         // Re-bind events within the updated container
         bindLiveViewEvents();
+    }
+
+    _showConnectionErrorOverlay() {
+        // Only show in DEBUG mode
+        if (!window.DEBUG_MODE) return;
+
+        // Don't duplicate
+        if (document.getElementById('djust-connection-error-overlay')) return;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'djust-connection-error-overlay';
+        overlay.style.cssText = `
+            position: fixed; bottom: 0; left: 0; right: 0; z-index: 99999;
+            background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+            border-top: 3px solid #ef4444; padding: 20px 24px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            color: #e2e8f0; font-size: 14px; box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+        `;
+        overlay.innerHTML = `
+            <div style="display:flex; align-items:flex-start; gap:16px; max-width:900px; margin:0 auto;">
+                <span style="font-size:24px; line-height:1;">❌</span>
+                <div style="flex:1;">
+                    <div style="font-weight:700; font-size:16px; margin-bottom:8px; color:#fca5a5;">
+                        WebSocket Connection Failed
+                    </div>
+                    <div style="margin-bottom:10px; color:#cbd5e1; line-height:1.6;">
+                        djust could not establish a WebSocket connection. Common causes:
+                    </div>
+                    <ul style="margin:0 0 12px 18px; padding:0; color:#94a3b8; line-height:1.8;">
+                        <li>ASGI server not running (need <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">daphne</code> or <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">uvicorn</code>, not <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">manage.py runserver</code>)</li>
+                        <li>If using daphne, wrap HTTP handler with <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">ASGIStaticFilesHandler</code> or use <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">djust.asgi.get_application()</code></li>
+                        <li>WebSocket route not configured (need <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">/ws/live/</code> path)</li>
+                    </ul>
+                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+                        <code style="background:#1e293b; padding:6px 12px; border-radius:4px; color:#86efac; font-size:13px;">
+                            python manage.py djust_check
+                        </code>
+                        <span style="color:#64748b; font-size:12px;">← Run this to diagnose configuration issues</span>
+                    </div>
+                </div>
+                <button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:20px;padding:4px;">✕</button>
+            </div>
+        `;
+        document.body.appendChild(overlay);
     }
 
     startHeartbeat(interval = 30000) {
