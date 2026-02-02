@@ -16,6 +16,7 @@ from .request import RequestMixin
 from .post_processing import PostProcessingMixin
 from .model_binding import ModelBindingMixin
 from .push_events import PushEventMixin
+from ..streaming import StreamingMixin
 
 __all__ = [
     "StreamsMixin",
@@ -29,4 +30,5 @@ __all__ = [
     "PostProcessingMixin",
     "ModelBindingMixin",
     "PushEventMixin",
+    "StreamingMixin",
 ]

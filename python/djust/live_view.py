@@ -20,6 +20,7 @@ from .session_utils import (  # noqa: F401
 
 from .mixins import (
     StreamsMixin,
+    StreamingMixin,
     TemplateMixin,
     ComponentMixin,
     JITMixin,
@@ -53,6 +54,7 @@ except ImportError:
 class LiveView(
     EmbeddedViewMixin,
     StreamsMixin,
+    StreamingMixin,
     TemplateMixin,
     ComponentMixin,
     JITMixin,

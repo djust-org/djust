@@ -2,6 +2,106 @@
 
 ## Implemented in this branch
 
+### ✨ Presence Tracking and Live Cursors (LATEST)
+
+**What:** Real-time presence tracking system showing who's viewing/editing a page, with optional live cursor tracking for collaborative features. Similar to Phoenix LiveView's Presence system.
+
+**Usage:**
+```python
+# Basic presence tracking
+class DocumentView(LiveView, PresenceMixin):
+    presence_key = "document:{doc_id}"  # Group identifier
+    
+    def mount(self, request, **kwargs):
+        self.doc_id = kwargs.get("doc_id")
+        # Auto-track this user's presence
+        self.track_presence(meta={
+            "name": request.user.username,
+            "color": "#6c63ff"
+        })
+    
+    def get_context_data(self):
+        ctx = super().get_context_data()
+        ctx["presences"] = self.list_presences()  # List of active users
+        ctx["presence_count"] = self.presence_count()  # Count
+        return ctx
+    
+    def handle_presence_join(self, presence):
+        """Called when a user joins"""
+        self.push_event("flash", {
+            "message": f"{presence['meta']['name']} joined",
+            "type": "success"
+        })
+    
+    def handle_presence_leave(self, presence):
+        """Called when a user leaves"""
+        self.push_event("flash", {
+            "message": f"{presence['meta']['name']} left",
+            "type": "info"
+        })
+```
+
+**Template usage:**
+```html
+<div class="presence-bar">
+  <h3>{{ presence_count }} user{{ presence_count|pluralize }} online</h3>
+  <div class="user-avatars">
+    {% for p in presences %}
+      <span class="avatar" style="background: {{ p.meta.color }}"
+            title="{{ p.meta.name }}">
+        {{ p.meta.name.0|upper }}
+      </span>
+    {% endfor %}
+  </div>
+</div>
+```
+
+**Live cursors (bonus):**
+```python
+# Enhanced with live cursor tracking
+class DocumentView(LiveView, LiveCursorMixin):
+    presence_key = "document:{doc_id}"
+    
+    def handle_cursor_move(self, x, y):
+        """Called when client sends cursor position"""
+        # Automatically broadcasts to other users
+        pass
+```
+
+**Client-side cursor tracking:**
+```javascript
+// Auto-sends throttled cursor positions (10fps)
+document.addEventListener('mousemove', (e) => {
+  djust.sendCursorMove(e.clientX, e.clientY);
+});
+
+// Receive other users' cursors
+document.addEventListener('djust:cursor_move', (e) => {
+  const { user_id, x, y, meta } = e.detail.payload;
+  showCursor(user_id, x, y, meta.color, meta.name);
+});
+```
+
+**Features:**
+- **Real-time presence tracking** — See who's viewing the page
+- **Heartbeat-based cleanup** — Auto-removes stale connections (60s timeout)
+- **Presence groups** — Isolate presence by document/room/etc
+- **User metadata** — Store name, color, avatar, etc
+- **Join/leave events** — React to presence changes
+- **Live cursors** — Optional real-time mouse position sharing
+- **Channel isolation** — Uses Django Channels groups for scalability
+- **Cache-based storage** — Efficient presence state management
+
+**Architecture:**
+- `PresenceManager` — Core presence logic and cache management
+- `PresenceMixin` — LiveView mixin for basic presence tracking
+- `LiveCursorMixin` — Enhanced mixin with cursor position tracking
+- `CursorTracker` — Manages live cursor positions
+- WebSocket integration for real-time updates
+- Automatic cleanup of stale presences/cursors
+
+**Demo:** See `examples/demo_project/djust_demos/demo_classes/presence.py` for live demos showing presence tracking and live cursors in action.
+
 ### 1. `dj-hook` — Client-Side JS Hooks (Phoenix-style)
 
 **What:** Register named JavaScript hooks that fire lifecycle callbacks when elements are mounted, updated, or destroyed. Like Phoenix LiveView's `phx-hook`.
@@ -210,6 +310,53 @@ class MyView(LiveView):
 
 ## Proposed (Not Yet Implemented)
 
+### 10. Streaming — Real-time Partial DOM Updates
+
+**What:** Send incremental DOM updates during async handler execution, without waiting for the handler to return. Perfect for LLM chat (token-by-token streaming), live feeds, progress indicators.
+
+**Server API:**
+```python
+class ChatView(LiveView):
+    @event_handler
+    async def send_message(self, content, **kwargs):
+        self.messages.append({"role": "user", "content": content})
+        self.messages.append({"role": "assistant", "content": ""})
+
+        # Stream tokens — each call sends a WebSocket message immediately
+        async for token in llm_stream(content):
+            self.messages[-1]["content"] += token
+            await self.stream_to("messages", target="#message-list")
+
+        # Also available:
+        # await self.stream_insert("feed", "<li>New</li>", at="append")
+        # await self.stream_delete("messages", "#msg-42")
+        # await self.push_state()  # Full re-render, sent immediately
+```
+
+**Template:**
+```html
+<div id="message-list" dj-stream="messages">
+    {% for msg in messages %}
+        <div class="message">{{ msg.content }}</div>
+    {% endfor %}
+</div>
+```
+
+**Implementation:**
+- `StreamingMixin` added to LiveView (server: `python/djust/streaming.py`)
+- WebSocket consumer stores `_ws_consumer` ref on view for direct sends
+- New message type: `{"type": "stream", "stream": "name", "ops": [...]}`
+- Operations: `replace`, `append`, `prepend`, `delete`
+- Batches rapid updates to ~60fps (16ms minimum interval)
+- Client JS (`src/17-streaming.js`): applies DOM ops directly, auto-scrolls chat containers
+- `push_state()` sends a full re-render mid-handler for non-stream state changes
+
+**Files:**
+- `python/djust/streaming.py` — StreamingMixin
+- `python/djust/static/djust/src/17-streaming.js` — Client-side handler
+- `python/tests/test_streaming.py` — Tests
+- `examples/streaming_demo.py` — Chat demo with simulated typing
+
 ### Core Features
 - `dj-submit` form handling improvements (nested forms, file inputs)
 - Upload support (file uploads via WebSocket with progress)
@@ -220,7 +367,7 @@ class MyView(LiveView):
 - Template fragment caching (only re-render changed sections)
 - Lazy loading / virtual scrolling for large lists
 - Batch multiple events into single round-trip
-- VDOM diff streaming (send patches as they're computed)
+- ~~VDOM diff streaming (send patches as they're computed)~~ ✅ Implemented (see Streaming below)
 
 ### Developer Experience
 - Component scaffolding CLI (`djust create component MyComponent`)

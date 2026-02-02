@@ -440,6 +440,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         try:
             self.view_instance = view_class()
 
+            # Store reference to WS consumer for streaming support
+            self.view_instance._ws_consumer = self
+
             # Store WebSocket session_id in view for consistent VDOM caching
             # This ensures mount and all subsequent events use the same VDOM instance
             self.view_instance._websocket_session_id = self.session_id

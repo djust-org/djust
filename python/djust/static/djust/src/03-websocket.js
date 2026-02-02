@@ -261,6 +261,27 @@ class LiveViewWebSocket {
                 console.log('[Upload] Registered:', data.ref, 'for', data.upload_name);
                 break;
 
+            case 'stream':
+                // Streaming partial DOM updates (LLM chat, live feeds)
+                if (window.djust.handleStreamMessage) {
+                    window.djust.handleStreamMessage(data);
+                }
+                break;
+
+            case 'push_event':
+                // Server-pushed event for JS hooks
+                window.dispatchEvent(new CustomEvent('djust:push_event', {
+                    detail: { event: data.event, payload: data.payload }
+                }));
+                // Also dispatch to hooks that registered via handleEvent
+                if (window.djust.hooks && window.djust.hooks._eventListeners) {
+                    const listeners = window.djust.hooks._eventListeners[data.event];
+                    if (listeners) {
+                        listeners.forEach(cb => cb(data.payload));
+                    }
+                }
+                break;
+
             case 'reload':
                 // Hot reload: file changed, refresh the page
                 window.location.reload();
