@@ -822,8 +822,9 @@ function applySinglePatch(patch) {
             case 'MoveChild': {
                 let child;
                 if (patch.child_d) {
-                    // ID-based resolution: find child by data-dj-id (resilient to index shifts)
-                    child = node.querySelector(`[data-dj-id="${CSS.escape(patch.child_d)}"]`);
+                    // ID-based resolution: find direct child by data-dj-id (resilient to index shifts)
+                    const escaped = CSS.escape(patch.child_d);
+                    child = node.querySelector(`:scope > [data-dj-id="${escaped}"]`);
                 }
                 if (!child) {
                     // Fallback: index-based

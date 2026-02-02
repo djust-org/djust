@@ -4,15 +4,13 @@
  */
 
 (function() {
-    // var (not const) avoids redeclaration error if script is loaded twice
-    var DJUST_DEBUG_PANEL_BUILD = '20260201-1830';
+    'use strict';
 
     // Check if we should load the debug panel
     if (!window.DEBUG_MODE) {
         console.log('[djust] Debug panel disabled (DEBUG_MODE=false)');
         return;
     }
-    console.log(`[djust] debug-panel.js build ${DJUST_DEBUG_PANEL_BUILD}`);
     class DjustDebugPanel {
         constructor(config = {}) {
             this.config = {
@@ -73,11 +71,6 @@
             this.attachEventListeners();
             this.hookIntoLiveView();
             this.loadState();
-
-            // Bootstrap handlers/variables from initial page data if available
-            if (window.DJUST_DEBUG_INFO) {
-                this.processDebugInfo(window.DJUST_DEBUG_INFO);
-            }
 
             console.log('[djust] Developer Bar initialized 🐍');
         }
@@ -258,7 +251,6 @@
                         <span class="djust-stat">Patches: <span id="patch-count">0</span></span>
                         <span class="djust-stat">Errors: <span id="error-count">0</span></span>
                         <span class="djust-stat warnings-stat">Warnings: <span id="warning-count">0</span></span>
-                        <span class="djust-stat version-stat" title="client.js build">v${(window.djust && window.djust.VERSION) || '?'}:${(window.djust && window.djust.JS_BUILD) || '?'}</span>
                     </div>
                 </div>
             `;
@@ -1743,18 +1735,17 @@
                 <div class="events-list">
                     ${filtered.length === 0 ? '<div class="empty-state">No events match the current filters.</div>' :
                     filtered.map((event, index) => {
-                        const hasDetails = event.params || event.error || event.warning || event.result;
+                        const hasDetails = event.params || event.error || event.result;
                         const paramCount = event.params ? Object.keys(event.params).length : 0;
 
                         return `
-                            <div class="event-item ${event.error ? 'error' : ''} ${event.warning ? 'warning' : ''} ${hasDetails ? 'expandable' : ''}" data-index="${index}">
+                            <div class="event-item ${event.error ? 'error' : ''} ${hasDetails ? 'expandable' : ''}" data-index="${index}">
                                 <div class="event-header" ${hasDetails ? 'onclick="window.djustDebugPanel.toggleExpand(this)"' : ''}>
                                     ${hasDetails ? '<span class="expand-icon">▶</span>' : ''}
                                     <span class="event-name">${event.handler || event.name || 'unknown'}</span>
                                     ${event.element ? this.renderElementBadge(event.element) : ''}
                                     ${event.duration ? `<span class="event-duration">${event.duration.toFixed(1)}ms</span>` : ''}
                                     ${paramCount > 0 ? `<span class="event-param-count">${paramCount} param${paramCount === 1 ? '' : 's'}</span>` : ''}
-                                    ${event.warning ? '<span class="event-status" title="html_update fallback">⚠️</span>' : ''}
                                     ${event.error ? '<span class="event-status">❌</span>' : ''}
                                     ${(event.handler || event.name) ? `<button class="event-replay-btn" data-event-index="${this.eventHistory.indexOf(event)}" onclick="event.stopPropagation(); window.djustDebugPanel.replayEvent(${this.eventHistory.indexOf(event)}, this)" title="Replay this event">⟳</button>` : ''}
                                     <span class="event-time">${this.formatTime(event.timestamp)}</span>
@@ -1793,12 +1784,6 @@
                                             <div class="event-section error">
                                                 <div class="event-section-title">Error:</div>
                                                 <div class="event-error-message">${event.error}</div>
-                                            </div>
-                                        ` : ''}
-                                        ${event.warning ? `
-                                            <div class="event-section warning">
-                                                <div class="event-section-title">⚠️ Warning:</div>
-                                                <div class="event-warning-message">${event.warning}</div>
                                             </div>
                                         ` : ''}
                                     </div>
@@ -2302,20 +2287,13 @@
         }
 
         renderHandlersTab() {
-            // Normalize handlers: server may return an object (dict) or array
-            const handlersList = Array.isArray(this.handlers)
-                ? this.handlers
-                : (this.handlers && typeof this.handlers === 'object')
-                    ? Object.entries(this.handlers).map(([name, info]) => ({ name, ...info }))
-                    : [];
-
-            if (handlersList.length === 0) {
+            if (!this.handlers || this.handlers.length === 0) {
                 return '<div class="empty-state">No event handlers detected. Handlers will appear after the view is mounted.</div>';
             }
 
             return `
                 <div class="handlers-list">
-                    ${handlersList.map(handler => `
+                    ${this.handlers.map(handler => `
                         <div class="handler-item">
                             <div class="handler-header">
                                 <div class="handler-name">${handler.name}</div>
@@ -2538,9 +2516,6 @@
                 this.eventHistory.pop();
             }
 
-            // Update status bar counter
-            this.updateCounter('event-count', this.eventHistory.length);
-
             // Update UI if events tab is active
             if (this.state.activeTab === 'events') {
                 this.renderTabContent();
@@ -2594,7 +2569,7 @@
             }
 
             // Update counter
-            this.updateCounter('patch-count', this.patchHistory.length);
+            this.updateCounter('patches', this.patchHistory.length);
 
             // Update UI if patches tab is active
             if (this.state.activeTab === 'patches') {
@@ -2685,53 +2660,6 @@
 
             // Initialize pending events tracker for matching sent events to responses
             this._pendingEvents = {};
-
-            // Retroactively hook into any existing WebSocket connection
-            // (LiveView may have already connected before the debug panel loaded)
-            this._hookExistingWebSocket();
-        }
-
-        _hookExistingWebSocket() {
-            const self = this;
-            const instance = window.djust && window.djust.liveViewInstance;
-            if (!instance || !instance.ws) return;
-
-            const ws = instance.ws;
-
-            // Patch send on the existing instance
-            if (!ws._djustDebugHooked) {
-                const originalSend = ws.send.bind(ws);
-                ws.send = function(data) {
-                    const payload = self.parsePayload(data);
-                    self.captureNetworkMessage({
-                        direction: 'sent',
-                        type: self.detectMessageType(data),
-                        size: new Blob([data]).size,
-                        payload: payload
-                    });
-                    if (payload && payload.type === 'event') {
-                        self._pendingEvents = self._pendingEvents || {};
-                        const eventKey = (payload.event || payload.handler) + '_' + Date.now();
-                        self._pendingEvents[eventKey] = {
-                            handler: payload.event || payload.handler,
-                            params: payload.params || payload.data || {},
-                            startTime: performance.now()
-                        };
-                    }
-                    return originalSend(data);
-                };
-
-                // Hook into message receive on the existing instance
-                const originalOnmessage = ws.onmessage;
-                ws.onmessage = function(event) {
-                    self._handleReceivedMessage(event);
-                    if (originalOnmessage) {
-                        return originalOnmessage.call(this, event);
-                    }
-                };
-
-                ws._djustDebugHooked = true;
-            }
         }
 
         _handleReceivedMessage(event) {
@@ -2751,7 +2679,7 @@
 
             // Match response to pending events and capture completed event
             if (payload && this._pendingEvents) {
-                const isEventResponse = payload.type === 'patch' || payload.type === 'error' || payload.type === 'noop' || payload.type === 'html_update';
+                const isEventResponse = payload.type === 'patch' || payload.type === 'error' || payload.type === 'noop';
                 if (isEventResponse) {
                     // Find the most recent pending event (FIFO)
                     const keys = Object.keys(this._pendingEvents);
@@ -2760,21 +2688,13 @@
                         const pending = this._pendingEvents[key];
                         delete this._pendingEvents[key];
 
-                        const isHtmlFallback = payload.type === 'html_update';
                         this.captureEvent({
                             type: 'event',
                             handler: pending.handler,
                             params: pending.params,
                             duration: performance.now() - pending.startTime,
-                            error: payload.type === 'error' ? (payload.error || 'Server error') : null,
-                            warning: isHtmlFallback ? 'html_update fallback — full HTML re-render instead of patches' : null
+                            error: payload.type === 'error' ? (payload.error || 'Server error') : null
                         });
-
-                        if (isHtmlFallback) {
-                            this.warningCount++;
-                            this.updateCounter('warning-count', this.warningCount);
-                            console.warn(`[djust] html_update fallback for "${pending.handler}" — expected patches but got full HTML. This may indicate a VDOM version mismatch or double event firing.`);
-                        }
                     }
                 }
             }
@@ -2813,14 +2733,6 @@
                 if (this.state.activeTab === 'variables') {
                     this.renderTabContent();
                 }
-            }
-
-            // Update patches from _debug payload
-            if (debugInfo.patches && Array.isArray(debugInfo.patches) && debugInfo.patches.length > 0) {
-                const duration = debugInfo.performance
-                    ? (debugInfo.performance.render_time || 0) + (debugInfo.performance.diff_time || 0)
-                    : 0;
-                this.logPatches(debugInfo.patches, duration, debugInfo.performance || null);
             }
 
             // Update performance metrics
@@ -2875,11 +2787,7 @@
         }
 
         updateCounter(id, count) {
-            // Try document-level first, then fall back to panel-scoped search
-            let counter = document.getElementById(id);
-            if (!counter && this.panel) {
-                counter = this.panel.querySelector('#' + id);
-            }
+            const counter = document.getElementById(id);
             if (counter) {
                 counter.textContent = count;
             }
