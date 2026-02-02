@@ -1,0 +1,119 @@
+<div style="max-width: 800px; margin: 2rem auto; font-family: system-ui, sans-serif;">
+    <h1>🚀 push_event() Demo</h1>
+    <p style="color: #666;">Server → Client JS Events</p>
+
+    <!-- 1. Confetti Animation -->
+    <section style="margin: 2rem 0; padding: 1.5rem; border: 1px solid #e5e7eb; border-radius: 12px;">
+        <h2>🎉 Confetti Animation</h2>
+        <p>Click to trigger a confetti animation via <code>push_event("confetti", ...)</code></p>
+        <button @click="handle_celebrate"
+                style="padding: 10px 24px; background: #8b5cf6; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px;">
+            Celebrate! 🎊
+        </button>
+        <div dj-hook="Confetti" id="confetti-canvas"></div>
+    </section>
+
+    <!-- 2. Flash Notification -->
+    <section style="margin: 2rem 0; padding: 1.5rem; border: 1px solid #e5e7eb; border-radius: 12px;">
+        <h2>💾 Save with Flash</h2>
+        <p>Save a note — server pushes a flash notification via <code>push_event("djust:flash", ...)</code></p>
+        <form @submit="handle_save_note" style="display: flex; gap: 8px;">
+            <input type="text" name="text" id="note-input" value="{{ note_text }}"
+                   placeholder="Type a note..."
+                   style="flex: 1; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px;">
+            <button type="submit"
+                    style="padding: 8px 20px; background: #059669; color: white; border: none; border-radius: 6px; cursor: pointer;">
+                Save
+            </button>
+        </form>
+    </section>
+
+    <!-- 3. Chat Auto-Scroll -->
+    <section style="margin: 2rem 0; padding: 1.5rem; border: 1px solid #e5e7eb; border-radius: 12px;">
+        <h2>💬 Chat Auto-Scroll</h2>
+        <p>Send messages — server pushes <code>djust:scroll_to</code> to scroll to the latest.</p>
+        <div id="chat-box" style="height: 200px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px; margin-bottom: 8px; background: #f9fafb;">
+            {% for msg in messages %}
+            <div id="{{ msg.id }}" style="padding: 6px 10px; margin: 4px 0; background: #eff6ff; border-radius: 6px;">
+                <strong>{{ msg.sender }}:</strong> {{ msg.content }}
+            </div>
+            {% empty %}
+            <p style="color: #9ca3af; text-align: center; margin-top: 80px;">No messages yet</p>
+            {% endfor %}
+        </div>
+        <form @submit="handle_send_message" style="display: flex; gap: 8px;">
+            <input type="text" name="content" placeholder="Type a message..."
+                   style="flex: 1; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px;">
+            <button type="submit"
+                    style="padding: 8px 20px; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer;">
+                Send
+            </button>
+        </form>
+    </section>
+
+    <!-- 4. Other Built-in Events -->
+    <section style="margin: 2rem 0; padding: 1.5rem; border: 1px solid #e5e7eb; border-radius: 12px;">
+        <h2>🛠️ Built-in Events</h2>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button @click="handle_copy_to_clipboard"
+                    style="padding: 8px 16px; background: #f59e0b; color: white; border: none; border-radius: 6px; cursor: pointer;">
+                📋 Copy to Clipboard
+            </button>
+            <button @click="handle_focus_input"
+                    style="padding: 8px 16px; background: #6366f1; color: white; border: none; border-radius: 6px; cursor: pointer;">
+                🎯 Focus Note Input
+            </button>
+        </div>
+    </section>
+</div>
+
+<script>
+// Register the Confetti hook
+djust.hooks.Confetti = {
+    mounted() {
+        // Listen for confetti events from the server
+        this.handleEvent("confetti", (payload) => {
+            this.showConfetti(payload);
+        });
+    },
+
+    showConfetti(payload) {
+        const canvas = this.el;
+        const count = payload.count || 100;
+        const colors = payload.colors || ['#ff0', '#0ff', '#f0f'];
+
+        // Simple confetti using CSS animations
+        for (let i = 0; i < count; i++) {
+            const particle = document.createElement('div');
+            const color = colors[i % colors.length];
+            const x = Math.random() * 100;
+            const delay = Math.random() * 0.5;
+            const size = Math.random() * 8 + 4;
+
+            particle.style.cssText = `
+                position: fixed; top: -10px; left: ${x}vw;
+                width: ${size}px; height: ${size}px;
+                background: ${color}; border-radius: 2px;
+                pointer-events: none; z-index: 100000;
+                animation: djust-confetti-fall ${1.5 + Math.random()}s ease-in ${delay}s forwards;
+                transform: rotate(${Math.random() * 360}deg);
+            `;
+            document.body.appendChild(particle);
+            setTimeout(() => particle.remove(), 3000);
+        }
+    }
+};
+
+// Inject confetti keyframes if not present
+if (!document.getElementById('djust-confetti-style')) {
+    const style = document.createElement('style');
+    style.id = 'djust-confetti-style';
+    style.textContent = `
+        @keyframes djust-confetti-fall {
+            0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+            100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+        }
+    `;
+    document.head.appendChild(style);
+}
+</script>

@@ -62,6 +62,55 @@ def push_to_view(view_path, *, state=None, handler=None, payload=None):
     async_to_sync(channel_layer.group_send)(group, message)
 
 
+def push_event_to_view(view_path, event, payload=None):
+    """
+    Push an event directly to all clients connected to a LiveView.
+
+    Unlike push_to_view (which updates state/calls handlers), this sends
+    a raw event that client-side JS hooks can receive via handleEvent().
+
+    Args:
+        view_path: Dotted path to the view class
+        event: Event name (e.g. "notification", "chart_update")
+        payload: Dict of data to send with the event
+
+    Example::
+
+        from djust import push_event_to_view
+
+        push_event_to_view("myapp.views.DashboardView",
+                           "new_alert", {"message": "Server restarted"})
+    """
+    if not _VIEW_PATH_RE.match(view_path):
+        raise ValueError(
+            f"Invalid view_path: {view_path!r}. Expected dotted Python path like 'myapp.views.MyView'"
+        )
+    channel_layer = get_channel_layer()
+    group = view_group_name(view_path)
+    message = {
+        "type": "client_push_event",
+        "event": event,
+        "payload": payload or {},
+    }
+    async_to_sync(channel_layer.group_send)(group, message)
+
+
+async def apush_event_to_view(view_path, event, payload=None):
+    """Async version of :func:`push_event_to_view`."""
+    if not _VIEW_PATH_RE.match(view_path):
+        raise ValueError(
+            f"Invalid view_path: {view_path!r}. Expected dotted Python path like 'myapp.views.MyView'"
+        )
+    channel_layer = get_channel_layer()
+    group = view_group_name(view_path)
+    message = {
+        "type": "client_push_event",
+        "event": event,
+        "payload": payload or {},
+    }
+    await channel_layer.group_send(group, message)
+
+
 async def apush_to_view(view_path, *, state=None, handler=None, payload=None):
     """
     Async version of :func:`push_to_view`.

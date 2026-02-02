@@ -29,6 +29,7 @@ from .mixins import (
     RequestMixin,
     PostProcessingMixin,
     ModelBindingMixin,
+    PushEventMixin,
 )
 
 # Configure logger
@@ -59,6 +60,7 @@ class LiveView(
     RequestMixin,
     PostProcessingMixin,
     ModelBindingMixin,
+    PushEventMixin,
     View,
 ):
     """

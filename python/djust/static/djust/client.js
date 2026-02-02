@@ -6,8 +6,6 @@
 
 // Create djust namespace at the top to ensure it's available for all exports
 window.djust = window.djust || {};
-window.djust.VERSION = '0.2.2rc3';
-window.djust.JS_BUILD = '20260201-1830';
 
 // ============================================================================
 // Double-Load Guard
@@ -18,7 +16,6 @@ if (window._djustClientLoaded) {
     console.log('[LiveView] client.js already loaded, skipping duplicate initialization');
 } else {
 window._djustClientLoaded = true;
-console.log(`[djust] client.js v${window.djust.VERSION} build ${window.djust.JS_BUILD}`);
 
 // ============================================================================
 // Security Constants
@@ -60,7 +57,7 @@ window.djustInitialized = false;
 // Track pending turbo:load reinit
 let pendingTurboReinit = false;
 
-window.addEventListener('turbo:load', function(_event) {
+window.addEventListener('turbo:load', function(event) {
     console.log('[LiveView:TurboNav] turbo:load event received!');
     console.log('[LiveView:TurboNav] djustInitialized:', window.djustInitialized);
 
@@ -444,6 +441,11 @@ class LiveViewWebSocket {
                     setCacheConfig(data.cache_config);
                 }
 
+                // Initialize upload configurations from mount response
+                if (data.upload_configs && window.djust.uploads) {
+                    window.djust.uploads.setConfigs(data.upload_configs);
+                }
+
                 // OPTIMIZATION: Skip HTML replacement if content was pre-rendered via HTTP GET
                 // Server sends has_ids flag to avoid client-side string search
                 const hasDataDjAttrs = data.has_ids === true;
@@ -515,6 +517,18 @@ class LiveViewWebSocket {
 
             case 'pong':
                 // Heartbeat response
+                break;
+
+            case 'upload_progress':
+                // File upload progress update
+                if (window.djust.uploads) {
+                    window.djust.uploads.handleProgress(data);
+                }
+                break;
+
+            case 'upload_registered':
+                // Upload registration acknowledged
+                console.log('[Upload] Registered:', data.ref, 'for', data.upload_name);
                 break;
 
             case 'reload':
@@ -897,7 +911,7 @@ class StateBus {
     }
 }
 
-const _globalStateBus = new StateBus();
+const globalStateBus = new StateBus();
 
 // DraftManager for localStorage-based draft saving
 class DraftManager {
@@ -1017,9 +1031,9 @@ function initDraftMode() {
             const field = document.querySelector(`[name="${fieldName}"]`);
             if (field) {
                 if (field.type === 'checkbox') {
-                    field.checked = savedDraft[fieldName]; // eslint-disable-line security/detect-object-injection
+                    field.checked = savedDraft[fieldName];
                 } else {
-                    field.value = savedDraft[fieldName]; // eslint-disable-line security/detect-object-injection
+                    field.value = savedDraft[fieldName];
                 }
             }
         });
@@ -1057,7 +1071,7 @@ function initDraftMode() {
     }
 }
 
-function _collectFormData(container) {
+function collectFormData(container) {
     const data = {};
 
     const fields = container.querySelectorAll('input, textarea, select');
@@ -1080,14 +1094,14 @@ function _collectFormData(container) {
         const name = editable.getAttribute('name') || editable.id;
         // Prevent prototype pollution attacks
         if (name && !UNSAFE_KEYS.includes(name)) {
-            data[name] = editable.innerHTML; // eslint-disable-line security/detect-object-injection
+            data[name] = editable.innerHTML;
         }
     });
 
     return data;
 }
 
-function _restoreFormData(container, data) {
+function restoreFormData(container, data) {
     if (!data) return;
 
     Object.entries(data).forEach(([name, value]) => {
@@ -1459,6 +1473,11 @@ window.djust = window.djust || {};
 window.djust.extractTypedParams = extractTypedParams;
 
 function bindLiveViewEvents() {
+    // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
+    if (window.djust.uploads) {
+        window.djust.uploads.bindHandlers();
+    }
+
     // Find all interactive elements
     const allElements = document.querySelectorAll('*');
     allElements.forEach(element => {
@@ -1466,12 +1485,10 @@ function bindLiveViewEvents() {
         const clickHandler = element.getAttribute('dj-click');
         if (clickHandler && !element.dataset.liveviewClickBound) {
             element.dataset.liveviewClickBound = 'true';
+            // Parse handler string to extract function name and arguments
+            const parsed = parseEventHandler(clickHandler);
             element.addEventListener('click', async (e) => {
                 e.preventDefault();
-
-                // Re-parse handler from DOM attribute at event time to pick up
-                // any changes made by SetAttribute patches since binding.
-                const parsed = parseEventHandler(element.getAttribute('dj-click'));
 
                 // Extract all data-* attributes with type coercion support
                 const params = extractTypedParams(element);
@@ -1513,7 +1530,7 @@ function bindLiveViewEvents() {
                 // Pass target element for optimistic updates (Phase 3)
                 params._targetElement = e.target;
 
-                await handleEvent(element.getAttribute('dj-submit'), params);
+                await handleEvent(submitHandler, params);
                 e.target.reset();
             });
         }
@@ -1563,7 +1580,7 @@ function bindLiveViewEvents() {
                 if (globalThis.djustDebug) {
                     console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
                 }
-                await handleEvent(element.getAttribute('dj-change'), params);
+                await handleEvent(changeHandler, params);
             });
         }
 
@@ -1587,7 +1604,7 @@ function bindLiveViewEvents() {
 
             const handler = async (e) => {
                 const params = buildFormEventParams(e.target, e.target.value);
-                await handleEvent(element.getAttribute('dj-input'), params);
+                await handleEvent(inputHandler, params);
             };
 
             // Apply rate limiting wrapper
@@ -1607,7 +1624,7 @@ function bindLiveViewEvents() {
             element.dataset.liveviewBlurBound = 'true';
             element.addEventListener('blur', async (e) => {
                 const params = buildFormEventParams(e.target, e.target.value);
-                await handleEvent(element.getAttribute('dj-blur'), params);
+                await handleEvent(blurHandler, params);
             });
         }
 
@@ -1617,7 +1634,7 @@ function bindLiveViewEvents() {
             element.dataset.liveviewFocusBound = 'true';
             element.addEventListener('focus', async (e) => {
                 const params = buildFormEventParams(e.target, e.target.value);
-                await handleEvent(element.getAttribute('dj-focus'), params);
+                await handleEvent(focusHandler, params);
             });
         }
 
@@ -1627,10 +1644,8 @@ function bindLiveViewEvents() {
             if (keyHandler && !element.dataset[`liveview${eventType}Bound`]) {
                 element.dataset[`liveview${eventType}Bound`] = 'true';
                 element.addEventListener(eventType, async (e) => {
-                    // Re-read attribute at event time to pick up SetAttribute patches
-                    const currentHandler = element.getAttribute(`dj-${eventType}`);
                     // Check for key modifiers (e.g. dj-keydown.enter)
-                    const modifiers = currentHandler.split('.');
+                    const modifiers = keyHandler.split('.');
                     const handlerName = modifiers[0];
                     const requiredKey = modifiers.length > 1 ? modifiers[1] : null;
 
@@ -1660,11 +1675,6 @@ function bindLiveViewEvents() {
             }
         });
     });
-
-    // After rebinding events, manage hooks and dj-model
-    _cleanupDestroyedHooks();
-    _mountHooks();
-    bindDjModel();
 }
 
 // Helper: Debounce function
@@ -2032,18 +2042,10 @@ function getNodeByPath(path, djustId = null) {
 
     for (let i = 0; i < path.length; i++) {
         const index = path[i]; // eslint-disable-line security/detect-object-injection -- path is a server-provided integer array
-        // Filter children to match server's Rust VDOM which strips whitespace-only
-        // text nodes (parser.rs). Must use same logic as getSignificantChildren().
-        // NOTE: \xa0 (non-breaking space / &nbsp;) is preserved by both server and
-        // client since it's semantically significant (e.g., syntax highlighting).
         const children = Array.from(node.childNodes).filter(child => {
             if (child.nodeType === Node.ELEMENT_NODE) return true;
             if (child.nodeType === Node.TEXT_NODE) {
-                if (isWhitespacePreserving(node)) return true;
-                // Preserve text nodes containing \xa0 (non-breaking space)
-                const text = child.textContent;
-                if (text.indexOf('\xa0') !== -1) return true;
-                return text.trim().length > 0;
+                return child.textContent.trim().length > 0;
             }
             return false;
         });
@@ -2673,14 +2675,7 @@ function isWhitespacePreserving(node) {
 // Export for testing
 window.djust.getSignificantChildren = getSignificantChildren;
 window.djust._applySinglePatch = applySinglePatch;
-window.djust._getNodeByPath = getNodeByPath;
 window.djust._stampDjIds = _stampDjIds;
-window.djust._groupPatchesByParent = groupPatchesByParent;
-window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
-window.djust.createNodeFromVNode = createNodeFromVNode;
-window.djust.bindLiveViewEvents = bindLiveViewEvents;
-window.djust.handleEvent = handleEvent;
-window.djust._sortPatches = sortPatches;
 
 /**
  * Group patches by their parent path for batching.
@@ -2688,15 +2683,7 @@ window.djust._sortPatches = sortPatches;
 function groupPatchesByParent(patches) {
     const groups = new Map(); // Use Map to avoid prototype pollution
     for (const patch of patches) {
-        // For child operations (InsertChild, RemoveChild, MoveChild), patch.path
-        // is already the parent container path. For node-targeting ops, we need
-        // to slice off the last element to get the parent.
-        const isChildOp = patch.type === 'InsertChild' ||
-                          patch.type === 'RemoveChild' ||
-                          patch.type === 'MoveChild';
-        const parentPath = isChildOp
-            ? patch.path.join('/')
-            : patch.path.slice(0, -1).join('/');
+        const parentPath = patch.path.slice(0, -1).join('/');
         if (!groups.has(parentPath)) {
             groups.set(parentPath, []);
         }
@@ -2725,8 +2712,7 @@ function groupConsecutiveInserts(inserts) {
 
     for (let i = 1; i < inserts.length; i++) {
         // Check if this insert is consecutive with the previous one
-        if (inserts[i].index === inserts[i - 1].index + 1 &&
-            inserts[i].d === inserts[i - 1].d) {
+        if (inserts[i].index === inserts[i - 1].index + 1) {
             currentGroup.push(inserts[i]);
         } else {
             // Start a new group
@@ -2870,39 +2856,6 @@ function applySinglePatch(patch) {
 }
 
 /**
- * Sort patches into 4-phase order for correct DOM mutation sequencing:
- *   Phase 0: RemoveChild  (descending index within same parent)
- *   Phase 1: MoveChild
- *   Phase 2: InsertChild  (ascending index within same parent)
- *   Phase 3: SetText / SetAttribute / all others
- *
- * Descending removal prevents index shifting (Issue #142).
- * Ascending insertion ensures earlier indices exist before later ones.
- */
-function sortPatches(patches) {
-    const phaseOrder = { RemoveChild: 0, MoveChild: 1, InsertChild: 2 };
-
-    patches.sort((a, b) => {
-        const phaseA = phaseOrder[a.type] ?? 3;
-        const phaseB = phaseOrder[b.type] ?? 3;
-        if (phaseA !== phaseB) return phaseA - phaseB;
-
-        // Within same phase and same parent, sort by index
-        if (a.type === 'RemoveChild' && b.type === 'RemoveChild') {
-            const pathA = JSON.stringify(a.path);
-            const pathB = JSON.stringify(b.path);
-            if (pathA === pathB) return (b.index || 0) - (a.index || 0); // descending
-        }
-        if (a.type === 'InsertChild' && b.type === 'InsertChild') {
-            const pathA = JSON.stringify(a.path);
-            const pathB = JSON.stringify(b.path);
-            if (pathA === pathB) return (a.index || 0) - (b.index || 0); // ascending
-        }
-        return 0;
-    });
-}
-
-/**
  * Apply VDOM patches with optimized batching.
  *
  * Improvements over sequential application:
@@ -2915,7 +2868,17 @@ function applyPatches(patches) {
         return true;
     }
 
-    sortPatches(patches);
+    // Sort patches: RemoveChild in descending order to preserve indices
+    patches.sort((a, b) => {
+        if (a.type === 'RemoveChild' && b.type === 'RemoveChild') {
+            const pathA = JSON.stringify(a.path);
+            const pathB = JSON.stringify(b.path);
+            if (pathA === pathB) {
+                return b.index - a.index;
+            }
+        }
+        return 0;
+    });
 
     // For small patch sets, apply directly without batching overhead
     if (patches.length <= 10) {
@@ -2934,37 +2897,14 @@ function applyPatches(patches) {
 
     // For larger patch sets, use batching
     let failedCount = 0;
-    let _successCount = 0;
+    let successCount = 0;
 
     // Group patches by parent for potential batching
     const patchGroups = groupPatchesByParent(patches);
 
-    for (const [_parentPath, group] of patchGroups) {
-        // IMPORTANT: Apply RemoveChild patches first before any InsertChild.
-        // For data-djust-replace, Rust emits all RemoveChild then all InsertChild.
-        // If InsertChild runs first, old children shift indices and RemoveChild
-        // targets the wrong nodes (Issue #142).
-        const removePatches = [];
-        const remainingPatches = [];
-        for (const patch of group) {
-            if (patch.type === 'RemoveChild') {
-                removePatches.push(patch);
-            } else {
-                remainingPatches.push(patch);
-            }
-        }
-
-        // Apply all RemoveChild patches first (already sorted descending by index)
-        for (const patch of removePatches) {
-            if (applySinglePatch(patch)) {
-                _successCount++;
-            } else {
-                failedCount++;
-            }
-        }
-
+    for (const [parentPath, group] of patchGroups) {
         // Optimization: Use DocumentFragment for consecutive InsertChild on same parent
-        const insertPatches = remainingPatches.filter(p => p.type === 'InsertChild');
+        const insertPatches = group.filter(p => p.type === 'InsertChild');
 
         if (insertPatches.length >= 3) {
             // Group only consecutive inserts (can't batch non-consecutive indices)
@@ -2985,7 +2925,7 @@ function applyPatches(patches) {
                         for (const patch of consecutiveGroup) {
                             const newChild = createNodeFromVNode(patch.node, svgContext);
                             fragment.appendChild(newChild);
-                            _successCount++;
+                            successCount++;
                         }
 
                         // Insert fragment at the first index position
@@ -3001,24 +2941,24 @@ function applyPatches(patches) {
 
                         // Mark these patches as processed
                         const processedSet = new Set(consecutiveGroup);
-                        for (let i = remainingPatches.length - 1; i >= 0; i--) {
-                            if (processedSet.has(remainingPatches[i])) {
-                                remainingPatches.splice(i, 1);
+                        for (let i = group.length - 1; i >= 0; i--) {
+                            if (processedSet.has(group[i])) {
+                                group.splice(i, 1);
                             }
                         }
                     } catch (error) {
                         console.error('[LiveView] Batch insert failed, falling back to individual patches:', error.message);
-                        // On failure, patches remain for individual processing
-                        _successCount -= consecutiveGroup.length;  // Undo count
+                        // On failure, patches remain in group for individual processing
+                        successCount -= consecutiveGroup.length;  // Undo count
                     }
                 }
             }
         }
 
-        // Apply remaining non-remove patches individually
-        for (const patch of remainingPatches) {
+        // Apply remaining patches individually
+        for (const patch of group) {
             if (applySinglePatch(patch)) {
-                _successCount++;
+                successCount++;
             } else {
                 failedCount++;
             }
@@ -3239,334 +3179,6 @@ const lazyHydrationManager = {
 // Expose lazy hydration API
 window.djust.lazyHydration = lazyHydrationManager;
 
-// ============================================================================
-// Feature: dj-hook — Client-Side JS Hooks (Phoenix-style)
-// ============================================================================
-
-/**
- * Hook registry. Users register hooks like:
- *   djust.hooks.Chart = { mounted() { ... }, updated() { ... }, destroyed() { ... } }
- *
- * Elements use: <div dj-hook="Chart">
- *
- * Lifecycle:
- *   mounted()      — element first appears in DOM
- *   updated()      — element attributes changed via VDOM patch
- *   destroyed()    — element removed from DOM
- *   disconnected() — WebSocket lost
- *   reconnected()  — WebSocket restored
- */
-window.djust.hooks = window.djust.hooks || {};
-
-// Track active hook instances: Map<element, hookInstance>
-const _activeHooks = new Map();
-
-function _createHookInstance(hookDef, el) {
-    const instance = Object.create(hookDef);
-    instance.el = el;
-    instance.__eventHandlers = {};
-
-    instance.pushEvent = function(eventName, params = {}) {
-        handleEvent(eventName, { ...params, _hookElement: true });
-    };
-
-    instance.handleEvent = function(eventName, callback) {
-        if (!instance.__eventHandlers[eventName]) {
-            instance.__eventHandlers[eventName] = [];
-        }
-        instance.__eventHandlers[eventName].push(callback);
-    };
-
-    return instance;
-}
-
-function _mountHooks() {
-    document.querySelectorAll('[dj-hook]').forEach(el => {
-        if (_activeHooks.has(el)) return; // Already mounted
-
-        const hookName = el.getAttribute('dj-hook');
-        const hookDef = window.djust.hooks[hookName];
-        if (!hookDef) {
-            if (globalThis.djustDebug) {
-                console.warn(`[djust:hook] No hook registered for "${hookName}"`);
-            }
-            return;
-        }
-
-        const instance = _createHookInstance(hookDef, el);
-        _activeHooks.set(el, instance);
-
-        if (typeof instance.mounted === 'function') {
-            try {
-                instance.mounted();
-            } catch (err) {
-                console.error(`[djust:hook] Error in ${hookName}.mounted():`, err);
-            }
-        }
-    });
-}
-
-function _updateHook(el) {
-    const instance = _activeHooks.get(el);
-    if (instance && typeof instance.updated === 'function') {
-        try {
-            instance.updated();
-        } catch (err) {
-            console.error(`[djust:hook] Error in updated():`, err);
-        }
-    }
-}
-
-function _cleanupDestroyedHooks() {
-    for (const [el, instance] of _activeHooks) {
-        if (!document.contains(el)) {
-            if (typeof instance.destroyed === 'function') {
-                try {
-                    instance.destroyed();
-                } catch (err) {
-                    console.error(`[djust:hook] Error in destroyed():`, err);
-                }
-            }
-            _activeHooks.delete(el);
-        }
-    }
-}
-
-function _notifyHooksDisconnected() {
-    for (const [, instance] of _activeHooks) {
-        if (typeof instance.disconnected === 'function') {
-            try { instance.disconnected(); } catch (e) { /* ignore */ }
-        }
-    }
-}
-
-function _notifyHooksReconnected() {
-    for (const [, instance] of _activeHooks) {
-        if (typeof instance.reconnected === 'function') {
-            try { instance.reconnected(); } catch (e) { /* ignore */ }
-        }
-    }
-}
-
-/**
- * Dispatch a server-pushed event to hook instances listening via handleEvent().
- * Call from server with push.py: push_event("chart-data", {values: [...]})
- */
-function _dispatchHookEvent(eventName, payload) {
-    for (const [, instance] of _activeHooks) {
-        const handlers = instance.__eventHandlers[eventName];
-        if (handlers) {
-            handlers.forEach(cb => {
-                try { cb(payload); } catch (e) {
-                    console.error(`[djust:hook] Error in handleEvent("${eventName}"):`, e);
-                }
-            });
-        }
-    }
-}
-
-window.djust._activeHooks = _activeHooks;
-window.djust._mountHooks = _mountHooks;
-window.djust._updateHook = _updateHook;
-window.djust._cleanupDestroyedHooks = _cleanupDestroyedHooks;
-window.djust._dispatchHookEvent = _dispatchHookEvent;
-
-// ============================================================================
-// Feature: dj-model — Two-Way Data Binding
-// ============================================================================
-
-/**
- * dj-model binds an input to a server-side attribute.
- *
- * Usage:
- *   <input type="text" dj-model="search_query">
- *   <select dj-model="sort_by">
- *   <textarea dj-model="message">
- *
- * Options (dot-separated):
- *   dj-model.lazy        — sync on blur only
- *   dj-model.debounce-500 — custom debounce ms
- *   dj-model.trim        — trim whitespace before sending
- *
- * Sends event: update_model({ field: "search_query", value: "..." })
- */
-function bindDjModel() {
-    document.querySelectorAll('[dj-model]').forEach(el => {
-        if (el.dataset.djModelBound) return;
-        el.dataset.djModelBound = 'true';
-
-        const raw = el.getAttribute('dj-model');
-        const parts = raw.split('.');
-        const field = parts[0];
-        const modifiers = parts.slice(1);
-
-        const isLazy = modifiers.includes('lazy');
-        const trim = modifiers.includes('trim');
-
-        // Parse debounce from modifiers like "debounce-500"
-        let debounceMs = 300; // default
-        const debounceModifier = modifiers.find(m => m.startsWith('debounce-'));
-        if (debounceModifier) {
-            debounceMs = parseInt(debounceModifier.split('-')[1], 10) || 300;
-        }
-
-        function sendValue() {
-            let value = el.type === 'checkbox' ? el.checked : el.value;
-            if (trim && typeof value === 'string') {
-                value = value.trim();
-            }
-            handleEvent('update_model', { field, value });
-        }
-
-        if (isLazy) {
-            el.addEventListener('blur', sendValue);
-            el.addEventListener('change', sendValue);
-        } else {
-            const tagName = el.tagName.toLowerCase();
-            if (tagName === 'select' || el.type === 'checkbox' || el.type === 'radio') {
-                el.addEventListener('change', sendValue);
-            } else {
-                const debouncedSend = debounce(sendValue, debounceMs);
-                el.addEventListener('input', debouncedSend);
-            }
-        }
-    });
-}
-
-window.djust.bindDjModel = bindDjModel;
-
-// ============================================================================
-// Feature: Error Overlay (Development Mode)
-// ============================================================================
-
-/**
- * Rich error overlay for development. Shows server errors with traceback,
- * event context, and validation details. Dismissible with Escape.
- */
-const errorOverlay = {
-    _overlay: null,
-
-    show(detail) {
-        this.dismiss(); // Remove any existing overlay
-
-        const overlay = document.createElement('div');
-        overlay.id = 'djust-error-overlay';
-        overlay.style.cssText = `
-            position: fixed; inset: 0; z-index: 99999;
-            background: rgba(0,0,0,0.85); color: #f8f8f2;
-            font-family: 'SF Mono', Menlo, Monaco, 'Courier New', monospace;
-            font-size: 13px; overflow-y: auto; padding: 0;
-            display: flex; align-items: flex-start; justify-content: center;
-        `;
-
-        const card = document.createElement('div');
-        card.style.cssText = `
-            background: #1e1e2e; border-radius: 12px; margin: 40px 20px;
-            max-width: 900px; width: 100%; box-shadow: 0 25px 50px rgba(0,0,0,0.5);
-            border: 1px solid #313244;
-        `;
-
-        // Header
-        const header = document.createElement('div');
-        header.style.cssText = `
-            padding: 16px 24px; background: #f38ba8; color: #1e1e2e;
-            border-radius: 12px 12px 0 0; display: flex;
-            justify-content: space-between; align-items: center;
-            font-weight: 600; font-size: 14px;
-        `;
-        header.innerHTML = `
-            <span>⚠️ Server Error${detail.event ? ` — Event: <code style="background:rgba(0,0,0,0.2);padding:2px 6px;border-radius:4px">${_escHtml(detail.event)}</code>` : ''}</span>
-            <button id="djust-error-close" style="background:none;border:none;color:#1e1e2e;font-size:20px;cursor:pointer;padding:0 4px;line-height:1" title="Dismiss (Esc)">✕</button>
-        `;
-        card.appendChild(header);
-
-        // Error message
-        const msgBox = document.createElement('div');
-        msgBox.style.cssText = `padding: 20px 24px; border-bottom: 1px solid #313244;`;
-        msgBox.innerHTML = `<div style="color:#f38ba8;font-size:16px;font-weight:500;margin-bottom:4px">Error</div>
-            <div style="color:#cdd6f4;white-space:pre-wrap">${_escHtml(detail.error || 'Unknown error')}</div>`;
-        card.appendChild(msgBox);
-
-        // Validation details
-        if (detail.validation_details) {
-            const valBox = document.createElement('div');
-            valBox.style.cssText = `padding: 16px 24px; border-bottom: 1px solid #313244;`;
-            valBox.innerHTML = `<div style="color:#f9e2af;font-size:14px;font-weight:500;margin-bottom:8px">Validation Details</div>
-                <pre style="color:#a6adc8;margin:0;white-space:pre-wrap">${_escHtml(JSON.stringify(detail.validation_details, null, 2))}</pre>`;
-            card.appendChild(valBox);
-        }
-
-        // Traceback
-        if (detail.traceback) {
-            const tbBox = document.createElement('div');
-            tbBox.style.cssText = `padding: 16px 24px;`;
-            tbBox.innerHTML = `
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-                    <span style="color:#89b4fa;font-size:14px;font-weight:500">Traceback</span>
-                    <button id="djust-error-copy" style="background:#313244;border:none;color:#cdd6f4;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px">Copy</button>
-                </div>
-                <pre style="color:#a6adc8;margin:0;white-space:pre-wrap;line-height:1.5;max-height:400px;overflow-y:auto">${_highlightTraceback(detail.traceback)}</pre>`;
-            card.appendChild(tbBox);
-        }
-
-        overlay.appendChild(card);
-        document.body.appendChild(overlay);
-        this._overlay = overlay;
-
-        // Event listeners
-        overlay.querySelector('#djust-error-close').addEventListener('click', () => this.dismiss());
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) this.dismiss(); });
-
-        const copyBtn = overlay.querySelector('#djust-error-copy');
-        if (copyBtn) {
-            copyBtn.addEventListener('click', () => {
-                navigator.clipboard.writeText(detail.traceback).then(() => {
-                    copyBtn.textContent = 'Copied!';
-                    setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
-                });
-            });
-        }
-
-        const escHandler = (e) => {
-            if (e.key === 'Escape') {
-                this.dismiss();
-                document.removeEventListener('keydown', escHandler);
-            }
-        };
-        document.addEventListener('keydown', escHandler);
-    },
-
-    dismiss() {
-        if (this._overlay) {
-            this._overlay.remove();
-            this._overlay = null;
-        }
-    }
-};
-
-function _escHtml(str) {
-    const d = document.createElement('div');
-    d.textContent = str;
-    return d.innerHTML;
-}
-
-function _highlightTraceback(tb) {
-    // Simple syntax highlighting for Python tracebacks
-    return _escHtml(tb)
-        .replace(/^(  File &quot;.+?&quot;, line \d+.*)/gm, '<span style="color:#89b4fa">$1</span>')
-        .replace(/^(\w+Error:.+)/gm, '<span style="color:#f38ba8;font-weight:bold">$1</span>')
-        .replace(/^(\w+Exception:.+)/gm, '<span style="color:#f38ba8;font-weight:bold">$1</span>');
-}
-
-// Listen for djust:error events and show overlay
-window.addEventListener('djust:error', (e) => {
-    errorOverlay.show(e.detail);
-});
-
-window.djust.errorOverlay = errorOverlay;
-
-// ============================================================================
-
 // Initialize on load (support both normal page load and dynamic script injection via TurboNav)
 function djustInit() {
     console.log('[LiveView] Initializing...');
@@ -3605,10 +3217,6 @@ function djustInit() {
     // Bind initial events
     bindLiveViewEvents();
 
-    // Mount hooks and dj-model bindings
-    _mountHooks();
-    bindDjModel();
-
     // Initialize Draft Mode
     initDraftMode();
 
@@ -3634,3 +3242,439 @@ if (document.readyState === 'loading') {
 }
 
 } // End of double-load guard
+// ============================================================================
+// File Upload Support
+// ============================================================================
+// Handles: file selection, chunked binary WebSocket upload, progress tracking,
+// image previews, and drag-and-drop zones.
+//
+// Template directives:
+//   dj-upload="name"         — file input bound to upload slot
+//   dj-upload-drop="name"    — drop zone for drag-and-drop
+//   dj-upload-preview="name" — container for image previews
+//   dj-upload-progress="name"— container for progress bars
+
+(function() {
+    'use strict';
+
+    // Frame types matching server protocol
+    const FRAME_CHUNK    = 0x01;
+    const FRAME_COMPLETE = 0x02;
+    const FRAME_CANCEL   = 0x03;
+
+    const DEFAULT_CHUNK_SIZE = 64 * 1024; // 64KB
+
+    // Active uploads: ref -> { file, config, chunkIndex, resolve, reject }
+    const activeUploads = new Map();
+
+    // Upload configs from server mount response
+    let uploadConfigs = {};
+
+    /**
+     * Initialize upload configs from server mount data.
+     * Called when mount response includes upload configuration.
+     */
+    function setUploadConfigs(configs) {
+        uploadConfigs = configs || {};
+        console.log('[Upload] Configs loaded:', Object.keys(uploadConfigs));
+    }
+
+    /**
+     * Generate a UUID v4 as bytes (Uint8Array of 16 bytes).
+     */
+    function uuidBytes() {
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+        bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1
+        return bytes;
+    }
+
+    /**
+     * Convert UUID bytes to string format.
+     */
+    function uuidToString(bytes) {
+        const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+        return [
+            hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16),
+            hex.slice(16, 20), hex.slice(20)
+        ].join('-');
+    }
+
+    /**
+     * Build a binary upload frame.
+     * @param {number} frameType - FRAME_CHUNK, FRAME_COMPLETE, or FRAME_CANCEL
+     * @param {Uint8Array} refBytes - 16-byte UUID
+     * @param {ArrayBuffer|null} payload - Chunk data (for FRAME_CHUNK)
+     * @param {number} chunkIndex - Chunk index (for FRAME_CHUNK)
+     * @returns {ArrayBuffer}
+     */
+    function buildFrame(frameType, refBytes, payload, chunkIndex) {
+        if (frameType === FRAME_CHUNK && payload) {
+            const header = new Uint8Array(21); // 1 + 16 + 4
+            header[0] = frameType;
+            header.set(refBytes, 1);
+            const view = new DataView(header.buffer);
+            view.setUint32(17, chunkIndex, false); // big-endian
+            const frame = new Uint8Array(21 + payload.byteLength);
+            frame.set(header);
+            frame.set(new Uint8Array(payload), 21);
+            return frame.buffer;
+        } else {
+            // COMPLETE or CANCEL: just type + ref
+            const frame = new Uint8Array(17);
+            frame[0] = frameType;
+            frame.set(refBytes, 1);
+            return frame.buffer;
+        }
+    }
+
+    /**
+     * Upload a single file via chunked binary WebSocket frames.
+     */
+    async function uploadFile(ws, uploadName, file, config) {
+        const refBytes = uuidBytes();
+        const ref = uuidToString(refBytes);
+        const chunkSize = (config && config.chunk_size) || DEFAULT_CHUNK_SIZE;
+
+        // Announce the upload to the server via JSON
+        ws.sendMessage({
+            type: 'upload_register',
+            upload_name: uploadName,
+            ref: ref,
+            client_name: file.name,
+            client_type: file.type,
+            client_size: file.size,
+        });
+
+        return new Promise((resolve, reject) => {
+            activeUploads.set(ref, {
+                file, config, uploadName, refBytes, resolve, reject,
+                chunkIndex: 0, sent: 0,
+            });
+
+            // Read file and send chunks
+            const reader = new FileReader();
+            reader.onload = function() {
+                const buffer = reader.result;
+                let offset = 0;
+                let chunkIndex = 0;
+
+                function sendNextChunk() {
+                    if (offset >= buffer.byteLength) {
+                        // All chunks sent — send complete frame
+                        const completeFrame = buildFrame(FRAME_COMPLETE, refBytes);
+                        ws.ws.send(completeFrame);
+                        return;
+                    }
+
+                    const end = Math.min(offset + chunkSize, buffer.byteLength);
+                    const chunk = buffer.slice(offset, end);
+                    const frame = buildFrame(FRAME_CHUNK, refBytes, chunk, chunkIndex);
+                    ws.ws.send(frame);
+
+                    const upload = activeUploads.get(ref);
+                    if (upload) {
+                        upload.sent = end;
+                        upload.chunkIndex = chunkIndex + 1;
+                    }
+
+                    offset = end;
+                    chunkIndex++;
+
+                    // Small delay to avoid overwhelming the WebSocket
+                    if (ws.ws.bufferedAmount > chunkSize * 4) {
+                        setTimeout(sendNextChunk, 10);
+                    } else {
+                        sendNextChunk();
+                    }
+                }
+
+                sendNextChunk();
+            };
+
+            reader.onerror = function() {
+                reject(new Error('Failed to read file: ' + file.name));
+                activeUploads.delete(ref);
+            };
+
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
+    /**
+     * Cancel an active upload.
+     */
+    function cancelUpload(ws, ref) {
+        const upload = activeUploads.get(ref);
+        if (upload) {
+            const cancelFrame = buildFrame(FRAME_CANCEL, upload.refBytes);
+            ws.ws.send(cancelFrame);
+            activeUploads.delete(ref);
+            if (upload.reject) {
+                upload.reject(new Error('Upload cancelled'));
+            }
+        }
+    }
+
+    /**
+     * Handle upload progress message from server.
+     */
+    function handleUploadProgress(data) {
+        const { ref, progress, status } = data;
+        const upload = activeUploads.get(ref);
+
+        // Update progress bars in DOM
+        document.querySelectorAll(`[data-upload-ref="${ref}"] .upload-progress-bar`).forEach(bar => {
+            bar.style.width = progress + '%';
+            bar.setAttribute('aria-valuenow', progress);
+        });
+
+        // Update progress text
+        document.querySelectorAll(`[data-upload-ref="${ref}"] .upload-progress-text`).forEach(el => {
+            el.textContent = progress + '%';
+        });
+
+        // Dispatch custom event for app-level handling
+        window.dispatchEvent(new CustomEvent('djust:upload:progress', {
+            detail: { ref, progress, status, uploadName: upload ? upload.uploadName : null }
+        }));
+
+        if (status === 'complete') {
+            if (upload && upload.resolve) {
+                upload.resolve({ ref, status: 'complete' });
+            }
+            activeUploads.delete(ref);
+        } else if (status === 'error') {
+            if (upload && upload.reject) {
+                upload.reject(new Error('Upload failed on server'));
+            }
+            activeUploads.delete(ref);
+        }
+    }
+
+    /**
+     * Generate image preview for a file.
+     * @returns {Promise<string>} Data URL
+     */
+    function generatePreview(file) {
+        return new Promise((resolve, reject) => {
+            if (!file.type.startsWith('image/')) {
+                reject(new Error('Not an image'));
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(file);
+        });
+    }
+
+    /**
+     * Show previews in a dj-upload-preview container.
+     */
+    async function showPreviews(uploadName, files) {
+        const containers = document.querySelectorAll(`[dj-upload-preview="${uploadName}"]`);
+        if (containers.length === 0) return;
+
+        for (const container of containers) {
+            container.innerHTML = '';
+
+            for (const file of files) {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'upload-preview-item';
+
+                if (file.type.startsWith('image/')) {
+                    try {
+                        const dataUrl = await generatePreview(file);
+                        const img = document.createElement('img');
+                        img.src = dataUrl;
+                        img.alt = file.name;
+                        img.className = 'upload-preview-image';
+                        wrapper.appendChild(img);
+                    } catch (e) {
+                        // Fall through to filename display
+                    }
+                }
+
+                const info = document.createElement('span');
+                info.className = 'upload-preview-name';
+                info.textContent = file.name;
+                wrapper.appendChild(info);
+
+                const size = document.createElement('span');
+                size.className = 'upload-preview-size';
+                size.textContent = formatSize(file.size);
+                wrapper.appendChild(size);
+
+                container.appendChild(wrapper);
+            }
+        }
+    }
+
+    /**
+     * Create progress bar HTML for an upload.
+     */
+    function createProgressBar(ref, fileName) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'upload-progress-item';
+        wrapper.setAttribute('data-upload-ref', ref);
+
+        wrapper.innerHTML = `
+            <div class="upload-progress-name">${escapeHtml(fileName)}</div>
+            <div class="upload-progress-track">
+                <div class="upload-progress-bar" role="progressbar"
+                     aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"
+                     style="width: 0%"></div>
+            </div>
+            <span class="upload-progress-text">0%</span>
+        `;
+
+        return wrapper;
+    }
+
+    function formatSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    /**
+     * Handle file selection from dj-upload input.
+     */
+    async function handleFileSelect(input, uploadName) {
+        const files = Array.from(input.files);
+        if (files.length === 0) return;
+
+        const config = uploadConfigs[uploadName];
+
+        // Show previews
+        await showPreviews(uploadName, files);
+
+        // Create progress bars
+        const progressContainers = document.querySelectorAll(`[dj-upload-progress="${uploadName}"]`);
+
+        // Auto-upload if configured (default)
+        if (!config || config.auto_upload !== false) {
+            if (!liveViewWS || !liveViewWS.ws || liveViewWS.ws.readyState !== WebSocket.OPEN) {
+                console.error('[Upload] WebSocket not connected');
+                return;
+            }
+
+            for (const file of files) {
+                // Validate client-side
+                if (config) {
+                    if (file.size > config.max_file_size) {
+                        console.warn(`[Upload] File too large: ${file.name} (${file.size} > ${config.max_file_size})`);
+                        window.dispatchEvent(new CustomEvent('djust:upload:error', {
+                            detail: { file: file.name, error: 'File too large' }
+                        }));
+                        continue;
+                    }
+                }
+
+                try {
+                    const result = await uploadFile(liveViewWS, uploadName, file, config);
+                    console.log(`[Upload] Complete: ${file.name}`, result);
+                } catch (err) {
+                    console.error(`[Upload] Failed: ${file.name}`, err);
+                }
+            }
+        }
+    }
+
+    /**
+     * Bind upload-related event handlers.
+     * Called after DOM updates (mount, patch, etc.)
+     */
+    function bindUploadHandlers() {
+        // File inputs with dj-upload
+        document.querySelectorAll('[dj-upload]').forEach(input => {
+            if (input._djUploadBound) return;
+            input._djUploadBound = true;
+
+            const uploadName = input.getAttribute('dj-upload');
+
+            // Set accept attribute from config
+            const config = uploadConfigs[uploadName];
+            if (config && config.accept && !input.getAttribute('accept')) {
+                input.setAttribute('accept', config.accept);
+            }
+            if (config && config.max_entries > 1 && !input.hasAttribute('multiple')) {
+                input.setAttribute('multiple', '');
+            }
+
+            input.addEventListener('change', () => handleFileSelect(input, uploadName));
+        });
+
+        // Drop zones with dj-upload-drop
+        document.querySelectorAll('[dj-upload-drop]').forEach(zone => {
+            if (zone._djDropBound) return;
+            zone._djDropBound = true;
+
+            const uploadName = zone.getAttribute('dj-upload-drop');
+
+            zone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zone.classList.add('upload-dragover');
+            });
+
+            zone.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zone.classList.remove('upload-dragover');
+            });
+
+            zone.addEventListener('drop', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zone.classList.remove('upload-dragover');
+
+                const files = Array.from(e.dataTransfer.files);
+                if (files.length === 0) return;
+
+                const config = uploadConfigs[uploadName];
+                await showPreviews(uploadName, files);
+
+                if (!liveViewWS || !liveViewWS.ws || liveViewWS.ws.readyState !== WebSocket.OPEN) {
+                    console.error('[Upload] WebSocket not connected');
+                    return;
+                }
+
+                for (const file of files) {
+                    if (config && file.size > config.max_file_size) {
+                        window.dispatchEvent(new CustomEvent('djust:upload:error', {
+                            detail: { file: file.name, error: 'File too large' }
+                        }));
+                        continue;
+                    }
+                    try {
+                        await uploadFile(liveViewWS, uploadName, file, config);
+                    } catch (err) {
+                        console.error(`[Upload] Drop upload failed: ${file.name}`, err);
+                    }
+                }
+            });
+        });
+    }
+
+    // ========================================================================
+    // Exports
+    // ========================================================================
+
+    window.djust.uploads = {
+        setConfigs: setUploadConfigs,
+        handleProgress: handleUploadProgress,
+        bindHandlers: bindUploadHandlers,
+        cancelUpload: (ref) => cancelUpload(liveViewWS, ref),
+        activeUploads: activeUploads,
+    };
+
+})();

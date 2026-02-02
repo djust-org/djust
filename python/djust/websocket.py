@@ -44,6 +44,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     - Event dispatching from client
     - Sending DOM patches to client
     - Session state management
+    - File uploads via binary WebSocket frames
     """
 
     def __init__(self, *args, **kwargs):
@@ -55,6 +56,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         self.use_actors = False  # Will be set based on view class
         self._view_group: Optional[str] = None
         self._tick_task = None
+
+    async def _flush_push_events(self) -> None:
+        """
+        Send any pending push_event messages queued by the view during handler execution.
+
+        Called after each _send_update to deliver server-pushed events to the client.
+        """
+        if not self.view_instance:
+            return
+        if not hasattr(self.view_instance, "_drain_push_events"):
+            return
+        events = self.view_instance._drain_push_events()
+        for event_name, payload in events:
+            await self.send_json({
+                "type": "push_event",
+                "event": event_name,
+                "payload": payload,
+            })
 
     async def send_error(self, error: str, **context) -> None:
         """
@@ -126,6 +145,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         response["file"] = file_path
                 self._attach_debug_payload(response, event_name, performance)
                 await self.send_json(response)
+                await self._flush_push_events()
         else:
             response = {
                 "type": "html_update",
@@ -138,6 +158,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 response["cache_request_id"] = cache_request_id
             self._attach_debug_payload(response, event_name)
             await self.send_json(response)
+            await self._flush_push_events()
 
     def _attach_debug_payload(
         self,
@@ -252,6 +273,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             except Exception as e:
                 logger.warning(f"Error shutting down actor: {e}")
 
+        # Clean up uploads
+        if self.view_instance and hasattr(self.view_instance, '_cleanup_uploads'):
+            try:
+                self.view_instance._cleanup_uploads()
+            except Exception as e:
+                logger.warning(f"Error cleaning up uploads: {e}")
+
         # Clean up session state
         self.view_instance = None
         self.actor_handle = None
@@ -281,6 +309,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.send_error(f"Message too large ({raw_size} bytes)")
                 return
 
+            # Check for binary upload frames
+            if bytes_data and len(bytes_data) >= 17:
+                # Check if this looks like an upload frame (first byte is 0x01-0x03)
+                frame_type = bytes_data[0]
+                if frame_type in (0x01, 0x02, 0x03):
+                    await self._handle_upload_frame(bytes_data)
+                    return
+
             # Decode message
             if bytes_data:
                 data = msgpack.unpackb(bytes_data, raw=False)
@@ -308,6 +344,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.handle_mount(data)
             elif msg_type == "ping":
                 await self.send_json({"type": "pong"})
+            elif msg_type == "upload_register":
+                await self._handle_upload_register(data)
             else:
                 logger.warning(f"Unknown message type: {msg_type}")
                 await self.send_error(f"Unknown message type: {msg_type}")
@@ -591,6 +629,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         cache_config = self._extract_cache_config()
         if cache_config:
             response["cache_config"] = cache_config
+
+        # Include upload configurations if view uses UploadMixin
+        if hasattr(self.view_instance, '_upload_manager') and self.view_instance._upload_manager:
+            upload_state = self.view_instance._upload_manager.get_upload_state()
+            if upload_state:
+                response["upload_configs"] = {
+                    name: info["config"] for name, info in upload_state.items()
+                }
 
         await self.send_json(response)
 
@@ -928,6 +974,85 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
                 await self.send_json(response)
 
+    # ========================================================================
+    # File Upload Handling
+    # ========================================================================
+
+    async def _handle_upload_register(self, data: Dict[str, Any]) -> None:
+        """Handle upload_register message: client announces a file to upload."""
+        if not self.view_instance:
+            await self.send_error("View not mounted")
+            return
+
+        if not hasattr(self.view_instance, '_upload_manager') or not self.view_instance._upload_manager:
+            await self.send_error("No uploads configured for this view")
+            return
+
+        mgr = self.view_instance._upload_manager
+        entry = mgr.register_entry(
+            upload_name=data.get("upload_name", ""),
+            ref=data.get("ref", ""),
+            client_name=data.get("client_name", ""),
+            client_type=data.get("client_type", ""),
+            client_size=data.get("client_size", 0),
+        )
+
+        if entry:
+            await self.send_json({
+                "type": "upload_registered",
+                "ref": entry.ref,
+                "upload_name": entry.upload_name,
+            })
+        else:
+            await self.send_error("Upload rejected (check file type, size, or max entries)")
+
+    async def _handle_upload_frame(self, data: bytes) -> None:
+        """Handle binary upload frame (chunk, complete, cancel)."""
+        from .uploads import parse_upload_frame, build_progress_message
+
+        if not self.view_instance or not hasattr(self.view_instance, '_upload_manager'):
+            return
+
+        mgr = self.view_instance._upload_manager
+        if not mgr:
+            return
+
+        frame = parse_upload_frame(data)
+        if not frame:
+            logger.warning("Invalid upload frame received")
+            return
+
+        ref = frame["ref"]
+
+        if frame["type"] == "chunk":
+            progress = mgr.add_chunk(ref, frame["chunk_index"], frame["data"])
+            if progress is not None:
+                # Send progress update (throttle to every 10%)
+                entry = mgr._entries.get(ref)
+                if entry and (progress % 10 == 0 or progress >= 100):
+                    await self.send_json(build_progress_message(ref, progress))
+            else:
+                await self.send_json(build_progress_message(ref, 0, "error"))
+
+        elif frame["type"] == "complete":
+            entry = mgr.complete_upload(ref)
+            if entry:
+                await self.send_json(build_progress_message(ref, 100, "complete"))
+            else:
+                err_entry = mgr._entries.get(ref)
+                error_msg = err_entry.error if err_entry else "Unknown error"
+                await self.send_json({
+                    "type": "upload_progress",
+                    "ref": ref,
+                    "progress": 0,
+                    "status": "error",
+                    "error": error_msg,
+                })
+
+        elif frame["type"] == "cancel":
+            mgr.cancel_upload(ref)
+            await self.send_json(build_progress_message(ref, 0, "cancelled"))
+
     def _extract_cache_config(self) -> Dict[str, Any]:
         """
         Extract cache configuration from handlers with @cache decorator.
@@ -1185,9 +1310,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if isinstance(patches, str):
                     patches = json.loads(patches)
                 await self._send_update(patches=patches, version=version)
+            else:
+                # Even if no patches, flush any push_events
+                await self._flush_push_events()
 
         except Exception as e:
             logger.exception(f"Error in server_push: {e}")
+
+    async def client_push_event(self, event):
+        """
+        Handle a direct push_event from the channel layer (via push_event_to_view).
+
+        Sends the event directly to the client without re-rendering.
+        """
+        await self.send_json({
+            "type": "push_event",
+            "event": event.get("event", ""),
+            "payload": event.get("payload", {}),
+        })
 
     async def _run_tick(self, interval_ms):
         """
