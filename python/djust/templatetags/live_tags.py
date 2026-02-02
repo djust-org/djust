@@ -212,3 +212,17 @@ def has_errors(view, field_name: str) -> bool:
     if hasattr(view, "has_field_errors"):
         return view.has_field_errors(field_name)
     return False
+
+
+@register.simple_tag
+def djust_route_map():
+    """
+    Output a <script> tag that populates the client-side route map for
+    live_redirect navigation.
+
+    Include once in your base template:
+        {% load live_tags %}
+        {% djust_route_map %}
+    """
+    from djust.routing import get_route_map_script
+    return get_route_map_script()

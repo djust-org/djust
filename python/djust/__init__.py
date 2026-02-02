@@ -24,6 +24,7 @@ from .forms import FormMixin, LiveViewForm, form_field, LiveForm, live_form_from
 from .drafts import DraftModeMixin
 from .push import push_to_view, apush_to_view, push_event_to_view, apush_event_to_view
 from .presence import PresenceMixin, LiveCursorMixin, PresenceManager, CursorTracker
+from .routing import live_session, get_route_map_script
 
 # Import Rust functions
 try:

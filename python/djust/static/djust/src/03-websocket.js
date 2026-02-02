@@ -282,6 +282,13 @@ class LiveViewWebSocket {
                 }
                 break;
 
+            case 'navigation':
+                // Server-side live_patch or live_redirect
+                if (window.djust.navigation) {
+                    window.djust.navigation.handleNavigation(data);
+                }
+                break;
+
             case 'reload':
                 // Hot reload: file changed, refresh the page
                 window.location.reload();

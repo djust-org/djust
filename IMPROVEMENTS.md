@@ -2,7 +2,81 @@
 
 ## Implemented in this branch
 
-### ✨ LiveForm — Standalone Form Validation (LATEST)
+### ✨ Navigation & URL State — live_patch / live_redirect (LATEST)
+
+**What:** Full URL state management inspired by Phoenix LiveView. Update the browser URL without remounting (`live_patch`), navigate between views over the same WebSocket (`live_redirect`), handle browser back/forward, and declarative template directives (`dj-patch`, `dj-navigate`). Includes `live_session()` for grouping views that share a WebSocket connection.
+
+**Server-side API:**
+```python
+from djust import LiveView
+from djust.decorators import event_handler
+
+class ProductListView(LiveView):
+    template_name = "products.html"
+
+    def mount(self, request, **kwargs):
+        # Read URL params on initial mount
+        self.category = request.GET.get("category", "all")
+        self.page = int(request.GET.get("page", 1))
+
+    def handle_params(self, params, uri):
+        # Called on browser back/forward and live_patch
+        self.category = params.get("category", "all")
+        self.page = int(params.get("page", 1))
+
+    @event_handler
+    def filter_results(self, category="all", **kwargs):
+        self.category = category
+        self.live_patch(params={"category": category, "page": 1})
+        # URL updates to ?category=electronics&page=1 — no remount
+
+    @event_handler
+    def go_to_detail(self, item_id, **kwargs):
+        self.live_redirect(f"/items/{item_id}/")
+        # Navigates to new view over same WebSocket — no page reload
+```
+
+**Template directives:**
+```html
+<!-- Update URL params without remount -->
+<a dj-patch="?category=electronics&page=1">Electronics</a>
+
+<!-- Navigate to different view -->
+<a dj-navigate="/items/42/">View Item</a>
+```
+
+**URL routing with live_session:**
+```python
+from djust.routing import live_session
+from django.urls import path
+
+urlpatterns = [
+    *live_session("/app", [
+        path("", DashboardView.as_view(), name="dashboard"),
+        path("settings/", SettingsView.as_view(), name="settings"),
+        path("items/<int:id>/", ItemDetailView.as_view(), name="item_detail"),
+    ]),
+]
+```
+
+**Features:**
+- `live_patch(params, path, replace)` — update URL without remount, triggers re-render
+- `live_redirect(path, params, replace)` — navigate to different view over same WebSocket
+- `handle_params(params, uri)` — callback when URL params change (back/forward, live_patch)
+- `dj-patch` / `dj-navigate` — declarative template directives
+- Browser back/forward support via `popstate` event handling
+- `live_session()` — group views sharing a WebSocket connection with client-side route map
+- `{% djust_route_map %}` template tag for client-side view resolution
+
+**Files:**
+- `python/djust/mixins/navigation.py` — NavigationMixin (live_patch, live_redirect, handle_params)
+- `python/djust/routing.py` — live_session(), get_route_map_script()
+- `python/djust/static/djust/src/18-navigation.js` — Client-side navigation handling
+- `python/tests/test_navigation.py` — 21 tests (17 pass, 4 skip without channels)
+
+---
+
+### ✨ LiveForm — Standalone Form Validation
 
 **What:** A standalone `LiveForm` class for declarative form validation with live inline feedback — no Django Form required. Inspired by Phoenix LiveView changesets. Also includes `live_form_from_model()` for auto-generating forms from Django models, and enhanced `dj-change` to fire on blur for text inputs.
 

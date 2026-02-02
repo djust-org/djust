@@ -5,6 +5,11 @@ function bindLiveViewEvents() {
         window.djust.uploads.bindHandlers();
     }
 
+    // Bind navigation directives (dj-patch, dj-navigate)
+    if (window.djust.navigation) {
+        window.djust.navigation.bindDirectives();
+    }
+
     // Find all interactive elements
     const allElements = document.querySelectorAll('*');
     allElements.forEach(element => {

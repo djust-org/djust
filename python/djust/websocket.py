@@ -76,6 +76,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 "payload": payload,
             })
 
+    async def _flush_navigation(self) -> None:
+        """
+        Send any pending navigation commands (live_patch / live_redirect)
+        queued by the view during handler execution.
+        """
+        if not self.view_instance:
+            return
+        if not hasattr(self.view_instance, "_drain_navigation"):
+            return
+        commands = self.view_instance._drain_navigation()
+        for cmd in commands:
+            await self.send_json({
+                "type": "navigation",
+                **cmd,
+            })
+
     async def send_error(self, error: str, **context) -> None:
         """
         Send an error response to the client with consistent formatting.
@@ -147,6 +163,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 self._attach_debug_payload(response, event_name, performance)
                 await self.send_json(response)
                 await self._flush_push_events()
+                await self._flush_navigation()
         else:
             response = {
                 "type": "html_update",
@@ -160,6 +177,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._attach_debug_payload(response, event_name)
             await self.send_json(response)
             await self._flush_push_events()
+            await self._flush_navigation()
 
     def _attach_debug_payload(
         self,
@@ -356,6 +374,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.handle_mount(data)
             elif msg_type == "ping":
                 await self.send_json({"type": "pong"})
+            elif msg_type == "url_change":
+                await self.handle_url_change(data)
+            elif msg_type == "live_redirect_mount":
+                await self.handle_live_redirect_mount(data)
             elif msg_type == "upload_register":
                 await self._handle_upload_register(data)
             elif msg_type == "presence_heartbeat":
@@ -1300,6 +1322,93 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     "file": file_path,
                 }
             )
+
+    async def handle_url_change(self, data: Dict[str, Any]):
+        """
+        Handle URL change from browser back/forward (popstate) or dj-patch clicks.
+
+        Calls handle_params() on the view so it can update state based on the
+        new URL params, then re-renders and sends patches.
+        """
+        if not self.view_instance:
+            await self.send_error("View not mounted")
+            return
+
+        params = data.get("params", {})
+        uri = data.get("uri", "")
+
+        try:
+            # Call handle_params on the view
+            await sync_to_async(self.view_instance.handle_params)(params, uri)
+
+            # Sync state and re-render
+            if hasattr(self.view_instance, "_sync_state_to_rust"):
+                await sync_to_async(self.view_instance._sync_state_to_rust)()
+
+            html, patches, version = await sync_to_async(
+                self.view_instance.render_with_diff
+            )()
+
+            if patches is not None:
+                if isinstance(patches, str):
+                    patches = json.loads(patches)
+                await self._send_update(patches=patches, version=version, event_name="url_change")
+            else:
+                html = await sync_to_async(
+                    self.view_instance._strip_comments_and_whitespace
+                )(html)
+                html = await sync_to_async(
+                    self.view_instance._extract_liveview_content
+                )(html)
+                await self._send_update(html=html, version=version, event_name="url_change")
+
+        except Exception as e:
+            response = handle_exception(
+                e,
+                error_type="event",
+                event_name="url_change",
+                logger=logger,
+                log_message="Error in handle_params()",
+            )
+            await self.send_json(response)
+
+    async def handle_live_redirect_mount(self, data: Dict[str, Any]):
+        """
+        Handle mounting a new view via live_redirect (no WS reconnect).
+
+        The client sends this after receiving a live_redirect navigation command.
+        We unmount the current view and mount the new one on the same connection.
+        """
+        # Reuse handle_mount — it already handles everything
+        # But first, clean up the old view instance
+        old_view = self.view_instance
+
+        # Leave old view's channel group
+        if self._view_group:
+            await self.channel_layer.group_discard(self._view_group, self.channel_name)
+            self._view_group = None
+
+        # Cancel old tick task
+        if self._tick_task:
+            self._tick_task.cancel()
+            try:
+                await self._tick_task
+            except asyncio.CancelledError:
+                pass
+            self._tick_task = None
+
+        # Clean up old view
+        if old_view:
+            if hasattr(old_view, '_cleanup_uploads'):
+                try:
+                    old_view._cleanup_uploads()
+                except Exception:
+                    pass
+
+        self.view_instance = None
+
+        # Now mount the new view using the standard mount flow
+        await self.handle_mount(data)
 
     async def handle_presence_heartbeat(self, data: Dict[str, Any]):
         """Handle presence heartbeat from client."""

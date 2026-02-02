@@ -31,6 +31,7 @@ from .mixins import (
     PostProcessingMixin,
     ModelBindingMixin,
     PushEventMixin,
+    NavigationMixin,
 )
 from .embedded import EmbeddedViewMixin, LiveSession
 
@@ -65,6 +66,7 @@ class LiveView(
     PostProcessingMixin,
     ModelBindingMixin,
     PushEventMixin,
+    NavigationMixin,
     View,
 ):
     """
@@ -156,6 +158,8 @@ class LiveView(
         self._stream_operations: list = []  # Pending stream operations for this render
         # Initialize embedded LiveView support (parent/child, live_session)
         self._init_embedded()
+        # Initialize navigation support (live_patch, live_redirect)
+        self._init_navigation()
 
     def handle_tick(self):
         """Override for periodic server-side updates. Called every tick_interval ms."""
