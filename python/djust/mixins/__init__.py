@@ -14,6 +14,7 @@ from .rust_bridge import RustBridgeMixin
 from .handlers import HandlerMixin
 from .request import RequestMixin
 from .post_processing import PostProcessingMixin
+from .model_binding import ModelBindingMixin
 
 __all__ = [
     "StreamsMixin",
@@ -25,4 +26,5 @@ __all__ = [
     "HandlerMixin",
     "RequestMixin",
     "PostProcessingMixin",
+    "ModelBindingMixin",
 ]

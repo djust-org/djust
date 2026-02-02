@@ -1660,6 +1660,11 @@ function bindLiveViewEvents() {
             }
         });
     });
+
+    // After rebinding events, manage hooks and dj-model
+    _cleanupDestroyedHooks();
+    _mountHooks();
+    bindDjModel();
 }
 
 // Helper: Debounce function
@@ -3234,6 +3239,334 @@ const lazyHydrationManager = {
 // Expose lazy hydration API
 window.djust.lazyHydration = lazyHydrationManager;
 
+// ============================================================================
+// Feature: dj-hook — Client-Side JS Hooks (Phoenix-style)
+// ============================================================================
+
+/**
+ * Hook registry. Users register hooks like:
+ *   djust.hooks.Chart = { mounted() { ... }, updated() { ... }, destroyed() { ... } }
+ *
+ * Elements use: <div dj-hook="Chart">
+ *
+ * Lifecycle:
+ *   mounted()      — element first appears in DOM
+ *   updated()      — element attributes changed via VDOM patch
+ *   destroyed()    — element removed from DOM
+ *   disconnected() — WebSocket lost
+ *   reconnected()  — WebSocket restored
+ */
+window.djust.hooks = window.djust.hooks || {};
+
+// Track active hook instances: Map<element, hookInstance>
+const _activeHooks = new Map();
+
+function _createHookInstance(hookDef, el) {
+    const instance = Object.create(hookDef);
+    instance.el = el;
+    instance.__eventHandlers = {};
+
+    instance.pushEvent = function(eventName, params = {}) {
+        handleEvent(eventName, { ...params, _hookElement: true });
+    };
+
+    instance.handleEvent = function(eventName, callback) {
+        if (!instance.__eventHandlers[eventName]) {
+            instance.__eventHandlers[eventName] = [];
+        }
+        instance.__eventHandlers[eventName].push(callback);
+    };
+
+    return instance;
+}
+
+function _mountHooks() {
+    document.querySelectorAll('[dj-hook]').forEach(el => {
+        if (_activeHooks.has(el)) return; // Already mounted
+
+        const hookName = el.getAttribute('dj-hook');
+        const hookDef = window.djust.hooks[hookName];
+        if (!hookDef) {
+            if (globalThis.djustDebug) {
+                console.warn(`[djust:hook] No hook registered for "${hookName}"`);
+            }
+            return;
+        }
+
+        const instance = _createHookInstance(hookDef, el);
+        _activeHooks.set(el, instance);
+
+        if (typeof instance.mounted === 'function') {
+            try {
+                instance.mounted();
+            } catch (err) {
+                console.error(`[djust:hook] Error in ${hookName}.mounted():`, err);
+            }
+        }
+    });
+}
+
+function _updateHook(el) {
+    const instance = _activeHooks.get(el);
+    if (instance && typeof instance.updated === 'function') {
+        try {
+            instance.updated();
+        } catch (err) {
+            console.error(`[djust:hook] Error in updated():`, err);
+        }
+    }
+}
+
+function _cleanupDestroyedHooks() {
+    for (const [el, instance] of _activeHooks) {
+        if (!document.contains(el)) {
+            if (typeof instance.destroyed === 'function') {
+                try {
+                    instance.destroyed();
+                } catch (err) {
+                    console.error(`[djust:hook] Error in destroyed():`, err);
+                }
+            }
+            _activeHooks.delete(el);
+        }
+    }
+}
+
+function _notifyHooksDisconnected() {
+    for (const [, instance] of _activeHooks) {
+        if (typeof instance.disconnected === 'function') {
+            try { instance.disconnected(); } catch (e) { /* ignore */ }
+        }
+    }
+}
+
+function _notifyHooksReconnected() {
+    for (const [, instance] of _activeHooks) {
+        if (typeof instance.reconnected === 'function') {
+            try { instance.reconnected(); } catch (e) { /* ignore */ }
+        }
+    }
+}
+
+/**
+ * Dispatch a server-pushed event to hook instances listening via handleEvent().
+ * Call from server with push.py: push_event("chart-data", {values: [...]})
+ */
+function _dispatchHookEvent(eventName, payload) {
+    for (const [, instance] of _activeHooks) {
+        const handlers = instance.__eventHandlers[eventName];
+        if (handlers) {
+            handlers.forEach(cb => {
+                try { cb(payload); } catch (e) {
+                    console.error(`[djust:hook] Error in handleEvent("${eventName}"):`, e);
+                }
+            });
+        }
+    }
+}
+
+window.djust._activeHooks = _activeHooks;
+window.djust._mountHooks = _mountHooks;
+window.djust._updateHook = _updateHook;
+window.djust._cleanupDestroyedHooks = _cleanupDestroyedHooks;
+window.djust._dispatchHookEvent = _dispatchHookEvent;
+
+// ============================================================================
+// Feature: dj-model — Two-Way Data Binding
+// ============================================================================
+
+/**
+ * dj-model binds an input to a server-side attribute.
+ *
+ * Usage:
+ *   <input type="text" dj-model="search_query">
+ *   <select dj-model="sort_by">
+ *   <textarea dj-model="message">
+ *
+ * Options (dot-separated):
+ *   dj-model.lazy        — sync on blur only
+ *   dj-model.debounce-500 — custom debounce ms
+ *   dj-model.trim        — trim whitespace before sending
+ *
+ * Sends event: update_model({ field: "search_query", value: "..." })
+ */
+function bindDjModel() {
+    document.querySelectorAll('[dj-model]').forEach(el => {
+        if (el.dataset.djModelBound) return;
+        el.dataset.djModelBound = 'true';
+
+        const raw = el.getAttribute('dj-model');
+        const parts = raw.split('.');
+        const field = parts[0];
+        const modifiers = parts.slice(1);
+
+        const isLazy = modifiers.includes('lazy');
+        const trim = modifiers.includes('trim');
+
+        // Parse debounce from modifiers like "debounce-500"
+        let debounceMs = 300; // default
+        const debounceModifier = modifiers.find(m => m.startsWith('debounce-'));
+        if (debounceModifier) {
+            debounceMs = parseInt(debounceModifier.split('-')[1], 10) || 300;
+        }
+
+        function sendValue() {
+            let value = el.type === 'checkbox' ? el.checked : el.value;
+            if (trim && typeof value === 'string') {
+                value = value.trim();
+            }
+            handleEvent('update_model', { field, value });
+        }
+
+        if (isLazy) {
+            el.addEventListener('blur', sendValue);
+            el.addEventListener('change', sendValue);
+        } else {
+            const tagName = el.tagName.toLowerCase();
+            if (tagName === 'select' || el.type === 'checkbox' || el.type === 'radio') {
+                el.addEventListener('change', sendValue);
+            } else {
+                const debouncedSend = debounce(sendValue, debounceMs);
+                el.addEventListener('input', debouncedSend);
+            }
+        }
+    });
+}
+
+window.djust.bindDjModel = bindDjModel;
+
+// ============================================================================
+// Feature: Error Overlay (Development Mode)
+// ============================================================================
+
+/**
+ * Rich error overlay for development. Shows server errors with traceback,
+ * event context, and validation details. Dismissible with Escape.
+ */
+const errorOverlay = {
+    _overlay: null,
+
+    show(detail) {
+        this.dismiss(); // Remove any existing overlay
+
+        const overlay = document.createElement('div');
+        overlay.id = 'djust-error-overlay';
+        overlay.style.cssText = `
+            position: fixed; inset: 0; z-index: 99999;
+            background: rgba(0,0,0,0.85); color: #f8f8f2;
+            font-family: 'SF Mono', Menlo, Monaco, 'Courier New', monospace;
+            font-size: 13px; overflow-y: auto; padding: 0;
+            display: flex; align-items: flex-start; justify-content: center;
+        `;
+
+        const card = document.createElement('div');
+        card.style.cssText = `
+            background: #1e1e2e; border-radius: 12px; margin: 40px 20px;
+            max-width: 900px; width: 100%; box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+            border: 1px solid #313244;
+        `;
+
+        // Header
+        const header = document.createElement('div');
+        header.style.cssText = `
+            padding: 16px 24px; background: #f38ba8; color: #1e1e2e;
+            border-radius: 12px 12px 0 0; display: flex;
+            justify-content: space-between; align-items: center;
+            font-weight: 600; font-size: 14px;
+        `;
+        header.innerHTML = `
+            <span>⚠️ Server Error${detail.event ? ` — Event: <code style="background:rgba(0,0,0,0.2);padding:2px 6px;border-radius:4px">${_escHtml(detail.event)}</code>` : ''}</span>
+            <button id="djust-error-close" style="background:none;border:none;color:#1e1e2e;font-size:20px;cursor:pointer;padding:0 4px;line-height:1" title="Dismiss (Esc)">✕</button>
+        `;
+        card.appendChild(header);
+
+        // Error message
+        const msgBox = document.createElement('div');
+        msgBox.style.cssText = `padding: 20px 24px; border-bottom: 1px solid #313244;`;
+        msgBox.innerHTML = `<div style="color:#f38ba8;font-size:16px;font-weight:500;margin-bottom:4px">Error</div>
+            <div style="color:#cdd6f4;white-space:pre-wrap">${_escHtml(detail.error || 'Unknown error')}</div>`;
+        card.appendChild(msgBox);
+
+        // Validation details
+        if (detail.validation_details) {
+            const valBox = document.createElement('div');
+            valBox.style.cssText = `padding: 16px 24px; border-bottom: 1px solid #313244;`;
+            valBox.innerHTML = `<div style="color:#f9e2af;font-size:14px;font-weight:500;margin-bottom:8px">Validation Details</div>
+                <pre style="color:#a6adc8;margin:0;white-space:pre-wrap">${_escHtml(JSON.stringify(detail.validation_details, null, 2))}</pre>`;
+            card.appendChild(valBox);
+        }
+
+        // Traceback
+        if (detail.traceback) {
+            const tbBox = document.createElement('div');
+            tbBox.style.cssText = `padding: 16px 24px;`;
+            tbBox.innerHTML = `
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                    <span style="color:#89b4fa;font-size:14px;font-weight:500">Traceback</span>
+                    <button id="djust-error-copy" style="background:#313244;border:none;color:#cdd6f4;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px">Copy</button>
+                </div>
+                <pre style="color:#a6adc8;margin:0;white-space:pre-wrap;line-height:1.5;max-height:400px;overflow-y:auto">${_highlightTraceback(detail.traceback)}</pre>`;
+            card.appendChild(tbBox);
+        }
+
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+        this._overlay = overlay;
+
+        // Event listeners
+        overlay.querySelector('#djust-error-close').addEventListener('click', () => this.dismiss());
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) this.dismiss(); });
+
+        const copyBtn = overlay.querySelector('#djust-error-copy');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', () => {
+                navigator.clipboard.writeText(detail.traceback).then(() => {
+                    copyBtn.textContent = 'Copied!';
+                    setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+                });
+            });
+        }
+
+        const escHandler = (e) => {
+            if (e.key === 'Escape') {
+                this.dismiss();
+                document.removeEventListener('keydown', escHandler);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
+    },
+
+    dismiss() {
+        if (this._overlay) {
+            this._overlay.remove();
+            this._overlay = null;
+        }
+    }
+};
+
+function _escHtml(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+}
+
+function _highlightTraceback(tb) {
+    // Simple syntax highlighting for Python tracebacks
+    return _escHtml(tb)
+        .replace(/^(  File &quot;.+?&quot;, line \d+.*)/gm, '<span style="color:#89b4fa">$1</span>')
+        .replace(/^(\w+Error:.+)/gm, '<span style="color:#f38ba8;font-weight:bold">$1</span>')
+        .replace(/^(\w+Exception:.+)/gm, '<span style="color:#f38ba8;font-weight:bold">$1</span>');
+}
+
+// Listen for djust:error events and show overlay
+window.addEventListener('djust:error', (e) => {
+    errorOverlay.show(e.detail);
+});
+
+window.djust.errorOverlay = errorOverlay;
+
+// ============================================================================
+
 // Initialize on load (support both normal page load and dynamic script injection via TurboNav)
 function djustInit() {
     console.log('[LiveView] Initializing...');
@@ -3271,6 +3604,10 @@ function djustInit() {
 
     // Bind initial events
     bindLiveViewEvents();
+
+    // Mount hooks and dj-model bindings
+    _mountHooks();
+    bindDjModel();
 
     // Initialize Draft Mode
     initDraftMode();
