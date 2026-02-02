@@ -17,6 +17,12 @@ function bindLiveViewEvents() {
             element.addEventListener('click', async (e) => {
                 e.preventDefault();
 
+                // dj-confirm: show confirmation dialog before sending event
+                const confirmMsg = element.getAttribute('dj-confirm');
+                if (confirmMsg && !window.confirm(confirmMsg)) {
+                    return; // User cancelled
+                }
+
                 // Extract all data-* attributes with type coercion support
                 const params = extractTypedParams(element);
 

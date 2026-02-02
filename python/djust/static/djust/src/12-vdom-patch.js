@@ -344,6 +344,15 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                 // patches update the attribute value after initial binding.
                 const djAttrKey = key;
                 elem.addEventListener(eventType, (e) => {
+                    // dj-confirm: show confirmation dialog before sending click events
+                    if (eventType === 'click') {
+                        const confirmMsg = elem.getAttribute('dj-confirm');
+                        if (confirmMsg && !window.confirm(confirmMsg)) {
+                            e.preventDefault();
+                            return;
+                        }
+                    }
+
                     // Handle key modifiers for keydown/keyup events
                     if ((eventType === 'keydown' || eventType === 'keyup') && modifiers.length > 0) {
                         const requiredKey = modifiers[0];
@@ -752,6 +761,10 @@ function applySinglePatch(patch) {
             case 'Replace':
                 const newNode = createNodeFromVNode(patch.node, isInSvgContext(node.parentNode));
                 node.parentNode.replaceChild(newNode, node);
+                // Apply enter transition to replacement node
+                if (window.djust.transitions) {
+                    window.djust.transitions.applyEnter(newNode);
+                }
                 break;
 
             case 'SetText':
@@ -794,6 +807,10 @@ function applySinglePatch(patch) {
                 } else {
                     node.appendChild(newChild);
                 }
+                // Apply enter transition to newly inserted element
+                if (window.djust.transitions) {
+                    window.djust.transitions.applyEnter(newChild);
+                }
                 // If inserting a text node into a textarea, also update its .value
                 if (newChild.nodeType === Node.TEXT_NODE && node.tagName === 'TEXTAREA') {
                     if (document.activeElement !== node) {
@@ -809,7 +826,16 @@ function applySinglePatch(patch) {
                 if (child) {
                     const wasTextNode = child.nodeType === Node.TEXT_NODE;
                     const parentTag = node.tagName;
-                    node.removeChild(child);
+                    // Check for leave transition before removing
+                    if (window.djust.transitions && window.djust.transitions.hasTransition(child)) {
+                        window.djust.transitions.applyLeave(child).then(() => {
+                            if (child.parentNode) {
+                                child.parentNode.removeChild(child);
+                            }
+                        });
+                    } else {
+                        node.removeChild(child);
+                    }
                     // If removing a text node from a textarea, also clear its .value
                     // (removing textContent alone doesn't update what's displayed)
                     if (wasTextNode && parentTag === 'TEXTAREA' && document.activeElement !== node) {

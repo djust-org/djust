@@ -85,6 +85,53 @@ class MyView(LiveView):
 - Stack frames with file paths
 - Copy traceback to clipboard button
 
+### 4. `dj-confirm` — Confirmation Dialog Before Click Events
+
+**What:** Simple directive to show a browser `confirm()` dialog before sending a `dj-click` event. If the user cancels, the event is not sent.
+
+**Usage:**
+```html
+<button dj-click="delete_item" dj-confirm="Are you sure you want to delete this?">Delete</button>
+```
+
+- Works with `dj-click` only (not `dj-change`, `dj-input`)
+- Works on both initially-rendered elements and VDOM-patched elements
+
+### 5. `dj-transition` — CSS Transition Classes on Mount/Remove
+
+**What:** Applies CSS transition classes when elements are added to or removed from the DOM via VDOM patches. Inspired by Vue's `<Transition>`.
+
+**Usage (named):**
+```html
+<div dj-transition="fade">...</div>
+```
+Applies: `fade-enter-from` → `fade-enter-to` on mount, `fade-leave-from` → `fade-leave-to` on remove.
+
+**Usage (explicit classes):**
+```html
+<div dj-transition-enter="opacity-0" dj-transition-enter-to="opacity-100"
+     dj-transition-leave="opacity-100" dj-transition-leave-to="opacity-0">
+```
+
+**Built-in presets** (in `transitions.css`): `fade`, `slide-up`, `slide-down`, `scale`
+
+### 6. `dj-loading` Improvements
+
+**What:** Enhanced loading state management with additional modifiers.
+
+**Usage:**
+```html
+<button dj-click="save" dj-loading.disable>Save</button>
+<div dj-loading.class="opacity-50">Content</div>
+<span dj-loading.show>Saving...</span>
+<div dj-loading.remove>Hide while loading</div>
+```
+
+- `.disable` — disable element while event is processing
+- `.class="..."` — add CSS classes while loading
+- `.show` — show element only while loading (hidden otherwise)
+- `.remove` / `.hide` — hide element while loading
+
 ---
 
 ## Proposed (Not Yet Implemented)

@@ -27,7 +27,7 @@ const globalLoadingManager = {
                     // 1. Use attribute value if specified (e.g., dj-loading.show="flex")
                     // 2. Otherwise default to 'block'
                     originalState.visibleDisplay = attr.value || 'block';
-                } else if (modifier === 'hide') {
+                } else if (modifier === 'hide' || modifier === 'remove') {
                     modifiers.push({ type: 'hide' });
                     // Store computed display to properly restore when loading stops
                     const computedDisplay = getComputedStyle(element).display;
@@ -56,6 +56,7 @@ const globalLoadingManager = {
             '[dj-loading\\.disable]',
             '[dj-loading\\.show]',
             '[dj-loading\\.hide]',
+            '[dj-loading\\.remove]',
             '[dj-loading\\.class]'
         ].join(',');
 

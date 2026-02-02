@@ -1490,6 +1490,12 @@ function bindLiveViewEvents() {
             element.addEventListener('click', async (e) => {
                 e.preventDefault();
 
+                // dj-confirm: show confirmation dialog before sending event
+                const confirmMsg = element.getAttribute('dj-confirm');
+                if (confirmMsg && !window.confirm(confirmMsg)) {
+                    return; // User cancelled
+                }
+
                 // Extract all data-* attributes with type coercion support
                 const params = extractTypedParams(element);
 
@@ -1716,6 +1722,138 @@ function clearOptimisticState(eventName) {
     }
 }
 
+// ============================================================================
+// dj-transition — CSS Transition Support
+// ============================================================================
+// Applies enter/leave CSS transition classes when elements are added/removed
+// from the DOM via VDOM patches. Inspired by Vue's <Transition>.
+//
+// Usage:
+//   <div dj-transition="fade">...</div>
+//   Applies: fade-enter-from → fade-enter-to (on mount)
+//            fade-leave-from → fade-leave-to (on remove)
+//
+//   <div dj-transition-enter="opacity-0" dj-transition-enter-to="opacity-100"
+//        dj-transition-leave="opacity-100" dj-transition-leave-to="opacity-0">
+//   Explicit class-based transitions.
+
+const djTransitions = {
+    /**
+     * Apply enter transition to a newly inserted element.
+     * @param {HTMLElement} el - The element being inserted
+     */
+    applyEnter(el) {
+        if (!el || el.nodeType !== Node.ELEMENT_NODE) return;
+
+        const transitionName = el.getAttribute('dj-transition');
+        const explicitEnter = el.getAttribute('dj-transition-enter');
+        const explicitEnterTo = el.getAttribute('dj-transition-enter-to');
+
+        if (!transitionName && !explicitEnter) return;
+
+        // Determine classes
+        const enterFromClasses = explicitEnter
+            ? explicitEnter.split(/\s+/)
+            : [`${transitionName}-enter-from`];
+        const enterToClasses = explicitEnterTo
+            ? explicitEnterTo.split(/\s+/)
+            : [`${transitionName}-enter-to`];
+
+        // Apply enter-from classes immediately
+        enterFromClasses.forEach(cls => cls && el.classList.add(cls));
+
+        // Force reflow to ensure the initial state is painted
+        void el.offsetHeight;
+
+        // Next frame: swap to enter-to classes
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                enterFromClasses.forEach(cls => cls && el.classList.remove(cls));
+                enterToClasses.forEach(cls => cls && el.classList.add(cls));
+
+                // Clean up enter-to classes after transition ends
+                const onEnd = () => {
+                    enterToClasses.forEach(cls => cls && el.classList.remove(cls));
+                    el.removeEventListener('transitionend', onEnd);
+                };
+                el.addEventListener('transitionend', onEnd, { once: true });
+
+                // Safety timeout: clean up if transitionend never fires (no CSS transition defined)
+                setTimeout(() => {
+                    enterToClasses.forEach(cls => cls && el.classList.remove(cls));
+                }, 1000);
+            });
+        });
+    },
+
+    /**
+     * Apply leave transition to an element being removed.
+     * Returns a promise that resolves when the transition completes.
+     * @param {HTMLElement} el - The element being removed
+     * @returns {Promise<void>}
+     */
+    applyLeave(el) {
+        if (!el || el.nodeType !== Node.ELEMENT_NODE) {
+            return Promise.resolve();
+        }
+
+        const transitionName = el.getAttribute('dj-transition');
+        const explicitLeave = el.getAttribute('dj-transition-leave');
+        const explicitLeaveTo = el.getAttribute('dj-transition-leave-to');
+
+        if (!transitionName && !explicitLeave) {
+            return Promise.resolve();
+        }
+
+        const leaveFromClasses = explicitLeave
+            ? explicitLeave.split(/\s+/)
+            : [`${transitionName}-leave-from`];
+        const leaveToClasses = explicitLeaveTo
+            ? explicitLeaveTo.split(/\s+/)
+            : [`${transitionName}-leave-to`];
+
+        return new Promise(resolve => {
+            // Apply leave-from classes
+            leaveFromClasses.forEach(cls => cls && el.classList.add(cls));
+
+            // Force reflow
+            void el.offsetHeight;
+
+            // Next frame: swap to leave-to
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    leaveFromClasses.forEach(cls => cls && el.classList.remove(cls));
+                    leaveToClasses.forEach(cls => cls && el.classList.add(cls));
+
+                    const onEnd = () => {
+                        resolve();
+                    };
+                    el.addEventListener('transitionend', onEnd, { once: true });
+
+                    // Safety timeout
+                    setTimeout(resolve, 1000);
+                });
+            });
+        });
+    },
+
+    /**
+     * Check if an element has transition directives.
+     * @param {HTMLElement} el
+     * @returns {boolean}
+     */
+    hasTransition(el) {
+        if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+        return el.hasAttribute('dj-transition') ||
+               el.hasAttribute('dj-transition-enter') ||
+               el.hasAttribute('dj-transition-leave');
+    }
+};
+
+// Expose for use in VDOM patch application
+window.djust = window.djust || {};
+window.djust.transitions = djTransitions;
+
 // Global Loading Manager (Phase 5)
 // Handles dj-loading.disable, dj-loading.class, dj-loading.show, dj-loading.hide attributes
 const globalLoadingManager = {
@@ -1744,7 +1882,7 @@ const globalLoadingManager = {
                     // 1. Use attribute value if specified (e.g., dj-loading.show="flex")
                     // 2. Otherwise default to 'block'
                     originalState.visibleDisplay = attr.value || 'block';
-                } else if (modifier === 'hide') {
+                } else if (modifier === 'hide' || modifier === 'remove') {
                     modifiers.push({ type: 'hide' });
                     // Store computed display to properly restore when loading stops
                     const computedDisplay = getComputedStyle(element).display;
@@ -1773,6 +1911,7 @@ const globalLoadingManager = {
             '[dj-loading\\.disable]',
             '[dj-loading\\.show]',
             '[dj-loading\\.hide]',
+            '[dj-loading\\.remove]',
             '[dj-loading\\.class]'
         ].join(',');
 
@@ -2341,6 +2480,15 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                 // patches update the attribute value after initial binding.
                 const djAttrKey = key;
                 elem.addEventListener(eventType, (e) => {
+                    // dj-confirm: show confirmation dialog before sending click events
+                    if (eventType === 'click') {
+                        const confirmMsg = elem.getAttribute('dj-confirm');
+                        if (confirmMsg && !window.confirm(confirmMsg)) {
+                            e.preventDefault();
+                            return;
+                        }
+                    }
+
                     // Handle key modifiers for keydown/keyup events
                     if ((eventType === 'keydown' || eventType === 'keyup') && modifiers.length > 0) {
                         const requiredKey = modifiers[0];
@@ -2749,6 +2897,10 @@ function applySinglePatch(patch) {
             case 'Replace':
                 const newNode = createNodeFromVNode(patch.node, isInSvgContext(node.parentNode));
                 node.parentNode.replaceChild(newNode, node);
+                // Apply enter transition to replacement node
+                if (window.djust.transitions) {
+                    window.djust.transitions.applyEnter(newNode);
+                }
                 break;
 
             case 'SetText':
@@ -2791,6 +2943,10 @@ function applySinglePatch(patch) {
                 } else {
                     node.appendChild(newChild);
                 }
+                // Apply enter transition to newly inserted element
+                if (window.djust.transitions) {
+                    window.djust.transitions.applyEnter(newChild);
+                }
                 // If inserting a text node into a textarea, also update its .value
                 if (newChild.nodeType === Node.TEXT_NODE && node.tagName === 'TEXTAREA') {
                     if (document.activeElement !== node) {
@@ -2806,7 +2962,16 @@ function applySinglePatch(patch) {
                 if (child) {
                     const wasTextNode = child.nodeType === Node.TEXT_NODE;
                     const parentTag = node.tagName;
-                    node.removeChild(child);
+                    // Check for leave transition before removing
+                    if (window.djust.transitions && window.djust.transitions.hasTransition(child)) {
+                        window.djust.transitions.applyLeave(child).then(() => {
+                            if (child.parentNode) {
+                                child.parentNode.removeChild(child);
+                            }
+                        });
+                    } else {
+                        node.removeChild(child);
+                    }
                     // If removing a text node from a textarea, also clear its .value
                     // (removing textContent alone doesn't update what's displayed)
                     if (wasTextNode && parentTag === 'TEXTAREA' && document.activeElement !== node) {
