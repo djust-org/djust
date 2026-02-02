@@ -1380,15 +1380,24 @@ window.djust = window.djust || {};
 window.djust.parseEventHandler = parseEventHandler;
 
 /**
- * Extract parameters from element data-* attributes with optional type coercion.
+ * Extract parameters from element attributes with optional type coercion.
  *
- * Supports typed attributes via suffix notation:
- *   data-sender-id:int="42"     -> { sender_id: 42 }
- *   data-enabled:bool="true"    -> { enabled: true }
- *   data-price:float="19.99"    -> { price: 19.99 }
- *   data-tags:json='["a","b"]'  -> { tags: ["a", "b"] }
- *   data-items:list="a,b,c"     -> { items: ["a", "b", "c"] }
- *   data-name="John"            -> { name: "John" } (default: string)
+ * Supports two attribute prefixes:
+ *   - data-* attributes (standard HTML): data-name="foo" -> { name: "foo" }
+ *   - dj-value-* attributes (djust convention, like Phoenix's phx-value-*):
+ *     dj-value-name="foo" -> { name: "foo" }
+ *
+ * Both prefixes support typed attributes via suffix notation:
+ *   data-sender-id:int="42"       -> { sender_id: 42 }
+ *   dj-value-sender-id:int="42"   -> { sender_id: 42 }
+ *   data-enabled:bool="true"      -> { enabled: true }
+ *   dj-value-enabled:bool="true"  -> { enabled: true }
+ *   data-price:float="19.99"      -> { price: 19.99 }
+ *   data-tags:json='["a","b"]'    -> { tags: ["a", "b"] }
+ *   data-items:list="a,b,c"       -> { items: ["a", "b", "c"] }
+ *   data-name="John"              -> { name: "John" } (default: string)
+ *
+ * Note: dj-value-* takes precedence over data-* for the same key.
  *
  * @param {HTMLElement} element - Element to extract params from
  * @returns {Object} - Parameters with coerced types
@@ -1397,20 +1406,24 @@ function extractTypedParams(element) {
     const params = Object.create(null); // null prototype prevents prototype-pollution
 
     for (const attr of element.attributes) {
-        if (!attr.name.startsWith('data-')) continue;
+        let nameWithoutPrefix;
 
-        // Skip djust internal attributes
-        if (attr.name.startsWith('data-liveview') ||
-            attr.name.startsWith('data-live-') ||
-            attr.name.startsWith('data-djust') ||
-            attr.name === 'data-dj-id' ||
-            attr.name === 'data-loading' ||
-            attr.name === 'data-component-id') {
+        if (attr.name.startsWith('dj-value-')) {
+            nameWithoutPrefix = attr.name.slice(9); // Remove "dj-value-"
+        } else if (attr.name.startsWith('data-')) {
+            // Skip djust internal attributes
+            if (attr.name.startsWith('data-liveview') ||
+                attr.name.startsWith('data-live-') ||
+                attr.name.startsWith('data-djust') ||
+                attr.name === 'data-dj-id' ||
+                attr.name === 'data-loading' ||
+                attr.name === 'data-component-id') {
+                continue;
+            }
+            nameWithoutPrefix = attr.name.slice(5); // Remove "data-"
+        } else {
             continue;
         }
-
-        // Parse attribute name: data-sender-id:int -> key="sender_id", type="int"
-        const nameWithoutPrefix = attr.name.slice(5); // Remove "data-"
         const colonIndex = nameWithoutPrefix.lastIndexOf(':');
         let rawKey, typeHint;
 
@@ -2715,19 +2728,28 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                         params.value = target.type === 'checkbox' ? target.checked : target.value;
                         params.field = target.name || target.id || null;
                     } else {
-                        // For other events, extract data-* attributes (but skip internal ones)
-                        Array.from(elem.attributes).forEach(attr => {
-                            if (attr.name.startsWith('data-') &&
-                                !attr.name.startsWith('data-liveview') &&
-                                !attr.name.startsWith('data-djust') &&
-                                attr.name !== 'data-dj-id') {
-                                const paramKey = attr.name.substring(5).replace(/-/g, '_');
+                        // For other events, extract data-* and dj-value-* attributes
+                        if (window.djust && window.djust.extractTypedParams) {
+                            Object.assign(params, window.djust.extractTypedParams(elem));
+                        } else {
+                            Array.from(elem.attributes).forEach(attr => {
+                                let paramKey;
+                                if (attr.name.startsWith('dj-value-')) {
+                                    paramKey = attr.name.substring(9).replace(/-/g, '_');
+                                } else if (attr.name.startsWith('data-') &&
+                                    !attr.name.startsWith('data-liveview') &&
+                                    !attr.name.startsWith('data-djust') &&
+                                    attr.name !== 'data-dj-id') {
+                                    paramKey = attr.name.substring(5).replace(/-/g, '_');
+                                } else {
+                                    return;
+                                }
                                 // Prevent prototype pollution attacks
                                 if (!UNSAFE_KEYS.includes(paramKey)) {
                                     params[paramKey] = attr.value;
                                 }
-                            }
-                        });
+                            });
+                        }
                     }
 
                     // Add positional arguments from handler syntax if present

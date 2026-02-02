@@ -1998,4 +1998,209 @@ mod tests {
         assert_eq!(patched.children[0].tag, "ul");
         assert_eq!(patched.children[1].tag, "section");
     }
+
+    #[test]
+    fn test_conditional_block_empty_to_content() {
+        // Simulates {% if show_detail %}...{% endif %} going from False to True.
+        // Parent has a header and an empty conditional area, then gains content.
+        //
+        // Before: <div id="container">
+        //           <h1>Title</h1>
+        //           <!-- {% if False %} renders nothing -->
+        //         </div>
+        //
+        // After:  <div id="container">
+        //           <h1>Title</h1>
+        //           <div class="detail">
+        //             <p>Detail content</p>
+        //           </div>
+        //         </div>
+        let old = VNode::element("div")
+            .with_djust_id("container")
+            .with_children(vec![
+                VNode::element("h1")
+                    .with_djust_id("h1")
+                    .with_child(VNode::text("Title")),
+            ]);
+
+        let new = VNode::element("div")
+            .with_djust_id("container")
+            .with_children(vec![
+                VNode::element("h1")
+                    .with_djust_id("h1")
+                    .with_child(VNode::text("Title")),
+                VNode::element("div")
+                    .with_attr("class", "detail")
+                    .with_djust_id("detail")
+                    .with_children(vec![
+                        VNode::element("p")
+                            .with_djust_id("p1")
+                            .with_child(VNode::text("Detail content")),
+                    ]),
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        // Should insert the new detail div as a child of container
+        let insert_count = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::InsertChild { .. }))
+            .count();
+        assert_eq!(insert_count, 1, "Should insert the detail div");
+
+        // The insert should target the container as parent
+        let insert = patches.iter().find(|p| matches!(p, Patch::InsertChild { .. }));
+        assert!(matches!(insert, Some(Patch::InsertChild { d, index: 1, .. }) if d == &Some("container".to_string())),
+            "Should insert at index 1 under container. Patches: {:?}", patches);
+
+        // h1 should have no changes
+        let h1_patches: Vec<_> = patches.iter().filter(|p| match p {
+            Patch::SetText { d, .. } | Patch::SetAttr { d, .. } | Patch::Replace { d, .. } => {
+                d == &Some("h1".to_string())
+            }
+            _ => false,
+        }).collect();
+        assert!(h1_patches.is_empty(), "h1 should be unchanged");
+    }
+
+    #[test]
+    fn test_conditional_block_content_to_empty() {
+        // Simulates {% if show_detail %}...{% endif %} going from True to False.
+        let old = VNode::element("div")
+            .with_djust_id("container")
+            .with_children(vec![
+                VNode::element("h1")
+                    .with_djust_id("h1")
+                    .with_child(VNode::text("Title")),
+                VNode::element("div")
+                    .with_attr("class", "detail")
+                    .with_djust_id("detail")
+                    .with_children(vec![
+                        VNode::element("p")
+                            .with_djust_id("p1")
+                            .with_child(VNode::text("Detail content")),
+                    ]),
+            ]);
+
+        let new = VNode::element("div")
+            .with_djust_id("container")
+            .with_children(vec![
+                VNode::element("h1")
+                    .with_djust_id("h1")
+                    .with_child(VNode::text("Title")),
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        // Should remove the detail div
+        let remove_count = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
+            .count();
+        assert_eq!(remove_count, 1, "Should remove the detail div");
+
+        assert!(patches.iter().any(|p| matches!(p, Patch::RemoveChild { d, index: 1, .. } if d == &Some("container".to_string()))),
+            "Should remove at index 1 from container. Patches: {:?}", patches);
+    }
+
+    #[test]
+    fn test_conditional_block_with_siblings_after_indexed() {
+        // The tricky case: conditional block has siblings after it.
+        // When the conditional appears/disappears, siblings shift indices.
+        //
+        // Before (condition=False):
+        //   <div> <h1>Title</h1> <footer>Footer</footer> </div>
+        //
+        // After (condition=True):
+        //   <div> <h1>Title</h1> <div class="detail">...</div> <footer>Footer</footer> </div>
+        //
+        // Without proper handling, the diff might try to morph footer into detail
+        // and then insert a new footer.
+        let old = VNode::element("div")
+            .with_djust_id("container")
+            .with_children(vec![
+                VNode::element("h1")
+                    .with_djust_id("h1")
+                    .with_child(VNode::text("Title")),
+                VNode::element("footer")
+                    .with_djust_id("footer")
+                    .with_child(VNode::text("Footer")),
+            ]);
+
+        let new = VNode::element("div")
+            .with_djust_id("container")
+            .with_children(vec![
+                VNode::element("h1")
+                    .with_djust_id("h1")
+                    .with_child(VNode::text("Title")),
+                VNode::element("div")
+                    .with_attr("class", "detail")
+                    .with_djust_id("detail")
+                    .with_child(VNode::text("Detail content")),
+                VNode::element("footer")
+                    .with_djust_id("footer")
+                    .with_child(VNode::text("Footer")),
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        // The indexed diff will match h1↔h1 (ok), footer↔detail (tag mismatch → Replace),
+        // then insert footer. This is suboptimal but functionally correct.
+        // With keyed elements, it would be better — but the diff should still produce
+        // a valid result.
+        assert!(!patches.is_empty(), "Should generate patches");
+
+        // The indexed diff will Replace footer→detail and Insert a new footer.
+        // This is functionally correct even if suboptimal.
+        // Verify we get the expected patch types.
+        let has_replace = patches.iter().any(|p| matches!(p, Patch::Replace { .. }));
+        let has_insert = patches.iter().any(|p| matches!(p, Patch::InsertChild { .. }));
+        assert!(has_replace || has_insert, "Should have Replace or InsertChild patches. Patches: {:?}", patches);
+    }
+
+    #[test]
+    fn test_conditional_block_multiple_children_inserted() {
+        // {% if show_todos %}
+        //   <div class="section-header">...</div>
+        //   <ul class="todo-list">...</ul>
+        // {% endif %}
+        //
+        // Going from empty to showing both elements.
+        let old = VNode::element("div")
+            .with_djust_id("container")
+            .with_children(vec![
+                VNode::element("h1")
+                    .with_djust_id("h1")
+                    .with_child(VNode::text("Project")),
+            ]);
+
+        let new = VNode::element("div")
+            .with_djust_id("container")
+            .with_children(vec![
+                VNode::element("h1")
+                    .with_djust_id("h1")
+                    .with_child(VNode::text("Project")),
+                VNode::element("div")
+                    .with_attr("class", "section-header")
+                    .with_djust_id("sh1")
+                    .with_child(VNode::text("Todos")),
+                VNode::element("ul")
+                    .with_attr("class", "todo-list")
+                    .with_djust_id("ul1")
+                    .with_children(vec![
+                        VNode::element("li")
+                            .with_djust_id("li1")
+                            .with_child(VNode::text("Item 1")),
+                    ]),
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        // Should insert 2 new children
+        let insert_count = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::InsertChild { .. }))
+            .count();
+        assert_eq!(insert_count, 2, "Should insert both conditional children. Patches: {:?}", patches);
+    }
 }

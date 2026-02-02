@@ -376,19 +376,29 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                         params.value = target.type === 'checkbox' ? target.checked : target.value;
                         params.field = target.name || target.id || null;
                     } else {
-                        // For other events, extract data-* attributes (but skip internal ones)
-                        Array.from(elem.attributes).forEach(attr => {
-                            if (attr.name.startsWith('data-') &&
-                                !attr.name.startsWith('data-liveview') &&
-                                !attr.name.startsWith('data-djust') &&
-                                attr.name !== 'data-dj-id') {
-                                const paramKey = attr.name.substring(5).replace(/-/g, '_');
+                        // For other events, extract data-* and dj-value-* attributes
+                        // Use extractTypedParams if available, otherwise basic extraction
+                        if (window.djust && window.djust.extractTypedParams) {
+                            Object.assign(params, window.djust.extractTypedParams(elem));
+                        } else {
+                            Array.from(elem.attributes).forEach(attr => {
+                                let paramKey;
+                                if (attr.name.startsWith('dj-value-')) {
+                                    paramKey = attr.name.substring(9).replace(/-/g, '_');
+                                } else if (attr.name.startsWith('data-') &&
+                                    !attr.name.startsWith('data-liveview') &&
+                                    !attr.name.startsWith('data-djust') &&
+                                    attr.name !== 'data-dj-id') {
+                                    paramKey = attr.name.substring(5).replace(/-/g, '_');
+                                } else {
+                                    return;
+                                }
                                 // Prevent prototype pollution attacks
                                 if (!UNSAFE_KEYS.includes(paramKey)) {
                                     params[paramKey] = attr.value;
                                 }
-                            }
-                        });
+                            });
+                        }
                     }
 
                     // Add positional arguments from handler syntax if present
