@@ -555,6 +555,506 @@ def performance_test(
     return decorator
 
 
+class _RedirectSentinel:
+    """Tracks redirects triggered during handler execution."""
+
+    def __init__(self):
+        self.url = None
+        self.triggered = False
+
+    def __call__(self, url):
+        self.url = url
+        self.triggered = True
+
+
+# Store reference to base before extending
+_BaseLiveViewTestClient = LiveViewTestClient
+
+
+class LiveViewTestClient(_BaseLiveViewTestClient):
+    """
+    Extended LiveView test client with high-level interaction methods.
+
+    Provides a Phoenix LiveViewTest-style API:
+        client = LiveViewTestClient(CounterView)
+        client.mount()
+        client.click("increment")
+        assert client.state["count"] == 1
+        assert "Count: 1" in client.html
+        assert client.has_element("button", text="Increment")
+    """
+
+    def __init__(
+        self,
+        view_class: Type,
+        request_factory: Optional[RequestFactory] = None,
+        user: Optional[Any] = None,
+    ):
+        super().__init__(view_class, request_factory, user)
+        self._redirect: Optional[_RedirectSentinel] = None
+        self._push_events: List[Dict[str, Any]] = []
+        self._html_cache: Optional[str] = None
+
+    def mount(self, request=None, **params: Any) -> "LiveViewTestClient":
+        """
+        Mount the view with optional custom request and params.
+
+        Args:
+            request: Optional pre-built request (uses factory if None)
+            **params: Parameters passed to the view's mount()
+
+        Returns:
+            self for chaining
+        """
+        self.view_instance = self.view_class()
+
+        if request is None:
+            request = self.request_factory.get("/")
+            if self.user:
+                request.user = self.user
+            from django.contrib.sessions.backends.db import SessionStore
+            request.session = SessionStore()
+
+        if hasattr(self.view_instance, "_initialize_temporary_assigns"):
+            self.view_instance._initialize_temporary_assigns()
+
+        # Initialize push events list if the view has it
+        if hasattr(self.view_instance, "_pending_push_events"):
+            self.view_instance._pending_push_events = []
+
+        # Initialize components dict if missing
+        if not hasattr(self.view_instance, "_components"):
+            self.view_instance._components = {}
+
+        self.view_instance.mount(request, **params)
+        self._mounted = True
+        self._html_cache = None
+        self._redirect = _RedirectSentinel()
+        self._push_events = []
+
+        self.events.append({
+            "type": "mount",
+            "params": params,
+            "timestamp": time.time(),
+        })
+
+        return self
+
+    # ── High-level interaction methods ──────────────────────────
+
+    @property
+    def state(self) -> Dict[str, Any]:
+        """Dict-like access to current view state (all public instance attrs)."""
+        return self.get_state()
+
+    @property
+    def html(self) -> str:
+        """Current rendered HTML. Cached until next event."""
+        if self._html_cache is None:
+            self._html_cache = self.render()
+        return self._html_cache
+
+    def click(self, event_name: str, value: Any = None, **params: Any) -> Dict[str, Any]:
+        """
+        Simulate a dj-click event.
+
+        Args:
+            event_name: Handler name (matches dj-click="handler_name")
+            value: Optional value (like dj-value-*)
+            **params: Additional params passed to handler
+
+        Returns:
+            Event result dict
+        """
+        if value is not None:
+            params["value"] = value
+        return self._dispatch(event_name, **params)
+
+    def input(self, field: str, value: Any) -> None:
+        """
+        Simulate dj-input / dj-model by setting an attribute directly.
+
+        Args:
+            field: Attribute name on the view
+            value: Value to set
+        """
+        if not self._mounted or not self.view_instance:
+            raise RuntimeError("View not mounted. Call client.mount() first.")
+        setattr(self.view_instance, field, value)
+        self._html_cache = None
+
+    def submit(self, event_name: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Simulate dj-submit by calling the handler with form data.
+
+        Args:
+            event_name: Handler name (matches dj-submit="handler_name")
+            data: Form data dict
+
+        Returns:
+            Event result dict
+        """
+        return self._dispatch(event_name, **(data or {}))
+
+    def _dispatch(self, event_name: str, **params: Any) -> Dict[str, Any]:
+        """Send an event, drain push events, invalidate html cache."""
+        result = self.send_event(event_name, **params)
+        self._html_cache = None
+
+        # Drain push events from the view instance
+        if hasattr(self.view_instance, "_drain_push_events"):
+            for name, payload in self.view_instance._drain_push_events():
+                self._push_events.append({"name": name, "payload": payload})
+
+        return result
+
+    # ── HTML query helpers ──────────────────────────────────────
+
+    def has_element(self, selector: str, text: Optional[str] = None) -> bool:
+        """
+        Check if an element matching selector exists in rendered HTML.
+
+        Supports simple selectors: tag, tag.class, tag#id, .class, #id
+
+        Args:
+            selector: CSS-like selector
+            text: Optional text content the element must contain
+
+        Returns:
+            True if matching element found
+        """
+        elements = self._query_elements(selector)
+        if text is not None:
+            return any(text in el for el in elements)
+        return len(elements) > 0
+
+    def count_elements(self, selector: str) -> int:
+        """
+        Count elements matching selector in rendered HTML.
+
+        Args:
+            selector: CSS-like selector
+
+        Returns:
+            Number of matching elements
+        """
+        return len(self._query_elements(selector))
+
+    def _query_elements(self, selector: str) -> List[str]:
+        """
+        Query rendered HTML for elements matching a simple CSS selector.
+
+        Uses regex-based matching for simple selectors to avoid requiring
+        lxml/beautifulsoup as dependencies.
+        """
+        html = self.html
+        tag, classes, id_val = self._parse_selector(selector)
+
+        # Build regex pattern for opening tags
+        if tag:
+            pattern = rf"<{tag}[^>]*>"
+        else:
+            pattern = r"<[a-zA-Z][a-zA-Z0-9]*[^>]*>"
+
+        matches = []
+        for m in re.finditer(pattern, html):
+            tag_str = m.group(0)
+
+            # Check class filter
+            if classes:
+                class_match = re.search(r'class\s*=\s*["\']([^"\']*)["\']', tag_str)
+                if not class_match:
+                    continue
+                tag_classes = class_match.group(1).split()
+                if not all(c in tag_classes for c in classes):
+                    continue
+
+            # Check id filter
+            if id_val:
+                id_match = re.search(r'id\s*=\s*["\']([^"\']*)["\']', tag_str)
+                if not id_match or id_match.group(1) != id_val:
+                    continue
+
+            # Extract element content (simple: up to closing tag)
+            start = m.start()
+            if tag:
+                close_pattern = rf"</{tag}\s*>"
+                close_match = re.search(close_pattern, html[m.end():])
+                if close_match:
+                    end = m.end() + close_match.end()
+                    matches.append(html[start:end])
+                else:
+                    matches.append(tag_str)
+            else:
+                matches.append(tag_str)
+
+        return matches
+
+    @staticmethod
+    def _parse_selector(selector: str):
+        """Parse a simple CSS selector into (tag, [classes], id)."""
+        tag = None
+        classes = []
+        id_val = None
+
+        # Extract id
+        id_match = re.search(r"#([\w-]+)", selector)
+        if id_match:
+            id_val = id_match.group(1)
+            selector = selector[:id_match.start()] + selector[id_match.end():]
+
+        # Extract classes
+        for cls_match in re.finditer(r"\.([\w-]+)", selector):
+            classes.append(cls_match.group(1))
+        selector = re.sub(r"\.[\w-]+", "", selector)
+
+        # Remaining is tag name
+        selector = selector.strip()
+        if selector:
+            tag = selector
+
+        return tag, classes, id_val
+
+    # ── Assertion helpers ───────────────────────────────────────
+
+    def assert_redirect(self, url: Optional[str] = None) -> None:
+        """
+        Assert that the view triggered a redirect.
+
+        Args:
+            url: If provided, assert redirect was to this URL
+
+        Raises:
+            AssertionError: If no redirect or URL mismatch
+        """
+        # Check if view has a redirect attribute (common pattern)
+        redirect_url = getattr(self.view_instance, "_redirect_url", None)
+        if redirect_url is None:
+            raise AssertionError("No redirect was triggered")
+        if url is not None and redirect_url != url:
+            raise AssertionError(
+                f"Expected redirect to {url!r}, got {redirect_url!r}"
+            )
+
+    def assert_push_event(self, name: str, payload: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Assert that push_event was called with the given name.
+
+        Args:
+            name: Expected event name
+            payload: If provided, assert payload matches
+
+        Raises:
+            AssertionError: If event not found or payload mismatch
+        """
+        matching = [e for e in self._push_events if e["name"] == name]
+        if not matching:
+            event_names = [e["name"] for e in self._push_events]
+            raise AssertionError(
+                f"push_event('{name}') was not called. "
+                f"Events fired: {event_names}"
+            )
+        if payload is not None:
+            if not any(e["payload"] == payload for e in matching):
+                payloads = [e["payload"] for e in matching]
+                raise AssertionError(
+                    f"push_event('{name}') was called but payload didn't match.\n"
+                    f"Expected: {payload!r}\n"
+                    f"Got: {payloads!r}"
+                )
+
+    @property
+    def push_events(self) -> List[Dict[str, Any]]:
+        """All push events that were fired since mount."""
+        return self._push_events.copy()
+
+
+class ComponentTestClient:
+    """
+    Test client for djust components (stateless Component and stateful LiveComponent).
+
+    Usage:
+        client = ComponentTestClient(BadgeComponent, text="Hello", variant="success")
+        assert "Hello" in client.html
+        assert client.has_element("span", text="Hello")
+    """
+
+    def __init__(self, component_class: Type, **props: Any):
+        self.component_class = component_class
+        self.props = props
+        self.instance = component_class(**props)
+
+    @property
+    def html(self) -> str:
+        """Rendered HTML of the component."""
+        return self.instance.render()
+
+    def update(self, **props: Any) -> None:
+        """Update component props and re-render."""
+        self.props.update(props)
+        self.instance.update(**props)
+
+    def has_element(self, selector: str, text: Optional[str] = None) -> bool:
+        """Check if element exists in rendered HTML."""
+        # Reuse LiveViewTestClient's static parse + query logic
+        html = self.html
+        tag, classes, id_val = LiveViewTestClient._parse_selector(selector)
+
+        if tag:
+            pattern = rf"<{tag}[^>]*>"
+        else:
+            pattern = r"<[a-zA-Z][a-zA-Z0-9]*[^>]*>"
+
+        for m in re.finditer(pattern, html):
+            tag_str = m.group(0)
+            if classes:
+                class_match = re.search(r'class\s*=\s*["\']([^"\']*)["\']', tag_str)
+                if not class_match:
+                    continue
+                tag_classes = class_match.group(1).split()
+                if not all(c in tag_classes for c in classes):
+                    continue
+            if id_val:
+                id_match = re.search(r'id\s*=\s*["\']([^"\']*)["\']', tag_str)
+                if not id_match or id_match.group(1) != id_val:
+                    continue
+            if text is not None:
+                # Check content after this tag
+                if tag:
+                    close_match = re.search(rf"</{tag}\s*>", html[m.end():])
+                    if close_match:
+                        content = html[m.end():m.end() + close_match.start()]
+                        if text in content:
+                            return True
+                    continue
+            else:
+                return True
+        return False
+
+    def count_elements(self, selector: str) -> int:
+        """Count matching elements."""
+        # Quick implementation reusing query logic
+        html = self.html
+        tag, classes, id_val = LiveViewTestClient._parse_selector(selector)
+        if tag:
+            pattern = rf"<{tag}[^>]*>"
+        else:
+            pattern = r"<[a-zA-Z][a-zA-Z0-9]*[^>]*>"
+
+        count = 0
+        for m in re.finditer(pattern, html):
+            tag_str = m.group(0)
+            if classes:
+                class_match = re.search(r'class\s*=\s*["\']([^"\']*)["\']', tag_str)
+                if not class_match:
+                    continue
+                tag_classes = class_match.group(1).split()
+                if not all(c in tag_classes for c in classes):
+                    continue
+            if id_val:
+                id_match = re.search(r'id\s*=\s*["\']([^"\']*)["\']', tag_str)
+                if not id_match or id_match.group(1) != id_val:
+                    continue
+            count += 1
+        return count
+
+
+class MockUploadFile:
+    """
+    Mock file upload for testing views that handle file uploads.
+
+    Usage:
+        file = MockUploadFile("photo.jpg", b"fake-image-data", "image/jpeg")
+        client.submit("upload", file=file)
+    """
+
+    def __init__(self, name: str, content: bytes = b"", content_type: str = "application/octet-stream", size: Optional[int] = None):
+        self.name = name
+        self.content = content
+        self.content_type = content_type
+        self.size = size or len(content)
+        self._position = 0
+
+    def read(self, num_bytes: Optional[int] = None) -> bytes:
+        if num_bytes is None:
+            data = self.content[self._position:]
+            self._position = len(self.content)
+        else:
+            data = self.content[self._position:self._position + num_bytes]
+            self._position += num_bytes
+        return data
+
+    def seek(self, position: int) -> None:
+        self._position = position
+
+    def tell(self) -> int:
+        return self._position
+
+    def chunks(self, chunk_size: int = 8192):
+        self.seek(0)
+        while True:
+            data = self.read(chunk_size)
+            if not data:
+                break
+            yield data
+
+
+# ── pytest fixtures ─────────────────────────────────────────────
+
+try:
+    import pytest
+
+    @pytest.fixture
+    def live_view_client():
+        """
+        Pytest fixture that returns a factory for LiveViewTestClient.
+
+        Usage:
+            def test_counter(live_view_client):
+                client = live_view_client(CounterView)
+                client.mount()
+                client.click("increment")
+                assert client.state["count"] == 1
+        """
+        def _factory(view_class, user=None, **mount_params):
+            client = LiveViewTestClient(view_class, user=user)
+            client.mount(**mount_params)
+            return client
+        return _factory
+
+    @pytest.fixture
+    def component_client():
+        """
+        Pytest fixture that returns a factory for ComponentTestClient.
+
+        Usage:
+            def test_badge(component_client):
+                client = component_client(Badge, text="Hi", variant="success")
+                assert "Hi" in client.html
+        """
+        def _factory(component_class, **props):
+            return ComponentTestClient(component_class, **props)
+        return _factory
+
+    @pytest.fixture
+    def mock_upload():
+        """
+        Pytest fixture for creating mock file uploads.
+
+        Usage:
+            def test_upload(live_view_client, mock_upload):
+                client = live_view_client(UploadView)
+                file = mock_upload("test.txt", b"hello world", "text/plain")
+                client.submit("handle_upload", file=file)
+        """
+        def _factory(name, content=b"", content_type="application/octet-stream"):
+            return MockUploadFile(name, content, content_type)
+        return _factory
+
+except ImportError:
+    pass  # pytest not available
+
+
 class MockRequest:
     """
     Simple mock request for testing LiveViews.
