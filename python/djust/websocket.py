@@ -373,7 +373,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         ip_tracker.add_cooldown(self._client_ip, cooldown)
                     await self.close(code=4429)
                     return
-                await self.send_error("Rate limit exceeded")
+                await self.send_json({"type": "rate_limit_exceeded", "message": "Too many messages, some events are being dropped"})
                 return
 
             if msg_type == "event":

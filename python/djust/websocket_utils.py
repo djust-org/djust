@@ -132,7 +132,7 @@ async def _validate_event_security(
                 ip_tracker.add_cooldown(client_ip, cooldown)
             await ws.close(code=4429)
             return None
-        await ws.send_error("Rate limit exceeded, event dropped")
+        await ws.send_json({"type": "rate_limit_exceeded", "message": "Rate limit exceeded, event dropped", "event": event_name})
         return None
 
     return handler

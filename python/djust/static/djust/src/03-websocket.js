@@ -294,6 +294,18 @@ class LiveViewWebSocket {
                 }
                 break;
 
+            case 'rate_limit_exceeded':
+                // Server is dropping events due to rate limiting — show brief warning, do NOT retry
+                console.warn('[LiveView] Rate limited:', data.message || 'Too many events');
+                this._showRateLimitWarning();
+                // Stop loading state if applicable
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
             case 'navigation':
                 // Server-side live_patch or live_redirect
                 if (window.djust.navigation) {
@@ -486,6 +498,27 @@ class LiveViewWebSocket {
             </div>
         `;
         document.body.appendChild(overlay);
+    }
+
+    _showRateLimitWarning() {
+        // Show a brief non-intrusive toast; debounce so rapid limits don't spam
+        if (this._rateLimitToast) return;
+        const toast = document.createElement('div');
+        toast.textContent = 'Slow down — some actions were dropped';
+        toast.style.cssText = `
+            position: fixed; bottom: 20px; right: 20px; z-index: 99999;
+            background: #f59e0b; color: #1c1917; padding: 10px 18px;
+            border-radius: 8px; font-size: 13px; font-weight: 600;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2); opacity: 0;
+            transition: opacity 0.3s; pointer-events: none;
+        `;
+        document.body.appendChild(toast);
+        this._rateLimitToast = toast;
+        requestAnimationFrame(() => { toast.style.opacity = '1'; });
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => { toast.remove(); this._rateLimitToast = null; }, 300);
+        }, 2500);
     }
 
     startHeartbeat(interval = 30000) {
