@@ -14,16 +14,32 @@ djust brings Phoenix LiveView-style reactive components to Django, with performa
 
 ## ✨ Features
 
-- ⚡ **10-100x Faster** - Rust-powered template engine and Virtual DOM diffing
-- 🔄 **Reactive Components** - Phoenix LiveView-style server-side reactivity
-- 🔌 **Django Compatible** - Works with existing Django templates and components
-- 📦 **Zero Build Step** - ~29KB gzipped client JavaScript, no bundling needed
-- 🌐 **WebSocket Updates** - Real-time DOM patches over WebSocket (with HTTP fallback)
-- 🎯 **Minimal Client Code** - Smart diffing sends only what changed
-- 🔒 **Type Safe** - Rust guarantees for core performance-critical code
-- 🐞 **Developer Debug Panel** - Interactive debugging with event history and VDOM inspection
-- 💤 **Lazy Hydration** - Defer WebSocket connections for below-fold content (20-40% memory savings)
-- 🚀 **TurboNav Compatible** - Works seamlessly with Turbo-style client-side navigation
+- ⚡ **10-100x Faster** — Rust-powered template engine and Virtual DOM diffing
+- 🔄 **Reactive Components** — Phoenix LiveView-style server-side reactivity
+- 🔌 **Django Compatible** — Works with existing Django templates and components
+- 📦 **Zero Build Step** — ~29KB gzipped client JavaScript, no bundling needed
+- 🌐 **WebSocket Updates** — Real-time DOM patches over WebSocket (with HTTP fallback)
+- 🎯 **Minimal Client Code** — Smart diffing sends only what changed
+- 🔒 **Type Safe** — Rust guarantees for core performance-critical code
+- 🐞 **Developer Debug Panel** — Interactive debugging with event history and VDOM inspection
+- 💤 **Lazy Hydration** — Defer WebSocket connections for below-fold content (20-40% memory savings)
+- 🚀 **TurboNav Compatible** — Works seamlessly with Turbo-style client-side navigation
+
+### New in v0.3 🔥
+
+- 🧭 **Navigation** — `live_patch` / `live_redirect` for URL state management and SPA-like navigation
+- 📝 **LiveForm** — Standalone declarative form validation with live inline feedback
+- 👥 **Presence Tracking** — See who's online with real-time join/leave events and live cursors
+- 📡 **Streaming** — Token-by-token DOM updates for LLM chat and live feeds
+- 📎 **File Uploads** — Chunked uploads via WebSocket with progress, drag-and-drop, and validation
+- 🪝 **JS Hooks** — `dj-hook` for integrating third-party JS libraries (charts, maps, editors)
+- 🔗 **Two-Way Binding** — `dj-model` for automatic input ↔ server state sync
+- ⚡ **Optimistic UI** — `dj-optimistic` for instant client-side updates with auto-rollback
+- 🎬 **Transitions** — `dj-transition` for CSS enter/leave animations
+- 🎯 **Scoped Updates** — `dj-target` to reduce patch size on large pages
+- ✅ **Confirmations** — `dj-confirm` for one-line delete confirmation dialogs
+- 📤 **Push Events** — Server-to-client events from handlers and background tasks
+- 🧪 **Testing Tools** — `LiveViewTestClient` for unit testing views without a browser
 
 ## 🎯 Quick Example
 
@@ -680,7 +696,17 @@ Areas we'd love help with:
 - [x] Developer debug panel with event history and VDOM inspection
 - [x] Reusable component library (`djust_components` crate)
 - [x] JIT pipeline improvements and stale-closure fixes
-- [ ] File upload handling
+- [x] File upload handling (v0.3)
+- [x] Navigation / URL state management (v0.3)
+- [x] LiveForm standalone validation (v0.3)
+- [x] Presence tracking & live cursors (v0.3)
+- [x] Streaming DOM updates (v0.3)
+- [x] JS Hooks (`dj-hook`) (v0.3)
+- [x] Two-way data binding (`dj-model`) (v0.3)
+- [x] Optimistic UI updates (v0.3)
+- [x] CSS transitions (v0.3)
+- [x] Testing utilities (v0.3)
+- [x] Push events API (v0.3)
 - [ ] Server-sent events (SSE) fallback
 - [ ] React/Vue component compatibility
 - [ ] TypeScript definitions
