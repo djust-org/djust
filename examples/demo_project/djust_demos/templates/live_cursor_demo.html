@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Cursors Demo | djust</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f7fa;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 2rem;
+            text-align: center;
+        }
+
+        .header h1 {
+            margin: 0 0 0.5rem;
+            font-size: 2.5rem;
+            font-weight: 600;
+        }
+
+        .header p {
+            margin: 0;
+            opacity: 0.9;
+            font-size: 1.1rem;
+        }
+
+        .content {
+            padding: 2rem;
+        }
+
+        .presence-bar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1.5rem;
+            border-radius: 12px;
+            margin-bottom: 2rem;
+            text-align: center;
+        }
+
+        .presence-bar h3 {
+            margin: 0 0 1rem;
+            font-size: 1.4rem;
+            font-weight: 500;
+        }
+
+        .user-avatars {
+            display: flex;
+            justify-content: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        .avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 16px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            transition: transform 0.2s ease;
+            cursor: pointer;
+        }
+
+        .avatar:hover {
+            transform: scale(1.1);
+        }
+
+        .demo-area {
+            background: white;
+            border: 2px solid #e1e8ed;
+            border-radius: 12px;
+            margin: 2rem 0;
+            position: relative;
+            min-height: 400px;
+            overflow: hidden;
+        }
+
+        .demo-header {
+            background: #f8f9fa;
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid #e1e8ed;
+            display: flex;
+            justify-content: between;
+            align-items: center;
+        }
+
+        .demo-title {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .cursor-count {
+            font-size: 0.9rem;
+            color: #666;
+        }
+
+        .demo-content {
+            padding: 2rem;
+            position: relative;
+            min-height: 300px;
+        }
+
+        .instructions {
+            background: #e3f2fd;
+            border: 1px solid #90caf9;
+            color: #1565c0;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 2rem;
+        }
+
+        .instructions h4 {
+            margin: 0 0 0.5rem;
+            color: #0d47a1;
+        }
+
+        .workspace {
+            background: #fafbfc;
+            border: 1px dashed #c1c9d0;
+            border-radius: 8px;
+            padding: 2rem;
+            text-align: center;
+            color: #666;
+            font-size: 1.1rem;
+            min-height: 200px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        /* Live Cursor Styles */
+        .live-cursor {
+            position: absolute;
+            width: 2px;
+            height: 24px;
+            z-index: 100;
+            pointer-events: none;
+            transition: all 0.1s ease-out;
+        }
+
+        .live-cursor::before {
+            content: '';
+            position: absolute;
+            top: -6px;
+            left: -4px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50% 0;
+            background: inherit;
+            transform: rotate(45deg);
+        }
+
+        .live-cursor::after {
+            content: attr(data-user);
+            position: absolute;
+            top: -8px;
+            left: 12px;
+            font-size: 12px;
+            background: inherit;
+            color: white;
+            padding: 3px 8px;
+            border-radius: 4px;
+            white-space: nowrap;
+            font-weight: 500;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .live-cursor.animate {
+            animation: cursorPulse 0.3s ease-out;
+        }
+
+        @keyframes cursorPulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+        }
+
+        .cursor-info {
+            position: absolute;
+            bottom: 1rem;
+            right: 1rem;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.9rem;
+        }
+
+        .demo-actions {
+            display: flex;
+            gap: 1rem;
+            margin-top: 2rem;
+            justify-content: center;
+        }
+
+        .btn {
+            background: #4facfe;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: background 0.2s ease;
+        }
+
+        .btn:hover {
+            background: #3d8bfe;
+        }
+
+        .btn.secondary {
+            background: #6c757d;
+        }
+
+        .btn.secondary:hover {
+            background: #5a6268;
+        }
+
+        .flash-messages {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            max-width: 350px;
+        }
+
+        .flash-message {
+            background: white;
+            border-left: 4px solid #28a745;
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            border-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .flash-message.info {
+            border-color: #17a2b8;
+        }
+
+        .flash-message.success {
+            border-color: #28a745;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes presence-join {
+            0% { transform: scale(0); opacity: 0; }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .avatar.new {
+            animation: presence-join 0.5s ease-out;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            background: #28a745;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>👨‍💻 Live Cursors Demo</h1>
+            <p>Real-time collaborative cursors with djust</p>
+        </div>
+
+        <div class="content">
+            <!-- Presence Bar -->
+            <div class="presence-bar">
+                <h3>
+                    <span class="status-indicator"></span>
+                    {{ presence_count }} user{{ presence_count|pluralize }} online
+                </h3>
+                <div class="user-avatars">
+                    {% for p in presences %}
+                        <span class="avatar" 
+                              style="background: {{ p.meta.color }}"
+                              title="{{ p.meta.name }}">
+                            {{ p.meta.name.0|upper }}
+                        </span>
+                    {% endfor %}
+                    {% if presence_count == 0 %}
+                        <span style="opacity: 0.7; font-style: italic;">No users online</span>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Instructions -->
+            <div class="instructions">
+                <h4>🎯 How to Use Live Cursors</h4>
+                <p>
+                    <strong>1.</strong> Open this page in multiple tabs or share with others<br>
+                    <strong>2.</strong> Move your mouse around in the demo area below<br>
+                    <strong>3.</strong> Watch other users' cursors appear in real-time<br>
+                    <strong>4.</strong> Each user gets a unique colored cursor with their name
+                </p>
+            </div>
+
+            <!-- Live Cursor Demo Area -->
+            <div class="demo-area">
+                <div class="demo-header">
+                    <div class="demo-title">🖱️ Collaborative Workspace</div>
+                    <div class="cursor-count">Active cursors: <span id="cursor-count">{{ cursors|length }}</span></div>
+                </div>
+                <div class="demo-content" id="workspace">
+                    <div class="workspace">
+                        <div>
+                            <h3>Move your mouse here! 🖱️</h3>
+                            <p>Watch as other users' cursors appear and disappear in real-time.</p>
+                            <p style="opacity: 0.7;">This area tracks all mouse movements and broadcasts them to other users.</p>
+                        </div>
+                    </div>
+                    <div class="cursor-info" id="cursor-info">
+                        Move your mouse to see live cursors
+                    </div>
+                </div>
+            </div>
+
+            <div class="demo-actions">
+                <button class="btn" onclick="location.reload()">
+                    🔄 Refresh Demo
+                </button>
+                <button class="btn secondary" onclick="toggleCursorTracking()">
+                    <span id="tracking-toggle">⏸️ Pause Tracking</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Flash Messages -->
+    <div class="flash-messages" id="flash-messages">
+        <!-- Messages will appear here -->
+    </div>
+
+    <!-- Live Cursor Implementation -->
+    {{ live_cursor_js|safe }}
+
+    <script>
+        let trackingEnabled = true;
+        let lastCursorUpdate = 0;
+        const CURSOR_THROTTLE = 50; // ms - More responsive for demo
+        let currentUserId = null;
+
+        // Store current cursors
+        let activeCursors = new Map();
+
+        // Get workspace element for relative positioning
+        const workspace = document.getElementById('workspace');
+        const workspaceRect = workspace.getBoundingClientRect();
+
+        // Enhanced cursor tracking for the demo area
+        workspace.addEventListener('mousemove', (e) => {
+            if (!trackingEnabled) return;
+            
+            const now = Date.now();
+            if (now - lastCursorUpdate < CURSOR_THROTTLE) return;
+            
+            lastCursorUpdate = now;
+            
+            // Get relative position within workspace
+            const rect = workspace.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            // Update cursor info
+            const cursorInfo = document.getElementById('cursor-info');
+            cursorInfo.textContent = `Mouse at (${Math.round(x)}, ${Math.round(y)})`;
+            
+            // Send cursor position to server
+            if (window.djustWebSocket && window.djustWebSocket.readyState === WebSocket.OPEN) {
+                window.djustWebSocket.send(JSON.stringify({
+                    type: 'cursor_move',
+                    x: x,
+                    y: y
+                }));
+            }
+        });
+
+        workspace.addEventListener('mouseleave', () => {
+            // Update cursor info
+            const cursorInfo = document.getElementById('cursor-info');
+            cursorInfo.textContent = 'Move your mouse here to see live cursors';
+        });
+
+        // Handle cursor updates from other users
+        document.addEventListener('djust:cursor_move', (e) => {
+            const { user_id, x, y, meta } = e.detail.payload;
+            
+            // Skip our own cursor
+            if (user_id === currentUserId) return;
+            
+            updateLiveCursor(user_id, x, y, meta);
+        });
+
+        // Handle presence events
+        document.addEventListener('djust:presence_join', (e) => {
+            const { meta } = e.detail.payload;
+            showFlashMessage(`${meta.name} joined the demo`, 'success');
+        });
+
+        document.addEventListener('djust:presence_leave', (e) => {
+            const { user_id, meta } = e.detail.payload;
+            removeLiveCursor(user_id);
+            if (meta && meta.name) {
+                showFlashMessage(`${meta.name} left the demo`, 'info');
+            }
+        });
+
+        function updateLiveCursor(userId, x, y, meta) {
+            let cursor = document.getElementById(`cursor-${userId}`);
+            
+            if (!cursor) {
+                // Create new cursor
+                cursor = document.createElement('div');
+                cursor.id = `cursor-${userId}`;
+                cursor.className = 'live-cursor';
+                cursor.style.backgroundColor = meta.color || '#667eea';
+                cursor.setAttribute('data-user', meta.name || 'Anonymous');
+                workspace.appendChild(cursor);
+                
+                // Animate in
+                cursor.classList.add('animate');
+                setTimeout(() => cursor.classList.remove('animate'), 300);
+                
+                activeCursors.set(userId, cursor);
+                updateCursorCount();
+            }
+            
+            // Update position
+            cursor.style.left = x + 'px';
+            cursor.style.top = y + 'px';
+            
+            // Auto-hide after inactivity
+            clearTimeout(cursor.hideTimeout);
+            cursor.hideTimeout = setTimeout(() => {
+                removeLiveCursor(userId);
+            }, 5000);
+        }
+
+        function removeLiveCursor(userId) {
+            const cursor = document.getElementById(`cursor-${userId}`);
+            if (cursor && cursor.parentNode) {
+                cursor.parentNode.removeChild(cursor);
+                activeCursors.delete(userId);
+                updateCursorCount();
+            }
+        }
+
+        function updateCursorCount() {
+            const countEl = document.getElementById('cursor-count');
+            if (countEl) {
+                countEl.textContent = activeCursors.size;
+            }
+        }
+
+        function toggleCursorTracking() {
+            trackingEnabled = !trackingEnabled;
+            const toggle = document.getElementById('tracking-toggle');
+            
+            if (trackingEnabled) {
+                toggle.textContent = '⏸️ Pause Tracking';
+                showFlashMessage('Cursor tracking enabled', 'success');
+            } else {
+                toggle.textContent = '▶️ Resume Tracking';
+                showFlashMessage('Cursor tracking paused', 'info');
+            }
+        }
+
+        // Flash message system
+        function showFlashMessage(message, type = 'info') {
+            const flashContainer = document.getElementById('flash-messages');
+            
+            const flashEl = document.createElement('div');
+            flashEl.className = `flash-message ${type}`;
+            flashEl.textContent = message;
+            
+            flashContainer.appendChild(flashEl);
+            
+            // Auto-remove after 4 seconds
+            setTimeout(() => {
+                if (flashEl.parentNode) {
+                    flashEl.style.animation = 'slideIn 0.3s ease-out reverse';
+                    setTimeout(() => {
+                        if (flashEl.parentNode) {
+                            flashEl.parentNode.removeChild(flashEl);
+                        }
+                    }, 300);
+                }
+            }, 4000);
+        }
+
+        // Initialize cursors from server data
+        {% if cursors %}
+            {% for user_id, cursor_data in cursors.items %}
+                updateLiveCursor('{{ user_id }}', {{ cursor_data.x }}, {{ cursor_data.y }}, {{ cursor_data.meta|safe }});
+            {% endfor %}
+        {% endif %}
+
+        // Generate a simple user ID for this session
+        currentUserId = 'user_' + Math.random().toString(36).substr(2, 9);
+
+        // Auto-refresh presence heartbeat
+        setInterval(() => {
+            if (window.djustWebSocket && window.djustWebSocket.readyState === WebSocket.OPEN) {
+                window.djustWebSocket.send(JSON.stringify({
+                    type: 'presence_heartbeat'
+                }));
+            }
+        }, 30000);
+
+        // Show welcome message
+        setTimeout(() => {
+            showFlashMessage('Welcome to live cursors! Move your mouse in the demo area.', 'success');
+        }, 1000);
+    </script>
+</body>
+</html>

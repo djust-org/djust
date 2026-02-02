@@ -5,9 +5,9 @@ Tests for the presence tracking system
 import pytest
 import time
 from unittest.mock import Mock, patch
-from django.test import RequestFactory
-from django.contrib.auth.models import User, AnonymousUser
-from django.core.cache import cache
+
+# Avoid Django imports to prevent configuration issues in testing
+HAS_DJANGO = False
 
 from djust.presence import (
     PresenceManager,
@@ -16,29 +16,92 @@ from djust.presence import (
     CursorTracker,
     PRESENCE_TIMEOUT
 )
-from djust import LiveView
+
+
+class FakeCache:
+    """Fake cache implementation for testing"""
+    def __init__(self):
+        self._cache = {}
+    
+    def get(self, key, default=None):
+        return self._cache.get(key, default)
+    
+    def set(self, key, value, timeout=None):
+        self._cache[key] = value
+    
+    def delete(self, key):
+        if key in self._cache:
+            del self._cache[key]
+    
+    def clear(self):
+        self._cache.clear()
+
+
+class FakeUser:
+    """Fake user for testing"""
+    def __init__(self, username="testuser", user_id=1):
+        self.username = username
+        self.id = user_id
+        self.is_authenticated = True
+
+
+class FakeAnonymousUser:
+    """Fake anonymous user"""
+    def __init__(self):
+        self.is_authenticated = False
+
+
+class FakeSession:
+    """Fake session"""
+    def __init__(self, session_key="test_session_123"):
+        self.session_key = session_key
+
+
+class FakeRequest:
+    """Fake request for testing"""
+    def __init__(self, user=None):
+        self.user = user or FakeUser()
+        self.session = FakeSession()
+
+
+class FakeView:
+    """Fake view for testing mixins"""
+    def __init__(self):
+        # Call parent __init__ methods if they exist
+        if hasattr(super(), '__init__'):
+            super().__init__()
+        self.request = FakeRequest()
+
+
+# Mock cache globally for tests
+fake_cache = FakeCache()
 
 
 @pytest.fixture(autouse=True)
 def clear_cache():
     """Clear cache before each test"""
-    cache.clear()
+    fake_cache.clear()
     yield
-    cache.clear()
+    fake_cache.clear()
 
 
 @pytest.fixture
 def user():
     """Create a test user"""
-    return User.objects.create_user(username='testuser', email='test@example.com')
+    return FakeUser()
 
 
 @pytest.fixture
 def request_factory():
     """Request factory for creating mock requests"""
-    return RequestFactory()
+    class FakeRequestFactory:
+        def get(self, path):
+            return FakeRequest()
+    
+    return FakeRequestFactory()
 
 
+@patch('djust.presence.cache', fake_cache)
 class TestPresenceManager:
     """Test the PresenceManager class"""
     
@@ -114,19 +177,20 @@ class TestPresenceManager:
         # Manually set heartbeat to old timestamp
         heartbeat_key = PresenceManager.heartbeat_cache_key(presence_key, user_id)
         old_time = time.time() - PRESENCE_TIMEOUT - 10
-        cache.set(heartbeat_key, old_time)
+        fake_cache.set(heartbeat_key, old_time)
         
         # List presences should clean up stale ones
         presences = PresenceManager.list_presences(presence_key)
         assert len(presences) == 0
 
 
+@patch('djust.presence.cache', fake_cache)
 class TestPresenceMixin:
     """Test the PresenceMixin class"""
     
     def test_presence_key_formatting(self):
         """Test presence key formatting with view attributes"""
-        class TestView(LiveView, PresenceMixin):
+        class TestView(FakeView, PresenceMixin):
             presence_key = "document:{doc_id}"
             
             def __init__(self):
@@ -138,7 +202,7 @@ class TestPresenceMixin:
     
     def test_presence_key_default(self):
         """Test default presence key generation"""
-        class TestView(LiveView, PresenceMixin):
+        class TestView(FakeView, PresenceMixin):
             pass
         
         view = TestView()
@@ -147,11 +211,10 @@ class TestPresenceMixin:
     
     def test_track_presence_authenticated_user(self, user, request_factory):
         """Test tracking presence with authenticated user"""
-        class TestView(LiveView, PresenceMixin):
+        class TestView(FakeView, PresenceMixin):
             presence_key = "test_view"
         
-        request = request_factory.get('/')
-        request.user = user
+        request = FakeRequest(user)
         
         view = TestView()
         view.request = request
@@ -172,13 +235,11 @@ class TestPresenceMixin:
     
     def test_track_presence_anonymous_user(self, request_factory):
         """Test tracking presence with anonymous user"""
-        class TestView(LiveView, PresenceMixin):
+        class TestView(FakeView, PresenceMixin):
             presence_key = "test_view"
         
-        request = request_factory.get('/')
-        request.user = AnonymousUser()
-        request.session = Mock()
-        request.session.session_key = "test_session_123"
+        request = FakeRequest(FakeAnonymousUser())
+        request.session = FakeSession("test_session_123")
         
         view = TestView()
         view.request = request
@@ -194,11 +255,10 @@ class TestPresenceMixin:
     
     def test_untrack_presence(self, user, request_factory):
         """Test untracking presence"""
-        class TestView(LiveView, PresenceMixin):
+        class TestView(FakeView, PresenceMixin):
             presence_key = "test_view"
         
-        request = request_factory.get('/')
-        request.user = user
+        request = FakeRequest(user)
         
         view = TestView()
         view.request = request
@@ -220,11 +280,10 @@ class TestPresenceMixin:
     
     def test_presence_count(self, user, request_factory):
         """Test presence count method"""
-        class TestView(LiveView, PresenceMixin):
+        class TestView(FakeView, PresenceMixin):
             presence_key = "test_view"
         
-        request = request_factory.get('/')
-        request.user = user
+        request = FakeRequest(user)
         
         view = TestView()
         view.request = request
@@ -246,11 +305,10 @@ class TestPresenceMixin:
         mock_group_send = Mock()
         mock_async_to_sync.return_value = mock_group_send
         
-        class TestView(LiveView, PresenceMixin):
+        class TestView(FakeView, PresenceMixin):
             presence_key = "test_view"
         
-        request = request_factory.get('/')
-        request.user = user
+        request = FakeRequest(user)
         
         view = TestView()
         view.request = request
@@ -266,6 +324,7 @@ class TestPresenceMixin:
         assert call_args[1]["payload"]["message"] == "hello"
 
 
+@patch('djust.presence.cache', fake_cache)
 class TestCursorTracker:
     """Test the CursorTracker class"""
     
@@ -303,13 +362,14 @@ class TestCursorTracker:
         cache_key = CursorTracker.cursor_cache_key(presence_key)
         old_time = time.time() - CursorTracker.CURSOR_TIMEOUT - 10
         cursors = {user_id: {"x": 100, "y": 200, "timestamp": old_time, "meta": {}}}
-        cache.set(cache_key, cursors)
+        fake_cache.set(cache_key, cursors)
         
         # Get cursors should clean up stale ones
         active_cursors = CursorTracker.get_cursors(presence_key)
         assert len(active_cursors) == 0
 
 
+@patch('djust.presence.cache', fake_cache)
 class TestLiveCursorMixin:
     """Test the LiveCursorMixin class"""
     
@@ -322,11 +382,10 @@ class TestLiveCursorMixin:
         mock_group_send = Mock()
         mock_async_to_sync.return_value = mock_group_send
         
-        class TestView(LiveView, LiveCursorMixin):
+        class TestView(FakeView, LiveCursorMixin):
             presence_key = "document:123"
         
-        request = request_factory.get('/')
-        request.user = user
+        request = FakeRequest(user)
         
         view = TestView()
         view.request = request
@@ -344,13 +403,19 @@ class TestLiveCursorMixin:
         # Check broadcast was called
         mock_group_send.assert_called_once()
     
-    def test_handle_cursor_move(self, user, request_factory):
+    @patch('djust.presence.get_channel_layer')
+    @patch('djust.presence.async_to_sync')
+    def test_handle_cursor_move(self, mock_async_to_sync, mock_get_channel_layer, user, request_factory):
         """Test cursor move handler"""
-        class TestView(LiveView, LiveCursorMixin):
+        mock_channel_layer = Mock()
+        mock_get_channel_layer.return_value = mock_channel_layer
+        mock_group_send = Mock()
+        mock_async_to_sync.return_value = mock_group_send
+        
+        class TestView(FakeView, LiveCursorMixin):
             presence_key = "document:123"
         
-        request = request_factory.get('/')
-        request.user = user
+        request = FakeRequest(user)
         
         view = TestView()
         view.request = request
@@ -363,13 +428,19 @@ class TestLiveCursorMixin:
         assert cursors[user_id]["x"] == 75
         assert cursors[user_id]["y"] == 125
     
-    def test_untrack_presence_removes_cursor(self, user, request_factory):
+    @patch('djust.presence.get_channel_layer')
+    @patch('djust.presence.async_to_sync')
+    def test_untrack_presence_removes_cursor(self, mock_async_to_sync, mock_get_channel_layer, user, request_factory):
         """Test that untracking presence also removes cursor"""
-        class TestView(LiveView, LiveCursorMixin):
+        mock_channel_layer = Mock()
+        mock_get_channel_layer.return_value = mock_channel_layer
+        mock_group_send = Mock()
+        mock_async_to_sync.return_value = mock_group_send
+        
+        class TestView(FakeView, LiveCursorMixin):
             presence_key = "document:123"
         
-        request = request_factory.get('/')
-        request.user = user
+        request = FakeRequest(user)
         
         view = TestView()
         view.request = request
@@ -388,27 +459,25 @@ class TestLiveCursorMixin:
         assert len(cursors) == 0
 
 
-@pytest.mark.django_db
+@patch('djust.presence.cache', fake_cache)
 class TestPresenceIntegration:
     """Integration tests for presence system"""
     
     def test_multiple_users_same_presence_group(self, request_factory):
         """Test multiple users in the same presence group"""
-        class TestView(LiveView, PresenceMixin):
+        class TestView(FakeView, PresenceMixin):
             presence_key = "document:123"
         
         # Create two users
-        user1 = User.objects.create_user(username='user1')
-        user2 = User.objects.create_user(username='user2')
+        user1 = FakeUser(username='user1', user_id=1)
+        user2 = FakeUser(username='user2', user_id=2)
         
         # Create two view instances
-        request1 = request_factory.get('/')
-        request1.user = user1
+        request1 = FakeRequest(user1)
         view1 = TestView()
         view1.request = request1
         
-        request2 = request_factory.get('/')
-        request2.user = user2
+        request2 = FakeRequest(user2)
         view2 = TestView()
         view2.request = request2
         
@@ -433,14 +502,13 @@ class TestPresenceIntegration:
     
     def test_presence_isolation_between_groups(self, request_factory):
         """Test that presence groups are isolated"""
-        user = User.objects.create_user(username='testuser')
-        request = request_factory.get('/')
-        request.user = user
+        user = FakeUser(username='testuser')
+        request = FakeRequest(user)
         
-        class View1(LiveView, PresenceMixin):
+        class View1(FakeView, PresenceMixin):
             presence_key = "document:123"
         
-        class View2(LiveView, PresenceMixin):
+        class View2(FakeView, PresenceMixin):
             presence_key = "document:456"
         
         view1 = View1()
