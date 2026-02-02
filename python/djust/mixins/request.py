@@ -159,6 +159,9 @@ class RequestMixin:
             event_name = data.get("event")
             params = data.get("params", {})
 
+            if not event_name:
+                return JsonResponse({"error": "No event name provided"}, status=400)
+
             # Restore state from session
             view_key = f"liveview_{request.path}"
             saved_state = request.session.get(view_key, {})
