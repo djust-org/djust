@@ -51,6 +51,19 @@ class TestPushToView:
         assert msg["handler"] == "on_new_message"
         assert msg["payload"] == {"text": "hi"}
 
+    def test_push_invalid_view_path(self):
+        with pytest.raises(ValueError, match="Invalid view_path"):
+            push_to_view("", state={"x": 1})
+
+    def test_push_invalid_view_path_no_dots(self):
+        with pytest.raises(ValueError, match="Invalid view_path"):
+            push_to_view("NoDots", state={"x": 1})
+
+    @pytest.mark.asyncio
+    async def test_apush_invalid_view_path(self):
+        with pytest.raises(ValueError, match="Invalid view_path"):
+            await apush_to_view("bad path!", state={"x": 1})
+
     @pytest.mark.asyncio
     @patch("djust.push.get_channel_layer")
     async def test_apush_to_view(self, mock_get_layer):
@@ -106,14 +119,52 @@ class TestServerPushHandler:
         consumer._send_update.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_calls_handler(self):
+    async def test_calls_handle_prefixed_handler(self):
         consumer = self._make_consumer()
-        consumer.view_instance.on_msg = MagicMock()
+        consumer.view_instance.handle_msg = MagicMock()
+        event = {"state": None, "handler": "handle_msg", "payload": {"text": "yo"}}
+
+        await consumer.server_push(event)
+
+        consumer.view_instance.handle_msg.assert_called_once_with(text="yo")
+
+    @pytest.mark.asyncio
+    async def test_calls_event_handler_decorated(self):
+        from djust.decorators import event_handler
+
+        consumer = self._make_consumer()
+        call_log = []
+
+        @event_handler
+        def on_msg(text):
+            call_log.append(text)
+
+        consumer.view_instance.on_msg = on_msg
         event = {"state": None, "handler": "on_msg", "payload": {"text": "yo"}}
 
         await consumer.server_push(event)
 
-        consumer.view_instance.on_msg.assert_called_once_with(text="yo")
+        assert call_log == ["yo"]
+        consumer._send_update.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_blocks_arbitrary_handler(self):
+        consumer = self._make_consumer()
+        # Use a plain function (no _djust_decorators) to avoid MagicMock auto-attr
+        call_log = []
+
+        def dangerous_method():
+            call_log.append("called")
+
+        consumer.view_instance.dangerous_method = dangerous_method
+        event = {"state": None, "handler": "dangerous_method", "payload": {}}
+
+        await consumer.server_push(event)
+
+        # Should NOT have been called — not handle_* and not @event_handler
+        assert call_log == []
+        # Render still happens (state may have changed)
+        consumer._send_update.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_no_view_instance(self):
@@ -167,12 +218,13 @@ class TestGroupJoinLeave:
         consumer.channel_layer = MagicMock()
         consumer.channel_layer.group_discard = AsyncMock()
 
-        mock_task = MagicMock()
-        consumer._tick_task = mock_task
+        # Create a real cancelled future so `await self._tick_task` works
+        fut = asyncio.get_event_loop().create_future()
+        fut.cancel()
+        consumer._tick_task = fut
 
         await consumer.disconnect(1000)
 
-        mock_task.cancel.assert_called_once()
         assert consumer._tick_task is None
 
 

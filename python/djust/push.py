@@ -5,8 +5,17 @@ Allows background tasks (Celery, management commands, cron jobs) to push
 state updates to connected LiveView clients.
 """
 
+import re
+
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+
+_VIEW_PATH_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$")
+
+
+def view_group_name(view_path: str) -> str:
+    """Return the channel-layer group name for a view path."""
+    return f"djust_view_{view_path.replace('.', '_')}"
 
 
 def push_to_view(view_path, *, state=None, handler=None, payload=None):
@@ -22,6 +31,9 @@ def push_to_view(view_path, *, state=None, handler=None, payload=None):
         handler: Name of a handler method to call on the view instance
         payload: Dict passed as kwargs to the handler method
 
+    Raises:
+        ValueError: If view_path is not a valid dotted Python path.
+
     Example::
 
         from djust import push_to_view
@@ -35,8 +47,12 @@ def push_to_view(view_path, *, state=None, handler=None, payload=None):
         push_to_view("myapp.views.ChatView", handler="on_new_message",
                       payload={"text": "hello"})
     """
+    if not _VIEW_PATH_RE.match(view_path):
+        raise ValueError(
+            f"Invalid view_path: {view_path!r}. Expected dotted Python path like 'myapp.views.MyView'"
+        )
     channel_layer = get_channel_layer()
-    group = f"djust_view_{view_path.replace('.', '_')}"
+    group = view_group_name(view_path)
     message = {
         "type": "server_push",
         "state": state,
@@ -51,9 +67,16 @@ async def apush_to_view(view_path, *, state=None, handler=None, payload=None):
     Async version of :func:`push_to_view`.
 
     Use from async contexts (async views, async Celery tasks, etc.).
+
+    Raises:
+        ValueError: If view_path is not a valid dotted Python path.
     """
+    if not _VIEW_PATH_RE.match(view_path):
+        raise ValueError(
+            f"Invalid view_path: {view_path!r}. Expected dotted Python path like 'myapp.views.MyView'"
+        )
     channel_layer = get_channel_layer()
-    group = f"djust_view_{view_path.replace('.', '_')}"
+    group = view_group_name(view_path)
     message = {
         "type": "server_push",
         "state": state,

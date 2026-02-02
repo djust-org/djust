@@ -236,9 +236,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if self._view_group:
             await self.channel_layer.group_discard(self._view_group, self.channel_name)
 
-        # Cancel tick task
+        # Cancel tick task and wait for it to finish
         if self._tick_task:
             self._tick_task.cancel()
+            try:
+                await self._tick_task
+            except asyncio.CancelledError:
+                pass
             self._tick_task = None
 
         # Clean up actor if using actors
@@ -393,13 +397,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
 
             # Join per-view channel group for server-push
+            from .push import view_group_name
+
             self._view_path = view_path
-            self._view_group = f"djust_view_{view_path.replace('.', '_')}"
+            self._view_group = view_group_name(view_path)
             await self.channel_layer.group_add(self._view_group, self.channel_name)
 
-            # Start periodic tick if configured
+            # Start periodic tick if subclass overrides handle_tick
             tick_interval = getattr(view_class, "tick_interval", None)
-            if tick_interval and hasattr(view_class, "handle_tick"):
+            if tick_interval:
                 from .live_view import LiveView as _LV
 
                 if view_class.handle_tick is not _LV.handle_tick:
@@ -1142,21 +1148,34 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
 
         try:
-            # Apply state updates
+            # Apply state updates before handler call so the handler can read
+            # the new values. _sync_state_to_rust runs after both to push the
+            # final Python state to Rust for rendering.
             state = event.get("state")
             if state and isinstance(state, dict):
                 for key, value in state.items():
                     setattr(self.view_instance, key, value)
 
-            # Call handler if specified
+            # Call handler if specified — restricted to handle_* prefixed or
+            # @event_handler-decorated methods to prevent arbitrary method calls
+            # if an attacker gains access to the channel layer backend.
             handler_name = event.get("handler")
             if handler_name:
                 handler_fn = getattr(self.view_instance, handler_name, None)
                 if handler_fn and callable(handler_fn):
-                    payload = event.get("payload") or {}
-                    await sync_to_async(handler_fn)(**payload)
+                    from .decorators import is_event_handler
+
+                    if not (handler_name.startswith("handle_") or is_event_handler(handler_fn)):
+                        logger.warning(
+                            "server_push: blocked handler %r — must be handle_* or @event_handler",
+                            handler_name,
+                        )
+                    else:
+                        payload = event.get("payload") or {}
+                        await sync_to_async(handler_fn)(**payload)
 
             # Sync state and re-render
+            # TODO: add patch compression (PATCH_COUNT_THRESHOLD) matching handle_event
             if hasattr(self.view_instance, "_sync_state_to_rust"):
                 await sync_to_async(self.view_instance._sync_state_to_rust)()
 
@@ -1174,6 +1193,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         Periodic tick loop. Calls handle_tick() on the view instance every
         interval_ms milliseconds, then re-renders and sends patches.
+
+        TODO: add patch compression (PATCH_COUNT_THRESHOLD) matching handle_event.
         """
         interval_s = interval_ms / 1000.0
         try:
