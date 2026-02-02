@@ -50,6 +50,12 @@ function bindLiveViewEvents() {
                     params.component_id = componentId;
                 }
 
+                // Embedded LiveView: route event to correct child view
+                const embeddedViewId = getEmbeddedViewId(e.currentTarget);
+                if (embeddedViewId) {
+                    params.view_id = embeddedViewId;
+                }
+
                 // Pass target element and optimistic update ID
                 params._targetElement = e.currentTarget;
                 params._optimisticUpdateId = optimisticUpdateId;
@@ -84,6 +90,12 @@ function bindLiveViewEvents() {
                 const componentId = getComponentId(e.target);
                 if (componentId) {
                     params.component_id = componentId;
+                }
+
+                // Embedded LiveView: route event to correct child view
+                const embeddedViewId = getEmbeddedViewId(e.target);
+                if (embeddedViewId) {
+                    params.view_id = embeddedViewId;
                 }
 
                 // Pass target element for optimistic updates (Phase 3)
@@ -123,6 +135,11 @@ function bindLiveViewEvents() {
             const componentId = getComponentId(element);
             if (componentId) {
                 params.component_id = componentId;
+            }
+            // Embedded LiveView: route event to correct child view
+            const embeddedViewId = getEmbeddedViewId(element);
+            if (embeddedViewId) {
+                params.view_id = embeddedViewId;
             }
             return params;
         }
@@ -244,6 +261,12 @@ function bindLiveViewEvents() {
                     const componentId = getComponentId(e.target);
                     if (componentId) {
                         params.component_id = componentId;
+                    }
+
+                    // Embedded LiveView: route event to correct child view
+                    const embeddedViewId = getEmbeddedViewId(e.target);
+                    if (embeddedViewId) {
+                        params.view_id = embeddedViewId;
                     }
 
                     // Add target element and handle dj-target

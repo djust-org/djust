@@ -282,6 +282,17 @@ class LiveViewWebSocket {
                 }
                 break;
 
+            case 'embedded_update':
+                // Scoped HTML update for an embedded child LiveView
+                this.handleEmbeddedUpdate(data);
+                // Stop loading state
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
             case 'navigation':
                 // Server-side live_patch or live_redirect
                 if (window.djust.navigation) {
@@ -406,6 +417,31 @@ class LiveViewWebSocket {
 
     // Removed duplicate applyPatches and patch helper methods
     // Now using centralized handleServerResponse() -> applyPatches()
+
+    /**
+     * Handle scoped HTML update for an embedded child LiveView.
+     * Replaces only the innerHTML of the embedded view's container div.
+     */
+    handleEmbeddedUpdate(data) {
+        const viewId = data.view_id;
+        const html = data.html;
+        if (!viewId || html === undefined) {
+            console.warn('[LiveView] Invalid embedded_update message:', data);
+            return;
+        }
+
+        const container = document.querySelector(`[data-djust-embedded="${CSS.escape(viewId)}"]`);
+        if (!container) {
+            console.warn(`[LiveView] Embedded view container not found: ${viewId}`);
+            return;
+        }
+
+        container.innerHTML = html;
+        console.log(`[LiveView] Updated embedded view: ${viewId}`);
+
+        // Re-bind events within the updated container
+        bindLiveViewEvents();
+    }
 
     startHeartbeat(interval = 30000) {
         setInterval(() => {

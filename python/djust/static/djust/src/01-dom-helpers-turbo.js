@@ -20,6 +20,23 @@ function getComponentId(element) {
     return null;
 }
 
+/**
+ * Find the closest embedded LiveView ID by walking up the DOM tree.
+ * Used by event handlers to route events to the correct embedded child view.
+ * @param {HTMLElement} element - Starting element
+ * @returns {string|null} - Embedded view ID or null if in root view
+ */
+function getEmbeddedViewId(element) {
+    let currentElement = element;
+    while (currentElement && currentElement !== document.body) {
+        if (currentElement.dataset.djustEmbedded) {
+            return currentElement.dataset.djustEmbedded;
+        }
+        currentElement = currentElement.parentElement;
+    }
+    return null;
+}
+
 // ============================================================================
 // TurboNav Integration - Early Registration
 // ============================================================================

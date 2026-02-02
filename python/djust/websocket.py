@@ -310,6 +310,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             except Exception as e:
                 logger.warning(f"Error cleaning up uploads: {e}")
 
+        # Clean up embedded child views
+        if self.view_instance and hasattr(self.view_instance, '_child_views'):
+            try:
+                for child_id in list(self.view_instance._child_views.keys()):
+                    self.view_instance._unregister_child(child_id)
+            except Exception as e:
+                logger.warning(f"Error cleaning up embedded children: {e}")
+
         # Clean up session state
         self.view_instance = None
         self.actor_handle = None
@@ -810,6 +818,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # Non-actor mode: Use traditional flow
             # Check if this is a component event (Phase 4)
             component_id = params.get("component_id")
+            is_embedded_child = (target_view is not self.view_instance)
             html = None
             patches = None
             version = 0
@@ -869,9 +878,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         time.perf_counter() - handler_start
                     ) * 1000  # Convert to ms
                 else:
+                    # Use target_view for handler lookup (may be an embedded child)
                     # Security checks (shared with actor and component paths)
                     handler = await _validate_event_security(
-                        self, event_name, self.view_instance, self._rate_limiter
+                        self, event_name, target_view, self._rate_limiter
                     )
                     if handler is None:
                         return
@@ -915,23 +925,33 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # Get updated HTML and patches with tracking
                         render_start = time.perf_counter()
                         with tracker.track("Template Render"):
-                            # Get context with tracking
-                            with tracker.track("Context Preparation"):
-                                context = await sync_to_async(self.view_instance.get_context_data)()
-                                tracker.track_context_size(context)
+                            if is_embedded_child:
+                                # Embedded child: render just the child's template
+                                # and send full HTML scoped to the child's container
+                                with tracker.track("Embedded Child Render"):
+                                    html = await sync_to_async(
+                                        self._render_embedded_child
+                                    )(target_view)
+                                    patches = None  # Send full HTML for the child subtree
+                                    version = 0
+                            else:
+                                # Get context with tracking
+                                with tracker.track("Context Preparation"):
+                                    context = await sync_to_async(self.view_instance.get_context_data)()
+                                    tracker.track_context_size(context)
 
-                            # Render and generate patches with tracking
-                            with tracker.track("VDOM Diff"):
-                                with profiler.profile(profiler.OP_RENDER):
-                                    html, patches, version = await sync_to_async(
-                                        self.view_instance.render_with_diff
-                                    )()
-                                patch_list = None  # Initialize for later use
-                                # patches can be: JSON string with patches, "[]" for empty, or None
-                                if patches is not None:
-                                    patch_list = json.loads(patches) if patches else []
-                                    tracker.track_patches(len(patch_list), patch_list)
-                                    profiler.record(profiler.OP_DIFF, 0)  # Mark diff occurred
+                                # Render and generate patches with tracking
+                                with tracker.track("VDOM Diff"):
+                                    with profiler.profile(profiler.OP_RENDER):
+                                        html, patches, version = await sync_to_async(
+                                            self.view_instance.render_with_diff
+                                        )()
+                                    patch_list = None  # Initialize for later use
+                                    # patches can be: JSON string with patches, "[]" for empty, or None
+                                    if patches is not None:
+                                        patch_list = json.loads(patches) if patches else []
+                                        tracker.track_patches(len(patch_list), patch_list)
+                                        profiler.record(profiler.OP_DIFF, 0)  # Mark diff occurred
                         timing["render"] = (
                             time.perf_counter() - render_start
                         ) * 1000  # Convert to ms
@@ -942,86 +962,97 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # Clear the flag
                     self.view_instance._should_reset_form = False
 
-                # For component events, send full HTML instead of patches
-                # Component VDOM is separate from parent VDOM, causing path mismatches
-                # TODO Phase 4.1: Implement per-component VDOM tracking
-                if component_id:
-                    patches = None
-
-                # For views with dynamic templates (template as property),
-                # patches may be empty because VDOM state is lost on recreation.
-                # In that case, send full HTML update.
-
-                # Patch compression: if patch count exceeds threshold and HTML is smaller,
-                # send HTML instead of patches for better performance
-                PATCH_COUNT_THRESHOLD = 100
-                # Note: patch_list was already parsed earlier for performance tracking
-                if patches and patch_list:
-                    patch_count = len(patch_list)
-                    if patch_count > PATCH_COUNT_THRESHOLD:
-                        # Compare sizes to decide whether to send patches or HTML
-                        patches_size = len(patches.encode("utf-8"))
-                        html_size = len(html.encode("utf-8"))
-                        # If HTML is at least 30% smaller, send HTML instead
-                        if html_size < patches_size * 0.7:
-                            logger.debug(
-                                "Patch compression: %d patches (%dB) -> sending HTML (%dB) instead",
-                                patch_count,
-                                patches_size,
-                                html_size,
-                            )
-                            # Reset VDOM and send HTML
-                            if (
-                                hasattr(self.view_instance, "_rust_view")
-                                and self.view_instance._rust_view
-                            ):
-                                self.view_instance._rust_view.reset()
-                            patches = None
-                            patch_list = None
-
-                # Note: patch_list can be [] (empty list) which is valid - means no changes needed
-                # Only send full HTML if patches is None (not just falsy)
-                if patches is not None and patch_list is not None:
-                    # Calculate timing for JSON mode
-                    timing["total"] = (time.perf_counter() - start_time) * 1000  # Total server time
-                    perf_summary = tracker.get_summary()
-
-                    await self._send_update(
-                        patches=patch_list,
-                        version=version,
-                        cache_request_id=cache_request_id,
-                        reset_form=should_reset_form,
-                        timing=timing,
-                        performance=perf_summary,
-                        event_name=event_name,
-                    )
+                # Embedded child view: send scoped HTML update
+                if is_embedded_child and view_id:
+                    await self.send_json({
+                        "type": "embedded_update",
+                        "view_id": view_id,
+                        "html": html,
+                        "event_name": event_name,
+                    })
+                    await self._flush_push_events()
+                    await self._flush_navigation()
                 else:
-                    # patches=None means VDOM diff failed or was skipped - send full HTML
-                    # Strip comments and whitespace to match Rust VDOM parser
-                    html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(
-                        html
-                    )
-                    # Extract innerHTML to avoid nesting <div data-djust-root> divs
-                    html_content = await sync_to_async(
-                        self.view_instance._extract_liveview_content
-                    )(html)
+                    # For component events, send full HTML instead of patches
+                    # Component VDOM is separate from parent VDOM, causing path mismatches
+                    # TODO Phase 4.1: Implement per-component VDOM tracking
+                    if component_id:
+                        patches = None
 
-                    print(
-                        "[WebSocket] No patches generated, sending full HTML update",
-                        file=sys.stderr,
-                    )
-                    print(
-                        f"[WebSocket] html_content length: {len(html_content)}, starts with: {html_content[:150]}...",
-                        file=sys.stderr,
-                    )
+                    # For views with dynamic templates (template as property),
+                    # patches may be empty because VDOM state is lost on recreation.
+                    # In that case, send full HTML update.
 
-                    await self._send_update(
-                        html=html_content,
-                        version=version,
-                        cache_request_id=cache_request_id,
-                        reset_form=should_reset_form,
-                        event_name=event_name,
-                    )
+                    # Patch compression: if patch count exceeds threshold and HTML is smaller,
+                    # send HTML instead of patches for better performance
+                    PATCH_COUNT_THRESHOLD = 100
+                    # Note: patch_list was already parsed earlier for performance tracking
+                    if patches and patch_list:
+                        patch_count = len(patch_list)
+                        if patch_count > PATCH_COUNT_THRESHOLD:
+                            # Compare sizes to decide whether to send patches or HTML
+                            patches_size = len(patches.encode("utf-8"))
+                            html_size = len(html.encode("utf-8"))
+                            # If HTML is at least 30% smaller, send HTML instead
+                            if html_size < patches_size * 0.7:
+                                logger.debug(
+                                    "Patch compression: %d patches (%dB) -> sending HTML (%dB) instead",
+                                    patch_count,
+                                    patches_size,
+                                    html_size,
+                                )
+                                # Reset VDOM and send HTML
+                                if (
+                                    hasattr(self.view_instance, "_rust_view")
+                                    and self.view_instance._rust_view
+                                ):
+                                    self.view_instance._rust_view.reset()
+                                patches = None
+                                patch_list = None
+
+                    # Note: patch_list can be [] (empty list) which is valid - means no changes needed
+                    # Only send full HTML if patches is None (not just falsy)
+                    if patches is not None and patch_list is not None:
+                        # Calculate timing for JSON mode
+                        timing["total"] = (time.perf_counter() - start_time) * 1000  # Total server time
+                        perf_summary = tracker.get_summary()
+
+                        await self._send_update(
+                            patches=patch_list,
+                            version=version,
+                            cache_request_id=cache_request_id,
+                            reset_form=should_reset_form,
+                            timing=timing,
+                            performance=perf_summary,
+                            event_name=event_name,
+                        )
+                    else:
+                        # patches=None means VDOM diff failed or was skipped - send full HTML
+                        # Strip comments and whitespace to match Rust VDOM parser
+                        html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(
+                            html
+                        )
+                        # Extract innerHTML to avoid nesting <div data-djust-root> divs
+                        html_content = await sync_to_async(
+                            self.view_instance._extract_liveview_content
+                        )(html)
+
+                        print(
+                            "[WebSocket] No patches generated, sending full HTML update",
+                            file=sys.stderr,
+                        )
+                        print(
+                            f"[WebSocket] html_content length: {len(html_content)}, starts with: {html_content[:150]}...",
+                            file=sys.stderr,
+                        )
+
+                        await self._send_update(
+                            html=html_content,
+                            version=version,
+                            cache_request_id=cache_request_id,
+                            reset_form=should_reset_form,
+                            event_name=event_name,
+                        )
 
             except Exception as e:
                 view_class_name = (
@@ -1037,6 +1068,30 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     log_message=f"Error in {view_class_name}.{sanitize_for_log(event_name)}() ({event_type})",
                 )
                 await self.send_json(response)
+
+    # ========================================================================
+    # Embedded LiveView Rendering
+    # ========================================================================
+
+    def _render_embedded_child(self, child_view) -> str:
+        """
+        Render an embedded child view's template and return the inner HTML.
+
+        This re-renders just the child's template using Django's template engine,
+        without going through the parent's VDOM at all.
+        """
+        try:
+            context = child_view.get_context_data()
+            from django.template import engines
+
+            template_str = child_view.get_template()
+            engine = engines["django"] if "django" in engines else list(engines.all())[0]
+            tmpl = engine.from_string(template_str)
+            html = tmpl.render(context)
+            return html
+        except Exception as e:
+            logger.error("Failed to render embedded child %s: %s", child_view.__class__.__name__, e)
+            return f"<!-- Error rendering embedded child: {e} -->"
 
     # ========================================================================
     # File Upload Handling

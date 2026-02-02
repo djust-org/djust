@@ -44,6 +44,23 @@ function getComponentId(element) {
     return null;
 }
 
+/**
+ * Find the closest embedded LiveView ID by walking up the DOM tree.
+ * Used by event handlers to route events to the correct embedded child view.
+ * @param {HTMLElement} element - Starting element
+ * @returns {string|null} - Embedded view ID or null if in root view
+ */
+function getEmbeddedViewId(element) {
+    let currentElement = element;
+    while (currentElement && currentElement !== document.body) {
+        if (currentElement.dataset.djustEmbedded) {
+            return currentElement.dataset.djustEmbedded;
+        }
+        currentElement = currentElement.parentElement;
+    }
+    return null;
+}
+
 // ============================================================================
 // TurboNav Integration - Early Registration
 // ============================================================================
@@ -565,6 +582,24 @@ class LiveViewWebSocket {
                 }
                 break;
 
+            case 'embedded_update':
+                // Scoped HTML update for an embedded child LiveView
+                this.handleEmbeddedUpdate(data);
+                // Stop loading state
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
+            case 'navigation':
+                // Server-side live_patch or live_redirect
+                if (window.djust.navigation) {
+                    window.djust.navigation.handleNavigation(data);
+                }
+                break;
+
             case 'reload':
                 // Hot reload: file changed, refresh the page
                 window.location.reload();
@@ -682,6 +717,31 @@ class LiveViewWebSocket {
 
     // Removed duplicate applyPatches and patch helper methods
     // Now using centralized handleServerResponse() -> applyPatches()
+
+    /**
+     * Handle scoped HTML update for an embedded child LiveView.
+     * Replaces only the innerHTML of the embedded view's container div.
+     */
+    handleEmbeddedUpdate(data) {
+        const viewId = data.view_id;
+        const html = data.html;
+        if (!viewId || html === undefined) {
+            console.warn('[LiveView] Invalid embedded_update message:', data);
+            return;
+        }
+
+        const container = document.querySelector(`[data-djust-embedded="${CSS.escape(viewId)}"]`);
+        if (!container) {
+            console.warn(`[LiveView] Embedded view container not found: ${viewId}`);
+            return;
+        }
+
+        container.innerHTML = html;
+        console.log(`[LiveView] Updated embedded view: ${viewId}`);
+
+        // Re-bind events within the updated container
+        bindLiveViewEvents();
+    }
 
     startHeartbeat(interval = 30000) {
         setInterval(() => {
@@ -1380,24 +1440,15 @@ window.djust = window.djust || {};
 window.djust.parseEventHandler = parseEventHandler;
 
 /**
- * Extract parameters from element attributes with optional type coercion.
+ * Extract parameters from element data-* attributes with optional type coercion.
  *
- * Supports two attribute prefixes:
- *   - data-* attributes (standard HTML): data-name="foo" -> { name: "foo" }
- *   - dj-value-* attributes (djust convention, like Phoenix's phx-value-*):
- *     dj-value-name="foo" -> { name: "foo" }
- *
- * Both prefixes support typed attributes via suffix notation:
- *   data-sender-id:int="42"       -> { sender_id: 42 }
- *   dj-value-sender-id:int="42"   -> { sender_id: 42 }
- *   data-enabled:bool="true"      -> { enabled: true }
- *   dj-value-enabled:bool="true"  -> { enabled: true }
- *   data-price:float="19.99"      -> { price: 19.99 }
- *   data-tags:json='["a","b"]'    -> { tags: ["a", "b"] }
- *   data-items:list="a,b,c"       -> { items: ["a", "b", "c"] }
- *   data-name="John"              -> { name: "John" } (default: string)
- *
- * Note: dj-value-* takes precedence over data-* for the same key.
+ * Supports typed attributes via suffix notation:
+ *   data-sender-id:int="42"     -> { sender_id: 42 }
+ *   data-enabled:bool="true"    -> { enabled: true }
+ *   data-price:float="19.99"    -> { price: 19.99 }
+ *   data-tags:json='["a","b"]'  -> { tags: ["a", "b"] }
+ *   data-items:list="a,b,c"     -> { items: ["a", "b", "c"] }
+ *   data-name="John"            -> { name: "John" } (default: string)
  *
  * @param {HTMLElement} element - Element to extract params from
  * @returns {Object} - Parameters with coerced types
@@ -1406,24 +1457,20 @@ function extractTypedParams(element) {
     const params = Object.create(null); // null prototype prevents prototype-pollution
 
     for (const attr of element.attributes) {
-        let nameWithoutPrefix;
+        if (!attr.name.startsWith('data-')) continue;
 
-        if (attr.name.startsWith('dj-value-')) {
-            nameWithoutPrefix = attr.name.slice(9); // Remove "dj-value-"
-        } else if (attr.name.startsWith('data-')) {
-            // Skip djust internal attributes
-            if (attr.name.startsWith('data-liveview') ||
-                attr.name.startsWith('data-live-') ||
-                attr.name.startsWith('data-djust') ||
-                attr.name === 'data-dj-id' ||
-                attr.name === 'data-loading' ||
-                attr.name === 'data-component-id') {
-                continue;
-            }
-            nameWithoutPrefix = attr.name.slice(5); // Remove "data-"
-        } else {
+        // Skip djust internal attributes
+        if (attr.name.startsWith('data-liveview') ||
+            attr.name.startsWith('data-live-') ||
+            attr.name.startsWith('data-djust') ||
+            attr.name === 'data-dj-id' ||
+            attr.name === 'data-loading' ||
+            attr.name === 'data-component-id') {
             continue;
         }
+
+        // Parse attribute name: data-sender-id:int -> key="sender_id", type="int"
+        const nameWithoutPrefix = attr.name.slice(5); // Remove "data-"
         const colonIndex = nameWithoutPrefix.lastIndexOf(':');
         let rawKey, typeHint;
 
@@ -1525,6 +1572,11 @@ function bindLiveViewEvents() {
         window.djust.uploads.bindHandlers();
     }
 
+    // Bind navigation directives (dj-patch, dj-navigate)
+    if (window.djust.navigation) {
+        window.djust.navigation.bindDirectives();
+    }
+
     // Find all interactive elements
     const allElements = document.querySelectorAll('*');
     allElements.forEach(element => {
@@ -1565,6 +1617,12 @@ function bindLiveViewEvents() {
                     params.component_id = componentId;
                 }
 
+                // Embedded LiveView: route event to correct child view
+                const embeddedViewId = getEmbeddedViewId(e.currentTarget);
+                if (embeddedViewId) {
+                    params.view_id = embeddedViewId;
+                }
+
                 // Pass target element and optimistic update ID
                 params._targetElement = e.currentTarget;
                 params._optimisticUpdateId = optimisticUpdateId;
@@ -1599,6 +1657,12 @@ function bindLiveViewEvents() {
                 const componentId = getComponentId(e.target);
                 if (componentId) {
                     params.component_id = componentId;
+                }
+
+                // Embedded LiveView: route event to correct child view
+                const embeddedViewId = getEmbeddedViewId(e.target);
+                if (embeddedViewId) {
+                    params.view_id = embeddedViewId;
                 }
 
                 // Pass target element for optimistic updates (Phase 3)
@@ -1639,6 +1703,11 @@ function bindLiveViewEvents() {
             if (componentId) {
                 params.component_id = componentId;
             }
+            // Embedded LiveView: route event to correct child view
+            const embeddedViewId = getEmbeddedViewId(element);
+            if (embeddedViewId) {
+                params.view_id = embeddedViewId;
+            }
             return params;
         }
 
@@ -1672,26 +1741,6 @@ function bindLiveViewEvents() {
                 : changeHandlerFn;
 
             element.addEventListener('change', wrappedHandler);
-
-            // Also fire dj-change on blur for text-like inputs
-            // This ensures validation triggers even when the user tabs away
-            // without changing the value (e.g., required field left empty).
-            const textTypes = ['text', 'email', 'url', 'tel', 'search', 'password', 'number'];
-            const tagName = element.tagName.toLowerCase();
-            const inputType = (element.getAttribute('type') || 'text').toLowerCase();
-            if (tagName === 'textarea' || (tagName === 'input' && textTypes.includes(inputType))) {
-                element.addEventListener('blur', (e) => {
-                    // Only fire if change hasn't already fired (avoid duplicate events)
-                    // We track this via a simple flag
-                    if (!element._djChangeBlurGuard) {
-                        changeHandlerFn(e);
-                    }
-                    element._djChangeBlurGuard = false;
-                });
-                element.addEventListener('change', () => {
-                    element._djChangeBlurGuard = true;
-                });
-            }
         }
 
         // Handle dj-input events (with smart debouncing/throttling)
@@ -1779,6 +1828,12 @@ function bindLiveViewEvents() {
                     const componentId = getComponentId(e.target);
                     if (componentId) {
                         params.component_id = componentId;
+                    }
+
+                    // Embedded LiveView: route event to correct child view
+                    const embeddedViewId = getEmbeddedViewId(e.target);
+                    if (embeddedViewId) {
+                        params.view_id = embeddedViewId;
                     }
 
                     // Add target element and handle dj-target
@@ -2729,6 +2784,7 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                         params.field = target.name || target.id || null;
                     } else {
                         // For other events, extract data-* and dj-value-* attributes
+                        // Use extractTypedParams if available, otherwise basic extraction
                         if (window.djust && window.djust.extractTypedParams) {
                             Object.assign(params, window.djust.extractTypedParams(elem));
                         } else {
@@ -2764,6 +2820,12 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                     const componentId = getComponentId(elem);
                     if (componentId) {
                         params.component_id = componentId;
+                    }
+
+                    // Embedded LiveView: route event to correct child view
+                    const embeddedViewId = getEmbeddedViewId(elem);
+                    if (embeddedViewId) {
+                        params.view_id = embeddedViewId;
                     }
 
                     handleEvent(parsed.name, params);
@@ -4526,3 +4588,235 @@ function _autoScroll(el) {
 // Expose for WebSocket handler
 window.djust = window.djust || {};
 window.djust.handleStreamMessage = handleStreamMessage;
+
+// ============================================================================
+// Navigation — URL State Management (live_patch / live_redirect)
+// ============================================================================
+
+(function () {
+    'use strict';
+
+    /**
+     * Handle navigation commands from the server.
+     *
+     * Called when the server sends a { type: "navigation", ... } message
+     * after a handler calls live_patch() or live_redirect().
+     */
+    function handleNavigation(data) {
+        if (data.type === 'live_patch') {
+            handleLivePatch(data);
+        } else if (data.type === 'live_redirect') {
+            handleLiveRedirect(data);
+        }
+    }
+
+    /**
+     * live_patch: Update URL without remounting the view.
+     * Uses history.pushState/replaceState.
+     */
+    function handleLivePatch(data) {
+        const currentUrl = new URL(window.location.href);
+        let newUrl;
+
+        if (data.path) {
+            newUrl = new URL(data.path, window.location.origin);
+        } else {
+            newUrl = new URL(currentUrl);
+        }
+
+        // Set query params
+        if (data.params !== undefined) {
+            // Clear existing params and set new ones
+            newUrl.search = '';
+            for (const [key, value] of Object.entries(data.params || {})) {
+                if (value !== null && value !== undefined && value !== '') {
+                    newUrl.searchParams.set(key, String(value));
+                }
+            }
+        }
+
+        const method = data.replace ? 'replaceState' : 'pushState';
+        window.history[method]({ djust: true }, '', newUrl.toString());
+
+        console.log(`[LiveView] live_patch: ${method} → ${newUrl.toString()}`);
+    }
+
+    /**
+     * live_redirect: Navigate to a different view over the same WebSocket.
+     * Updates URL, then sends a mount message for the new view.
+     */
+    function handleLiveRedirect(data) {
+        const newUrl = new URL(data.path, window.location.origin);
+
+        if (data.params) {
+            for (const [key, value] of Object.entries(data.params)) {
+                if (value !== null && value !== undefined && value !== '') {
+                    newUrl.searchParams.set(key, String(value));
+                }
+            }
+        }
+
+        const method = data.replace ? 'replaceState' : 'pushState';
+        window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
+
+        console.log(`[LiveView] live_redirect: ${method} → ${newUrl.toString()}`);
+
+        // Send a mount request for the new view path over the existing WebSocket
+        // The server will unmount the old view and mount the new one
+        if (liveViewWS && liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) {
+            // Look up the view path for the new URL from the route map
+            const viewPath = resolveViewPath(newUrl.pathname);
+            if (viewPath) {
+                const urlParams = Object.fromEntries(newUrl.searchParams);
+                liveViewWS.sendMessage({
+                    type: 'live_redirect_mount',
+                    view: viewPath,
+                    params: urlParams,
+                    url: newUrl.pathname,
+                });
+            } else {
+                // Fallback: full page navigation if we can't resolve the view
+                console.warn('[LiveView] Cannot resolve view for', newUrl.pathname, '— doing full navigation');
+                window.location.href = newUrl.toString();
+            }
+        }
+    }
+
+    /**
+     * Resolve a URL path to a view path using the route map.
+     *
+     * The route map is populated by live_session() via a <script> tag
+     * or by data attributes on the container.
+     */
+    function resolveViewPath(pathname) {
+        // Check the route map (populated by live_session)
+        const routeMap = window.djust._routeMap || {};
+        
+        // Try exact match first
+        if (routeMap[pathname]) {
+            return routeMap[pathname];
+        }
+
+        // Try pattern matching (for paths with parameters like /items/42/)
+        for (const [pattern, viewPath] of Object.entries(routeMap)) {
+            if (pattern.includes(':')) {
+                // Convert Django-style pattern to regex
+                // e.g., "/items/:id/" → /^\/items\/([^\/]+)\/$/
+                const regexStr = pattern.replace(/:([^/]+)/g, '([^/]+)');
+                const regex = new RegExp('^' + regexStr + '$');
+                if (regex.test(pathname)) {
+                    return viewPath;
+                }
+            }
+        }
+
+        // Fallback: check the current container's data-djust-view
+        // (only works for live_patch, not cross-view navigation)
+        const container = document.querySelector('[data-djust-view]');
+        if (container) {
+            return container.dataset.djustView;
+        }
+
+        return null;
+    }
+
+    /**
+     * Listen for browser back/forward (popstate) and send url_change to server.
+     */
+    window.addEventListener('popstate', function (event) {
+        if (!liveViewWS || !liveViewWS.viewMounted) return;
+        if (!liveViewWS.ws || liveViewWS.ws.readyState !== WebSocket.OPEN) return;
+
+        const url = new URL(window.location.href);
+        const params = Object.fromEntries(url.searchParams);
+
+        // Check if this is a redirect (different path) vs patch (same path, different params)
+        const isRedirect = event.state && event.state.redirect;
+
+        if (isRedirect) {
+            // Different view — need to remount
+            const viewPath = resolveViewPath(url.pathname);
+            if (viewPath) {
+                liveViewWS.sendMessage({
+                    type: 'live_redirect_mount',
+                    view: viewPath,
+                    params: params,
+                    url: url.pathname,
+                });
+            } else {
+                // Fallback
+                window.location.reload();
+            }
+        } else {
+            // Same view, different params — send url_change
+            liveViewWS.sendMessage({
+                type: 'url_change',
+                params: params,
+                uri: url.pathname + url.search,
+            });
+        }
+    });
+
+    /**
+     * Bind dj-patch and dj-navigate directives.
+     *
+     * Called from bindLiveViewEvents() after DOM updates.
+     */
+    function bindNavigationDirectives() {
+        // dj-patch: Update URL params without remount
+        document.querySelectorAll('[dj-patch]').forEach(function (el) {
+            if (el.dataset.djustPatchBound) return;
+            el.dataset.djustPatchBound = 'true';
+
+            el.addEventListener('click', function (e) {
+                e.preventDefault();
+                if (!liveViewWS || !liveViewWS.viewMounted) return;
+
+                const patchValue = el.getAttribute('dj-patch');
+                const url = new URL(patchValue, window.location.href);
+                const params = Object.fromEntries(url.searchParams);
+
+                // Update browser URL
+                const newUrl = new URL(window.location.href);
+                newUrl.search = url.search;
+                if (url.pathname !== '/' && patchValue.startsWith('/')) {
+                    newUrl.pathname = url.pathname;
+                }
+                window.history.pushState({ djust: true }, '', newUrl.toString());
+
+                // Send url_change to server
+                liveViewWS.sendMessage({
+                    type: 'url_change',
+                    params: params,
+                    uri: newUrl.pathname + newUrl.search,
+                });
+            });
+        });
+
+        // dj-navigate: Navigate to a different view
+        document.querySelectorAll('[dj-navigate]').forEach(function (el) {
+            if (el.dataset.djustNavigateBound) return;
+            el.dataset.djustNavigateBound = 'true';
+
+            el.addEventListener('click', function (e) {
+                e.preventDefault();
+                if (!liveViewWS || !liveViewWS.ws) return;
+
+                const path = el.getAttribute('dj-navigate');
+                handleLiveRedirect({ path: path, replace: false });
+            });
+        });
+    }
+
+    // Expose to djust namespace
+    window.djust.navigation = {
+        handleNavigation: handleNavigation,
+        bindDirectives: bindNavigationDirectives,
+        resolveViewPath: resolveViewPath,
+    };
+
+    // Initialize route map
+    if (!window.djust._routeMap) {
+        window.djust._routeMap = {};
+    }
+})();

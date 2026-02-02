@@ -415,6 +415,12 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                         params.component_id = componentId;
                     }
 
+                    // Embedded LiveView: route event to correct child view
+                    const embeddedViewId = getEmbeddedViewId(elem);
+                    if (embeddedViewId) {
+                        params.view_id = embeddedViewId;
+                    }
+
                     handleEvent(parsed.name, params);
                 });
                 // Set the dj-* attribute on the DOM so SetAttribute patches
