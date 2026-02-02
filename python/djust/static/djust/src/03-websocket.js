@@ -326,12 +326,21 @@ class LiveViewWebSocket {
         }
 
         console.log('[LiveView] Mounting view:', viewPath);
+        // Detect browser timezone for server-side local time rendering
+        let clientTimezone = null;
+        try {
+            clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        } catch (e) {
+            console.warn('[LiveView] Could not detect browser timezone:', e);
+        }
+
         this.sendMessage({
             type: 'mount',
             view: viewPath,
             params: params,
             url: window.location.pathname,
-            has_prerendered: this.skipMountHtml || false  // Tell server we have pre-rendered content
+            has_prerendered: this.skipMountHtml || false,  // Tell server we have pre-rendered content
+            client_timezone: clientTimezone  // IANA timezone string (e.g. "America/New_York")
         });
         return true;
     }

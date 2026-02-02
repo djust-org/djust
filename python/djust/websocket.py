@@ -425,6 +425,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         view_path = data.get("view")
         params = data.get("params", {})
         has_prerendered = data.get("has_prerendered", False)
+        client_timezone = data.get("client_timezone")
 
         if not view_path:
             await self.send_error("Missing view path in mount request")
@@ -472,6 +473,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
             # Store reference to WS consumer for streaming support
             self.view_instance._ws_consumer = self
+
+            # Store client timezone for local time rendering
+            self.view_instance.client_timezone = None
+            if client_timezone:
+                try:
+                    from zoneinfo import ZoneInfo
+                    ZoneInfo(client_timezone)  # Validate IANA timezone string
+                    self.view_instance.client_timezone = client_timezone
+                except (KeyError, Exception):
+                    logger.warning("Invalid client timezone: %s", client_timezone)
 
             # Store WebSocket session_id in view for consistent VDOM caching
             # This ensures mount and all subsequent events use the same VDOM instance
