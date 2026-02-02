@@ -171,6 +171,11 @@ class LiveViewWebSocket {
                     setCacheConfig(data.cache_config);
                 }
 
+                // Initialize upload configurations from mount response
+                if (data.upload_configs && window.djust.uploads) {
+                    window.djust.uploads.setConfigs(data.upload_configs);
+                }
+
                 // OPTIMIZATION: Skip HTML replacement if content was pre-rendered via HTTP GET
                 // Server sends has_ids flag to avoid client-side string search
                 const hasDataDjAttrs = data.has_ids === true;
@@ -242,6 +247,18 @@ class LiveViewWebSocket {
 
             case 'pong':
                 // Heartbeat response
+                break;
+
+            case 'upload_progress':
+                // File upload progress update
+                if (window.djust.uploads) {
+                    window.djust.uploads.handleProgress(data);
+                }
+                break;
+
+            case 'upload_registered':
+                // Upload registration acknowledged
+                console.log('[Upload] Registered:', data.ref, 'for', data.upload_name);
                 break;
 
             case 'reload':

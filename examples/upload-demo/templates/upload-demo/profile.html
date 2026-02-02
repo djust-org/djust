@@ -1,0 +1,27 @@
+<div class="upload-demo">
+    <h2>Profile Picture Upload</h2>
+
+    <div class="upload-area">
+        <label for="avatar-input">Choose a profile picture:</label>
+        <input type="file" id="avatar-input" dj-upload="avatar" />
+        <div dj-upload-preview="avatar" class="preview-container"></div>
+    </div>
+
+    <div class="actions">
+        <button dj-click="save_avatar" class="btn btn-primary">Save Avatar</button>
+        {% if avatar_url %}
+        <button dj-click="clear_avatar" class="btn btn-secondary">Clear</button>
+        {% endif %}
+    </div>
+
+    {% if message %}
+    <div class="alert alert-success">{{ message }}</div>
+    {% endif %}
+
+    {% if avatar_url %}
+    <div class="current-avatar">
+        <h3>Current Avatar</h3>
+        <img src="{{ avatar_url }}" alt="Avatar" style="max-width: 200px; border-radius: 50%;" />
+    </div>
+    {% endif %}
+</div>

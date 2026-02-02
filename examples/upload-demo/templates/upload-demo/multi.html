@@ -1,0 +1,40 @@
+<div class="upload-demo">
+    <h2>Multiple File Upload</h2>
+
+    <div class="upload-area">
+        <label for="docs-input">Select files (up to 5):</label>
+        <input type="file" id="docs-input" dj-upload="documents" multiple />
+        <div dj-upload-progress="documents" class="progress-container"></div>
+    </div>
+
+    <div class="actions">
+        <button dj-click="save_files" class="btn btn-primary">Save All Files</button>
+        {% if uploaded_files %}
+        <button dj-click="clear_files" class="btn btn-secondary">Clear</button>
+        {% endif %}
+    </div>
+
+    {% if uploaded_files %}
+    <div class="file-list">
+        <h3>Uploaded Files</h3>
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Size</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for file in uploaded_files %}
+                <tr>
+                    <td>{{ file.name }}</td>
+                    <td>{{ file.type }}</td>
+                    <td>{{ file.size|filesizeformat }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</div>

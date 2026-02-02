@@ -1,0 +1,56 @@
+<div class="upload-demo">
+    <h2>Drag &amp; Drop Upload</h2>
+
+    <div dj-upload-drop="images" class="drop-zone">
+        <div class="drop-zone-content">
+            <p class="drop-icon">📁</p>
+            <p>Drag &amp; drop images here</p>
+            <p class="text-muted">or click to select</p>
+            <input type="file" dj-upload="images" multiple style="display: none;" />
+        </div>
+        <div dj-upload-preview="images" class="preview-grid"></div>
+        <div dj-upload-progress="images" class="progress-container"></div>
+    </div>
+
+    <div class="actions">
+        <button dj-click="process_images" class="btn btn-primary">Process Images</button>
+        {% if gallery %}
+        <button dj-click="clear_gallery" class="btn btn-secondary">Clear Gallery</button>
+        {% endif %}
+    </div>
+
+    {% if gallery %}
+    <div class="gallery">
+        <h3>Gallery ({{ gallery|length }} images)</h3>
+        <div class="gallery-grid">
+            {% for img in gallery %}
+            <div class="gallery-item">
+                <span class="gallery-name">{{ img.name }}</span>
+                <span class="gallery-size">{{ img.size|filesizeformat }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<style>
+    .drop-zone {
+        border: 2px dashed #ccc;
+        border-radius: 8px;
+        padding: 2rem;
+        text-align: center;
+        cursor: pointer;
+        transition: border-color 0.2s, background-color 0.2s;
+        margin: 1rem 0;
+    }
+    .drop-zone.upload-dragover {
+        border-color: #007bff;
+        background-color: #f0f7ff;
+    }
+    .drop-icon { font-size: 3rem; margin: 0; }
+    .preview-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
+    .upload-preview-image { width: 80px; height: 80px; object-fit: cover; border-radius: 4px; }
+    .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1rem; }
+    .gallery-item { padding: 1rem; border: 1px solid #eee; border-radius: 4px; text-align: center; }
+</style>

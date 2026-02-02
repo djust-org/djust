@@ -1,5 +1,10 @@
 
 function bindLiveViewEvents() {
+    // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
+    if (window.djust.uploads) {
+        window.djust.uploads.bindHandlers();
+    }
+
     // Find all interactive elements
     const allElements = document.querySelectorAll('*');
     allElements.forEach(element => {
