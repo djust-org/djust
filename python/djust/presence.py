@@ -59,130 +59,74 @@ CLEANUP_INTERVAL = 300  # seconds - cleanup every 5 minutes
 
 
 class PresenceManager:
-    """Manages presence state across the application."""
+    """
+    Manages presence state across the application.
+
+    Delegates to the configured presence backend (memory or Redis).
+    See ``djust.backends`` for backend implementations.
+    """
+
+    @staticmethod
+    def _backend():
+        from djust.backends.registry import get_presence_backend
+        return get_presence_backend()
 
     @staticmethod
     def presence_group_name(presence_key: str) -> str:
         """Get the channels group name for a presence key."""
         return f"{PRESENCE_GROUP_PREFIX}_{presence_key.replace(':', '_').replace('{', '').replace('}', '')}"
 
-    @staticmethod
-    def presence_cache_key(presence_key: str) -> str:
-        """Get the cache key for storing presence data."""
-        return f"{PRESENCE_KEY_PREFIX}:{presence_key}"
-
-    @staticmethod
-    def heartbeat_cache_key(presence_key: str, user_id: str) -> str:
-        """Get the cache key for user heartbeat."""
-        return f"{HEARTBEAT_KEY_PREFIX}:{presence_key}:{user_id}"
-
     @classmethod
     def join_presence(cls, presence_key: str, user_id: str, meta: Dict[str, Any]) -> Dict[str, Any]:
         """
         Add a user to a presence group.
-        
+
         Args:
             presence_key: The presence group identifier
             user_id: Unique identifier for the user
             meta: Metadata about the user (name, color, etc.)
-            
+
         Returns:
             The presence record that was added
         """
-        presence_data = {
-            "id": user_id,
-            "joined_at": time.time(),
-            "meta": meta,
-        }
-        
-        cache_key = cls.presence_cache_key(presence_key)
-        
-        # Get current presences
-        presences = cache.get(cache_key, {})
-        presences[user_id] = presence_data
-        
-        # Store updated presences
-        cache.set(cache_key, presences, timeout=PRESENCE_TIMEOUT + 60)
-        
-        # Update heartbeat
-        cls.update_heartbeat(presence_key, user_id)
-        
-        logger.debug(f"User {user_id} joined presence group {presence_key}")
-        return presence_data
+        return cls._backend().join(presence_key, user_id, meta)
 
     @classmethod
     def leave_presence(cls, presence_key: str, user_id: str) -> Optional[Dict[str, Any]]:
         """
         Remove a user from a presence group.
-        
+
         Args:
             presence_key: The presence group identifier
             user_id: Unique identifier for the user
-            
+
         Returns:
             The presence record that was removed, or None if not found
         """
-        cache_key = cls.presence_cache_key(presence_key)
-        heartbeat_key = cls.heartbeat_cache_key(presence_key, user_id)
-        
-        # Get current presences
-        presences = cache.get(cache_key, {})
-        
-        # Remove user
-        presence_data = presences.pop(user_id, None)
-        
-        if presence_data:
-            # Update cache
-            cache.set(cache_key, presences, timeout=PRESENCE_TIMEOUT + 60)
-            
-            # Remove heartbeat
-            cache.delete(heartbeat_key)
-            
-            logger.debug(f"User {user_id} left presence group {presence_key}")
-        
-        return presence_data
+        return cls._backend().leave(presence_key, user_id)
 
     @classmethod
     def list_presences(cls, presence_key: str) -> List[Dict[str, Any]]:
         """
         Get all active presences for a group.
-        
+
         Args:
             presence_key: The presence group identifier
-            
+
         Returns:
             List of presence records
         """
-        cache_key = cls.presence_cache_key(presence_key)
-        presences = cache.get(cache_key, {})
-        
-        # Clean up stale presences
-        now = time.time()
-        active_presences = {}
-        
-        for user_id, presence_data in presences.items():
-            heartbeat_key = cls.heartbeat_cache_key(presence_key, user_id)
-            last_heartbeat = cache.get(heartbeat_key)
-            
-            if last_heartbeat and (now - last_heartbeat) < PRESENCE_TIMEOUT:
-                active_presences[user_id] = presence_data
-        
-        # Update cache if we removed stale presences
-        if len(active_presences) != len(presences):
-            cache.set(cache_key, active_presences, timeout=PRESENCE_TIMEOUT + 60)
-        
-        return list(active_presences.values())
+        return cls._backend().list(presence_key)
 
     @classmethod
     def presence_count(cls, presence_key: str) -> int:
         """Get the count of active users in a presence group."""
-        return len(cls.list_presences(presence_key))
+        return cls._backend().count(presence_key)
 
     @classmethod
     def update_heartbeat(cls, presence_key: str, user_id: str):
         """Update the heartbeat timestamp for a user."""
-        heartbeat_key = cls.heartbeat_cache_key(presence_key, user_id)
-        cache.set(heartbeat_key, time.time(), timeout=PRESENCE_TIMEOUT + 30)
+        cls._backend().heartbeat(presence_key, user_id)
 
 
 class PresenceMixin:

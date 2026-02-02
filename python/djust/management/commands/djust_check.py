@@ -42,6 +42,7 @@ class Command(BaseCommand):
         self.stdout.write("")
 
         self._check_settings()
+        self._check_backend_consistency()
         self._check_static_files()
         self._check_websocket_routing()
         self._check_templates()
@@ -139,6 +140,93 @@ class Command(BaseCommand):
             self._error(
                 "ASGI_APPLICATION is not set",
                 "Add ASGI_APPLICATION = 'myproject.asgi.application' to settings.py",
+            )
+
+    # ── Backend Consistency ──────────────────────────────────────
+
+    def _check_backend_consistency(self):
+        self._section("Backend Consistency")
+
+        djust_config = getattr(settings, "DJUST_CONFIG", {})
+        state_backend = djust_config.get("STATE_BACKEND", "memory")
+        presence_backend = djust_config.get("PRESENCE_BACKEND", "memory")
+
+        channel_layers = getattr(settings, "CHANNEL_LAYERS", {})
+        default_layer = channel_layers.get("default", {})
+        layer_backend = default_layer.get("BACKEND", "")
+
+        is_redis_channel = "redis" in layer_backend.lower() if layer_backend else False
+        is_inmemory_channel = "InMemory" in layer_backend or not layer_backend
+
+        # Report what's configured
+        if self.verbose:
+            self._pass(f"State backend: {state_backend}")
+            self._pass(f"Presence backend: {presence_backend}")
+            self._pass(f"Channel layer: {layer_backend or '(not configured)'}")
+
+        # Check: Redis state backend but in-memory channel layer
+        if state_backend == "redis" and is_inmemory_channel:
+            self._warn(
+                "State backend is 'redis' but channel layer is in-memory. "
+                "group_send (hot reload, presence broadcasts) won't reach other nodes.",
+                "Set CHANNEL_LAYERS to use channels_redis.core.RedisChannelLayer",
+            )
+
+        # Check: In-memory state backend but Redis channel layer
+        if state_backend == "memory" and is_redis_channel:
+            self._warn(
+                "Channel layer uses Redis (multi-node) but state backend is 'memory'. "
+                "LiveView state won't be shared across nodes — WebSocket reconnects may fail.",
+                "Set DJUST_CONFIG['STATE_BACKEND'] = 'redis' for multi-node deployments",
+            )
+
+        # Check: Redis state backend — verify connectivity
+        if state_backend == "redis":
+            redis_url = djust_config.get("REDIS_URL", "redis://localhost:6379/0")
+            try:
+                from djust.state_backends import get_backend
+                backend = get_backend()
+                health = backend.health_check()
+                if health.get("status") == "healthy":
+                    self._pass(f"Redis state backend is healthy ({redis_url})")
+                else:
+                    self._error(
+                        f"Redis state backend unhealthy: {health.get('error', 'unknown')}",
+                        f"Check Redis is running at {redis_url}",
+                    )
+            except Exception as e:
+                self._error(
+                    f"Cannot connect to Redis state backend: {e}",
+                    f"Check Redis is running at {redis_url}",
+                )
+
+        # Check: Redis presence backend — verify connectivity
+        if presence_backend == "redis":
+            try:
+                from djust.backends import get_presence_backend
+                pb = get_presence_backend()
+                health = pb.health_check()
+                if health.get("status") == "healthy":
+                    self._pass("Redis presence backend is healthy")
+                else:
+                    self._error(
+                        f"Redis presence backend unhealthy: {health.get('error', 'unknown')}",
+                    )
+            except Exception as e:
+                self._error(f"Cannot connect to Redis presence backend: {e}")
+
+        # Check: presence backend consistency with state backend
+        if state_backend == "redis" and presence_backend == "memory":
+            self._warn(
+                "State backend is Redis but presence backend is still in-memory. "
+                "Presence won't work across nodes.",
+                "Set DJUST_CONFIG['PRESENCE_BACKEND'] = 'redis'",
+            )
+
+        # All memory — that's fine for dev, just note it
+        if state_backend == "memory" and presence_backend == "memory" and is_inmemory_channel:
+            self._pass(
+                "All backends use in-memory storage (single-node development mode)"
             )
 
     # ── Static Files ────────────────────────────────────────────
