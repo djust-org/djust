@@ -22,6 +22,7 @@ from .decorators import (
 from .react import react_components, register_react_component, ReactMixin
 from .forms import FormMixin, LiveViewForm, form_field
 from .drafts import DraftModeMixin
+from .push import push_to_view, apush_to_view
 
 # Import Rust functions
 try:
@@ -199,6 +200,8 @@ __all__ = [
     "LiveViewForm",
     "form_field",
     "DraftModeMixin",
+    "push_to_view",
+    "apush_to_view",
     "enable_hot_reload",
     "get_template_dirs",
     "clear_template_dirs_cache",
