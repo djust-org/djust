@@ -124,6 +124,7 @@ class LiveView(
     template_name: Optional[str] = None
     template: Optional[str] = None
     use_actors: bool = False  # Enable Tokio actor-based state management (Phase 5+)
+    tick_interval: Optional[int] = None  # Periodic tick in ms (e.g. 2000 for 2s)
 
     # Memory optimization: assigns to clear after each render
     # Format: {'assign_name': default_value, ...}
@@ -145,6 +146,10 @@ class LiveView(
         self._temporary_assigns_initialized: bool = False  # Track if temp assigns are set up
         self._streams: Dict[str, Stream] = {}  # Stream collections
         self._stream_operations: list = []  # Pending stream operations for this render
+
+    def handle_tick(self):
+        """Override for periodic server-side updates. Called every tick_interval ms."""
+        pass
 
     # ============================================================================
     # TEMPORARY ASSIGNS - Memory optimization for large collections

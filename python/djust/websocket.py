@@ -2,6 +2,7 @@
 WebSocket consumer for LiveView real-time updates
 """
 
+import asyncio
 import json
 import logging
 import sys
@@ -52,6 +53,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         self.session_id: Optional[str] = None
         self.use_binary = False  # Use JSON for now (MessagePack support TODO)
         self.use_actors = False  # Will be set based on view class
+        self._view_group: Optional[str] = None
+        self._tick_task = None
 
     async def send_error(self, error: str, **context) -> None:
         """
@@ -229,6 +232,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Remove from hot reload broadcast group
         await self.channel_layer.group_discard("djust_hotreload", self.channel_name)
 
+        # Leave per-view channel group
+        if self._view_group:
+            await self.channel_layer.group_discard(self._view_group, self.channel_name)
+
+        # Cancel tick task and wait for it to finish
+        if self._tick_task:
+            self._tick_task.cancel()
+            try:
+                await self._tick_task
+            except asyncio.CancelledError:
+                pass
+            self._tick_task = None
+
         # Clean up actor if using actors
         if self.use_actors and self.actor_handle:
             try:
@@ -379,6 +395,21 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self.view_instance._websocket_query_string = self.scope.get("query_string", b"").decode(
                 "utf-8"
             )
+
+            # Join per-view channel group for server-push
+            from .push import view_group_name
+
+            self._view_path = view_path
+            self._view_group = view_group_name(view_path)
+            await self.channel_layer.group_add(self._view_group, self.channel_name)
+
+            # Start periodic tick if subclass overrides handle_tick
+            tick_interval = getattr(view_class, "tick_interval", None)
+            if tick_interval:
+                from .live_view import LiveView as _LV
+
+                if view_class.handle_tick is not _LV.handle_tick:
+                    self._tick_task = asyncio.create_task(self._run_tick(tick_interval))
 
             # Check if view uses actor-based state management
             self.use_actors = getattr(view_class, "use_actors", False)
@@ -1102,6 +1133,93 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     "file": file_path,
                 }
             )
+
+    async def server_push(self, event):
+        """
+        Handle a server-push message from the channel layer.
+
+        Called when external code (Celery tasks, management commands, etc.)
+        sends an update via push_to_view().
+
+        Args:
+            event: Channel layer event with optional 'state', 'handler', 'payload'
+        """
+        if not self.view_instance:
+            return
+
+        try:
+            # Apply state updates before handler call so the handler can read
+            # the new values. _sync_state_to_rust runs after both to push the
+            # final Python state to Rust for rendering.
+            state = event.get("state")
+            if state and isinstance(state, dict):
+                for key, value in state.items():
+                    setattr(self.view_instance, key, value)
+
+            # Call handler if specified — restricted to handle_* prefixed or
+            # @event_handler-decorated methods to prevent arbitrary method calls
+            # if an attacker gains access to the channel layer backend.
+            handler_name = event.get("handler")
+            if handler_name:
+                handler_fn = getattr(self.view_instance, handler_name, None)
+                if handler_fn and callable(handler_fn):
+                    from .decorators import is_event_handler
+
+                    if not (handler_name.startswith("handle_") or is_event_handler(handler_fn)):
+                        logger.warning(
+                            "server_push: blocked handler %r — must be handle_* or @event_handler",
+                            handler_name,
+                        )
+                    else:
+                        payload = event.get("payload") or {}
+                        await sync_to_async(handler_fn)(**payload)
+
+            # Sync state and re-render
+            # TODO: add patch compression (PATCH_COUNT_THRESHOLD) matching handle_event
+            if hasattr(self.view_instance, "_sync_state_to_rust"):
+                await sync_to_async(self.view_instance._sync_state_to_rust)()
+
+            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+
+            if patches is not None:
+                if isinstance(patches, str):
+                    patches = json.loads(patches)
+                await self._send_update(patches=patches, version=version)
+
+        except Exception as e:
+            logger.exception(f"Error in server_push: {e}")
+
+    async def _run_tick(self, interval_ms):
+        """
+        Periodic tick loop. Calls handle_tick() on the view instance every
+        interval_ms milliseconds, then re-renders and sends patches.
+
+        TODO: add patch compression (PATCH_COUNT_THRESHOLD) matching handle_event.
+        """
+        interval_s = interval_ms / 1000.0
+        try:
+            while True:
+                await asyncio.sleep(interval_s)
+                if not self.view_instance:
+                    break
+                try:
+                    await sync_to_async(self.view_instance.handle_tick)()
+
+                    if hasattr(self.view_instance, "_sync_state_to_rust"):
+                        await sync_to_async(self.view_instance._sync_state_to_rust)()
+
+                    html, patches, version = await sync_to_async(
+                        self.view_instance.render_with_diff
+                    )()
+
+                    if patches is not None:
+                        if isinstance(patches, str):
+                            patches = json.loads(patches)
+                        await self._send_update(patches=patches, version=version)
+                except Exception as e:
+                    logger.exception(f"Error in tick handler: {e}")
+        except asyncio.CancelledError:
+            pass
 
     @classmethod
     async def broadcast_reload(cls, file_path: str):
