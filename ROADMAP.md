@@ -73,11 +73,11 @@ All major files have been split into focused modules:
 | `state_backend.py` | ✅ Split into state_backends package | #123 |
 | `template_backend.py` | ✅ Split into template package | #128 |
 
-## 6. Finish Debug Toolbar
+## 6. Debug Toolbar — ✅ Complete
 
-Complete the development tools suite.
+Development tools suite is now feature-complete.
 
-**Existing (working):**
+**All features implemented (v0.4.0):**
 - Event handlers tab with parameter/decorator inspection
 - Event history (last 50 events) with timing and error details
 - VDOM patches tab with operation logging and timing
@@ -87,14 +87,12 @@ Complete the development tools suite.
 - Hot reload with template change detection
 - Performance warnings for patches >16ms
 - Server error display in toolbar (#112)
-
-**Missing:**
-- Event filtering by handler name, success/error status, time range
-- Event replay — resend previous events with same parameters
-- Network tab — raw WebSocket message inspection, connection status monitoring
-- Performance warnings tab — slow patches (>5ms), state size alerts, memory tracking
-- State size visualization — session contents and size breakdown
-- Panel state persistence across TurboNav navigation
+- ✅ Event filtering by handler name, success/error status, time range
+- ✅ Event replay — resend previous events with same parameters
+- ✅ Network tab — raw WebSocket message inspection, connection status monitoring
+- ✅ Performance warnings tab — slow patches (>5ms), state size alerts, memory tracking
+- ✅ State size visualization — session contents and size breakdown
+- ✅ Panel state persistence across TurboNav navigation
 
 ## 7. WebSocket Security Hardening — ✅ Complete
 
@@ -123,3 +121,54 @@ Ongoing effort to harden the VDOM diff and patch pipeline.
 - ✅ Edge cases from proptest fuzzing investigated
 - ✅ Large list performance documented with benchmarks
 - ✅ 11 new VDOM stress tests added for edge cases
+
+---
+
+## v0.6 Priorities
+
+With core functionality complete, v0.6 focuses on ecosystem expansion and production hardening.
+
+### 9. TypeScript Definitions for JS API
+
+Provide first-class TypeScript support for the client-side API.
+
+- Generate `.d.ts` files for `djust.js`, `client.js`, and public APIs
+- Document event handler type signatures
+- Export types for `DjustLiveView`, `DjustEvent`, `PatchOperation`
+- Enable autocomplete and type checking in VS Code
+
+### 10. Server-Sent Events (SSE) Alternative
+
+Add SSE as a simpler alternative to WebSocket for read-heavy use cases.
+
+- New `@sse_channel` decorator for server-push-only views
+- Automatic fallback when WebSocket unavailable
+- Lower infrastructure complexity (no Channels required for SSE-only apps)
+- Document trade-offs: SSE (simpler, HTTP/2 multiplexing) vs WebSocket (bidirectional)
+
+### 11. Accessibility (ARIA) Improvements
+
+Make djust apps accessible by default.
+
+- Auto-inject `aria-live` regions for dynamic content updates
+- Announce patch changes to screen readers appropriately
+- Document ARIA patterns for common LiveView UI components
+- Add accessibility audit to debug toolbar
+
+### 12. Mobile/Touch Support
+
+Improve experience on mobile devices.
+
+- Touch event handlers (`@touch_start`, `@touch_move`, `@touch_end`)
+- Gesture recognition helpers (swipe, pinch, long-press)
+- Viewport-aware rendering hints
+- Document mobile-specific patterns and gotchas
+
+### 13. Admin Integration
+
+Bring LiveView interactivity to Django admin.
+
+- `LiveViewAdminMixin` for model admin classes
+- Real-time inline editing without page reloads
+- Live search/filter for changelist views
+- Document integration patterns with existing admin customizations
