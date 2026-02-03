@@ -1,0 +1,191 @@
+{#
+Live Search Template - Real-time Input Binding Example
+
+This template demonstrates:
+- dj-model: Bind input value to server state
+- dj-model.debounce: Debounce input to reduce requests
+- dj-loading: Show loading state during search
+- Dynamic list rendering with results
+#}
+
+<div class="search-container">
+    <h1>Live Search</h1>
+    <p class="subtitle">Real-time filtering with dj-model</p>
+    
+    {#
+    dj-model binds this input's value to self.query on the server.
+    Every change triggers the search() handler.
+    
+    Modifiers:
+    - dj-model.debounce.300 = wait 300ms after typing stops
+    - dj-model.lazy = only update on blur
+    - dj-model.trim = trim whitespace
+    #}
+    <div class="search-box" dj-loading="class:searching">
+        <input 
+            type="search" 
+            placeholder="Search fruits..."
+            value="{{ query }}"
+            dj-model="query"
+            dj-model.debounce.200
+            dj-input="search"
+            data-query="{{ query }}"
+            autofocus
+        >
+        {# Loading indicator shown during search #}
+        <span class="search-icon" dj-loading="hide">🔍</span>
+        <span class="loading-icon" dj-loading="show" style="display:none">⏳</span>
+    </div>
+    
+    {# Results count #}
+    <div class="results-meta">
+        {% if query %}
+        <span>{{ results|length }} result{{ results|pluralize }} for "{{ query }}"</span>
+        {% else %}
+        <span>Showing {{ results|length }} items</span>
+        {% endif %}
+    </div>
+    
+    {# Results list #}
+    <ul class="results-list">
+        {% for item in results %}
+        <li class="result-item">
+            <span class="result-icon">🍎</span>
+            <span class="result-text">{{ item }}</span>
+        </li>
+        {% empty %}
+        <li class="no-results">
+            <span>😕</span>
+            <span>No results found for "{{ query }}"</span>
+        </li>
+        {% endfor %}
+    </ul>
+    
+    {# Help text #}
+    <div class="help-text">
+        <p><strong>Try searching:</strong> apple, banana, grape, kiwi...</p>
+        <p class="code-hint">
+            <code>dj-model="query"</code> binds input to server state<br>
+            <code>dj-model.debounce.200</code> waits 200ms after typing
+        </p>
+    </div>
+</div>
+
+<style>
+    .search-container {
+        max-width: 500px;
+        margin: 2rem auto;
+        padding: 2rem;
+        font-family: system-ui, -apple-system, sans-serif;
+    }
+    
+    .subtitle {
+        color: #666;
+        margin-bottom: 2rem;
+    }
+    
+    .search-box {
+        position: relative;
+        margin-bottom: 1rem;
+    }
+    
+    .search-box input {
+        width: 100%;
+        padding: 1rem 1rem 1rem 3rem;
+        font-size: 1.125rem;
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        transition: border-color 0.2s, box-shadow 0.2s;
+        box-sizing: border-box;
+    }
+    
+    .search-box input:focus {
+        outline: none;
+        border-color: #333;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    
+    .search-icon,
+    .loading-icon {
+        position: absolute;
+        left: 1rem;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 1.25rem;
+    }
+    
+    .search-box.searching input {
+        border-color: #667eea;
+    }
+    
+    .results-meta {
+        color: #666;
+        font-size: 0.875rem;
+        margin-bottom: 1rem;
+    }
+    
+    .results-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+    
+    .result-item {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 1rem;
+        background: #f9f9f9;
+        border-radius: 6px;
+        margin-bottom: 0.5rem;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    
+    .result-item:hover {
+        transform: translateX(4px);
+        box-shadow: -4px 0 0 #333;
+    }
+    
+    .result-icon {
+        font-size: 1.5rem;
+    }
+    
+    .result-text {
+        font-weight: 500;
+    }
+    
+    .no-results {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 2rem;
+        color: #666;
+        background: #f5f5f5;
+        border-radius: 8px;
+    }
+    
+    .no-results span:first-child {
+        font-size: 2rem;
+        margin-bottom: 0.5rem;
+    }
+    
+    .help-text {
+        margin-top: 2rem;
+        padding: 1rem;
+        background: #f0f7ff;
+        border-radius: 6px;
+        font-size: 0.875rem;
+    }
+    
+    .code-hint {
+        margin-top: 0.5rem;
+        margin-bottom: 0;
+    }
+    
+    .code-hint code {
+        background: #e0e8f0;
+        padding: 0.125rem 0.375rem;
+        border-radius: 4px;
+        font-size: 0.8rem;
+    }
+</style>

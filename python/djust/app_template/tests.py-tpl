@@ -1,0 +1,184 @@
+"""
+{{ app_name }} LiveView Tests
+
+Tests for LiveViews using djust's testing utilities.
+LiveViewTestClient lets you test views without a browser or WebSocket.
+
+Run tests:
+    python manage.py test {{ app_name }}
+    # or with pytest:
+    pytest {{ app_name }}/tests.py -v
+"""
+
+from django.test import TestCase
+from djust.testing import LiveViewTestClient, SnapshotTestMixin, performance_test
+
+from .views import CounterView, ContactFormView, SearchView
+
+
+class CounterViewTests(TestCase):
+    """Tests for the CounterView LiveView."""
+
+    def test_mount_initializes_count(self):
+        """Test that mount() sets initial count to 0."""
+        client = LiveViewTestClient(CounterView)
+        client.mount()
+
+        client.assert_state(count=0)
+
+    def test_mount_with_initial_count(self):
+        """Test that mount() respects initial count from URL params."""
+        client = LiveViewTestClient(CounterView)
+        client.mount(count=10)
+
+        client.assert_state(count=10)
+
+    def test_increment(self):
+        """Test the increment event handler."""
+        client = LiveViewTestClient(CounterView)
+        client.mount()
+
+        client.send_event('increment')
+        client.assert_state(count=1)
+
+        client.send_event('increment')
+        client.assert_state(count=2)
+
+    def test_decrement(self):
+        """Test the decrement event handler."""
+        client = LiveViewTestClient(CounterView)
+        client.mount(count=5)
+
+        client.send_event('decrement')
+        client.assert_state(count=4)
+
+    def test_reset(self):
+        """Test the reset event handler."""
+        client = LiveViewTestClient(CounterView)
+        client.mount(count=100)
+
+        client.send_event('reset')
+        client.assert_state(count=0)
+
+    def test_set_count(self):
+        """Test setting count to specific value."""
+        client = LiveViewTestClient(CounterView)
+        client.mount()
+
+        client.send_event('set_count', value=42)
+        client.assert_state(count=42)
+
+    def test_render_output(self):
+        """Test that the view renders correctly."""
+        client = LiveViewTestClient(CounterView)
+        client.mount(count=5)
+
+        html = client.render()
+        self.assertIn('5', html)
+
+
+class ContactFormViewTests(TestCase):
+    """Tests for the ContactFormView LiveView."""
+
+    def test_mount_initializes_form(self):
+        """Test that mount() initializes empty form state."""
+        client = LiveViewTestClient(ContactFormView)
+        client.mount()
+
+        client.assert_state(submitted=False)
+        client.assert_state(submission_count=0)
+
+    def test_validate_field_with_valid_email(self):
+        """Test real-time field validation with valid input."""
+        client = LiveViewTestClient(ContactFormView)
+        client.mount()
+
+        client.send_event('validate_field', field_name='email', value='test@example.com')
+        # Should have no errors for this field
+        self.assertEqual(client.view.field_errors.get('email'), None)
+
+    def test_validate_field_with_invalid_email(self):
+        """Test real-time field validation catches invalid input."""
+        client = LiveViewTestClient(ContactFormView)
+        client.mount()
+
+        client.send_event('validate_field', field_name='email', value='not-an-email')
+        # Should have error for this field
+        self.assertIn('email', client.view.field_errors)
+
+    def test_form_submission(self):
+        """Test successful form submission."""
+        client = LiveViewTestClient(ContactFormView)
+        client.mount()
+
+        # Fill in the form
+        client.view.form_data = {
+            'name': 'John Doe',
+            'email': 'john@example.com',
+            'message': 'Hello, world!',
+        }
+
+        client.send_event('submit_form')
+        client.assert_state(submitted=True)
+        client.assert_state(submission_count=1)
+
+
+class SearchViewTests(TestCase):
+    """Tests for the SearchView LiveView."""
+
+    def test_mount_shows_initial_results(self):
+        """Test that mount() shows first 5 items."""
+        client = LiveViewTestClient(SearchView)
+        client.mount()
+
+        self.assertEqual(len(client.view.results), 5)
+        self.assertEqual(client.view.query, '')
+
+    def test_search_filters_results(self):
+        """Test that search filters items correctly."""
+        client = LiveViewTestClient(SearchView)
+        client.mount()
+
+        client.send_event('search', query='apple')
+        self.assertEqual(client.view.results, ['Apple'])
+
+    def test_search_case_insensitive(self):
+        """Test that search is case-insensitive."""
+        client = LiveViewTestClient(SearchView)
+        client.mount()
+
+        client.send_event('search', query='BANANA')
+        self.assertEqual(client.view.results, ['Banana'])
+
+    def test_empty_search_shows_defaults(self):
+        """Test that empty search shows default results."""
+        client = LiveViewTestClient(SearchView)
+        client.mount()
+
+        client.send_event('search', query='apple')  # Filter first
+        client.send_event('search', query='')  # Clear filter
+        self.assertEqual(len(client.view.results), 5)
+
+    @performance_test(max_time_ms=50)
+    def test_search_performance(self):
+        """Test that search completes quickly."""
+        client = LiveViewTestClient(SearchView)
+        client.mount()
+        client.send_event('search', query='a')
+
+
+class SnapshotTests(TestCase, SnapshotTestMixin):
+    """
+    Snapshot tests for consistent rendering.
+
+    Snapshots are stored in {{ app_name }}/snapshots/ directory.
+    Run with --snapshot-update to regenerate.
+    """
+
+    def test_counter_snapshot(self):
+        """Test counter renders consistently."""
+        client = LiveViewTestClient(CounterView)
+        client.mount(count=42)
+
+        # First run creates snapshot, subsequent runs compare
+        self.assert_html_snapshot('counter_42', client.render())

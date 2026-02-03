@@ -1,0 +1,209 @@
+"""
+{{ app_name }} LiveViews
+
+This module contains LiveView classes for the {{ app_name }} app.
+LiveViews are reactive server-rendered views that update via WebSocket.
+
+See: https://github.com/your-repo/djust/docs/guides/QUICKSTART.md
+"""
+
+from djust import LiveView, event_handler
+from djust.forms import FormMixin
+from django import forms
+
+
+# ==============================================================================
+# EXAMPLE FORM
+# ==============================================================================
+
+class ContactForm(forms.Form):
+    """Example Django form with validation."""
+    name = forms.CharField(
+        max_length=100,
+        widget=forms.TextInput(attrs={'placeholder': 'Your name'}),
+    )
+    email = forms.EmailField(
+        widget=forms.EmailInput(attrs={'placeholder': 'your@email.com'}),
+    )
+    message = forms.CharField(
+        widget=forms.Textarea(attrs={'placeholder': 'Your message...', 'rows': 4}),
+    )
+
+
+# ==============================================================================
+# SAMPLE LIVEVIEW: Counter
+# ==============================================================================
+
+class CounterView(LiveView):
+    """
+    A simple counter demonstrating djust LiveView basics.
+
+    Key concepts:
+    - mount(): Called once when the view loads, initialize state here
+    - @event_handler: Decorator marks methods as callable from templates
+    - Template uses dj-click to bind events to handlers
+    """
+
+    template_name = '{{ app_name }}/counter.html'
+
+    def mount(self, **kwargs):
+        """
+        Initialize view state on first load.
+
+        Called once per session. Set instance variables here that
+        will be available in the template context.
+        """
+        self.count = 0
+        # URL params are passed as kwargs
+        self.initial_count = kwargs.get('count', 0)
+        self.count = int(self.initial_count)
+
+    def handle_params(self, params: dict):
+        """
+        Handle URL parameter changes (for live navigation).
+
+        Called when URL params change via live_patch/live_redirect.
+        """
+        if 'count' in params:
+            self.count = int(params['count'])
+
+    @event_handler
+    def increment(self):
+        """Increment the counter."""
+        self.count += 1
+
+    @event_handler
+    def decrement(self):
+        """Decrement the counter."""
+        self.count -= 1
+
+    @event_handler
+    def reset(self):
+        """Reset counter to zero."""
+        self.count = 0
+
+    @event_handler
+    def set_count(self, value: int):
+        """
+        Set counter to specific value.
+
+        Type hints enable automatic coercion: "42" -> 42
+        """
+        self.count = value
+
+
+# ==============================================================================
+# SAMPLE LIVEVIEW: Form with Validation
+# ==============================================================================
+
+class ContactFormView(FormMixin, LiveView):
+    """
+    Example form with real-time validation.
+
+    FormMixin provides:
+    - form_data: Dict of current field values
+    - field_errors: Dict of per-field errors
+    - validate_field(): Real-time validation on change
+    - submit_form(): Full form validation on submit
+    """
+
+    template_name = '{{ app_name }}/contact_form.html'
+    form_class = ContactForm
+
+    def mount(self, **kwargs):
+        """Initialize form state."""
+        super().mount(**kwargs)
+        self.submitted = False
+        self.submission_count = 0
+
+    def form_valid(self, form):
+        """
+        Handle successful form submission.
+
+        Called when all validation passes. Process the data here
+        (save to database, send email, etc.)
+        """
+        self.submitted = True
+        self.submission_count += 1
+        self.success_message = f"Thanks, {form.cleaned_data['name']}! Message received."
+        # In a real app: form.save() or send_email(form.cleaned_data)
+
+    def form_invalid(self, form):
+        """Handle failed validation."""
+        self.error_message = "Please fix the errors below."
+
+
+# ==============================================================================
+# SAMPLE LIVEVIEW: With JavaScript Hooks
+# ==============================================================================
+
+class HooksExampleView(LiveView):
+    """
+    Example demonstrating JavaScript hooks integration.
+
+    Hooks let you run client-side JS when elements mount/update/destroy.
+    Useful for: charts, maps, animations, third-party widgets.
+
+    Template uses dj-hook="HookName" to connect to JS hooks.
+    """
+
+    template_name = '{{ app_name }}/hooks_example.html'
+
+    def mount(self, **kwargs):
+        """Initialize state for hooks demo."""
+        self.chart_data = [10, 20, 30, 40, 50]
+        self.chart_type = 'bar'
+        self.animate = True
+
+    @event_handler
+    def update_data(self):
+        """Randomize chart data to trigger hook update."""
+        import random
+        self.chart_data = [random.randint(5, 100) for _ in range(5)]
+
+    @event_handler
+    def toggle_chart_type(self):
+        """Toggle between bar and line chart."""
+        self.chart_type = 'line' if self.chart_type == 'bar' else 'bar'
+
+
+# ==============================================================================
+# SAMPLE LIVEVIEW: Live Search
+# ==============================================================================
+
+class SearchView(LiveView):
+    """
+    Example of dj-model for real-time input binding.
+
+    dj-model binds input value to server state on every keystroke.
+    Combined with dj-loading, shows loading state during requests.
+    """
+
+    template_name = '{{ app_name }}/search.html'
+
+    # Sample data - in real app, use database queries
+    ITEMS = [
+        'Apple', 'Banana', 'Cherry', 'Date', 'Elderberry',
+        'Fig', 'Grape', 'Honeydew', 'Kiwi', 'Lemon',
+    ]
+
+    def mount(self, **kwargs):
+        """Initialize search state."""
+        self.query = ''
+        self.results = self.ITEMS[:5]  # Show first 5 by default
+
+    @event_handler
+    def search(self, query: str = ''):
+        """
+        Filter results based on search query.
+
+        Called automatically by dj-model="query" on input change.
+        """
+        self.query = query
+        if not query:
+            self.results = self.ITEMS[:5]
+        else:
+            self.results = [
+                item for item in self.ITEMS
+                if query.lower() in item.lower()
+            ]

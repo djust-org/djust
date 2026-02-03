@@ -1,0 +1,223 @@
+{#
+Contact Form Template - Real-time Form Validation Example
+
+This template demonstrates:
+- dj-model: Two-way binding between input and server state
+- dj-change: Trigger validation on field change
+- dj-submit: Handle form submission
+- dj-loading: Show loading states
+- Field errors display with Django's form system
+#}
+
+<div class="form-container">
+    <h1>Contact Form</h1>
+    <p class="subtitle">Real-time validation with djust</p>
+    
+    {% if submitted %}
+    {# Success state after form submission #}
+    <div class="success-message">
+        <h2>✓ Message Sent!</h2>
+        <p>{{ success_message }}</p>
+        <p class="meta">Submissions: {{ submission_count }}</p>
+        {# Reset by reloading - or add a reset handler #}
+        <a href="" class="btn btn-outline">Send Another</a>
+    </div>
+    {% else %}
+    
+    {# 
+    dj-submit intercepts form submission, sends data via WebSocket.
+    Server-side validation runs, errors are returned, DOM updates.
+    #}
+    <form dj-submit="submit_form" class="contact-form" dj-loading="class:submitting">
+        
+        {% if error_message %}
+        <div class="error-banner">
+            {{ error_message }}
+        </div>
+        {% endif %}
+        
+        {# Name field #}
+        <div class="form-group {% if field_errors.name %}has-error{% endif %}">
+            <label for="name">Name</label>
+            {# 
+            dj-model binds input to form_data.name on server.
+            dj-change triggers validate_field on blur/change.
+            #}
+            <input 
+                type="text" 
+                id="name" 
+                name="name"
+                value="{{ form_data.name }}"
+                dj-model="form_data.name"
+                dj-change="validate_field"
+                data-field_name="name"
+                placeholder="Your name"
+            >
+            {% if field_errors.name %}
+            <span class="error-text">{{ field_errors.name }}</span>
+            {% endif %}
+        </div>
+        
+        {# Email field #}
+        <div class="form-group {% if field_errors.email %}has-error{% endif %}">
+            <label for="email">Email</label>
+            <input 
+                type="email" 
+                id="email" 
+                name="email"
+                value="{{ form_data.email }}"
+                dj-model="form_data.email"
+                dj-change="validate_field"
+                data-field_name="email"
+                placeholder="your@email.com"
+            >
+            {% if field_errors.email %}
+            <span class="error-text">{{ field_errors.email }}</span>
+            {% endif %}
+        </div>
+        
+        {# Message field #}
+        <div class="form-group {% if field_errors.message %}has-error{% endif %}">
+            <label for="message">Message</label>
+            <textarea 
+                id="message" 
+                name="message"
+                dj-model="form_data.message"
+                dj-change="validate_field"
+                data-field_name="message"
+                rows="4"
+                placeholder="Your message..."
+            >{{ form_data.message }}</textarea>
+            {% if field_errors.message %}
+            <span class="error-text">{{ field_errors.message }}</span>
+            {% endif %}
+        </div>
+        
+        {# Submit button with loading state #}
+        <button type="submit" class="btn btn-primary btn-block">
+            <span dj-loading="hide">Send Message</span>
+            <span dj-loading="show" style="display:none">Sending...</span>
+        </button>
+    </form>
+    {% endif %}
+</div>
+
+<style>
+    .form-container {
+        max-width: 500px;
+        margin: 2rem auto;
+        padding: 2rem;
+        font-family: system-ui, -apple-system, sans-serif;
+    }
+    
+    .subtitle {
+        color: #666;
+        margin-bottom: 2rem;
+    }
+    
+    .contact-form {
+        transition: opacity 0.2s;
+    }
+    
+    .contact-form.submitting {
+        opacity: 0.6;
+        pointer-events: none;
+    }
+    
+    .form-group {
+        margin-bottom: 1.5rem;
+    }
+    
+    .form-group label {
+        display: block;
+        margin-bottom: 0.5rem;
+        font-weight: 500;
+    }
+    
+    .form-group input,
+    .form-group textarea {
+        width: 100%;
+        padding: 0.75rem;
+        border: 2px solid #ddd;
+        border-radius: 6px;
+        font-size: 1rem;
+        transition: border-color 0.2s;
+        box-sizing: border-box;
+    }
+    
+    .form-group input:focus,
+    .form-group textarea:focus {
+        outline: none;
+        border-color: #333;
+    }
+    
+    .form-group.has-error input,
+    .form-group.has-error textarea {
+        border-color: #e53e3e;
+    }
+    
+    .error-text {
+        display: block;
+        color: #e53e3e;
+        font-size: 0.875rem;
+        margin-top: 0.5rem;
+    }
+    
+    .error-banner {
+        background: #fed7d7;
+        color: #c53030;
+        padding: 1rem;
+        border-radius: 6px;
+        margin-bottom: 1.5rem;
+    }
+    
+    .success-message {
+        text-align: center;
+        padding: 2rem;
+        background: #c6f6d5;
+        border-radius: 8px;
+    }
+    
+    .success-message h2 {
+        color: #276749;
+        margin-bottom: 0.5rem;
+    }
+    
+    .success-message .meta {
+        color: #666;
+        font-size: 0.875rem;
+        margin-top: 1rem;
+    }
+    
+    .btn {
+        padding: 0.75rem 1.5rem;
+        font-size: 1rem;
+        border: 2px solid #333;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        text-decoration: none;
+        display: inline-block;
+    }
+    
+    .btn-primary {
+        background: #333;
+        color: white;
+    }
+    
+    .btn-block {
+        display: block;
+        width: 100%;
+    }
+    
+    .btn-outline {
+        background: transparent;
+        color: #333;
+        margin-top: 1rem;
+    }
+    
+    .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+</style>

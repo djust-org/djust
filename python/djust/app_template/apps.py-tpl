@@ -1,0 +1,22 @@
+"""{{ app_name }} app configuration."""
+
+from django.apps import AppConfig
+
+
+class {{ camel_case_app_name }}Config(AppConfig):
+    """Configuration for the {{ app_name }} djust app."""
+    
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = '{{ app_name }}'
+    verbose_name = '{{ app_name|title }}'
+    
+    def ready(self):
+        """
+        Called when Django starts. Use for initialization.
+        
+        Examples:
+        - Register signal handlers
+        - Initialize caches
+        - Register custom template tags
+        """
+        pass

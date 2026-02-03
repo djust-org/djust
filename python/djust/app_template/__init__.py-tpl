@@ -1,0 +1,19 @@
+"""
+{{ app_name }} - A djust LiveView application
+
+This app was created with djust's app template. It includes:
+- Sample LiveViews with common patterns (counter, form, search)
+- Templates demonstrating dj-* directives
+- JavaScript hooks for client-side interactivity
+- Tests using LiveViewTestClient
+
+Quick Start:
+    1. Add '{{ app_name }}' to INSTALLED_APPS in settings.py
+    2. Include URLs: path('{{ app_name }}/', include('{{ app_name }}.urls'))
+    3. Run: python manage.py runserver (or daphne for WebSocket)
+    4. Visit: http://localhost:8000/{{ app_name }}/counter/
+
+Documentation: https://github.com/your-repo/djust
+"""
+
+default_app_config = '{{ app_name }}.apps.{{ camel_case_app_name }}Config'

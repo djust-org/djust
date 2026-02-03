@@ -1,0 +1,39 @@
+"""
+{{ app_name }} URL configuration
+
+This module defines URL patterns for the {{ app_name }} LiveViews.
+Use live_session() to group views that share a WebSocket connection.
+"""
+
+from django.urls import path
+from djust.routing import live_session
+
+from .views import CounterView, ContactFormView, HooksExampleView, SearchView
+
+app_name = '{{ app_name }}'
+
+# Option 1: Simple routing (each view gets its own WebSocket connection)
+# Use for standalone views that don't need live navigation between them.
+#
+# urlpatterns = [
+#     path('counter/', CounterView.as_view(), name='counter'),
+#     path('contact/', ContactFormView.as_view(), name='contact'),
+# ]
+
+# Option 2: Live session routing (shared WebSocket, live_redirect works)
+# Use when you want instant navigation between views without page reload.
+
+urlpatterns = [
+    path('counter/', CounterView.as_view(), name='counter'),
+    path('contact/', ContactFormView.as_view(), name='contact'),
+    path('hooks/', HooksExampleView.as_view(), name='hooks'),
+    path('search/', SearchView.as_view(), name='search'),
+]
+
+# If using live_session for shared WebSocket navigation:
+# urlpatterns = live_session('/{{ app_name }}', [
+#     path('', CounterView.as_view(), name='counter'),
+#     path('contact/', ContactFormView.as_view(), name='contact'),
+#     path('hooks/', HooksExampleView.as_view(), name='hooks'),
+#     path('search/', SearchView.as_view(), name='search'),
+# ])

@@ -1,0 +1,31 @@
+"""
+{{ app_name }} models
+
+Define your Django models here. LiveViews can query and update these models
+with real-time UI updates.
+
+Example:
+    class Message(models.Model):
+        content = models.TextField()
+        created_at = models.DateTimeField(auto_now_add=True)
+        
+    # In your LiveView:
+    def mount(self, **kwargs):
+        self.messages = Message.objects.all()[:50]
+        
+    @event_handler
+    def add_message(self, content: str):
+        Message.objects.create(content=content)
+        self.messages = Message.objects.all()[:50]
+"""
+
+from django.db import models
+
+
+# Add your models here
+# class YourModel(models.Model):
+#     name = models.CharField(max_length=100)
+#     created_at = models.DateTimeField(auto_now_add=True)
+#     
+#     def __str__(self):
+#         return self.name
