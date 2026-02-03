@@ -348,28 +348,6 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
             }
             vnode.children = children;
 
-            // Debug: log final child count for form elements
-            if tag == "form" {
-                eprintln!(
-                    "[Parser] Form element has {} children after filtering",
-                    vnode.children.len()
-                );
-                for (i, child) in vnode.children.iter().enumerate() {
-                    if child.is_text() {
-                        eprintln!(
-                            "  [{}] Text: {:?}",
-                            i,
-                            child
-                                .text
-                                .as_ref()
-                                .map(|t| t.chars().take(20).collect::<String>())
-                        );
-                    } else {
-                        eprintln!("  [{}] Element: <{}>", i, child.tag);
-                    }
-                }
-            }
-
             Ok(vnode)
         }
 
