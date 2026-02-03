@@ -30,8 +30,18 @@
 
 /**
  * Registry of hook definitions provided by the user.
- * Users set this via: window.djust.hooks = { HookName: { mounted(){}, ... } }
+ * Users set this via:
+ *   window.djust.hooks = { HookName: { mounted(){}, ... } }
+ * or (Phoenix LiveView-compatible):
+ *   window.DjustHooks = { HookName: { mounted(){}, ... } }
  */
+
+/**
+ * Get the merged hook registry (window.djust.hooks + window.DjustHooks).
+ */
+function _getHookDefs() {
+    return Object.assign({}, window.DjustHooks || {}, window.djust.hooks || {});
+}
 
 /**
  * Map of active hook instances keyed by element id.
@@ -94,7 +104,7 @@ function _createHookInstance(hookDef, el) {
  */
 function mountHooks(root) {
     root = root || document;
-    const hooks = window.djust.hooks || {};
+    const hooks = _getHookDefs();
     const elements = root.querySelectorAll('[dj-hook]');
 
     elements.forEach(el => {
@@ -127,11 +137,29 @@ function mountHooks(root) {
 }
 
 /**
+ * Notify active hooks that a DOM update is about to happen.
+ * Call this BEFORE applying patches.
+ */
+function beforeUpdateHooks(root) {
+    root = root || document;
+    for (const [, entry] of _activeHooks) {
+        // Only call if element is still in the DOM
+        if (root.contains(entry.el) && typeof entry.instance.beforeUpdate === 'function') {
+            try {
+                entry.instance.beforeUpdate();
+            } catch (e) {
+                console.error(`[dj-hook] Error in ${entry.hookName}.beforeUpdate():`, e);
+            }
+        }
+    }
+}
+
+/**
  * Called after a DOM patch to update/mount/destroy hooks as needed.
  */
 function updateHooks(root) {
     root = root || document;
-    const hooks = window.djust.hooks || {};
+    const hooks = _getHookDefs();
 
     // 1. Find all currently hooked elements in the DOM
     const currentElements = new Set();
@@ -253,6 +281,7 @@ function destroyAllHooks() {
 
 // Export to namespace
 window.djust.mountHooks = mountHooks;
+window.djust.beforeUpdateHooks = beforeUpdateHooks;
 window.djust.updateHooks = updateHooks;
 window.djust.notifyHooksDisconnected = notifyHooksDisconnected;
 window.djust.notifyHooksReconnected = notifyHooksReconnected;

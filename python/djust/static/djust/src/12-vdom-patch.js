@@ -914,6 +914,11 @@ function applyPatches(patches, targetSelector = null) {
         return true;
     }
 
+    // Notify hooks before DOM update
+    if (typeof beforeUpdateHooks === 'function') {
+        beforeUpdateHooks();
+    }
+
     // Sort patches: RemoveChild in descending order to preserve indices
     patches.sort((a, b) => {
         if (a.type === 'RemoveChild' && b.type === 'RemoveChild') {
