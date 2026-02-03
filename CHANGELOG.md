@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-02-03 — "Stable Connections" 🔗
+
+A focused release hardening TurboNav/SPA navigation integration and adding performance analysis tooling.
+
 ### Fixed
 
 #### TurboNav Integration
@@ -17,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Connection timestamp reset** — `disconnect()` now resets `stats.connectedAt` to properly track reconnection statistics.
 
 ### Added
+
+#### Performance Tooling
+- **Performance Analysis Report** — New `docs/PERFORMANCE_ANALYSIS.md` with comprehensive benchmark results:
+  - 21/21 benchmarks passing under 2ms p95 target
+  - Template rendering: 0.001ms (simple) to 1.2ms (500 items)
+  - VDOM diffing: 0.004ms (single change) to 1.2ms (toggle 100 items)
+  - Full update cycle: 0.007ms (counter) to 1.3ms (list append)
+  - Bottleneck analysis and optimization recommendations
 
 #### Documentation
 - **TurboNav Integration Guide** — New comprehensive guide at `docs/guides/turbonav-integration.md` covering:
@@ -356,7 +368,8 @@ The biggest djust release yet — 13 major features bringing djust to full parit
 
 - Bug fixes and stability improvements
 
-[Unreleased]: https://github.com/djust-org/djust/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/djust-org/djust/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/djust-org/djust/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/djust-org/djust/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/djust-org/djust/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/djust-org/djust/compare/v0.2.0...v0.2.1
