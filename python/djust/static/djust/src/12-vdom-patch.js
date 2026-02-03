@@ -914,6 +914,12 @@ function applyPatches(patches, targetSelector = null) {
         return true;
     }
 
+    // Save focus state before DOM update (accessibility)
+    if (window.djust && window.djust.accessibility) {
+        window.djust.accessibility.saveFocusState();
+        window.djust.accessibility.beforePatches(patches);
+    }
+
     // Notify hooks before DOM update
     if (typeof beforeUpdateHooks === 'function') {
         beforeUpdateHooks();
@@ -1029,6 +1035,11 @@ function applyPatches(patches, targetSelector = null) {
     // Rebind dj-model elements after DOM patches
     if (typeof bindModelElements === 'function') {
         bindModelElements();
+    }
+
+    // Accessibility: restore focus and enhance keyboard access
+    if (window.djust && window.djust.accessibility) {
+        window.djust.accessibility.afterPatches();
     }
 
     return true;

@@ -17,6 +17,8 @@ from .post_processing import PostProcessingMixin
 from .model_binding import ModelBindingMixin
 from .push_events import PushEventMixin
 from .navigation import NavigationMixin
+from .accessibility import AccessibilityMixin
+from .mobile import MobileMixin
 from ..streaming import StreamingMixin
 
 __all__ = [
@@ -32,5 +34,7 @@ __all__ = [
     "ModelBindingMixin",
     "PushEventMixin",
     "NavigationMixin",
+    "AccessibilityMixin",
+    "MobileMixin",
     "StreamingMixin",
 ]

@@ -32,6 +32,7 @@ from .mixins import (
     ModelBindingMixin,
     PushEventMixin,
     NavigationMixin,
+    AccessibilityMixin,
 )
 from .embedded import EmbeddedViewMixin, LiveSession
 
@@ -67,6 +68,7 @@ class LiveView(
     ModelBindingMixin,
     PushEventMixin,
     NavigationMixin,
+    AccessibilityMixin,
     View,
 ):
     """

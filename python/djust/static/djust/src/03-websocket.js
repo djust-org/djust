@@ -326,6 +326,20 @@ class LiveViewWebSocket {
                 }
                 break;
 
+            case 'accessibility':
+                // Screen reader announcements from server
+                if (window.djust.accessibility) {
+                    window.djust.accessibility.processAnnouncements(data.announcements);
+                }
+                break;
+
+            case 'focus':
+                // Focus command from server
+                if (window.djust.accessibility) {
+                    window.djust.accessibility.processFocus([data.selector, data.options]);
+                }
+                break;
+
             case 'reload':
                 // Hot reload: file changed, refresh the page
                 window.location.reload();

@@ -103,6 +103,11 @@ const globalLoadingManager = {
 
         document.body.classList.add('djust-global-loading');
 
+        // Announce loading start to screen readers
+        if (window.djust && window.djust.accessibility) {
+            window.djust.accessibility.announceLoadingStart();
+        }
+
         if (globalThis.djustDebug) {
             console.log(`[Loading] Started: ${eventName}`);
         }
@@ -129,6 +134,11 @@ const globalLoadingManager = {
         });
 
         document.body.classList.remove('djust-global-loading');
+
+        // Announce loading complete to screen readers
+        if (window.djust && window.djust.accessibility) {
+            window.djust.accessibility.announceLoadingComplete();
+        }
 
         if (globalThis.djustDebug) {
             console.log(`[Loading] Stopped: ${eventName}`);
