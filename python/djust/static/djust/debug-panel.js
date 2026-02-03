@@ -35,7 +35,8 @@
                     types: [],
                     severity: 'all',
                     eventName: '',
-                    eventStatus: 'all'
+                    eventStatus: 'all',
+                    timeRange: 'all'
                 }
             };
 
@@ -1596,6 +1597,620 @@
                     color: #f1f5f9;
                     font-weight: 600;
                 }
+
+                /* Events Filter Bar Styles */
+                .events-filter-bar {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    padding: 10px 12px;
+                    background: rgba(30, 41, 59, 0.5);
+                    border-radius: 6px;
+                    margin-bottom: 12px;
+                    flex-wrap: wrap;
+                }
+
+                .events-filter-input {
+                    flex: 1;
+                    min-width: 150px;
+                    max-width: 250px;
+                    padding: 6px 12px;
+                    background: rgba(15, 23, 42, 0.6);
+                    border: 1px solid rgba(148, 163, 184, 0.2);
+                    border-radius: 6px;
+                    color: #f1f5f9;
+                    font-size: 12px;
+                    transition: all 0.2s ease;
+                }
+
+                .events-filter-input:focus {
+                    outline: none;
+                    border-color: #E57324;
+                    box-shadow: 0 0 0 2px rgba(229, 115, 36, 0.2);
+                }
+
+                .events-filter-input::placeholder {
+                    color: #64748b;
+                }
+
+                .events-filter-select {
+                    padding: 6px 10px;
+                    background: rgba(15, 23, 42, 0.6);
+                    border: 1px solid rgba(148, 163, 184, 0.2);
+                    border-radius: 6px;
+                    color: #f1f5f9;
+                    font-size: 12px;
+                    cursor: pointer;
+                    transition: all 0.2s ease;
+                }
+
+                .events-filter-select:focus {
+                    outline: none;
+                    border-color: #E57324;
+                }
+
+                .events-filter-select option {
+                    background: #1e293b;
+                    color: #f1f5f9;
+                }
+
+                .events-filter-clear {
+                    padding: 6px 12px;
+                    background: rgba(239, 68, 68, 0.15);
+                    border: 1px solid rgba(239, 68, 68, 0.3);
+                    border-radius: 6px;
+                    color: #f87171;
+                    font-size: 12px;
+                    cursor: pointer;
+                    transition: all 0.2s ease;
+                }
+
+                .events-filter-clear:hover {
+                    background: rgba(239, 68, 68, 0.25);
+                    border-color: rgba(239, 68, 68, 0.5);
+                }
+
+                .events-filter-count {
+                    font-size: 11px;
+                    color: #64748b;
+                    margin-left: auto;
+                }
+
+                /* Event Replay Button Styles */
+                .event-replay-btn {
+                    padding: 4px 8px;
+                    background: rgba(59, 130, 246, 0.15);
+                    border: 1px solid rgba(59, 130, 246, 0.3);
+                    border-radius: 4px;
+                    color: #60a5fa;
+                    font-size: 14px;
+                    cursor: pointer;
+                    transition: all 0.2s ease;
+                    margin-left: 8px;
+                }
+
+                .event-replay-btn:hover {
+                    background: rgba(59, 130, 246, 0.25);
+                    border-color: rgba(59, 130, 246, 0.5);
+                    transform: rotate(180deg);
+                }
+
+                .event-replay-btn.replay-pending {
+                    background: rgba(251, 191, 36, 0.15);
+                    border-color: rgba(251, 191, 36, 0.3);
+                    color: #fbbf24;
+                    animation: replay-pulse 1s infinite;
+                }
+
+                .event-replay-btn.replay-success {
+                    background: rgba(16, 185, 129, 0.15);
+                    border-color: rgba(16, 185, 129, 0.3);
+                    color: #10b981;
+                }
+
+                .event-replay-btn.replay-error {
+                    background: rgba(239, 68, 68, 0.15);
+                    border-color: rgba(239, 68, 68, 0.3);
+                    color: #ef4444;
+                }
+
+                @keyframes replay-pulse {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.5; }
+                }
+
+                /* State Timeline Styles */
+                .state-timeline-container {
+                    padding: 8px;
+                }
+
+                .state-timeline-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 12px 16px;
+                    background: rgba(30, 41, 59, 0.5);
+                    border-radius: 8px;
+                    margin-bottom: 12px;
+                }
+
+                .state-timeline-title {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: #f1f5f9;
+                }
+
+                .timeline-icon {
+                    font-size: 16px;
+                }
+
+                .state-count {
+                    font-size: 11px;
+                    color: #64748b;
+                    font-weight: normal;
+                    margin-left: 8px;
+                }
+
+                .clear-state-btn {
+                    padding: 6px 12px;
+                    background: rgba(239, 68, 68, 0.1);
+                    border: 1px solid rgba(239, 68, 68, 0.2);
+                    border-radius: 4px;
+                    color: #f87171;
+                    font-size: 11px;
+                    cursor: pointer;
+                    transition: all 0.2s ease;
+                }
+
+                .clear-state-btn:hover {
+                    background: rgba(239, 68, 68, 0.2);
+                    border-color: rgba(239, 68, 68, 0.4);
+                }
+
+                .state-timeline-list {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 8px;
+                }
+
+                .state-entry {
+                    background: rgba(30, 41, 59, 0.3);
+                    border: 1px solid rgba(148, 163, 184, 0.2);
+                    border-radius: 6px;
+                    overflow: hidden;
+                    transition: all 0.2s ease;
+                }
+
+                .state-entry:hover {
+                    border-color: rgba(139, 92, 246, 0.4);
+                }
+
+                .state-entry.has-changes {
+                    border-left: 3px solid #a78bfa;
+                }
+
+                .state-entry-header {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    padding: 10px 12px;
+                    cursor: pointer;
+                    user-select: none;
+                }
+
+                .state-trigger {
+                    padding: 2px 8px;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    font-weight: 600;
+                }
+
+                .state-trigger.trigger-mount {
+                    background: rgba(16, 185, 129, 0.15);
+                    color: #34d399;
+                }
+
+                .state-trigger.trigger-event {
+                    background: rgba(59, 130, 246, 0.15);
+                    color: #60a5fa;
+                }
+
+                .state-event-name {
+                    font-weight: 600;
+                    color: #c4b5fd;
+                    font-family: 'SF Mono', Monaco, monospace;
+                }
+
+                .state-change-count {
+                    padding: 2px 6px;
+                    background: rgba(148, 163, 184, 0.15);
+                    border-radius: 10px;
+                    font-size: 10px;
+                    color: #94a3b8;
+                }
+
+                .state-time {
+                    margin-left: auto;
+                    font-size: 11px;
+                    color: #64748b;
+                }
+
+                .state-entry-details {
+                    padding: 12px;
+                    background: rgba(15, 23, 42, 0.3);
+                    border-top: 1px solid rgba(148, 163, 184, 0.1);
+                }
+
+                .state-section-title {
+                    font-size: 11px;
+                    font-weight: 600;
+                    color: #94a3b8;
+                    text-transform: uppercase;
+                    letter-spacing: 0.05em;
+                    margin-bottom: 8px;
+                }
+
+                .state-changes {
+                    margin-bottom: 16px;
+                }
+
+                .state-change-item {
+                    padding: 8px 10px;
+                    margin-bottom: 6px;
+                    background: rgba(30, 41, 59, 0.5);
+                    border-radius: 4px;
+                    border-left: 3px solid;
+                }
+
+                .state-change-item.added {
+                    border-left-color: #10b981;
+                }
+
+                .state-change-item.modified {
+                    border-left-color: #f59e0b;
+                }
+
+                .state-change-item.removed {
+                    border-left-color: #ef4444;
+                }
+
+                .change-type-badge {
+                    display: inline-block;
+                    padding: 2px 6px;
+                    border-radius: 3px;
+                    font-size: 10px;
+                    font-weight: 600;
+                    margin-right: 8px;
+                }
+
+                .change-type-badge.added {
+                    background: rgba(16, 185, 129, 0.2);
+                    color: #34d399;
+                }
+
+                .change-type-badge.modified {
+                    background: rgba(245, 158, 11, 0.2);
+                    color: #fbbf24;
+                }
+
+                .change-type-badge.removed {
+                    background: rgba(239, 68, 68, 0.2);
+                    color: #f87171;
+                }
+
+                .change-key {
+                    font-family: 'SF Mono', Monaco, monospace;
+                    font-weight: 600;
+                    color: #c4b5fd;
+                }
+
+                .change-values {
+                    margin-top: 8px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 6px;
+                }
+
+                .change-before,
+                .change-after {
+                    font-size: 12px;
+                }
+
+                .change-label {
+                    color: #94a3b8;
+                    font-size: 10px;
+                    margin-bottom: 2px;
+                    display: block;
+                }
+
+                .change-values pre {
+                    margin: 0;
+                    padding: 6px 8px;
+                    background: rgba(0, 0, 0, 0.3);
+                    border-radius: 3px;
+                    font-size: 11px;
+                    color: #e2e8f0;
+                    overflow-x: auto;
+                    white-space: pre-wrap;
+                    word-break: break-word;
+                }
+
+                .no-changes {
+                    padding: 12px;
+                    text-align: center;
+                    color: #64748b;
+                    font-style: italic;
+                    font-size: 12px;
+                }
+
+                .state-snapshot {
+                    margin-top: 12px;
+                }
+
+                .state-snapshot-content {
+                    margin: 0;
+                    padding: 10px;
+                    background: rgba(0, 0, 0, 0.3);
+                    border-radius: 4px;
+                    font-size: 11px;
+                    color: #e2e8f0;
+                    overflow-x: auto;
+                    max-height: 200px;
+                    overflow-y: auto;
+                    white-space: pre-wrap;
+                    word-break: break-word;
+                }
+
+                /* Connection Status Styles */
+                .connection-status-bar {
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                    padding: 10px 16px;
+                    background: rgba(30, 41, 59, 0.5);
+                    border-radius: 6px;
+                    margin-bottom: 12px;
+                }
+
+                .connection-indicator {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+
+                .connection-dot {
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 50%;
+                    animation: pulse 2s infinite;
+                }
+
+                .connection-dot.connected {
+                    background: #10b981;
+                    box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+                }
+
+                .connection-dot.disconnected {
+                    background: #ef4444;
+                    box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+                    animation: none;
+                }
+
+                .connection-dot.reconnecting {
+                    background: #f59e0b;
+                    box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+                    animation: reconnect-pulse 0.5s infinite;
+                }
+
+                @keyframes reconnect-pulse {
+                    0%, 100% { opacity: 1; transform: scale(1); }
+                    50% { opacity: 0.5; transform: scale(0.8); }
+                }
+
+                .connection-text {
+                    font-size: 12px;
+                    font-weight: 600;
+                }
+
+                .connection-text.connected { color: #10b981; }
+                .connection-text.disconnected { color: #ef4444; }
+                .connection-text.reconnecting { color: #f59e0b; }
+
+                .connection-details {
+                    margin-left: auto;
+                    font-size: 11px;
+                    color: #64748b;
+                }
+
+                /* Performance Tab Styles */
+                .perf-tab-container {
+                    padding: 8px;
+                }
+
+                .perf-overview-cards {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+                    gap: 12px;
+                    margin-bottom: 16px;
+                }
+
+                .perf-card {
+                    background: rgba(30, 41, 59, 0.5);
+                    border: 1px solid rgba(148, 163, 184, 0.2);
+                    border-radius: 8px;
+                    padding: 16px;
+                    transition: all 0.2s ease;
+                }
+
+                .perf-card:hover {
+                    border-color: rgba(229, 115, 36, 0.4);
+                }
+
+                .perf-card.warning {
+                    border-color: rgba(251, 191, 36, 0.4);
+                    background: rgba(251, 191, 36, 0.05);
+                }
+
+                .perf-card.alert {
+                    border-color: rgba(239, 68, 68, 0.4);
+                    background: rgba(239, 68, 68, 0.05);
+                }
+
+                .perf-card-header {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    margin-bottom: 8px;
+                }
+
+                .perf-card-icon {
+                    font-size: 18px;
+                }
+
+                .perf-card-title {
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: #94a3b8;
+                }
+
+                .perf-card-value {
+                    font-size: 24px;
+                    font-weight: 700;
+                    color: #f1f5f9;
+                    font-family: 'SF Mono', Monaco, monospace;
+                }
+
+                .perf-card-detail {
+                    font-size: 11px;
+                    color: #64748b;
+                    margin-top: 4px;
+                }
+
+                .perf-issues-section {
+                    background: rgba(30, 41, 59, 0.3);
+                    border-radius: 8px;
+                    overflow: hidden;
+                }
+
+                .perf-issues-header {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    padding: 12px 16px;
+                    background: rgba(251, 146, 60, 0.1);
+                    border-bottom: 1px solid rgba(251, 146, 60, 0.2);
+                }
+
+                .perf-issues-title {
+                    font-weight: 600;
+                    font-size: 13px;
+                    color: #fdba74;
+                }
+
+                .perf-issues-count {
+                    margin-left: auto;
+                    padding: 2px 8px;
+                    background: rgba(251, 146, 60, 0.2);
+                    border-radius: 10px;
+                    font-size: 11px;
+                    font-weight: 600;
+                    color: #fb923c;
+                }
+
+                .perf-issues-list {
+                    padding: 12px;
+                    max-height: 300px;
+                    overflow-y: auto;
+                }
+
+                .perf-issue-item {
+                    padding: 10px 12px;
+                    margin-bottom: 8px;
+                    background: rgba(30, 41, 59, 0.5);
+                    border-left: 3px solid;
+                    border-radius: 4px;
+                }
+
+                .perf-issue-item.slow-patch {
+                    border-left-color: #f59e0b;
+                }
+
+                .perf-issue-item.large-state {
+                    border-left-color: #ef4444;
+                }
+
+                .perf-issue-item.memory-warning {
+                    border-left-color: #8b5cf6;
+                }
+
+                .perf-issue-title {
+                    font-weight: 600;
+                    color: #f1f5f9;
+                    font-size: 12px;
+                    margin-bottom: 4px;
+                }
+
+                .perf-issue-detail {
+                    font-size: 11px;
+                    color: #94a3b8;
+                    line-height: 1.5;
+                }
+
+                .perf-issue-time {
+                    font-size: 10px;
+                    color: #64748b;
+                    margin-top: 4px;
+                }
+
+                .perf-empty {
+                    padding: 40px;
+                    text-align: center;
+                    color: #64748b;
+                }
+
+                .perf-empty-icon {
+                    font-size: 32px;
+                    margin-bottom: 12px;
+                }
+
+                .perf-empty-text {
+                    font-size: 13px;
+                }
+
+                /* Network Copy Button */
+                .network-copy-btn {
+                    padding: 4px 10px;
+                    background: rgba(59, 130, 246, 0.15);
+                    border: 1px solid rgba(59, 130, 246, 0.3);
+                    border-radius: 4px;
+                    color: #60a5fa;
+                    font-size: 11px;
+                    cursor: pointer;
+                    transition: all 0.2s ease;
+                    margin-bottom: 8px;
+                }
+
+                .network-copy-btn:hover {
+                    background: rgba(59, 130, 246, 0.25);
+                }
+
+                .network-copy-btn.copied {
+                    background: rgba(16, 185, 129, 0.15);
+                    border-color: rgba(16, 185, 129, 0.3);
+                    color: #10b981;
+                }
+
+                /* Network direction colors */
+                .network-direction.sent {
+                    color: #10b981;
+                }
+
+                .network-direction.received {
+                    color: #60a5fa;
+                }
             `;
 
             document.head.appendChild(panelStyle);
@@ -1644,6 +2259,12 @@
                 name: 'Variables',
                 icon: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3H14V13H2V3Z"/><path d="M5 6H11M5 8H11M5 10H8"/></svg>',
                 render: () => this.renderVariablesTab()
+            });
+
+            this.registerTab('performance', {
+                name: 'Performance',
+                icon: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 14L5 8L8 11L14 2"/><circle cx="14" cy="2" r="1.5" fill="currentColor"/></svg>',
+                render: () => this.renderPerformanceTab()
             });
 
             // Render tab buttons
@@ -1705,16 +2326,28 @@
 
             const nameFilter = (this.state.filters.eventName || '').toLowerCase();
             const statusFilter = this.state.filters.eventStatus || 'all';
+            const timeRange = this.state.filters.timeRange || 'all';
+
+            // Calculate time cutoff based on selected range
+            const now = Date.now();
+            const timeRanges = {
+                '5min': 5 * 60 * 1000,
+                '15min': 15 * 60 * 1000,
+                '1hr': 60 * 60 * 1000,
+                'all': Infinity
+            };
+            const timeCutoff = now - (timeRanges[timeRange] || Infinity);
 
             const filtered = this.eventHistory.filter(event => {
                 const eventName = (event.handler || event.name || 'unknown').toLowerCase();
                 if (nameFilter && !eventName.includes(nameFilter)) return false;
                 if (statusFilter === 'errors' && !event.error) return false;
                 if (statusFilter === 'success' && event.error) return false;
+                if (timeRange !== 'all' && event.timestamp < timeCutoff) return false;
                 return true;
             });
 
-            const hasActiveFilters = nameFilter || statusFilter !== 'all';
+            const hasActiveFilters = nameFilter || statusFilter !== 'all' || timeRange !== 'all';
 
             return `
                 <div class="events-filter-bar">
@@ -1728,6 +2361,13 @@
                         <option value="all"${statusFilter === 'all' ? ' selected' : ''}>All</option>
                         <option value="errors"${statusFilter === 'errors' ? ' selected' : ''}>Errors only</option>
                         <option value="success"${statusFilter === 'success' ? ' selected' : ''}>Success only</option>
+                    </select>
+                    <select class="events-filter-select"
+                        onchange="window.djustDebugPanel.onEventTimeRangeFilter(this.value)">
+                        <option value="all"${timeRange === 'all' ? ' selected' : ''}>All time</option>
+                        <option value="5min"${timeRange === '5min' ? ' selected' : ''}>Last 5 min</option>
+                        <option value="15min"${timeRange === '15min' ? ' selected' : ''}>Last 15 min</option>
+                        <option value="1hr"${timeRange === '1hr' ? ' selected' : ''}>Last hour</option>
                     </select>
                     ${hasActiveFilters ? `<button class="events-filter-clear" onclick="window.djustDebugPanel.clearEventFilters()">Clear</button>` : ''}
                     <span class="events-filter-count">${filtered.length} / ${this.eventHistory.length}</span>
@@ -1797,17 +2437,27 @@
 
         onEventNameFilter(value) {
             this.state.filters.eventName = value;
+            this.saveState();
             this.renderTabContent();
         }
 
         onEventStatusFilter(value) {
             this.state.filters.eventStatus = value;
+            this.saveState();
+            this.renderTabContent();
+        }
+
+        onEventTimeRangeFilter(value) {
+            this.state.filters.timeRange = value;
+            this.saveState();
             this.renderTabContent();
         }
 
         clearEventFilters() {
             this.state.filters.eventName = '';
             this.state.filters.eventStatus = 'all';
+            this.state.filters.timeRange = 'all';
+            this.saveState();
             this.renderTabContent();
         }
 
@@ -1861,6 +2511,22 @@
             const stats = window.liveview && window.liveview.stats ? window.liveview.stats : null;
             const messages = stats ? stats.messages : this.networkHistory;
 
+            // Determine connection status
+            const connectionStatus = this.getConnectionStatus();
+
+            if (messages.length === 0 && connectionStatus.status === 'disconnected') {
+                return `
+                    <div class="connection-status-bar">
+                        <div class="connection-indicator">
+                            <span class="connection-dot ${connectionStatus.status}"></span>
+                            <span class="connection-text ${connectionStatus.status}">${connectionStatus.text}</span>
+                        </div>
+                        ${connectionStatus.details ? `<span class="connection-details">${connectionStatus.details}</span>` : ''}
+                    </div>
+                    <div class="empty-state">No WebSocket messages captured yet.</div>
+                `;
+            }
+
             if (messages.length === 0) {
                 return '<div class="empty-state">No WebSocket messages captured yet.</div>';
             }
@@ -1872,6 +2538,13 @@
                 `${Math.floor(uptime / 60)}m ${uptime % 60}s` : 'N/A';
 
             return `
+                <div class="connection-status-bar">
+                    <div class="connection-indicator">
+                        <span class="connection-dot ${connectionStatus.status}"></span>
+                        <span class="connection-text ${connectionStatus.status}">${connectionStatus.text}</span>
+                    </div>
+                    ${connectionStatus.details ? `<span class="connection-details">${connectionStatus.details}</span>` : ''}
+                </div>
                 ${stats ? `
                 <div class="websocket-stats">
                     <div class="stats-header">
@@ -1963,6 +2636,73 @@
                 btnElement.textContent = 'Failed';
                 setTimeout(() => { btnElement.textContent = 'Copy JSON'; }, 1500);
             });
+        }
+
+        getConnectionStatus() {
+            // Check for djust liveview instance
+            const lv = window.djust && window.djust.liveViewInstance;
+            const stats = window.liveview && window.liveview.stats;
+
+            // Try to get WebSocket status from various sources
+            let wsState = null;
+
+            // Check liveview instance first
+            if (lv && lv.ws) {
+                wsState = lv.ws.readyState;
+            } else if (stats && stats.ws) {
+                wsState = stats.ws.readyState;
+            }
+
+            // WebSocket.CONNECTING = 0, OPEN = 1, CLOSING = 2, CLOSED = 3
+            if (wsState === 1) { // OPEN
+                const uptime = stats && stats.connectedAt ?
+                    Math.floor((Date.now() - stats.connectedAt) / 1000) : 0;
+                const uptimeStr = uptime > 0 ?
+                    `${Math.floor(uptime / 60)}m ${uptime % 60}s` : '';
+                return {
+                    status: 'connected',
+                    text: 'Connected',
+                    details: uptimeStr ? `Uptime: ${uptimeStr}` : null
+                };
+            } else if (wsState === 0) { // CONNECTING
+                return {
+                    status: 'reconnecting',
+                    text: 'Connecting...',
+                    details: null
+                };
+            } else if (wsState === 2) { // CLOSING
+                return {
+                    status: 'reconnecting',
+                    text: 'Closing...',
+                    details: null
+                };
+            } else if (wsState === 3) { // CLOSED
+                const reconnections = stats ? stats.reconnections : 0;
+                return {
+                    status: 'disconnected',
+                    text: 'Disconnected',
+                    details: reconnections > 0 ? `${reconnections} reconnection attempt${reconnections === 1 ? '' : 's'}` : null
+                };
+            }
+
+            // If we can't determine state, check if we have any recent messages
+            if (this.networkHistory.length > 0) {
+                const lastMessage = this.networkHistory[0];
+                const age = Date.now() - lastMessage.timestamp;
+                if (age < 30000) { // Within last 30 seconds
+                    return {
+                        status: 'connected',
+                        text: 'Connected',
+                        details: null
+                    };
+                }
+            }
+
+            return {
+                status: 'disconnected',
+                text: 'Unknown',
+                details: 'Cannot determine connection status'
+            };
         }
 
         renderPatchesTab() {
@@ -2398,6 +3138,273 @@
                                 </div>
                             `;
                         }).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        renderPerformanceTab() {
+            // Collect performance issues
+            const issues = this.collectPerformanceIssues();
+            const memoryStats = this.calculateMemoryStats();
+            const contextStats = this.calculateContextStats();
+
+            // Calculate overview stats
+            const slowPatchCount = issues.filter(i => i.type === 'slow-patch').length;
+            const largeStateCount = issues.filter(i => i.type === 'large-state').length;
+            const warningCount = this.warningCount;
+            const avgPatchTime = this.calculateAvgPatchTime();
+
+            // State size threshold (100KB)
+            const STATE_SIZE_THRESHOLD = 100 * 1024;
+            const totalStateSize = contextStats.hasData ? contextStats.current : 0;
+            const isStateLarge = totalStateSize > STATE_SIZE_THRESHOLD;
+
+            if (this.patchHistory.length === 0 && !memoryStats.hasData) {
+                return `
+                    <div class="perf-empty">
+                        <div class="perf-empty-icon">📊</div>
+                        <div class="perf-empty-text">No performance data yet. Interact with the page to collect metrics.</div>
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="perf-tab-container">
+                    <div class="perf-overview-cards">
+                        <div class="perf-card ${avgPatchTime > 16 ? 'alert' : avgPatchTime > 5 ? 'warning' : ''}">
+                            <div class="perf-card-header">
+                                <span class="perf-card-icon">⚡</span>
+                                <span class="perf-card-title">Avg Patch Time</span>
+                            </div>
+                            <div class="perf-card-value">${avgPatchTime.toFixed(1)}ms</div>
+                            <div class="perf-card-detail">${avgPatchTime > 16 ? '⚠️ Exceeds 16ms frame budget' : avgPatchTime > 5 ? '⚠️ May cause jank' : '✅ Good'}</div>
+                        </div>
+                        <div class="perf-card ${slowPatchCount > 0 ? 'warning' : ''}">
+                            <div class="perf-card-header">
+                                <span class="perf-card-icon">🐌</span>
+                                <span class="perf-card-title">Slow Patches</span>
+                            </div>
+                            <div class="perf-card-value">${slowPatchCount}</div>
+                            <div class="perf-card-detail">Patches > 5ms</div>
+                        </div>
+                        <div class="perf-card ${isStateLarge ? 'alert' : ''}">
+                            <div class="perf-card-header">
+                                <span class="perf-card-icon">📦</span>
+                                <span class="perf-card-title">State Size</span>
+                            </div>
+                            <div class="perf-card-value">${this.formatBytes(totalStateSize)}</div>
+                            <div class="perf-card-detail">${isStateLarge ? '⚠️ Exceeds 100KB threshold' : '✅ Within limits'}</div>
+                        </div>
+                        ${memoryStats.hasData ? `
+                        <div class="perf-card ${memoryStats.current > 100 ? 'warning' : ''}">
+                            <div class="perf-card-header">
+                                <span class="perf-card-icon">💾</span>
+                                <span class="perf-card-title">Memory</span>
+                            </div>
+                            <div class="perf-card-value">${memoryStats.current.toFixed(1)}MB</div>
+                            <div class="perf-card-detail">Peak: ${memoryStats.peak.toFixed(1)}MB</div>
+                        </div>
+                        ` : ''}
+                        <div class="perf-card ${warningCount > 0 ? 'warning' : ''}">
+                            <div class="perf-card-header">
+                                <span class="perf-card-icon">⚠️</span>
+                                <span class="perf-card-title">Warnings</span>
+                            </div>
+                            <div class="perf-card-value">${warningCount}</div>
+                            <div class="perf-card-detail">Total performance warnings</div>
+                        </div>
+                    </div>
+
+                    ${issues.length > 0 ? `
+                    <div class="perf-issues-section">
+                        <div class="perf-issues-header">
+                            <span>⚠️</span>
+                            <span class="perf-issues-title">Performance Issues</span>
+                            <span class="perf-issues-count">${issues.length}</span>
+                        </div>
+                        <div class="perf-issues-list">
+                            ${issues.slice(0, 20).map(issue => `
+                                <div class="perf-issue-item ${issue.type}">
+                                    <div class="perf-issue-title">${this.escapeHtml(issue.title)}</div>
+                                    <div class="perf-issue-detail">${this.escapeHtml(issue.detail)}</div>
+                                    ${issue.recommendation ? `<div class="perf-issue-detail" style="color: #86efac; margin-top: 6px;">💡 ${this.escapeHtml(issue.recommendation)}</div>` : ''}
+                                    <div class="perf-issue-time">${this.formatTime(issue.timestamp)}</div>
+                                </div>
+                            `).join('')}
+                            ${issues.length > 20 ? `<div class="perf-issue-detail" style="text-align: center; padding: 12px;">+ ${issues.length - 20} more issues</div>` : ''}
+                        </div>
+                    </div>
+                    ` : `
+                    <div class="perf-issues-section">
+                        <div class="perf-issues-header">
+                            <span>✅</span>
+                            <span class="perf-issues-title">No Performance Issues</span>
+                        </div>
+                        <div class="perf-issues-list">
+                            <div class="perf-empty" style="padding: 20px;">
+                                <div class="perf-empty-text">No performance issues detected. Keep up the good work!</div>
+                            </div>
+                        </div>
+                    </div>
+                    `}
+
+                    ${this.renderPerformanceRecommendations(issues, avgPatchTime, totalStateSize, memoryStats)}
+                </div>
+            `;
+        }
+
+        collectPerformanceIssues() {
+            const issues = [];
+            const SLOW_PATCH_THRESHOLD = 5; // 5ms
+            const LARGE_STATE_THRESHOLD = 100 * 1024; // 100KB
+
+            // Check patches for slow operations
+            this.patchHistory.forEach(entry => {
+                const totalTime = entry.totalDuration || entry.timing?.client || 0;
+                if (totalTime > SLOW_PATCH_THRESHOLD) {
+                    issues.push({
+                        type: 'slow-patch',
+                        title: `Slow patch: ${totalTime.toFixed(1)}ms`,
+                        detail: `${entry.count} operation${entry.count === 1 ? '' : 's'} took longer than ${SLOW_PATCH_THRESHOLD}ms threshold`,
+                        recommendation: totalTime > 16 ? 'Consider debouncing rapid updates or reducing patch complexity' : 'Monitor for patterns that cause slow updates',
+                        timestamp: entry.timestamp
+                    });
+                }
+
+                // Check for warnings from performance data
+                if (entry.performance && entry.performance.timing) {
+                    this.extractWarningsFromTiming(entry.performance.timing, issues, entry.timestamp);
+                }
+            });
+
+            // Check state size
+            if (this.variables) {
+                const entries = Object.entries(this.variables);
+                const totalSize = entries.reduce((sum, [_, info]) => sum + (info.size_bytes || 0), 0);
+
+                if (totalSize > LARGE_STATE_THRESHOLD) {
+                    issues.push({
+                        type: 'large-state',
+                        title: `Large state: ${this.formatBytes(totalSize)}`,
+                        detail: `Total state size exceeds ${this.formatBytes(LARGE_STATE_THRESHOLD)} threshold`,
+                        recommendation: 'Consider using pagination, lazy loading, or moving large data to the server',
+                        timestamp: Date.now()
+                    });
+                }
+
+                // Find individual large variables
+                entries.forEach(([name, info]) => {
+                    const size = info.size_bytes || 0;
+                    if (size > LARGE_STATE_THRESHOLD / 2) { // 50KB per variable
+                        issues.push({
+                            type: 'large-state',
+                            title: `Large variable: ${name}`,
+                            detail: `Variable "${name}" is ${this.formatBytes(size)}`,
+                            recommendation: `Consider moving "${name}" to server-side storage or using lazy loading`,
+                            timestamp: Date.now()
+                        });
+                    }
+                });
+            }
+
+            // Check memory
+            if (this.memoryHistory.length > 0) {
+                const recent = this.memoryHistory.slice(0, 5);
+                const memoryTrend = recent.map(m => m.memory_mb).filter(m => m !== null);
+                if (memoryTrend.length >= 2) {
+                    const isIncreasing = memoryTrend.every((val, i, arr) => i === 0 || val >= arr[i - 1]);
+                    if (isIncreasing && memoryTrend[0] > 50) {
+                        issues.push({
+                            type: 'memory-warning',
+                            title: 'Memory trend: increasing',
+                            detail: `Memory usage has increased from ${memoryTrend[memoryTrend.length - 1]?.toFixed(1)}MB to ${memoryTrend[0]?.toFixed(1)}MB`,
+                            recommendation: 'Check for memory leaks or unbounded data structures',
+                            timestamp: Date.now()
+                        });
+                    }
+                }
+            }
+
+            // Sort by timestamp (newest first)
+            return issues.sort((a, b) => b.timestamp - a.timestamp);
+        }
+
+        extractWarningsFromTiming(node, issues, timestamp) {
+            if (node.warnings) {
+                node.warnings.forEach(warning => {
+                    issues.push({
+                        type: 'slow-patch',
+                        title: warning.message,
+                        detail: `in ${node.name}`,
+                        recommendation: warning.recommendation,
+                        timestamp: timestamp
+                    });
+                });
+            }
+
+            if (node.children) {
+                node.children.forEach(child => this.extractWarningsFromTiming(child, issues, timestamp));
+            }
+        }
+
+        renderPerformanceRecommendations(issues, avgPatchTime, totalStateSize, memoryStats) {
+            const recommendations = [];
+
+            if (avgPatchTime > 16) {
+                recommendations.push({
+                    priority: 'high',
+                    title: 'Optimize Patch Performance',
+                    description: 'Average patch time exceeds 16ms frame budget, causing visible jank.',
+                    code: '# Use debounce for rapid inputs\n@debounce(wait=0.1)\n@event_handler\ndef on_input_change(self, value):\n    self.value = value'
+                });
+            }
+
+            if (totalStateSize > 100 * 1024) {
+                recommendations.push({
+                    priority: 'high',
+                    title: 'Reduce State Size',
+                    description: 'Large state increases WebSocket payload size and client-side processing.',
+                    code: '# Paginate large lists\n@event_handler\ndef load_more(self):\n    self.page += 1\n    self.items.extend(self.fetch_page(self.page))'
+                });
+            }
+
+            if (issues.filter(i => i.type === 'slow-patch').length > 5) {
+                recommendations.push({
+                    priority: 'medium',
+                    title: 'Review Update Patterns',
+                    description: 'Multiple slow patches detected. Consider batching updates.',
+                    code: '# Batch multiple state changes\nself.batch_update({\n    "item1": value1,\n    "item2": value2\n})'
+                });
+            }
+
+            if (memoryStats.hasData && memoryStats.current > 100) {
+                recommendations.push({
+                    priority: 'medium',
+                    title: 'Monitor Memory Usage',
+                    description: 'Memory usage is elevated. Check for data accumulation.',
+                    code: '# Clear old data periodically\n@event_handler\ndef cleanup(self):\n    self.history = self.history[-100:]  # Keep last 100'
+                });
+            }
+
+            if (recommendations.length === 0) {
+                return '';
+            }
+
+            return `
+                <div class="perf-issues-section" style="margin-top: 16px; border-color: rgba(59, 130, 246, 0.3);">
+                    <div class="perf-issues-header" style="background: rgba(59, 130, 246, 0.1); border-color: rgba(59, 130, 246, 0.2);">
+                        <span>💡</span>
+                        <span class="perf-issues-title" style="color: #93c5fd;">Recommendations</span>
+                    </div>
+                    <div class="perf-issues-list">
+                        ${recommendations.map(rec => `
+                            <div class="recommendation-item priority-${rec.priority}">
+                                <div class="recommendation-title">${this.escapeHtml(rec.title)}</div>
+                                <div class="recommendation-description">${this.escapeHtml(rec.description)}</div>
+                                ${rec.code ? `<pre class="recommendation-code">${this.escapeHtml(rec.code)}</pre>` : ''}
+                            </div>
+                        `).join('')}
                     </div>
                 </div>
             `;
@@ -3482,10 +4489,15 @@
         }
 
         saveState() {
-            // Only persist UI preferences, not data or filters
+            // Persist UI preferences and filter settings
             const uiState = {
                 isOpen: this.state.isOpen,
                 activeTab: this.state.activeTab,
+                filters: {
+                    eventName: this.state.filters.eventName || '',
+                    eventStatus: this.state.filters.eventStatus || 'all',
+                    timeRange: this.state.filters.timeRange || 'all'
+                }
             };
             localStorage.setItem(this._stateKey(), JSON.stringify(uiState));
         }
@@ -3495,9 +4507,16 @@
             if (saved) {
                 try {
                     const parsedState = JSON.parse(saved);
-                    // Merge only UI preferences into state
+                    // Merge UI preferences into state
                     this.state.isOpen = parsedState.isOpen || false;
                     this.state.activeTab = parsedState.activeTab || 'events';
+
+                    // Restore filter settings
+                    if (parsedState.filters) {
+                        this.state.filters.eventName = parsedState.filters.eventName || '';
+                        this.state.filters.eventStatus = parsedState.filters.eventStatus || 'all';
+                        this.state.filters.timeRange = parsedState.filters.timeRange || 'all';
+                    }
 
                     // Restore panel visibility and active tab if saved
                     if (parsedState.isOpen || parsedState.activeTab) {
