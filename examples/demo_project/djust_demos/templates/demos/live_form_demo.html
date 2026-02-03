@@ -1,0 +1,375 @@
+{% extends "base.html" %}
+
+{% block title %}LiveForm Demo - djust{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block content %}
+<div data-djust-root>
+    <!-- Hero Section -->
+    <section class="section-modern" style="padding: 2rem 0;">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+            <div class="text-center">
+                <h1 class="text-3xl font-bold" style="color: var(--color-text);">📝 LiveForm Demo</h1>
+                <p class="text-lg mt-2" style="color: var(--color-text-muted);">
+                    Real-time form validation without Django Forms
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Main Demo Section -->
+    <section class="section-modern" style="padding: 0 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 1000px;">
+            <div class="grid gap-6" style="grid-template-columns: 1fr 350px;">
+                <!-- Form Card -->
+                <div class="demo-card-modern">
+                    <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.03);">
+                        <h2 class="text-xl font-bold m-0" style="color: var(--color-text);">Create Account</h2>
+                        <p class="text-sm m-0 mt-1" style="color: var(--color-text-muted);">
+                            Fill out the form — validation happens as you type!
+                        </p>
+                    </div>
+
+                    {% if submitted %}
+                    <!-- Success State -->
+                    <div class="p-6">
+                        <div class="p-6 rounded-lg text-center" style="background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3);">
+                            <div style="font-size: 3rem; margin-bottom: 1rem;">🎉</div>
+                            <h3 class="text-xl font-bold mb-2" style="color: rgb(34, 197, 94);">Registration Successful!</h3>
+                            <p class="mb-4" style="color: var(--color-text-muted);">
+                                Welcome, <strong>{{ submitted_data.username }}</strong>!
+                            </p>
+                            <div class="text-left p-3 rounded" style="background: var(--color-bg); font-size: 0.875rem;">
+                                <p><strong>Email:</strong> {{ submitted_data.email }}</p>
+                                <p><strong>Age:</strong> {{ submitted_data.age }}</p>
+                                {% if submitted_data.website %}
+                                <p><strong>Website:</strong> {{ submitted_data.website }}</p>
+                                {% endif %}
+                                {% if submitted_data.bio %}
+                                <p><strong>Bio:</strong> {{ submitted_data.bio }}</p>
+                                {% endif %}
+                            </div>
+                            <button 
+                                dj-click="dismiss_success"
+                                class="btn-primary-modern mt-4"
+                                style="padding: 0.75rem 1.5rem;"
+                            >
+                                Create Another Account
+                            </button>
+                        </div>
+                    </div>
+                    {% else %}
+                    <!-- Form -->
+                    <form dj-submit="submit_form" class="p-6 space-y-4">
+                        <!-- Username -->
+                        <div>
+                            <label class="block text-sm font-medium mb-1" style="color: var(--color-text);">
+                                Username <span style="color: var(--color-error);">*</span>
+                            </label>
+                            <input 
+                                type="text"
+                                name="username"
+                                value="{{ form.data.username }}"
+                                dj-change="validate"
+                                dj-debounce="300"
+                                placeholder="Enter username"
+                                class="w-full px-3 py-2 rounded-lg"
+                                style="border: 1px solid {% if form.errors.username %}var(--color-error){% else %}var(--color-border){% endif %}; background: var(--color-bg); color: var(--color-text);"
+                            />
+                            {% if form.errors.username %}
+                            <p class="mt-1 text-sm" style="color: var(--color-error);">{{ form.errors.username }}</p>
+                            {% else %}
+                            <p class="mt-1 text-xs" style="color: var(--color-text-muted);">3-20 characters, letters, numbers, and underscores only</p>
+                            {% endif %}
+                        </div>
+
+                        <!-- Email -->
+                        <div>
+                            <label class="block text-sm font-medium mb-1" style="color: var(--color-text);">
+                                Email <span style="color: var(--color-error);">*</span>
+                            </label>
+                            <input 
+                                type="email"
+                                name="email"
+                                value="{{ form.data.email }}"
+                                dj-change="validate"
+                                dj-debounce="300"
+                                placeholder="you@example.com"
+                                class="w-full px-3 py-2 rounded-lg"
+                                style="border: 1px solid {% if form.errors.email %}var(--color-error){% else %}var(--color-border){% endif %}; background: var(--color-bg); color: var(--color-text);"
+                            />
+                            {% if form.errors.email %}
+                            <p class="mt-1 text-sm" style="color: var(--color-error);">{{ form.errors.email }}</p>
+                            {% endif %}
+                        </div>
+
+                        <!-- Password -->
+                        <div>
+                            <label class="block text-sm font-medium mb-1" style="color: var(--color-text);">
+                                Password <span style="color: var(--color-error);">*</span>
+                            </label>
+                            <input 
+                                type="password"
+                                name="password"
+                                value="{{ form.data.password }}"
+                                dj-change="validate"
+                                dj-debounce="200"
+                                placeholder="Enter password"
+                                class="w-full px-3 py-2 rounded-lg"
+                                style="border: 1px solid {% if form.errors.password %}var(--color-error){% else %}var(--color-border){% endif %}; background: var(--color-bg); color: var(--color-text);"
+                            />
+                            <!-- Password Strength Meter -->
+                            {% if form.data.password %}
+                            <div class="mt-2">
+                                <div class="flex gap-1 mb-1">
+                                    {% for i in "12345"|make_list %}
+                                    <div 
+                                        class="h-1 flex-1 rounded"
+                                        style="background: {% if forloop.counter <= password_strength %}{% if password_strength < 3 %}#ef4444{% elif password_strength < 4 %}#f59e0b{% else %}#22c55e{% endif %}{% else %}var(--color-border){% endif %};"
+                                    ></div>
+                                    {% endfor %}
+                                </div>
+                                <p class="text-xs" style="color: {% if password_strength < 3 %}#ef4444{% elif password_strength < 4 %}#f59e0b{% else %}#22c55e{% endif %};">
+                                    {% if password_strength < 3 %}Weak{% elif password_strength < 4 %}Moderate{% elif password_strength < 5 %}Strong{% else %}Very Strong{% endif %}
+                                </p>
+                                {% if password_feedback %}
+                                <p class="text-xs mt-1" style="color: var(--color-text-muted);">
+                                    {{ password_feedback|join:", " }}
+                                </p>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+                            {% if form.errors.password %}
+                            <p class="mt-1 text-sm" style="color: var(--color-error);">{{ form.errors.password }}</p>
+                            {% endif %}
+                        </div>
+
+                        <!-- Password Confirm -->
+                        <div>
+                            <label class="block text-sm font-medium mb-1" style="color: var(--color-text);">
+                                Confirm Password <span style="color: var(--color-error);">*</span>
+                            </label>
+                            <input 
+                                type="password"
+                                name="password_confirm"
+                                value="{{ form.data.password_confirm }}"
+                                dj-change="validate"
+                                dj-debounce="200"
+                                placeholder="Confirm password"
+                                class="w-full px-3 py-2 rounded-lg"
+                                style="border: 1px solid {% if form.errors.password_confirm %}var(--color-error){% else %}var(--color-border){% endif %}; background: var(--color-bg); color: var(--color-text);"
+                            />
+                            {% if form.errors.password_confirm %}
+                            <p class="mt-1 text-sm" style="color: var(--color-error);">{{ form.errors.password_confirm }}</p>
+                            {% elif form.data.password_confirm and not form.errors.password_confirm %}
+                            <p class="mt-1 text-sm" style="color: #22c55e;">✓ Passwords match</p>
+                            {% endif %}
+                        </div>
+
+                        <!-- Age -->
+                        <div>
+                            <label class="block text-sm font-medium mb-1" style="color: var(--color-text);">
+                                Age <span style="color: var(--color-error);">*</span>
+                            </label>
+                            <input 
+                                type="number"
+                                name="age"
+                                value="{{ form.data.age }}"
+                                dj-change="validate"
+                                placeholder="Your age"
+                                min="13"
+                                max="120"
+                                class="w-full px-3 py-2 rounded-lg"
+                                style="border: 1px solid {% if form.errors.age %}var(--color-error){% else %}var(--color-border){% endif %}; background: var(--color-bg); color: var(--color-text);"
+                            />
+                            {% if form.errors.age %}
+                            <p class="mt-1 text-sm" style="color: var(--color-error);">{{ form.errors.age }}</p>
+                            {% endif %}
+                        </div>
+
+                        <!-- Website (Optional) -->
+                        <div>
+                            <label class="block text-sm font-medium mb-1" style="color: var(--color-text);">
+                                Website <span class="text-xs" style="color: var(--color-text-muted);">(optional)</span>
+                            </label>
+                            <input 
+                                type="url"
+                                name="website"
+                                value="{{ form.data.website }}"
+                                dj-change="validate"
+                                dj-debounce="500"
+                                placeholder="https://yoursite.com"
+                                class="w-full px-3 py-2 rounded-lg"
+                                style="border: 1px solid {% if form.errors.website %}var(--color-error){% else %}var(--color-border){% endif %}; background: var(--color-bg); color: var(--color-text);"
+                            />
+                            {% if form.errors.website %}
+                            <p class="mt-1 text-sm" style="color: var(--color-error);">{{ form.errors.website }}</p>
+                            {% endif %}
+                        </div>
+
+                        <!-- Bio (Optional) -->
+                        <div>
+                            <label class="block text-sm font-medium mb-1" style="color: var(--color-text);">
+                                Bio <span class="text-xs" style="color: var(--color-text-muted);">(optional, max 500 chars)</span>
+                            </label>
+                            <textarea 
+                                name="bio"
+                                dj-change="validate"
+                                dj-debounce="500"
+                                placeholder="Tell us about yourself..."
+                                rows="3"
+                                class="w-full px-3 py-2 rounded-lg resize-none"
+                                style="border: 1px solid {% if form.errors.bio %}var(--color-error){% else %}var(--color-border){% endif %}; background: var(--color-bg); color: var(--color-text);"
+                            >{{ form.data.bio }}</textarea>
+                            <div class="flex justify-between mt-1">
+                                {% if form.errors.bio %}
+                                <p class="text-sm" style="color: var(--color-error);">{{ form.errors.bio }}</p>
+                                {% else %}
+                                <span></span>
+                                {% endif %}
+                                <span class="text-xs" style="color: var(--color-text-muted);">
+                                    {{ form.data.bio|length|default:0 }}/500
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Terms -->
+                        <div class="flex items-start gap-2">
+                            <input 
+                                type="checkbox"
+                                name="terms"
+                                id="terms"
+                                dj-change="validate"
+                                {% if form.data.terms == 'true' or form.data.terms == True %}checked{% endif %}
+                                class="mt-1"
+                                style="accent-color: var(--color-accent);"
+                            />
+                            <label for="terms" class="text-sm" style="color: var(--color-text);">
+                                I agree to the <a href="#" style="color: var(--color-accent);">Terms of Service</a> 
+                                and <a href="#" style="color: var(--color-accent);">Privacy Policy</a>
+                                <span style="color: var(--color-error);">*</span>
+                            </label>
+                        </div>
+                        {% if form.errors.terms %}
+                        <p class="text-sm" style="color: var(--color-error); margin-top: -0.5rem;">{{ form.errors.terms }}</p>
+                        {% endif %}
+
+                        <!-- Submit Button -->
+                        <div class="flex gap-3 pt-2">
+                            <button 
+                                type="submit"
+                                class="btn-primary-modern flex-1"
+                                style="padding: 0.75rem 1.5rem; {% if not form.valid %}opacity: 0.5; cursor: not-allowed;{% endif %}"
+                                {% if not form.valid %}disabled{% endif %}
+                            >
+                                Create Account
+                            </button>
+                            <button 
+                                type="button"
+                                dj-click="reset_form"
+                                class="btn-secondary-modern"
+                                style="padding: 0.75rem 1rem;"
+                            >
+                                Reset
+                            </button>
+                        </div>
+                    </form>
+                    {% endif %}
+                </div>
+
+                <!-- Sidebar: Info & Features -->
+                <div class="space-y-4">
+                    <!-- Form Status -->
+                    <div class="demo-card-modern">
+                        <div class="p-3 border-b" style="border-color: var(--color-border);">
+                            <h4 class="font-semibold m-0" style="color: var(--color-text);">📊 Form Status</h4>
+                        </div>
+                        <div class="p-3">
+                            <div class="flex items-center gap-2 mb-3">
+                                <span 
+                                    class="w-3 h-3 rounded-full"
+                                    style="background: {% if form.valid %}#22c55e{% else %}#ef4444{% endif %};"
+                                ></span>
+                                <span style="color: var(--color-text);">
+                                    {% if form.valid %}Ready to submit{% else %}Incomplete{% endif %}
+                                </span>
+                            </div>
+                            
+                            {% if form.errors %}
+                            <div class="text-sm space-y-1">
+                                <p class="font-medium" style="color: var(--color-error);">Errors:</p>
+                                {% for field, error in form.errors.items %}
+                                <p style="color: var(--color-text-muted);">• {{ field }}: {{ error }}</p>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <!-- Features -->
+                    <div class="demo-card-modern">
+                        <div class="p-3 border-b" style="border-color: var(--color-border);">
+                            <h4 class="font-semibold m-0" style="color: var(--color-text);">✨ Features</h4>
+                        </div>
+                        <div class="p-3">
+                            <ul class="space-y-2 text-sm" style="color: var(--color-text-muted);">
+                                <li>✓ Real-time validation</li>
+                                <li>✓ Debounced input handling</li>
+                                <li>✓ Password strength meter</li>
+                                <li>✓ Confirm password matching</li>
+                                <li>✓ Custom validators</li>
+                                <li>✓ Submit disabled until valid</li>
+                                <li>✓ No Django Forms required!</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <!-- Code Example -->
+                    <div class="demo-card-modern">
+                        <div class="p-3 border-b" style="border-color: var(--color-border);">
+                            <h4 class="font-semibold m-0" style="color: var(--color-text);">💻 Code</h4>
+                        </div>
+                        <div class="p-3">
+                            <pre class="text-xs p-2 rounded overflow-x-auto" style="background: var(--color-bg); color: var(--color-text);">
+form = LiveForm({
+    "email": {
+        "required": True,
+        "email": True,
+    },
+    "password": {
+        "required": True,
+        "min_length": 8,
+        "validators": [
+            custom_strength_check,
+        ],
+    },
+})</pre>
+                        </div>
+                    </div>
+
+                    <!-- Validation Rules -->
+                    <div class="demo-card-modern">
+                        <div class="p-3 border-b" style="border-color: var(--color-border);">
+                            <h4 class="font-semibold m-0" style="color: var(--color-text);">📏 Built-in Rules</h4>
+                        </div>
+                        <div class="p-3">
+                            <dl class="text-xs space-y-1" style="color: var(--color-text-muted);">
+                                <div><dt class="inline font-mono">required</dt> — Field must have value</div>
+                                <div><dt class="inline font-mono">min_length</dt> — Minimum string length</div>
+                                <div><dt class="inline font-mono">max_length</dt> — Maximum string length</div>
+                                <div><dt class="inline font-mono">email</dt> — Valid email format</div>
+                                <div><dt class="inline font-mono">url</dt> — Valid URL format</div>
+                                <div><dt class="inline font-mono">min/max</dt> — Numeric range</div>
+                                <div><dt class="inline font-mono">pattern</dt> — Regex match</div>
+                                <div><dt class="inline font-mono">choices</dt> — Allowed values</div>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}

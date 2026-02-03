@@ -1,0 +1,376 @@
+{% extends "base.html" %}
+
+{% block title %}Navigation Demo - djust{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block content %}
+<div data-djust-root>
+    <!-- Hero Section -->
+    <section class="section-modern" style="padding: 2rem 0;">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+            <div class="text-center">
+                <h1 class="text-3xl font-bold" style="color: var(--color-text);">🧭 Navigation Demo</h1>
+                <p class="text-lg mt-2" style="color: var(--color-text-muted);">
+                    URL state management with live_patch and live_redirect
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Main Demo Section -->
+    <section class="section-modern" style="padding: 0 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+            <div class="grid gap-6" style="grid-template-columns: 1fr 300px;">
+                <!-- Main Content -->
+                <div>
+                    <!-- URL State Display -->
+                    <div class="demo-card-modern mb-4">
+                        <div class="p-3 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.05);">
+                            <div class="flex items-center gap-2">
+                                <span style="font-size: 1.25rem;">🔗</span>
+                                <span class="font-mono text-sm" style="color: var(--color-accent);">
+                                    ?{% for key, value in current_url_params.items %}{{ key }}={{ value }}{% if not forloop.last %}&amp;{% endif %}{% endfor %}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab Navigation -->
+                    <div class="demo-card-modern mb-4">
+                        <div class="p-3 border-b flex gap-2" style="border-color: var(--color-border);">
+                            <button 
+                                dj-click="switch_tab"
+                                dj-value-tab="browse"
+                                class="{% if tab == 'browse' %}btn-primary-modern{% else %}btn-secondary-modern{% endif %}"
+                                style="padding: 0.5rem 1rem;"
+                            >
+                                📦 Browse
+                            </button>
+                            <button 
+                                dj-click="switch_tab"
+                                dj-value-tab="settings"
+                                class="{% if tab == 'settings' %}btn-primary-modern{% else %}btn-secondary-modern{% endif %}"
+                                style="padding: 0.5rem 1rem;"
+                            >
+                                ⚙️ Settings
+                            </button>
+                            <button 
+                                dj-click="switch_tab"
+                                dj-value-tab="about"
+                                class="{% if tab == 'about' %}btn-primary-modern{% else %}btn-secondary-modern{% endif %}"
+                                style="padding: 0.5rem 1rem;"
+                            >
+                                ℹ️ About
+                            </button>
+                        </div>
+
+                        <!-- Tab Content: Browse -->
+                        {% if tab == 'browse' %}
+                        <div class="p-4">
+                            <!-- Filters Row -->
+                            <div class="flex flex-wrap gap-4 mb-4 items-center">
+                                <!-- Category Filter -->
+                                <div class="flex items-center gap-2">
+                                    <label style="color: var(--color-text-muted); font-size: 0.875rem;">Category:</label>
+                                    <div class="flex gap-1">
+                                        {% for cat in categories %}
+                                        <button 
+                                            dj-click="filter_category"
+                                            dj-value-category="{{ cat }}"
+                                            class="{% if category == cat %}btn-primary-modern{% else %}btn-secondary-modern{% endif %}"
+                                            style="padding: 0.25rem 0.75rem; font-size: 0.875rem;"
+                                        >
+                                            {{ cat|title }}
+                                        </button>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+
+                                <!-- Sort -->
+                                <div class="flex items-center gap-2">
+                                    <label style="color: var(--color-text-muted); font-size: 0.875rem;">Sort:</label>
+                                    <select 
+                                        dj-change="change_sort"
+                                        name="sort"
+                                        style="padding: 0.25rem 0.5rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg); color: var(--color-text);"
+                                    >
+                                        <option value="name" {% if sort == 'name' %}selected{% endif %}>Name</option>
+                                        <option value="price_asc" {% if sort == 'price_asc' %}selected{% endif %}>Price (Low)</option>
+                                        <option value="price_desc" {% if sort == 'price_desc' %}selected{% endif %}>Price (High)</option>
+                                    </select>
+                                </div>
+
+                                <!-- Search -->
+                                <div class="flex items-center gap-2">
+                                    <input 
+                                        type="text"
+                                        name="search"
+                                        placeholder="Search..."
+                                        value="{{ search }}"
+                                        dj-change="search_products"
+                                        dj-debounce="300"
+                                        style="padding: 0.25rem 0.5rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg); color: var(--color-text); width: 150px;"
+                                    />
+                                </div>
+
+                                <!-- Clear Filters -->
+                                {% if category != 'all' or search or sort != 'name' %}
+                                <button 
+                                    dj-click="clear_filters"
+                                    class="btn-secondary-modern"
+                                    style="padding: 0.25rem 0.75rem; font-size: 0.875rem;"
+                                >
+                                    ✕ Clear
+                                </button>
+                                {% endif %}
+                            </div>
+
+                            <!-- Results Info -->
+                            <p class="text-sm mb-3" style="color: var(--color-text-muted);">
+                                Showing {{ products|length }} of {{ total_products }} products (page {{ page }} of {{ total_pages }})
+                            </p>
+
+                            <!-- Product Grid -->
+                            <div class="grid gap-3" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));">
+                                {% for product in products %}
+                                <div 
+                                    class="p-4 rounded-lg cursor-pointer transition-all"
+                                    style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);"
+                                    dj-click="view_detail"
+                                    dj-value-product_id="{{ product.id }}"
+                                >
+                                    <h4 class="font-semibold mb-1" style="color: var(--color-text);">{{ product.name }}</h4>
+                                    <p class="text-sm" style="color: var(--color-text-muted);">{{ product.category|title }}</p>
+                                    <p class="text-lg font-bold mt-2" style="color: var(--color-accent);">${{ product.price }}</p>
+                                </div>
+                                {% empty %}
+                                <div class="col-span-full text-center py-8" style="color: var(--color-text-muted);">
+                                    No products found
+                                </div>
+                                {% endfor %}
+                            </div>
+
+                            <!-- Pagination -->
+                            {% if total_pages > 1 %}
+                            <div class="flex justify-center gap-2 mt-4">
+                                {% if page > 1 %}
+                                <button 
+                                    dj-click="change_page"
+                                    dj-value-page="{{ page|add:'-1' }}"
+                                    class="btn-secondary-modern"
+                                    style="padding: 0.5rem 1rem;"
+                                >
+                                    ← Prev
+                                </button>
+                                {% endif %}
+                                
+                                {% for p in "12345"|make_list %}
+                                {% if forloop.counter <= total_pages %}
+                                <button 
+                                    dj-click="change_page"
+                                    dj-value-page="{{ forloop.counter }}"
+                                    class="{% if page == forloop.counter %}btn-primary-modern{% else %}btn-secondary-modern{% endif %}"
+                                    style="padding: 0.5rem 0.75rem; min-width: 40px;"
+                                >
+                                    {{ forloop.counter }}
+                                </button>
+                                {% endif %}
+                                {% endfor %}
+                                
+                                {% if page < total_pages %}
+                                <button 
+                                    dj-click="change_page"
+                                    dj-value-page="{{ page|add:'1' }}"
+                                    class="btn-secondary-modern"
+                                    style="padding: 0.5rem 1rem;"
+                                >
+                                    Next →
+                                </button>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+
+                        <!-- Tab Content: Detail -->
+                        {% if tab == 'detail' and detail_product %}
+                        <div class="p-4">
+                            <button 
+                                dj-click="back_to_browse"
+                                class="btn-secondary-modern mb-4"
+                                style="padding: 0.5rem 1rem;"
+                            >
+                                ← Back to Browse
+                            </button>
+                            
+                            <div class="p-6 rounded-lg" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                                <h2 class="text-2xl font-bold mb-2" style="color: var(--color-text);">{{ detail_product.name }}</h2>
+                                <p class="mb-2" style="color: var(--color-text-muted);">Category: {{ detail_product.category|title }}</p>
+                                <p class="text-3xl font-bold mb-4" style="color: var(--color-accent);">${{ detail_product.price }}</p>
+                                <p style="color: var(--color-text);">
+                                    This is a detailed view of the product. Notice how the URL updated to include
+                                    <code style="background: var(--color-bg); padding: 0.125rem 0.25rem; border-radius: 4px;">?tab=detail&amp;detail={{ detail_product.id }}</code>
+                                    — you can share this URL or use browser back/forward!
+                                </p>
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <!-- Tab Content: Settings -->
+                        {% if tab == 'settings' %}
+                        <div class="p-4">
+                            <h3 class="text-xl font-bold mb-4" style="color: var(--color-text);">⚙️ Settings</h3>
+                            <p style="color: var(--color-text-muted);">
+                                This tab demonstrates <code>live_patch</code> for tabbed navigation.
+                                The URL changes to <code>?tab=settings</code> without a page reload.
+                            </p>
+                            
+                            <div class="mt-4 p-4 rounded-lg" style="background: var(--color-bg); border: 1px solid var(--color-border);">
+                                <h4 class="font-semibold mb-2" style="color: var(--color-text);">Try These:</h4>
+                                <ul class="list-disc pl-5 space-y-1" style="color: var(--color-text-muted);">
+                                    <li>Click browser back button — you'll return to the previous tab</li>
+                                    <li>Copy the URL and open in a new tab — same state!</li>
+                                    <li>Try the "Replace History" button below</li>
+                                </ul>
+                            </div>
+                            
+                            <div class="mt-4 flex gap-2">
+                                <button 
+                                    dj-click="replace_history"
+                                    class="btn-secondary-modern"
+                                    style="padding: 0.5rem 1rem;"
+                                >
+                                    🔄 Replace History (no back)
+                                </button>
+                                <button 
+                                    dj-click="demo_redirect"
+                                    class="btn-primary-modern"
+                                    style="padding: 0.5rem 1rem;"
+                                >
+                                    🚀 Demo live_redirect
+                                </button>
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <!-- Tab Content: About -->
+                        {% if tab == 'about' %}
+                        <div class="p-4">
+                            <h3 class="text-xl font-bold mb-4" style="color: var(--color-text);">ℹ️ About Navigation</h3>
+                            
+                            <div class="space-y-4">
+                                <div class="p-4 rounded-lg" style="background: var(--color-bg); border: 1px solid var(--color-border);">
+                                    <h4 class="font-semibold mb-2" style="color: var(--color-text);">🔧 live_patch()</h4>
+                                    <p style="color: var(--color-text-muted);">
+                                        Updates the URL without remounting the view. Perfect for filters, pagination,
+                                        tabs, and any state you want reflected in the URL. Triggers <code>handle_params()</code>.
+                                    </p>
+                                    <pre class="mt-2 p-2 rounded text-sm" style="background: var(--color-bg-elevated); color: var(--color-text); overflow-x: auto;">
+self.live_patch(params={"page": 2, "category": "books"})</pre>
+                                </div>
+                                
+                                <div class="p-4 rounded-lg" style="background: var(--color-bg); border: 1px solid var(--color-border);">
+                                    <h4 class="font-semibold mb-2" style="color: var(--color-text);">🚀 live_redirect()</h4>
+                                    <p style="color: var(--color-text-muted);">
+                                        Navigates to a different LiveView over the existing WebSocket connection.
+                                        No full page reload, just unmount current view and mount the new one.
+                                    </p>
+                                    <pre class="mt-2 p-2 rounded text-sm" style="background: var(--color-bg-elevated); color: var(--color-text); overflow-x: auto;">
+self.live_redirect("/products/42/", params={"edit": "true"})</pre>
+                                </div>
+                                
+                                <div class="p-4 rounded-lg" style="background: var(--color-bg); border: 1px solid var(--color-border);">
+                                    <h4 class="font-semibold mb-2" style="color: var(--color-text);">📍 handle_params()</h4>
+                                    <p style="color: var(--color-text-muted);">
+                                        Callback when URL params change (browser back/forward, live_patch).
+                                        Override this to update view state based on URL.
+                                    </p>
+                                    <pre class="mt-2 p-2 rounded text-sm" style="background: var(--color-bg-elevated); color: var(--color-text); overflow-x: auto;">
+def handle_params(self, params, uri):
+    self.page = int(params.get("page", 1))
+    self.category = params.get("category", "all")</pre>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Sidebar: Navigation History & Info -->
+                <div>
+                    <!-- Current State -->
+                    <div class="demo-card-modern mb-4">
+                        <div class="p-3 border-b" style="border-color: var(--color-border);">
+                            <h4 class="font-semibold m-0" style="color: var(--color-text);">📊 Current State</h4>
+                        </div>
+                        <div class="p-3">
+                            <dl class="space-y-2 text-sm">
+                                <div class="flex justify-between">
+                                    <dt style="color: var(--color-text-muted);">Tab:</dt>
+                                    <dd class="font-mono" style="color: var(--color-text);">{{ tab }}</dd>
+                                </div>
+                                <div class="flex justify-between">
+                                    <dt style="color: var(--color-text-muted);">Category:</dt>
+                                    <dd class="font-mono" style="color: var(--color-text);">{{ category }}</dd>
+                                </div>
+                                <div class="flex justify-between">
+                                    <dt style="color: var(--color-text-muted);">Page:</dt>
+                                    <dd class="font-mono" style="color: var(--color-text);">{{ page }}</dd>
+                                </div>
+                                <div class="flex justify-between">
+                                    <dt style="color: var(--color-text-muted);">Sort:</dt>
+                                    <dd class="font-mono" style="color: var(--color-text);">{{ sort }}</dd>
+                                </div>
+                                {% if search %}
+                                <div class="flex justify-between">
+                                    <dt style="color: var(--color-text-muted);">Search:</dt>
+                                    <dd class="font-mono" style="color: var(--color-text);">{{ search }}</dd>
+                                </div>
+                                {% endif %}
+                            </dl>
+                        </div>
+                    </div>
+
+                    <!-- Navigation History -->
+                    <div class="demo-card-modern mb-4">
+                        <div class="p-3 border-b" style="border-color: var(--color-border);">
+                            <h4 class="font-semibold m-0" style="color: var(--color-text);">📜 Param Changes</h4>
+                        </div>
+                        <div class="p-3">
+                            {% if navigation_history %}
+                            <ul class="space-y-1 text-xs font-mono" style="color: var(--color-text-muted);">
+                                {% for entry in navigation_history %}
+                                <li class="truncate">{{ entry }}</li>
+                                {% endfor %}
+                            </ul>
+                            {% else %}
+                            <p class="text-sm" style="color: var(--color-text-muted);">
+                                Navigate to see param changes logged here.
+                            </p>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <!-- Tips -->
+                    <div class="demo-card-modern">
+                        <div class="p-3 border-b" style="border-color: var(--color-border);">
+                            <h4 class="font-semibold m-0" style="color: var(--color-text);">💡 Try This</h4>
+                        </div>
+                        <div class="p-3">
+                            <ul class="space-y-2 text-sm" style="color: var(--color-text-muted);">
+                                <li>🔙 Use browser back/forward</li>
+                                <li>🔗 Copy URL & open in new tab</li>
+                                <li>🔍 Filter, sort, and paginate</li>
+                                <li>📦 Click a product for details</li>
+                                <li>⌨️ Check URL bar after each action</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}

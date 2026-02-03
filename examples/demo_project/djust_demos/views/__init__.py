@@ -34,6 +34,9 @@ from .no_template_demo import NoTemplateDemo
 from .components_demo import ComponentsDemoView
 from .kitchen_sink import KitchenSinkView
 from .streaming_demo import StreamingDemoView
+from .navigation_demo import NavigationDemoView
+from .live_form_demo import LiveFormDemoView
+from .uploads_demo import UploadsDemoView
 
 __all__ = [
     'CounterView',
@@ -66,4 +69,7 @@ __all__ = [
     'NoTemplateDemo',
     'KitchenSinkView',
     'StreamingDemoView',
+    'NavigationDemoView',
+    'LiveFormDemoView',
+    'UploadsDemoView',
 ]

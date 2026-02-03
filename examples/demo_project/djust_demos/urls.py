@@ -57,4 +57,13 @@ urlpatterns = [
 
     # Streaming Demo
     path('streaming/', StreamingDemoView.as_view(), name='streaming'),
+
+    # Navigation Demo
+    path('navigation/', NavigationDemoView.as_view(), name='navigation'),
+
+    # LiveForm Demo
+    path('live-form/', LiveFormDemoView.as_view(), name='live-form'),
+
+    # Uploads Demo
+    path('uploads/', UploadsDemoView.as_view(), name='uploads'),
 ]

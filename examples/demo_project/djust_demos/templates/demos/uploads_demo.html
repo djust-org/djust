@@ -1,0 +1,337 @@
+{% extends "base.html" %}
+
+{% block title %}Uploads Demo - djust{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block content %}
+<div data-djust-root>
+    <!-- Hero Section -->
+    <section class="section-modern" style="padding: 2rem 0;">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+            <div class="text-center">
+                <h1 class="text-3xl font-bold" style="color: var(--color-text);">📤 Uploads Demo</h1>
+                <p class="text-lg mt-2" style="color: var(--color-text-muted);">
+                    File uploads via WebSocket with progress tracking
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Main Demo Section -->
+    <section class="section-modern" style="padding: 0 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+            <div class="grid gap-6" style="grid-template-columns: 1fr 1fr;">
+                <!-- Image Upload Card -->
+                <div class="demo-card-modern">
+                    <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.03);">
+                        <h2 class="text-xl font-bold m-0" style="color: var(--color-text);">🖼️ Image Upload</h2>
+                        <p class="text-sm m-0 mt-1" style="color: var(--color-text-muted);">
+                            JPG, PNG, GIF, WebP • Max 5MB each • Up to 5 files
+                        </p>
+                    </div>
+
+                    <div class="p-4">
+                        <!-- Drop Zone -->
+                        <div 
+                            class="upload-dropzone p-8 rounded-lg text-center cursor-pointer transition-all"
+                            style="border: 2px dashed var(--color-border); background: var(--color-bg);"
+                            dj-upload="images"
+                        >
+                            <div style="font-size: 3rem; margin-bottom: 1rem;">📷</div>
+                            <p class="font-medium" style="color: var(--color-text);">
+                                Drop images here or click to browse
+                            </p>
+                            <p class="text-sm mt-1" style="color: var(--color-text-muted);">
+                                Supports: JPG, PNG, GIF, WebP
+                            </p>
+                            <input 
+                                type="file"
+                                accept=".jpg,.jpeg,.png,.gif,.webp"
+                                multiple
+                                style="display: none;"
+                            />
+                        </div>
+
+                        <!-- Upload Queue -->
+                        {% if uploads.images.entries %}
+                        <div class="mt-4 space-y-2">
+                            <h4 class="font-medium text-sm" style="color: var(--color-text);">Uploading:</h4>
+                            {% for entry in uploads.images.entries %}
+                            <div class="flex items-center gap-3 p-3 rounded-lg" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                                <!-- Thumbnail or Icon -->
+                                <div class="w-12 h-12 rounded flex items-center justify-center" style="background: var(--color-bg); font-size: 1.5rem;">
+                                    {% if entry.is_image and entry.complete %}
+                                    <span>{{ entry.icon }}</span>
+                                    {% else %}
+                                    {{ entry.icon }}
+                                    {% endif %}
+                                </div>
+                                
+                                <!-- Info -->
+                                <div class="flex-1 min-w-0">
+                                    <p class="font-medium truncate" style="color: var(--color-text);">{{ entry.client_name }}</p>
+                                    <p class="text-xs" style="color: var(--color-text-muted);">{{ entry.size_display }}</p>
+                                    
+                                    <!-- Progress Bar -->
+                                    {% if not entry.complete %}
+                                    <div class="mt-1 h-1 rounded-full overflow-hidden" style="background: var(--color-border);">
+                                        <div 
+                                            class="h-full rounded-full transition-all"
+                                            style="width: {{ entry.progress }}%; background: var(--color-accent);"
+                                        ></div>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                                
+                                <!-- Status -->
+                                <div class="text-sm">
+                                    {% if entry.error %}
+                                    <span style="color: var(--color-error);">❌</span>
+                                    {% elif entry.complete %}
+                                    <span style="color: #22c55e;">✓</span>
+                                    {% else %}
+                                    <span style="color: var(--color-text-muted);">{{ entry.progress }}%</span>
+                                    {% endif %}
+                                </div>
+                                
+                                <!-- Cancel -->
+                                {% if not entry.complete %}
+                                <button 
+                                    dj-click="cancel_upload"
+                                    dj-value-slot="images"
+                                    dj-value-ref="{{ entry.ref }}"
+                                    class="text-sm p-1 rounded hover:bg-gray-200"
+                                    style="color: var(--color-text-muted);"
+                                >
+                                    ✕
+                                </button>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        </div>
+                        
+                        <!-- Process Button -->
+                        <button 
+                            dj-click="process_images"
+                            class="btn-primary-modern w-full mt-4"
+                            style="padding: 0.75rem 1.5rem;"
+                        >
+                            Process Images
+                        </button>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Document Upload Card -->
+                <div class="demo-card-modern">
+                    <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.03);">
+                        <h2 class="text-xl font-bold m-0" style="color: var(--color-text);">📄 Document Upload</h2>
+                        <p class="text-sm m-0 mt-1" style="color: var(--color-text-muted);">
+                            PDF, TXT, DOC, CSV • Max 10MB each • Up to 3 files
+                        </p>
+                    </div>
+
+                    <div class="p-4">
+                        <!-- Drop Zone -->
+                        <div 
+                            class="upload-dropzone p-8 rounded-lg text-center cursor-pointer transition-all"
+                            style="border: 2px dashed var(--color-border); background: var(--color-bg);"
+                            dj-upload="documents"
+                        >
+                            <div style="font-size: 3rem; margin-bottom: 1rem;">📁</div>
+                            <p class="font-medium" style="color: var(--color-text);">
+                                Drop documents here or click to browse
+                            </p>
+                            <p class="text-sm mt-1" style="color: var(--color-text-muted);">
+                                Supports: PDF, TXT, DOC, DOCX, CSV
+                            </p>
+                            <input 
+                                type="file"
+                                accept=".pdf,.txt,.doc,.docx,.csv"
+                                multiple
+                                style="display: none;"
+                            />
+                        </div>
+
+                        <!-- Upload Queue -->
+                        {% if uploads.documents.entries %}
+                        <div class="mt-4 space-y-2">
+                            <h4 class="font-medium text-sm" style="color: var(--color-text);">Uploading:</h4>
+                            {% for entry in uploads.documents.entries %}
+                            <div class="flex items-center gap-3 p-3 rounded-lg" style="background: var(--color-bg-elevated); border: 1px solid var(--color-border);">
+                                <div class="w-10 h-10 rounded flex items-center justify-center" style="background: var(--color-bg); font-size: 1.25rem;">
+                                    {{ entry.icon }}
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="font-medium truncate text-sm" style="color: var(--color-text);">{{ entry.client_name }}</p>
+                                    <p class="text-xs" style="color: var(--color-text-muted);">{{ entry.size_display }}</p>
+                                    {% if not entry.complete %}
+                                    <div class="mt-1 h-1 rounded-full overflow-hidden" style="background: var(--color-border);">
+                                        <div class="h-full rounded-full" style="width: {{ entry.progress }}%; background: var(--color-accent);"></div>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                                <div class="text-sm">
+                                    {% if entry.complete %}✓{% else %}{{ entry.progress }}%{% endif %}
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        
+                        <button 
+                            dj-click="process_documents"
+                            class="btn-primary-modern w-full mt-4"
+                            style="padding: 0.75rem 1.5rem;"
+                        >
+                            Process Documents
+                        </button>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Processed Files -->
+            {% if processed_files %}
+            <div class="demo-card-modern mt-6">
+                <div class="p-4 border-b flex justify-between items-center" style="border-color: var(--color-border);">
+                    <h3 class="text-lg font-bold m-0" style="color: var(--color-text);">
+                        ✅ Processed Files ({{ processed_files|length }})
+                    </h3>
+                    <button 
+                        dj-click="clear_processed"
+                        class="btn-secondary-modern"
+                        style="padding: 0.5rem 1rem; font-size: 0.875rem;"
+                    >
+                        Clear All
+                    </button>
+                </div>
+                <div class="p-4">
+                    <div class="grid gap-4" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));">
+                        {% for file in processed_files %}
+                        <div class="p-4 rounded-lg relative group" style="background: var(--color-bg); border: 1px solid var(--color-border);">
+                            <!-- Remove Button -->
+                            <button 
+                                dj-click="remove_file"
+                                dj-value-index="{{ forloop.counter0 }}"
+                                class="absolute top-2 right-2 w-6 h-6 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                style="background: var(--color-bg-elevated); color: var(--color-text-muted); font-size: 0.75rem;"
+                            >
+                                ✕
+                            </button>
+                            
+                            <!-- Preview -->
+                            {% if file.thumbnail %}
+                            <div class="aspect-square rounded-lg overflow-hidden mb-3" style="background: var(--color-bg-elevated);">
+                                <img 
+                                    src="{{ file.thumbnail }}" 
+                                    alt="{{ file.name }}"
+                                    style="width: 100%; height: 100%; object-fit: cover;"
+                                />
+                            </div>
+                            {% else %}
+                            <div class="aspect-square rounded-lg flex items-center justify-center mb-3" style="background: var(--color-bg-elevated);">
+                                <span style="font-size: 3rem;">{{ file.icon }}</span>
+                            </div>
+                            {% endif %}
+                            
+                            <!-- Info -->
+                            <p class="font-medium text-sm truncate" style="color: var(--color-text);">{{ file.name }}</p>
+                            <p class="text-xs" style="color: var(--color-text-muted);">{{ file.size_display }} • {{ file.type }}</p>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Errors -->
+            {% if upload_errors %}
+            <div class="demo-card-modern mt-6" style="border-color: var(--color-error);">
+                <div class="p-4" style="background: rgba(239, 68, 68, 0.1);">
+                    <h4 class="font-bold mb-2" style="color: var(--color-error);">⚠️ Upload Errors</h4>
+                    <ul class="space-y-1 text-sm" style="color: var(--color-error);">
+                        {% for error in upload_errors %}
+                        <li>{{ error }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- How It Works -->
+            <div class="demo-card-modern mt-6">
+                <div class="p-4 border-b" style="border-color: var(--color-border);">
+                    <h3 class="text-lg font-bold m-0" style="color: var(--color-text);">💡 How It Works</h3>
+                </div>
+                <div class="p-4">
+                    <div class="grid gap-6" style="grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));">
+                        <div>
+                            <h4 class="font-semibold mb-2" style="color: var(--color-text);">📝 Configure</h4>
+                            <pre class="text-xs p-3 rounded overflow-x-auto" style="background: var(--color-bg); color: var(--color-text);">
+self.allow_upload(
+    "images",
+    accept=".jpg,.png,.gif",
+    max_entries=5,
+    max_file_size=5_000_000,
+)</pre>
+                        </div>
+                        
+                        <div>
+                            <h4 class="font-semibold mb-2" style="color: var(--color-text);">🎯 Template</h4>
+                            <pre class="text-xs p-3 rounded overflow-x-auto" style="background: var(--color-bg); color: var(--color-text);">
+&lt;div dj-upload="images"&gt;
+    Drop files here
+    &lt;input type="file" 
+           accept=".jpg,.png"
+           multiple /&gt;
+&lt;/div&gt;</pre>
+                        </div>
+                        
+                        <div>
+                            <h4 class="font-semibold mb-2" style="color: var(--color-text);">⚡ Process</h4>
+                            <pre class="text-xs p-3 rounded overflow-x-auto" style="background: var(--color-bg); color: var(--color-text);">
+for entry in self.consume_uploaded_entries("images"):
+    # entry.client_name
+    # entry.client_type
+    # entry.data (bytes)
+    # entry.file (file-like)
+    save_to_storage(entry)</pre>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-4 p-3 rounded-lg" style="background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.2);">
+                        <p class="text-sm" style="color: var(--color-text);">
+                            <strong>📡 WebSocket Upload:</strong> Files are streamed in chunks over the existing WebSocket connection.
+                            No separate HTTP requests, no page reloads. Progress is reported in real-time.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+
+<style>
+/* Upload dropzone styles */
+.upload-dropzone {
+    transition: all 0.2s ease;
+}
+
+.upload-dropzone:hover,
+.upload-dropzone.drag-over {
+    border-color: var(--color-accent) !important;
+    background: rgba(59, 130, 246, 0.05) !important;
+}
+
+.upload-dropzone.drag-over {
+    transform: scale(1.01);
+}
+
+/* Group hover for remove button */
+.group:hover .group-hover\:opacity-100 {
+    opacity: 1;
+}
+</style>
+{% endblock %}
