@@ -7,19 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-03 — "Phoenix Rising" 🔥
+
+The biggest djust release yet — 13 major features bringing djust to full parity with Phoenix LiveView.
+
 ### Added
 
-- **Server-Push API** — Background tasks (Celery, management commands, cron jobs) can now push state updates to connected LiveView clients via `push_to_view()`. Includes per-view channel groups (auto-joined on mount), a sync/async public API (`push_to_view` / `apush_to_view`), and periodic `handle_tick()` for self-updating views. ([#230](https://github.com/djust-org/djust/issues/230))
-- **Auto-build client.js from src/ modules** — Pre-commit hook runs `build-client.sh` when `src/` files change, eliminating manual concatenation drift between `src/` and built JS files. ([#211](https://github.com/djust-org/djust/issues/211))
-- **Keyed-mutation fuzz test generator** — New proptest generator produces tree B by mutating tree A (reorder, insert, remove keyed children), guaranteeing key overlap and exercising keyed diff paths far more effectively than independent random generation. Proptest cases bumped from 500 to 1000. ([#216](https://github.com/djust-org/djust/issues/216), [#217](https://github.com/djust-org/djust/issues/217))
+#### Navigation & URL State
+- **`live_patch()`** — Update browser URL without remounting the view. Ideal for filters, pagination, and tabs.
+- **`live_redirect()`** — Navigate to a different LiveView over the same WebSocket connection.
+- **`handle_params()`** — Hook called when URL params change (browser back/forward or live_patch).
+- **`dj-patch`** — Template directive for declarative URL updates: `<a dj-patch="?page=2">`.
+- **`dj-navigate`** — Template directive for LiveView navigation: `<a dj-navigate="/items/42/">`.
+- **`live_session()`** — Group related views to share WebSocket connections.
+
+#### LiveForm Validation
+- **`LiveForm`** — Standalone declarative form validation without Django Forms dependency.
+- **Built-in validators** — `required`, `min_length`, `max_length`, `pattern`, `email`, `url`, `min`, `max`, `choices`.
+- **Custom validators** — Pass callable validators for complex validation logic.
+- **`live_form_from_model()`** — Auto-generate LiveForm from Django model field definitions.
+- **Real-time validation** — Validate fields on `dj-change` for instant feedback.
+
+#### File Uploads
+- **`UploadMixin`** — Chunked file uploads over WebSocket with progress tracking.
+- **`allow_upload()`** — Configure upload slots with size limits, accepted types, and max entries.
+- **`consume_uploaded_entries()`** — Process completed uploads in event handlers.
+- **`dj-upload`** — Template directive for drag-and-drop upload zones.
+- **Magic byte validation** — Server validates file content, not just extensions.
+
+#### Presence Tracking
+- **`PresenceMixin`** — Track who's viewing a page in real-time.
+- **`track_presence()`** / **`untrack_presence()`** — Start/stop tracking with custom metadata.
+- **`list_presences()`** / **`presence_count()`** — Query current viewers.
+- **`handle_presence_join()`** / **`handle_presence_leave()`** — Hooks for join/leave events.
+- **`LiveCursorMixin`** — Share live cursor positions for collaborative features.
+- **`broadcast_to_presence()`** — Send events to all users in a presence group.
+
+#### Streaming
+- **`stream_to()`** — Push partial DOM updates during async handler execution.
+- **`stream_text()`** — Stream raw text content (append/prepend/replace modes).
+- **`stream_insert()`** — Insert HTML at start or end of a container.
+- **`stream_error()`** — Show error state while preserving partial content.
+- **`stream_start()`** / **`stream_done()`** — Signal stream lifecycle to client.
+- **`dj-stream`** — Template attribute to mark streaming targets.
+- **~60fps batching** — Automatic rate limiting for smooth updates.
+
+#### JavaScript Hooks
+- **`dj-hook`** — Integrate third-party JS libraries (charts, maps, editors).
+- **Hook lifecycle** — `mounted()`, `updated()`, `destroyed()`, `disconnected()`, `reconnected()`.
+- **`pushEvent()`** — Send events from JS hooks to server handlers.
+- **`handleEvent()`** — Listen for server-pushed events in JS hooks.
+- **`window.DjustHooks`** — Register hooks Phoenix LiveView-style.
+
+#### Client-Side Features
+- **`dj-model`** — Two-way data binding between inputs and server state.
+- **`dj-model.lazy`** — Update on blur instead of every keystroke.
+- **`dj-model.debounce-N`** — Debounce model updates by N milliseconds.
+- **`dj-confirm`** — Show browser confirm dialog before sending events.
+- **`dj-loading`** — Show/hide elements, add classes, or disable during events.
+- **`dj-transition`** — CSS enter/leave animations when elements mount/unmount.
+- **`dj-debounce`** — Debounce any event type (not just inputs).
+- **`dj-throttle`** — Throttle events to fire at most once per interval.
+- **`dj-target`** — Scope DOM updates to specific elements.
+- **`dj-optimistic`** — Apply client-side state changes immediately with auto-rollback.
+
+#### Push Events
+- **`push_event()`** — Push events to client-side JS hooks from handlers.
+- **`push_event_to_view()`** — Push events from background tasks (Celery, management commands).
+
+#### Testing
+- **`LiveViewTestClient`** — Test LiveViews without browser or WebSocket.
+- **`ComponentTestClient`** — Test components in isolation.
+- **`MockUploadFile`** — Mock file uploads for testing.
+- **`SnapshotTestMixin`** — Compare rendered output against stored snapshots.
+- **`@performance_test`** — Assert handler time and query count limits.
+- **pytest fixtures** — `live_view_client`, `component_client`, `mock_upload`.
+
+#### Error Handling
+- **Dev error overlay** — Rich overlay with syntax-highlighted tracebacks.
+- **`djust:error` event** — Client-side event for custom error handling.
+- **Debug mode** — Automatic when `DEBUG=True` or `data-debug` attribute.
+
+#### Server-Push API
+- **`push_to_view()`** — Push state updates from background tasks to connected clients.
+- **`handle_tick()`** — Periodic handler for self-updating views.
 
 ### Fixed
 
-- **Client-side SetText mis-targets text nodes after keyed MoveChild** — MoveChild patches now include `child_d` (the child's `djust_id`) so the client resolves the child to move by `data-dj-id` instead of stale index. Fixes incorrect DOM mutations when multiple MoveChild patches shift indices before subsequent patches are applied. ([#225](https://github.com/djust-org/djust/issues/225))
-- **VDOM diff/patch round-trip failure on keyed child reorder** — `apply_patches` now processes patches level-by-level (shallowest parent first) so structural changes establish correct tree shape before deeper patches navigate into children. ([#212](https://github.com/djust-org/djust/issues/212))
-- **apply_patches djust_id-based resolution** — Rewrote `apply_patches` to resolve parent nodes by `djust_id` instead of path-based traversal, preventing mis-targeting when structural patches at shallower levels invalidate deeper path indices. Fixed patch application order (removes → inserts → moves) and MoveChild index clamping. ([#216](https://github.com/djust-org/djust/issues/216))
-- **Diff engine keyed+unkeyed interleaving** — The diff engine now emits `MoveChild` patches for unkeyed element children (with `djust_id`) when their absolute position changes due to keyed sibling moves, fixing incorrect patch targeting in mixed keyed/unkeyed child lists. ([#219](https://github.com/djust-org/djust/issues/219))
-- **Text node targeting after keyed moves** — `SetText` patches now carry `djust_id` when available (for test infrastructure), and `sync_ids` propagates IDs to text nodes. Test `assign_ids` gives synthetic IDs to text nodes so `apply_patches` resolves them by ID after structural changes shift path indices. ([#221](https://github.com/djust-org/djust/issues/221))
+- **Client-side SetText mis-targets text nodes after keyed MoveChild** — MoveChild patches now include `child_d` (the child's `djust_id`) so the client resolves the child to move by `data-dj-id` instead of stale index.
+- **VDOM diff/patch round-trip failure on keyed child reorder** — `apply_patches` now processes patches level-by-level (shallowest parent first).
+- **apply_patches djust_id-based resolution** — Rewrote to resolve parent nodes by `djust_id` instead of path-based traversal.
+- **Diff engine keyed+unkeyed interleaving** — Emits `MoveChild` patches for unkeyed element children when position changes due to keyed sibling moves.
+- **Text node targeting after keyed moves** — `SetText` patches now carry `djust_id` when available.
+
+### Changed
+
+- **Removed `@event` decorator alias** — Use `@event_handler` instead (deprecated in v0.2.2).
+- **Auto-build client.js** — Pre-commit hook builds from `src/` modules automatically.
+- **Keyed-mutation fuzz testing** — Proptest cases increased to 1000 with smarter tree mutation.
 
 ## [0.2.2] - 2026-02-01
 
@@ -252,7 +337,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bug fixes and stability improvements
 
-[Unreleased]: https://github.com/djust-org/djust/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/djust-org/djust/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/djust-org/djust/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/djust-org/djust/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/djust-org/djust/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/djust-org/djust/compare/v0.2.0a2...v0.2.0

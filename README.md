@@ -179,6 +179,20 @@ pip install target/wheels/djust-*.whl
 
 ## 📖 Documentation
 
+### Guides
+
+| Guide | Description |
+|-------|-------------|
+| [Navigation & URL State](docs/guides/navigation.md) | `live_patch`, `live_redirect`, browser history |
+| [LiveForm Validation](docs/guides/forms.md) | Declarative form validation with live feedback |
+| [File Uploads](docs/guides/uploads.md) | Chunked uploads with progress tracking |
+| [Presence Tracking](docs/guides/presence.md) | Track who's online, live cursors |
+| [Streaming](docs/guides/streaming.md) | Token-by-token updates for LLM chat |
+| [JavaScript Hooks](docs/guides/hooks.md) | Integrate charts, maps, and editors |
+| [Client Features](docs/guides/client-features.md) | `dj-model`, `dj-confirm`, transitions |
+| [Error Handling](docs/guides/errors.md) | Dev overlay and production errors |
+| [Testing](docs/guides/testing.md) | `LiveViewTestClient` and test patterns |
+
 ### Setup
 
 1. Add to `INSTALLED_APPS`:
