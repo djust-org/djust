@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-02-03 — "Universal Access" 🌐
+
+A major release expanding djust's reach with TypeScript support, SSE alternative, accessibility features, mobile/touch gestures, and Django Admin integration.
+
+### Added
+
+#### TypeScript Definitions
+- **Full `.d.ts` type coverage** — Type definitions for `djust.js`, `client.js`, and all public APIs
+- **Exported types** — `DjustLiveView`, `DjustEvent`, `PatchOperation`, hook interfaces
+- **VS Code autocomplete** — Full IntelliSense support for djust client-side APIs
+
+#### Server-Sent Events (SSE)
+- **`SSEView`** — New view class for server-push-only use cases without WebSocket infrastructure
+- **`SSEMixin`** — Add SSE capabilities to existing views
+- **`dj-sse` directive** — Subscribe DOM elements to SSE channels
+- **`@sse_event` decorator** — Mark methods as SSE event generators
+- **No Channels required** — SSE works over standard HTTP, simplifying deployment
+
+#### Accessibility (ARIA)
+- **`AccessibilityMixin`** — Auto-inject ARIA attributes for dynamic content
+- **`announce(message, priority)`** — Programmatically announce updates to screen readers
+- **`focus(selector)`** — Manage focus after DOM updates
+- **`dj-aria-live` directive** — Mark regions for automatic screen reader announcements
+- **`dj-keyboard` directive** — Declarative keyboard navigation handlers
+- **Debug toolbar audit** — Accessibility warnings panel for missing ARIA attributes
+
+#### Mobile/Touch Support
+- **`MobileMixin`** — Touch event handling and gesture recognition
+- **`dj-tap` directive** — Optimized tap handler (no 300ms delay)
+- **`dj-longpress` directive** — Long-press gesture with configurable duration
+- **`dj-swipe` directive** — Swipe gesture detection (left/right/up/down)
+- **`dj-pinch` directive** — Pinch-to-zoom gesture handler
+- **`dj-pull-refresh` directive** — Pull-to-refresh pattern for mobile lists
+- **Viewport-aware hints** — Automatic mobile detection and optimization
+
+#### Django Admin Integration
+- **`LiveViewAdminMixin`** — Add LiveView interactivity to ModelAdmin classes
+- **`@live_action` decorator** — Real-time admin actions without page reloads
+- **Live inline editing** — Edit fields in changelist without opening detail view
+- **Dashboard widgets** — LiveView-powered admin dashboard components
+- **`LiveAdminView`** — Full LiveView pages within Django admin
+
+### Testing
+
+- 39 SSE tests covering connection lifecycle, event streaming, and error handling
+- 32 accessibility tests for ARIA injection, announcements, and keyboard navigation
+- 37 mobile/touch tests for gesture recognition and touch event handling
+- 23 admin integration tests for LiveView-admin interoperability
+
 ## [0.5.0] - 2026-02-03 — "Developer Experience" 🛠️
 
 A release focused on making djust easier to adopt with scaffolding tools and comprehensive documentation.
@@ -388,7 +437,8 @@ The biggest djust release yet — 13 major features bringing djust to full parit
 
 - Bug fixes and stability improvements
 
-[Unreleased]: https://github.com/djust-org/djust/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/djust-org/djust/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/djust-org/djust/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/djust-org/djust/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/djust-org/djust/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/djust-org/djust/compare/v0.2.2...v0.3.0

@@ -124,51 +124,92 @@ Ongoing effort to harden the VDOM diff and patch pipeline.
 
 ---
 
-## v0.6 Priorities
+## v0.6 Features — ✅ Complete
 
-With core functionality complete, v0.6 focuses on ecosystem expansion and production hardening.
+All v0.6 priorities have been implemented and released.
 
-### 9. TypeScript Definitions for JS API
+### 9. TypeScript Definitions for JS API — ✅ Complete
 
-Provide first-class TypeScript support for the client-side API.
+- ✅ Generated `.d.ts` files for `djust.js`, `client.js`, and public APIs
+- ✅ Documented event handler type signatures
+- ✅ Exported types for `DjustLiveView`, `DjustEvent`, `PatchOperation`
+- ✅ VS Code autocomplete and type checking enabled
 
-- Generate `.d.ts` files for `djust.js`, `client.js`, and public APIs
-- Document event handler type signatures
-- Export types for `DjustLiveView`, `DjustEvent`, `PatchOperation`
-- Enable autocomplete and type checking in VS Code
+### 10. Server-Sent Events (SSE) Alternative — ✅ Complete
 
-### 10. Server-Sent Events (SSE) Alternative
+- ✅ `SSEView` and `SSEMixin` for server-push-only use cases
+- ✅ `dj-sse` directive for subscribing DOM elements
+- ✅ No Channels required — works over standard HTTP
+- ✅ Trade-offs documented: SSE vs WebSocket
 
-Add SSE as a simpler alternative to WebSocket for read-heavy use cases.
+### 11. Accessibility (ARIA) Improvements — ✅ Complete
 
-- New `@sse_channel` decorator for server-push-only views
-- Automatic fallback when WebSocket unavailable
-- Lower infrastructure complexity (no Channels required for SSE-only apps)
-- Document trade-offs: SSE (simpler, HTTP/2 multiplexing) vs WebSocket (bidirectional)
+- ✅ `AccessibilityMixin` with auto-injected `aria-live` regions
+- ✅ `announce()` and `focus()` helpers
+- ✅ `dj-aria-live` and `dj-keyboard` directives
+- ✅ Accessibility audit in debug toolbar
 
-### 11. Accessibility (ARIA) Improvements
+### 12. Mobile/Touch Support — ✅ Complete
 
-Make djust apps accessible by default.
+- ✅ `MobileMixin` with gesture recognition
+- ✅ `dj-tap`, `dj-longpress`, `dj-swipe`, `dj-pinch`, `dj-pull-refresh` directives
+- ✅ Viewport-aware rendering hints
+- ✅ Mobile patterns documented
 
-- Auto-inject `aria-live` regions for dynamic content updates
-- Announce patch changes to screen readers appropriately
-- Document ARIA patterns for common LiveView UI components
-- Add accessibility audit to debug toolbar
+### 13. Admin Integration — ✅ Complete
 
-### 12. Mobile/Touch Support
+- ✅ `LiveViewAdminMixin` for ModelAdmin classes
+- ✅ `@live_action` decorator for real-time actions
+- ✅ Live inline editing and dashboard widgets
+- ✅ `LiveAdminView` for full admin LiveView pages
 
-Improve experience on mobile devices.
+---
 
-- Touch event handlers (`@touch_start`, `@touch_move`, `@touch_end`)
-- Gesture recognition helpers (swipe, pinch, long-press)
-- Viewport-aware rendering hints
-- Document mobile-specific patterns and gotchas
+## v0.7 Priorities
 
-### 13. Admin Integration
+With universal access complete, v0.7 focuses on advanced features and enterprise readiness.
 
-Bring LiveView interactivity to Django admin.
+### 14. Multi-tenant Support
 
-- `LiveViewAdminMixin` for model admin classes
-- Real-time inline editing without page reloads
-- Live search/filter for changelist views
-- Document integration patterns with existing admin customizations
+Enable djust for SaaS applications with tenant isolation.
+
+- Tenant-aware state backends with namespace isolation
+- Per-tenant rate limiting and connection limits
+- Tenant context injection via middleware
+- Document multi-tenant patterns and security considerations
+
+### 15. Offline Support & PWA
+
+Make djust apps work offline with Progressive Web App features.
+
+- Service worker integration for caching rendered HTML
+- Optimistic state persistence to IndexedDB
+- Auto-sync when connection restored
+- `dj-offline` directive for offline-aware UI states
+
+### 16. GraphQL/REST API Integration
+
+Streamline integration with external data sources.
+
+- `@data_source` decorator for declarative API bindings
+- Automatic cache invalidation on LiveView updates
+- WebSocket subscription bridging for GraphQL subscriptions
+- Document patterns for hybrid REST/LiveView architectures
+
+### 17. Testing & CI Improvements
+
+Strengthen the test infrastructure for enterprise adoption.
+
+- Visual regression testing with Playwright snapshots
+- Load testing harness for WebSocket connections
+- Mutation testing coverage analysis
+- GitHub Actions reusable workflows for djust apps
+
+### 18. Internationalization (i18n)
+
+First-class support for multi-language LiveView apps.
+
+- Real-time language switching without remount
+- `{% trans %}` and `{% blocktrans %}` tag optimization in Rust
+- RTL layout support with automatic direction hints
+- Document i18n patterns for dynamic content
