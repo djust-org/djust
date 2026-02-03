@@ -54,4 +54,7 @@ urlpatterns = [
 
     # Kitchen Sink
     path('kitchen-sink/', KitchenSinkView.as_view(), name='kitchen-sink'),
+
+    # Streaming Demo
+    path('streaming/', StreamingDemoView.as_view(), name='streaming'),
 ]

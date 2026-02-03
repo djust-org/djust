@@ -129,6 +129,115 @@ class StreamingMixin:
         }
         await self._send_stream_ops(stream_name, [op])
 
+    async def stream_text(
+        self,
+        stream_name: str,
+        text: str,
+        mode: str = "append",
+        target: Optional[str] = None,
+    ) -> None:
+        """
+        Stream text content to a target element.
+
+        Args:
+            stream_name: Logical name for the stream
+            text: Text content to stream
+            mode: "append", "replace", or "prepend"
+            target: CSS selector (defaults to [dj-stream='name'])
+        """
+        if not self._ws_consumer:
+            return
+
+        op = {
+            "op": "text",
+            "target": target or f"[dj-stream='{stream_name}']",
+            "text": text,
+            "mode": mode,
+        }
+
+        now = time.monotonic()
+        elapsed = now - self._last_stream_time
+
+        if elapsed >= MIN_STREAM_INTERVAL_S:
+            await self._send_stream_ops(stream_name, [op])
+            self._last_stream_time = now
+        else:
+            if stream_name not in self._stream_batch:
+                self._stream_batch[stream_name] = []
+            self._stream_batch[stream_name] = [op]
+
+            if not self._stream_flush_task or self._stream_flush_task.done():
+                delay = MIN_STREAM_INTERVAL_S - elapsed
+                self._stream_flush_task = asyncio.ensure_future(
+                    self._flush_stream_batch(delay)
+                )
+
+    async def stream_error(
+        self,
+        stream_name: str,
+        error: str,
+        target: Optional[str] = None,
+    ) -> None:
+        """
+        Send an error state to a stream target, preserving partial content.
+
+        Args:
+            stream_name: Logical name for the stream
+            error: Error message to display
+            target: CSS selector (defaults to [dj-stream='name'])
+        """
+        if not self._ws_consumer:
+            return
+
+        op = {
+            "op": "error",
+            "target": target or f"[dj-stream='{stream_name}']",
+            "error": error,
+        }
+        await self._send_stream_ops(stream_name, [op])
+
+    async def stream_start(
+        self,
+        stream_name: str,
+        target: Optional[str] = None,
+    ) -> None:
+        """
+        Signal the start of a stream to the client.
+
+        Args:
+            stream_name: Logical name for the stream
+            target: CSS selector (defaults to [dj-stream='name'])
+        """
+        if not self._ws_consumer:
+            return
+
+        op = {
+            "op": "start",
+            "target": target or f"[dj-stream='{stream_name}']",
+        }
+        await self._send_stream_ops(stream_name, [op])
+
+    async def stream_done(
+        self,
+        stream_name: str,
+        target: Optional[str] = None,
+    ) -> None:
+        """
+        Signal the end of a stream to the client.
+
+        Args:
+            stream_name: Logical name for the stream
+            target: CSS selector (defaults to [dj-stream='name'])
+        """
+        if not self._ws_consumer:
+            return
+
+        op = {
+            "op": "done",
+            "target": target or f"[dj-stream='{stream_name}']",
+        }
+        await self._send_stream_ops(stream_name, [op])
+
     async def stream_delete(
         self,
         stream_name: str,

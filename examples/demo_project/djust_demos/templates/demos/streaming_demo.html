@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+
+{% block title %}Streaming Demo - djust{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block content %}
+<div data-djust-root>
+    <!-- Hero Section -->
+    <section class="section-modern" style="padding: 2rem 0;">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+            <div class="text-center">
+                <h1 class="text-3xl font-bold" style="color: var(--color-text);">🚀 Streaming Demo</h1>
+                <p class="text-lg mt-2" style="color: var(--color-text-muted);">
+                    Real-time token-by-token streaming over WebSocket
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Demo Section -->
+    <section class="section-modern" style="padding: 0 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 800px;">
+            <!-- Chat Container -->
+            <div class="demo-card-modern" style="overflow: hidden;">
+                <!-- Header -->
+                <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(59, 130, 246, 0.03);">
+                    <div class="flex justify-between items-center">
+                        <div>
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">AI Chat</h3>
+                            <p class="text-sm m-0 mt-1" style="color: var(--color-text-muted);">
+                                Status: <span id="status">{{ status }}</span>
+                            </p>
+                        </div>
+                        <button dj-click="clear_chat" class="btn-secondary-modern" style="padding: 0.5rem 1rem; font-size: 0.875rem;">
+                            Clear
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Messages Area -->
+                <div id="message-list" style="height: 400px; overflow-y: auto; padding: 1rem; background: var(--color-bg);">
+                    {% if not messages %}
+                    <div class="text-center py-8" style="color: var(--color-text-muted);">
+                        <p class="text-lg">👋 Send a message to start!</p>
+                        <p class="text-sm mt-2">Try typing "error" to see error handling.</p>
+                    </div>
+                    {% endif %}
+
+                    {% for msg in messages %}
+                    <div class="message mb-3" style="
+                        {% if msg.role == 'user' %}
+                        margin-left: 4rem; text-align: right;
+                        {% else %}
+                        margin-right: 4rem;
+                        {% endif %}
+                    ">
+                        <div style="
+                            display: inline-block;
+                            padding: 0.75rem 1rem;
+                            border-radius: 1rem;
+                            max-width: 100%;
+                            text-align: left;
+                            {% if msg.role == 'user' %}
+                            background: var(--color-accent);
+                            color: white;
+                            {% else %}
+                            background: var(--color-bg-elevated);
+                            border: 1px solid var(--color-border);
+                            color: var(--color-text);
+                            {% endif %}
+                        ">
+                            {% if msg.role == 'assistant' %}
+                            <div dj-stream="response" dj-stream-mode="replace">{{ msg.content }}</div>
+                            {% else %}
+                            {{ msg.content }}
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <!-- Input Area -->
+                <div class="p-4 border-t" style="border-color: var(--color-border); background: var(--color-bg-elevated);">
+                    <form dj-submit="send_message" class="flex gap-3">
+                        <input
+                            type="text"
+                            name="content"
+                            placeholder="Type a message..."
+                            autocomplete="off"
+                            {% if is_streaming %}disabled{% endif %}
+                            style="
+                                flex: 1;
+                                padding: 0.75rem 1rem;
+                                border: 1px solid var(--color-border);
+                                border-radius: var(--radius-lg);
+                                background: var(--color-bg);
+                                color: var(--color-text);
+                                font-size: 1rem;
+                            "
+                        />
+                        <button
+                            type="submit"
+                            class="btn-primary-modern"
+                            {% if is_streaming %}disabled{% endif %}
+                            style="padding: 0.75rem 1.5rem;"
+                        >
+                            {% if is_streaming %}
+                            <span style="display: inline-flex; gap: 4px;">
+                                <span>•</span><span>•</span><span>•</span>
+                            </span>
+                            {% else %}
+                            Send
+                            {% endif %}
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- How It Works -->
+            <div class="demo-card-modern mt-4">
+                <div class="p-4 border-b" style="border-color: var(--color-border);">
+                    <h4 class="text-lg font-bold m-0" style="color: var(--color-text);">How It Works</h4>
+                </div>
+                <div class="p-4">
+                    <div class="grid gap-4" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+                        <div>
+                            <h5 class="font-semibold mb-2" style="color: var(--color-text);">🎯 stream_text()</h5>
+                            <p class="text-sm" style="color: var(--color-text-muted);">
+                                Streams individual tokens to a target element. Supports append, replace, and prepend modes.
+                            </p>
+                        </div>
+                        <div>
+                            <h5 class="font-semibold mb-2" style="color: var(--color-text);">🔄 stream_start/done()</h5>
+                            <p class="text-sm" style="color: var(--color-text-muted);">
+                                Lifecycle events for UI state (loading indicators, disable inputs).
+                            </p>
+                        </div>
+                        <div>
+                            <h5 class="font-semibold mb-2" style="color: var(--color-text);">⚠️ stream_error()</h5>
+                            <p class="text-sm" style="color: var(--color-text-muted);">
+                                Graceful error display while preserving partial content.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 p-3" style="background: var(--color-bg); border-radius: var(--radius-md); border: 1px solid var(--color-border);">
+                        <code style="font-size: 0.875rem; color: var(--color-accent);">
+                            &lt;div dj-stream="response" dj-stream-mode="append"&gt;...&lt;/div&gt;
+                        </code>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+
+<style>
+/* Stream error indicator styles */
+[data-stream-error="true"] {
+    border-color: var(--color-error, #ef4444) !important;
+}
+
+.dj-stream-error {
+    color: var(--color-error, #ef4444);
+    font-size: 0.875rem;
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    background: rgba(239, 68, 68, 0.1);
+    border-radius: 0.25rem;
+}
+
+/* Stream active pulsing cursor */
+[data-stream-active="true"]::after {
+    content: '▋';
+    animation: blink 1s step-end infinite;
+    color: var(--color-accent);
+}
+
+@keyframes blink {
+    50% { opacity: 0; }
+}
+</style>
+{% endblock %}
