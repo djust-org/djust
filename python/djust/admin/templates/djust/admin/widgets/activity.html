@@ -1,0 +1,38 @@
+<div id="{{ widget_id }}" 
+     class="djust-widget djust-widget-activity {{ css_class }}"
+     {% if refresh_interval %}data-refresh-interval="{{ refresh_interval }}"{% endif %}>
+    {% if title %}
+    <div class="djust-widget-header">
+        <h3 class="djust-widget-title">{{ title }}</h3>
+    </div>
+    {% endif %}
+    <div class="djust-widget-content">
+        <ul class="djust-activity-list">
+            {% for item in items %}
+            <li class="djust-activity-item">
+                {% if item.icon %}
+                <div class="djust-activity-icon djust-activity-icon--{{ item.color|default:'blue' }}">
+                    <i class="{{ item.icon }}"></i>
+                </div>
+                {% endif %}
+                <div class="djust-activity-content">
+                    <div class="djust-activity-message">{{ item.message }}</div>
+                    {% if item.detail %}
+                    <div class="djust-activity-detail">{{ item.detail }}</div>
+                    {% endif %}
+                </div>
+                {% if show_timestamps and item.time %}
+                <div class="djust-activity-time">{{ item.time }}</div>
+                {% endif %}
+            </li>
+            {% empty %}
+            <li class="djust-activity-empty">No recent activity</li>
+            {% endfor %}
+        </ul>
+        {% if has_more %}
+        <div class="djust-activity-more">
+            <a href="#">View all</a>
+        </div>
+        {% endif %}
+    </div>
+</div>

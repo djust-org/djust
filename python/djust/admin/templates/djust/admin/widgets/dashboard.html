@@ -1,0 +1,7 @@
+<div class="djust-dashboard djust-dashboard--{{ layout }}" style="--djust-columns: {{ columns }}; --djust-gap: {{ gap }};">
+    {% for item in widgets %}
+    <div class="djust-dashboard-item djust-dashboard-item--{{ item.size }}" style="--djust-colspan: {{ item.colspan }};">
+        {{ item.widget }}
+    </div>
+    {% endfor %}
+</div>

@@ -1,0 +1,25 @@
+<div id="{{ widget_id }}" 
+     class="djust-widget djust-widget-chart {{ css_class }}"
+     {% if refresh_interval %}data-refresh-interval="{{ refresh_interval }}"{% endif %}>
+    {% if title %}
+    <div class="djust-widget-header">
+        <h3 class="djust-widget-title">{{ title }}</h3>
+    </div>
+    {% endif %}
+    <div class="djust-widget-content" style="height: {{ height }};">
+        <canvas id="{{ widget_id }}-canvas"></canvas>
+    </div>
+    <script>
+        (function() {
+            const ctx = document.getElementById('{{ widget_id }}-canvas').getContext('2d');
+            new Chart(ctx, {
+                type: '{{ chart_type }}',
+                data: {
+                    labels: {{ labels|safe }},
+                    datasets: {{ datasets|safe }}
+                },
+                options: {{ options|safe }}
+            });
+        })();
+    </script>
+</div>

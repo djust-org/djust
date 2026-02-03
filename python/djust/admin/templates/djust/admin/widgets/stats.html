@@ -1,0 +1,30 @@
+<div id="{{ widget_id }}" 
+     class="djust-widget djust-widget-stats djust-widget-stats--{{ color }} {{ css_class }}"
+     {% if refresh_interval %}data-refresh-interval="{{ refresh_interval }}"{% endif %}>
+    <div class="djust-stats-content">
+        {% if icon %}
+        <div class="djust-stats-icon">
+            <i class="{{ icon }}"></i>
+        </div>
+        {% endif %}
+        <div class="djust-stats-body">
+            {% if title %}
+            <div class="djust-stats-title">{{ title }}</div>
+            {% endif %}
+            <div class="djust-stats-value">
+                {% if prefix %}{{ prefix }}{% endif %}{{ value }}{% if suffix %}{{ suffix }}{% endif %}
+            </div>
+            {% if trend is not None %}
+            <div class="djust-stats-trend {% if trend_positive %}djust-stats-trend--positive{% else %}djust-stats-trend--negative{% endif %}">
+                <span class="djust-stats-trend-icon">
+                    {% if trend_positive %}↑{% else %}↓{% endif %}
+                </span>
+                <span class="djust-stats-trend-value">{{ trend|floatformat:1 }}%</span>
+                {% if trend_label %}
+                <span class="djust-stats-trend-label">{{ trend_label }}</span>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>

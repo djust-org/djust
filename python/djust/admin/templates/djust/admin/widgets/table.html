@@ -1,0 +1,38 @@
+<div id="{{ widget_id }}" 
+     class="djust-widget djust-widget-table {{ css_class }}"
+     {% if refresh_interval %}data-refresh-interval="{{ refresh_interval }}"{% endif %}>
+    {% if title %}
+    <div class="djust-widget-header">
+        <h3 class="djust-widget-title">{{ title }}</h3>
+    </div>
+    {% endif %}
+    <div class="djust-widget-content">
+        <table class="djust-table">
+            <thead>
+                <tr>
+                    {% for col in columns %}
+                    <th{% if sortable %} class="djust-sortable"{% endif %}>{{ col }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    {% for cell in row %}
+                    <td>{{ cell }}</td>
+                    {% endfor %}
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="{{ columns|length }}" class="djust-table-empty">No data</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if has_more %}
+        <div class="djust-table-more">
+            <a href="#">View all</a>
+        </div>
+        {% endif %}
+    </div>
+</div>

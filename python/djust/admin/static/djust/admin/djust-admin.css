@@ -1,0 +1,490 @@
+/**
+ * djust Admin LiveView Integration Styles
+ * Extends Django admin with LiveView functionality
+ */
+
+/* ==========================================================================
+   Filter Bar
+   ========================================================================== */
+
+.djust-filter-bar {
+    background: var(--body-bg, #fff);
+    border-bottom: 1px solid var(--hairline-color, #e8e8e8);
+    padding: 10px 20px;
+    margin-bottom: 20px;
+}
+
+.djust-filter-bar-inner {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.djust-live-search {
+    flex: 1;
+    max-width: 400px;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color, #ccc);
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.djust-live-search:focus {
+    outline: none;
+    border-color: var(--primary, #417690);
+    box-shadow: 0 0 0 2px rgba(65, 118, 144, 0.2);
+}
+
+.djust-filter-count {
+    color: var(--body-quiet-color, #666);
+    font-size: 13px;
+}
+
+/* ==========================================================================
+   Inline Editing
+   ========================================================================== */
+
+.djust-inline-edit {
+    display: inline-block;
+    min-width: 50px;
+    padding: 4px 8px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: border-color 0.15s, background-color 0.15s;
+}
+
+.djust-inline-edit:hover {
+    border-color: var(--border-color, #ccc);
+    background-color: var(--darkened-bg, #f8f8f8);
+}
+
+.djust-inline-edit:focus {
+    outline: none;
+    border-color: var(--primary, #417690);
+    background-color: #fff;
+    box-shadow: 0 0 0 2px rgba(65, 118, 144, 0.2);
+}
+
+.djust-inline-edit--saving {
+    opacity: 0.7;
+    pointer-events: none;
+}
+
+.djust-inline-edit--error {
+    border-color: var(--error-fg, #ba2121) !important;
+    background-color: rgba(186, 33, 33, 0.05);
+}
+
+/* ==========================================================================
+   Progress Modal
+   ========================================================================== */
+
+.djust-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+}
+
+.djust-modal-content {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    width: 90%;
+    max-width: 500px;
+    max-height: 90vh;
+    overflow: auto;
+}
+
+.djust-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 15px 20px;
+    border-bottom: 1px solid var(--hairline-color, #e8e8e8);
+}
+
+.djust-modal-header h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.djust-modal-close {
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: var(--body-quiet-color, #666);
+    padding: 0;
+    line-height: 1;
+}
+
+.djust-modal-close:hover {
+    color: var(--body-fg, #333);
+}
+
+.djust-modal-body {
+    padding: 20px;
+}
+
+.djust-progress-container {
+    padding: 10px 0;
+}
+
+.djust-progress-bar {
+    height: 8px;
+    background: var(--darkened-bg, #f0f0f0);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+
+.djust-progress-fill {
+    height: 100%;
+    background: var(--primary, #417690);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+.djust-progress-info {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: var(--body-quiet-color, #666);
+}
+
+.djust-progress-message {
+    margin-top: 10px;
+    font-size: 14px;
+    color: var(--body-fg, #333);
+}
+
+/* ==========================================================================
+   Dashboard & Widgets
+   ========================================================================== */
+
+.djust-dashboard {
+    display: grid;
+    gap: var(--djust-gap, 1rem);
+}
+
+.djust-dashboard--grid {
+    grid-template-columns: repeat(var(--djust-columns, 4), 1fr);
+}
+
+.djust-dashboard--flex {
+    display: flex;
+    flex-wrap: wrap;
+}
+
+.djust-dashboard-item {
+    grid-column: span var(--djust-colspan, 1);
+}
+
+.djust-dashboard--flex .djust-dashboard-item {
+    flex: 1;
+    min-width: calc((100% / var(--djust-columns, 4)) * var(--djust-colspan, 1) - var(--djust-gap, 1rem));
+}
+
+/* Widget Base */
+.djust-widget {
+    background: #fff;
+    border: 1px solid var(--hairline-color, #e8e8e8);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.djust-widget-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--hairline-color, #e8e8e8);
+    background: var(--darkened-bg, #f8f8f8);
+}
+
+.djust-widget-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--body-fg, #333);
+}
+
+.djust-widget-content {
+    padding: 16px;
+}
+
+/* Stats Widget */
+.djust-widget-stats {
+    position: relative;
+    overflow: hidden;
+}
+
+.djust-stats-content {
+    display: flex;
+    gap: 16px;
+}
+
+.djust-stats-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: #fff;
+}
+
+.djust-widget-stats--blue .djust-stats-icon { background: #3b82f6; }
+.djust-widget-stats--green .djust-stats-icon { background: #10b981; }
+.djust-widget-stats--red .djust-stats-icon { background: #ef4444; }
+.djust-widget-stats--yellow .djust-stats-icon { background: #f59e0b; }
+.djust-widget-stats--purple .djust-stats-icon { background: #8b5cf6; }
+
+.djust-stats-body {
+    flex: 1;
+}
+
+.djust-stats-title {
+    font-size: 12px;
+    color: var(--body-quiet-color, #666);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.djust-stats-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--body-fg, #333);
+    line-height: 1.2;
+}
+
+.djust-stats-trend {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    margin-top: 4px;
+}
+
+.djust-stats-trend--positive {
+    color: #10b981;
+}
+
+.djust-stats-trend--negative {
+    color: #ef4444;
+}
+
+.djust-stats-trend-label {
+    color: var(--body-quiet-color, #666);
+}
+
+/* Activity Widget */
+.djust-activity-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.djust-activity-item {
+    display: flex;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--hairline-color, #e8e8e8);
+}
+
+.djust-activity-item:last-child {
+    border-bottom: none;
+}
+
+.djust-activity-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: #fff;
+    flex-shrink: 0;
+}
+
+.djust-activity-icon--blue { background: #3b82f6; }
+.djust-activity-icon--green { background: #10b981; }
+.djust-activity-icon--red { background: #ef4444; }
+.djust-activity-icon--yellow { background: #f59e0b; }
+
+.djust-activity-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.djust-activity-message {
+    font-size: 13px;
+    color: var(--body-fg, #333);
+}
+
+.djust-activity-detail {
+    font-size: 12px;
+    color: var(--body-quiet-color, #666);
+    margin-top: 2px;
+}
+
+.djust-activity-time {
+    font-size: 11px;
+    color: var(--body-quiet-color, #999);
+    flex-shrink: 0;
+}
+
+.djust-activity-empty {
+    text-align: center;
+    padding: 20px;
+    color: var(--body-quiet-color, #666);
+}
+
+.djust-activity-more {
+    text-align: center;
+    padding-top: 10px;
+}
+
+/* Table Widget */
+.djust-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.djust-table th,
+.djust-table td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--hairline-color, #e8e8e8);
+}
+
+.djust-table th {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--body-quiet-color, #666);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.djust-table td {
+    font-size: 13px;
+    color: var(--body-fg, #333);
+}
+
+.djust-table tbody tr:hover {
+    background: var(--darkened-bg, #f8f8f8);
+}
+
+.djust-sortable {
+    cursor: pointer;
+}
+
+.djust-sortable:hover {
+    color: var(--primary, #417690);
+}
+
+.djust-table-empty {
+    text-align: center;
+    padding: 20px;
+    color: var(--body-quiet-color, #666);
+}
+
+.djust-table-more {
+    text-align: center;
+    padding-top: 10px;
+}
+
+/* Progress Widget */
+.djust-progress-stages {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.djust-progress-stage-bar {
+    height: 6px;
+    background: var(--darkened-bg, #f0f0f0);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.djust-progress-stage-fill {
+    height: 100%;
+    border-radius: 3px;
+}
+
+.djust-progress-stage-fill--blue { background: #3b82f6; }
+.djust-progress-stage-fill--green { background: #10b981; }
+.djust-progress-stage-fill--red { background: #ef4444; }
+.djust-progress-stage-fill--yellow { background: #f59e0b; }
+.djust-progress-stage-fill--gray { background: #9ca3af; }
+
+.djust-progress-stage-info {
+    display: flex;
+    gap: 8px;
+    font-size: 12px;
+    margin-top: 4px;
+}
+
+.djust-progress-stage-label {
+    color: var(--body-fg, #333);
+}
+
+.djust-progress-stage-count {
+    font-weight: 600;
+}
+
+.djust-progress-stage-percent {
+    color: var(--body-quiet-color, #666);
+}
+
+.djust-progress-total {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--hairline-color, #e8e8e8);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--body-fg, #333);
+}
+
+/* ==========================================================================
+   Responsive
+   ========================================================================== */
+
+@media (max-width: 1200px) {
+    .djust-dashboard--grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .djust-dashboard-item--large,
+    .djust-dashboard-item--full {
+        grid-column: span 2;
+    }
+}
+
+@media (max-width: 768px) {
+    .djust-dashboard--grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .djust-dashboard-item {
+        grid-column: span 1 !important;
+    }
+    
+    .djust-stats-value {
+        font-size: 24px;
+    }
+    
+    .djust-modal-content {
+        width: 95%;
+    }
+}

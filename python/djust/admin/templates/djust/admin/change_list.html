@@ -1,0 +1,72 @@
+{% extends "admin/change_list.html" %}
+{% load static %}
+
+{% block extrahead %}
+{{ block.super }}
+{% if djust_admin_enabled %}
+<link rel="stylesheet" href="{% static 'djust/admin/djust-admin.css' %}">
+<script>
+    window.DJUST_ADMIN_CONFIG = {
+        liveFilters: {{ live_filters|yesno:"true,false" }},
+        liveInlineEditing: {{ live_inline_editing|yesno:"true,false" }},
+        liveEditableFields: {{ live_editable_fields|safe }},
+        refreshInterval: {{ live_refresh_interval|default:"null" }},
+        csrfToken: '{{ csrf_token }}'
+    };
+</script>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+{% if djust_admin_enabled and live_filters %}
+<div id="djust-live-filter-bar" class="djust-filter-bar">
+    <div class="djust-filter-bar-inner">
+        <input type="text" 
+               id="djust-live-search" 
+               class="djust-live-search" 
+               placeholder="Search..."
+               dj-keyup="live_filter"
+               dj-debounce="300">
+        <span id="djust-filter-count" class="djust-filter-count"></span>
+    </div>
+</div>
+{% endif %}
+
+{{ block.super }}
+
+{% if djust_admin_enabled %}
+<!-- Live Action Progress Modal -->
+<div id="djust-action-progress-modal" class="djust-modal" style="display: none;">
+    <div class="djust-modal-content">
+        <div class="djust-modal-header">
+            <h3 id="djust-action-title">Processing...</h3>
+            <button type="button" class="djust-modal-close" onclick="djustAdmin.closeProgressModal()">&times;</button>
+        </div>
+        <div class="djust-modal-body">
+            <div class="djust-progress-container">
+                <div id="djust-progress-bar" class="djust-progress-bar">
+                    <div id="djust-progress-fill" class="djust-progress-fill" style="width: 0%"></div>
+                </div>
+                <div class="djust-progress-info">
+                    <span id="djust-progress-text">0%</span>
+                    <span id="djust-progress-count"></span>
+                </div>
+                <div id="djust-progress-message" class="djust-progress-message"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="{% static 'djust/admin/djust-admin.js' %}"></script>
+{% endif %}
+{% endblock %}
+
+{% block result_list %}
+{% if djust_admin_enabled %}
+<div id="djust-result-list" class="djust-result-list">
+    {{ block.super }}
+</div>
+{% else %}
+{{ block.super }}
+{% endif %}
+{% endblock %}

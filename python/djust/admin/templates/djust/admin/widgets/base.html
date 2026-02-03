@@ -1,0 +1,12 @@
+<div id="{{ widget_id }}" 
+     class="djust-widget {{ css_class }}"
+     {% if refresh_interval %}data-refresh-interval="{{ refresh_interval }}"{% endif %}>
+    {% if title %}
+    <div class="djust-widget-header">
+        <h3 class="djust-widget-title">{{ title }}</h3>
+    </div>
+    {% endif %}
+    <div class="djust-widget-content">
+        {% block widget_content %}{% endblock %}
+    </div>
+</div>

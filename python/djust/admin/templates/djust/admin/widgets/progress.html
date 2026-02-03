@@ -1,0 +1,31 @@
+<div id="{{ widget_id }}" 
+     class="djust-widget djust-widget-progress {{ css_class }}"
+     {% if refresh_interval %}data-refresh-interval="{{ refresh_interval }}"{% endif %}>
+    {% if title %}
+    <div class="djust-widget-header">
+        <h3 class="djust-widget-title">{{ title }}</h3>
+    </div>
+    {% endif %}
+    <div class="djust-widget-content">
+        <div class="djust-progress-stages">
+            {% for stage in stages %}
+            <div class="djust-progress-stage">
+                <div class="djust-progress-stage-bar">
+                    <div class="djust-progress-stage-fill djust-progress-stage-fill--{{ stage.color|default:'blue' }}" 
+                         style="width: {{ stage.percent|floatformat:1 }}%"></div>
+                </div>
+                <div class="djust-progress-stage-info">
+                    <span class="djust-progress-stage-label">{{ stage.label }}</span>
+                    <span class="djust-progress-stage-count">{{ stage.count }}</span>
+                    {% if show_percentages %}
+                    <span class="djust-progress-stage-percent">({{ stage.percent|floatformat:0 }}%)</span>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="djust-progress-total">
+            Total: {{ total }}
+        </div>
+    </div>
+</div>
