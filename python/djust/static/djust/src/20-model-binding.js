@@ -74,13 +74,21 @@ function _getElementValue(el) {
  * Send update_model event to server.
  */
 function _sendModelUpdate(field, value) {
-    if (window.djust.liveViewInstance && window.djust.liveViewInstance.ws &&
-        window.djust.liveViewInstance.ws.readyState === WebSocket.OPEN) {
-        window.djust.liveViewInstance.ws.send(JSON.stringify({
+    // Prefer the high-level handleEvent path (HTTP fallback, loading states, caching)
+    if (typeof handleEvent === 'function') {
+        handleEvent('update_model', { field, value });
+        return;
+    }
+    // Fallback: send directly via WebSocket
+    const inst = window.djust.liveViewInstance;
+    if (inst && inst.sendEvent) {
+        inst.sendEvent('update_model', { field, value });
+    } else if (inst && inst.ws && inst.ws.readyState === WebSocket.OPEN) {
+        inst.sendMessage({
             type: 'event',
             event: 'update_model',
-            data: { field, value },
-        }));
+            params: { field, value },
+        });
     }
 }
 
