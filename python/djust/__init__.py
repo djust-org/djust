@@ -250,4 +250,12 @@ __all__ = [
     "format_decimal",
     # Offline/PWA support
     "OfflineMixin",
+    # API Integrations (GraphQL, REST, DRF)
+    "GraphQLMixin",
+    "GraphQLSubscription",
+    "RESTMixin",
+    "APIError",
+    "APIResponse",
+    "DRFMixin",
+    "DRFSerializerMixin",
 ]
