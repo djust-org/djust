@@ -76,8 +76,8 @@ class TestPrintResults(unittest.TestCase):
             SmokeTestResult('t1', True, duration=10),
             SmokeTestResult('t2', False, skipped=True, message='skip', duration=0),
         ]
-        # Skips count as failures in the current logic
-        self.assertFalse(print_results(results))
+        # Skips don't count as failures — only actual failures do
+        self.assertTrue(print_results(results))
 
 
 class TestIndividualTests(unittest.TestCase):

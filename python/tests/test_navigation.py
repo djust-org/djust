@@ -274,7 +274,7 @@ class TestNavigationWebSocket:
 
         consumer_instance.send_json.assert_called_once()
         call_data = consumer_instance.send_json.call_args[0][0]
-        assert call_data["type"] == "navigation"
+        assert call_data["type"] == "live_patch"
         assert call_data["params"] == {"page": 2}
 
     @pytest.mark.asyncio
@@ -329,8 +329,8 @@ class TestNavigationWebSocket:
         assert consumer_instance.send_json.call_count == 2
         first = consumer_instance.send_json.call_args_list[0][0][0]
         second = consumer_instance.send_json.call_args_list[1][0][0]
-        assert first["type"] == "navigation"
-        assert second["type"] == "navigation"
+        assert first["type"] == "live_patch"
+        assert second["type"] == "live_redirect"
         assert second["path"] == "/b/"
 
 

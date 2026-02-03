@@ -16,6 +16,8 @@ from djust.presence import (
     CursorTracker,
     PRESENCE_TIMEOUT
 )
+from djust.backends.registry import reset_presence_backend, set_presence_backend
+from djust.backends.memory import InMemoryPresenceBackend
 
 
 class FakeCache:
@@ -79,10 +81,13 @@ fake_cache = FakeCache()
 
 @pytest.fixture(autouse=True)
 def clear_cache():
-    """Clear cache before each test"""
+    """Reset presence backend before each test"""
     fake_cache.clear()
+    backend = InMemoryPresenceBackend(timeout=PRESENCE_TIMEOUT)
+    set_presence_backend(backend)
     yield
     fake_cache.clear()
+    reset_presence_backend()
 
 
 @pytest.fixture
@@ -101,7 +106,7 @@ def request_factory():
     return FakeRequestFactory()
 
 
-@patch('djust.presence.cache', fake_cache)
+
 class TestPresenceManager:
     """Test the PresenceManager class"""
     
@@ -110,13 +115,13 @@ class TestPresenceManager:
         assert PresenceManager.presence_group_name("document:123") == "djust_presence_document_123"
         assert PresenceManager.presence_group_name("chat:{room_id}") == "djust_presence_chat_room_id"
     
-    def test_presence_cache_key(self):
-        """Test presence cache key generation"""
-        assert PresenceManager.presence_cache_key("document:123") == "djust_presence:document:123"
-    
-    def test_heartbeat_cache_key(self):
-        """Test heartbeat cache key generation"""
-        assert PresenceManager.heartbeat_cache_key("document:123", "user1") == "djust_heartbeat:document:123:user1"
+    def test_join_and_list(self):
+        """Test that join creates a presence record retrievable via list"""
+        presence_key = "document:test_cache"
+        PresenceManager.join_presence(presence_key, "u1", {"name": "User 1"})
+        presences = PresenceManager.list_presences(presence_key)
+        assert len(presences) == 1
+        assert presences[0]["id"] == "u1"
     
     def test_join_presence(self):
         """Test joining a presence group"""
@@ -167,6 +172,12 @@ class TestPresenceManager:
     
     def test_presence_cleanup_stale(self):
         """Test cleanup of stale presences"""
+        from djust.backends.registry import get_presence_backend
+        
+        # Use a backend with very short timeout
+        backend = InMemoryPresenceBackend(timeout=0)
+        set_presence_backend(backend)
+        
         presence_key = "document:123"
         user_id = "user1"
         meta = {"name": "Test User"}
@@ -175,16 +186,14 @@ class TestPresenceManager:
         PresenceManager.join_presence(presence_key, user_id, meta)
         
         # Manually set heartbeat to old timestamp
-        heartbeat_key = PresenceManager.heartbeat_cache_key(presence_key, user_id)
-        old_time = time.time() - PRESENCE_TIMEOUT - 10
-        fake_cache.set(heartbeat_key, old_time)
+        backend._heartbeats[(presence_key, user_id)] = time.time() - 100
         
         # List presences should clean up stale ones
         presences = PresenceManager.list_presences(presence_key)
         assert len(presences) == 0
 
 
-@patch('djust.presence.cache', fake_cache)
+
 class TestPresenceMixin:
     """Test the PresenceMixin class"""
     
@@ -324,7 +333,7 @@ class TestPresenceMixin:
         assert call_args[1]["payload"]["message"] == "hello"
 
 
-@patch('djust.presence.cache', fake_cache)
+
 class TestCursorTracker:
     """Test the CursorTracker class"""
     
@@ -369,7 +378,7 @@ class TestCursorTracker:
         assert len(active_cursors) == 0
 
 
-@patch('djust.presence.cache', fake_cache)
+
 class TestLiveCursorMixin:
     """Test the LiveCursorMixin class"""
     
@@ -459,7 +468,7 @@ class TestLiveCursorMixin:
         assert len(cursors) == 0
 
 
-@patch('djust.presence.cache', fake_cache)
+
 class TestPresenceIntegration:
     """Integration tests for presence system"""
     

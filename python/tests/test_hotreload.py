@@ -17,6 +17,8 @@ def mock_view_instance():
     view = Mock()
     view.get_template = Mock(return_value=Mock())
     view.render_with_diff = Mock(return_value=("<html>test</html>", [], 1))
+    view._drain_push_events = Mock(return_value=[])
+    view._drain_navigation = Mock(return_value=[])
     return view
 
 

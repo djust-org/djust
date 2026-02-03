@@ -7,6 +7,20 @@ from unittest.mock import patch, MagicMock
 
 from django.test import TestCase, override_settings
 from django.core.management import call_command
+from djust.management.commands.djust_check import Command as DjustCheckCommand
+
+
+def _run_djust_check(*args, stdout=None):
+    """Run djust_check command directly (works even when djust is not in INSTALLED_APPS)."""
+    cmd = DjustCheckCommand(stdout=stdout or StringIO(), stderr=StringIO())
+    # Call handle() directly to skip Django system checks (which fail when apps are removed)
+    from django.core.management.base import BaseCommand
+    parser = cmd.create_parser("manage.py", "djust_check")
+    options = parser.parse_args(list(args))
+    cmd_options = vars(options)
+    cmd_options.pop("args", ())
+    cmd.handle(**cmd_options)
+    return cmd
 
 
 MINIMAL_INSTALLED_APPS = [
@@ -37,7 +51,7 @@ class DjustCheckSettingsTest(TestCase):
     )
     def test_missing_djust_in_installed_apps(self):
         out = StringIO()
-        call_command("djust_check", stdout=out)
+        _run_djust_check(stdout=out)
         output = out.getvalue()
         assert "'djust' is not in INSTALLED_APPS" in output
 
@@ -53,6 +67,7 @@ class DjustCheckSettingsTest(TestCase):
 
     @override_settings(
         INSTALLED_APPS=MINIMAL_INSTALLED_APPS,
+        ASGI_APPLICATION=None,
     )
     def test_missing_asgi_application(self):
         out = StringIO()
@@ -63,6 +78,7 @@ class DjustCheckSettingsTest(TestCase):
     @override_settings(
         INSTALLED_APPS=MINIMAL_INSTALLED_APPS,
         ASGI_APPLICATION="djust.asgi.application",
+        CHANNEL_LAYERS={},
     )
     def test_missing_channel_layers_warns(self):
         out = StringIO()
@@ -132,7 +148,7 @@ class DjustCheckFixSuggestionsTest(TestCase):
     )
     def test_fix_flag_shows_suggestions(self):
         out = StringIO()
-        call_command("djust_check", "--fix", stdout=out)
+        _run_djust_check("--fix", stdout=out)
         output = out.getvalue()
         assert "Fix:" in output
 
@@ -142,7 +158,7 @@ class DjustCheckFixSuggestionsTest(TestCase):
     )
     def test_no_fix_flag_hides_suggestions(self):
         out = StringIO()
-        call_command("djust_check", stdout=out)
+        _run_djust_check(stdout=out)
         output = out.getvalue()
         # Should suggest running with --fix instead
         assert "--fix" in output

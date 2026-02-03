@@ -265,7 +265,7 @@ Default
 
             template = self.create_template(child_source, [tmpdir])
 
-            from djust.template_backend import TemplateDoesNotExist
+            from django.template import TemplateDoesNotExist
 
             with pytest.raises(TemplateDoesNotExist):
                 template._resolve_template_inheritance()

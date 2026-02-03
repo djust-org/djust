@@ -101,24 +101,14 @@ class TestRedisPresenceBackend(unittest.TestCase):
     """Tests for RedisPresenceBackend using mocked Redis."""
 
     def setUp(self):
-        # Mock redis import and client
+        # Create backend with mocked client, bypassing __init__
+        from djust.backends.redis import RedisPresenceBackend
         self.mock_redis_client = MagicMock()
         self.mock_redis_client.ping.return_value = True
-
-        with patch("djust.backends.redis.redis_lib") as mock_redis_mod:
-            mock_redis_mod.from_url.return_value = self.mock_redis_client
-            # Need to patch the import inside the module
-            import djust.backends.redis as redis_mod
-            self._redis_mod = redis_mod
-
-        # Create backend with mocked client
-        from djust.backends.redis import RedisPresenceBackend
-        with patch("redis.from_url", return_value=self.mock_redis_client):
-            # Directly instantiate and inject mock
-            self.backend = RedisPresenceBackend.__new__(RedisPresenceBackend)
-            self.backend._client = self.mock_redis_client
-            self.backend._prefix = "djust:presence"
-            self.backend._timeout = 60
+        self.backend = RedisPresenceBackend.__new__(RedisPresenceBackend)
+        self.backend._client = self.mock_redis_client
+        self.backend._prefix = "djust:presence"
+        self.backend._timeout = 60
 
     def test_implements_interface(self):
         self.assertIsInstance(self.backend, PresenceBackend)
