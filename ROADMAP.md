@@ -213,3 +213,138 @@ First-class support for multi-language LiveView apps.
 - `{% trans %}` and `{% blocktrans %}` tag optimization in Rust
 - RTL layout support with automatic direction hints
 - Document i18n patterns for dynamic content
+
+### 19. LiveForm Conditional Visibility (`visible_if`)
+
+Declarative field visibility based on other field values.
+
+- `visible_if` rule in LiveForm field definitions
+- Reactive show/hide without manual JavaScript
+- Support for complex conditions (AND/OR, comparisons)
+- Automatic ARIA handling for hidden fields
+- Example: `{"role": {"visible_if": {"employment_type": "full_time"}}}`
+
+---
+
+## v0.8 Priorities
+
+Core framework enhancements based on competitive analysis and DX research.
+
+### 20. Async Assigns with Loading States
+
+Declarative async data loading with automatic state tracking.
+
+- `assign_async()` wraps async work, tracks loading/error/ok states automatically
+- `{% async_result %}` template tag for declarative rendering of each state
+- Eliminates manual `is_loading`, `error`, `data` boilerplate
+- Inspired by Phoenix LiveView's `assign_async()` pattern
+
+### 21. Integrated File Uploads
+
+First-class file upload support with progress tracking and cloud integration.
+
+- `allow_upload()` with accept filters, max entries, size limits
+- Reactive progress tracking in templates
+- Drag-drop support via `dj-drop-target`
+- Direct-to-S3/cloud uploads with presigned URLs
+- Image previews via `live_img_preview`
+
+### 22. SPA Navigation (`dj-navigate`)
+
+Preserve app state across page navigations without full reloads.
+
+- `dj-navigate` directive intercepts links, morphs only body content
+- Preserves JS state, scroll position, audio/video playback
+- `dj-navigate.hover` for prefetch on hover
+- History API integration for URL changes
+- Inspired by Livewire 3's `wire:navigate`
+
+### 23. Morphing Page Refreshes
+
+Intelligent DOM diffing for full-page refreshes using idiomorph.
+
+- Morph only changed elements instead of replacing entire body
+- Preserve focus, scroll position, form state
+- `<meta name="dj-refresh-method" content="morph">` opt-in
+- Broadcast refresh: `MyModel.objects.broadcast_refresh()`
+- 2KB idiomorph library (MIT licensed)
+
+### 24. Streams for Large/Infinite Lists
+
+Efficiently manage large lists without memory pressure.
+
+- `stream()` initializes a stream with initial data
+- `stream_insert()`, `stream_delete()` for delta updates
+- Server sends only changes; client maintains DOM
+- Essential for chat, feeds, real-time dashboards
+- Inspired by Phoenix LiveView streams
+
+### 25. Trigger Modifiers (HTMX-style)
+
+Rich event trigger system with debounce, throttle, and conditions.
+
+- `dj-trigger="keyup changed delay:300ms"` for debounced search
+- `dj-trigger="scroll throttle:500ms"` for throttled infinite scroll
+- `dj-trigger="click[ctrlKey]"` for conditional triggers
+- `from:<selector>` for triggering from other elements
+- Reduces server load, enables advanced UX patterns
+
+### 26. Persistent Elements Across Navigation
+
+Keep stateful DOM elements alive during page transitions.
+
+- `{% persist "player" %}` wraps elements to preserve
+- Audio/video players, chat widgets survive navigation
+- Client transplants DOM nodes instead of destroying
+- Inspired by Livewire's `@persist` and Turbo's `data-turbo-permanent`
+
+---
+
+## v0.9 Priorities
+
+Developer experience and tooling improvements.
+
+### 27. `djust new` CLI Scaffolder
+
+Generate components, views, and tests with one command.
+
+- `djust new component chat --with-tests`
+- Customizable templates via `.djust/templates/`
+- Enforces team patterns and consistency
+- Eliminates copy-paste from docs
+
+### 28. Event Replay Debugger
+
+Record and replay WebSocket events for debugging.
+
+- Step forward/backward through state changes
+- Inspect diffs at each step
+- Export as reproducible test cases
+- Redux DevTools-style time travel for server state
+
+### 29. Type-Safe Event Contracts
+
+Validate template events against handler signatures.
+
+- Auto-generate TypedDict schemas from `handle_event` methods
+- IDE integration (VS Code/PyCharm) via language server
+- Catch typos like `dj-click="submti"` at edit-time
+- Surface mismatches as squiggles before runtime
+
+### 30. Component Storybook Mode
+
+Develop and test components in isolation.
+
+- `djust storybook` renders components with mock assigns
+- Hot-reload on save
+- Show all states side-by-side (empty, loading, error, success)
+- Auto-generate visual regression snapshots
+
+### 31. Enhanced Test Helpers
+
+First-class pytest fixtures for LiveView testing.
+
+- `async with live_view("/chat") as view` context manager
+- `view.click()`, `view.type()`, `assert_push()`, `assert_patch()`
+- WebSocket simulation without Selenium
+- Automatic cleanup and isolation

@@ -56,6 +56,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         self.use_binary = False  # Use JSON for now (MessagePack support TODO)
         self.use_actors = False  # Will be set based on view class
         self._view_group: Optional[str] = None
+        self._presence_group: Optional[str] = None
         self._tick_task = None
 
     async def _flush_push_events(self) -> None:
@@ -89,6 +90,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         for cmd in commands:
             await self.send_json({
                 "type": "navigation",
+                **cmd,
+            })
+
+    async def _flush_i18n(self) -> None:
+        """
+        Send any pending i18n commands (language changes, etc.)
+        queued by the view during handler execution.
+        """
+        if not self.view_instance:
+            return
+        if not hasattr(self.view_instance, "_drain_i18n_commands"):
+            return
+        commands = self.view_instance._drain_i18n_commands()
+        for cmd in commands:
+            await self.send_json({
+                "type": "i18n",
                 **cmd,
             })
 
@@ -199,6 +216,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self._flush_push_events()
                 await self._flush_navigation()
                 await self._flush_accessibility()
+                await self._flush_i18n()
         else:
             response = {
                 "type": "html_update",
@@ -214,6 +232,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self._flush_push_events()
             await self._flush_navigation()
             await self._flush_accessibility()
+            await self._flush_i18n()
 
     def _attach_debug_payload(
         self,
@@ -1019,6 +1038,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     })
                     await self._flush_push_events()
                     await self._flush_navigation()
+                    await self._flush_i18n()
                 else:
                     # For component events, send full HTML instead of patches
                     # Component VDOM is separate from parent VDOM, causing path mismatches

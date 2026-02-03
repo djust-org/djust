@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-02-03
+
+### Fixed
+- Fixed `AttributeError: '_presence_group'` in WebSocket disconnect handler
+- Initialize `_presence_group` to `None` in `LiveViewConsumer.__init__()`
+
+### Added
+- **155 new unit tests** for v0.7 features:
+  - `test_tenants.py` (61 tests) — TenantMixin, resolvers, backends, isolation
+  - `test_pwa.py` (53 tests) — manifest, service worker, offline indicators
+  - `test_i18n.py` (39 tests) — language switching, RTL/LTR, formatting
+  - Plus 2 fixed server_push tests
+
+### Documentation
+- Added `ENTERPRISE.md` — enterprise tier strategy, features, and licensing
+- Added `FUTURE_CONSIDERATIONS.md` — potential add-on packages
+- Updated `ROADMAP.md` with v0.8 and v0.9 priorities
+
 ## [0.7.0] - 2026-02-03 — "Global Scale" 🌍
 
 A transformative release bringing multi-tenancy, offline-first PWA capabilities, comprehensive API integrations, and full internationalization to djust.
