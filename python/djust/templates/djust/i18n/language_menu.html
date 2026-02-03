@@ -1,0 +1,24 @@
+{# Language dropdown menu for djust i18n #}
+{# Usage: {% djust_language_menu %} #}
+<div class="djust-language-menu dropdown">
+  <button type="button"
+          class="dropdown-toggle"
+          data-bs-toggle="dropdown"
+          aria-expanded="false"
+          aria-label="Select language">
+    {{ current_lang_name }}
+  </button>
+  <ul class="dropdown-menu">
+    {% for code, name in available_languages %}
+    <li>
+      <button type="button"
+              class="dropdown-item{% if code == current_lang %} active{% endif %}"
+              dj-click="change_language"
+              dj-value-lang="{{ code }}"
+              {% if code == current_lang %}aria-current="true"{% endif %}>
+        {{ name }}
+      </button>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
