@@ -25,6 +25,7 @@ from .drafts import DraftModeMixin
 from .push import push_to_view, apush_to_view, push_event_to_view, apush_event_to_view
 from .presence import PresenceMixin, LiveCursorMixin, PresenceManager, CursorTracker
 from .routing import live_session, get_route_map_script
+from .sse import SSEView, SSEMixin, sse_event, sse_comment
 
 # Import Rust functions
 try:
@@ -213,4 +214,9 @@ __all__ = [
     "LiveCursorMixin",
     "PresenceManager",
     "CursorTracker",
+    # SSE (Server-Sent Events)
+    "SSEView",
+    "SSEMixin",
+    "sse_event",
+    "sse_comment",
 ]
