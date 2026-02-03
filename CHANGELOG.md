@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-02-03 — "Developer Experience" 🛠️
+
+A release focused on making djust easier to adopt with scaffolding tools and comprehensive documentation.
+
+### Added
+
+#### Scaffolding & Templates
+- **Django app template** — Use `django-admin startapp --template` with djust's app template for instant LiveView-ready app structure
+- **`startliveview` management command** — Scaffold new LiveViews with `python manage.py startliveview MyView` including template, tests, and URL configuration
+
+#### Documentation
+- **Comprehensive getting-started guide** — Step-by-step tutorial for new users covering installation, first LiveView, events, and deployment
+
+#### Analysis & Documentation
+- **State storage investigation** — In-depth analysis of session/state storage patterns with scaling recommendations for production deployments
+- **VDOM performance benchmarks** — Documented benchmark results and optimization guidance
+
+#### Testing
+- **11 new VDOM stress tests** — Additional edge case coverage for large lists, rapid mutations, and complex nested structures
+
 ## [0.4.0] - 2026-02-03 — "Stable Connections" 🔗
 
 A focused release hardening TurboNav/SPA navigation integration and adding performance analysis tooling.
@@ -368,7 +388,8 @@ The biggest djust release yet — 13 major features bringing djust to full parit
 
 - Bug fixes and stability improvements
 
-[Unreleased]: https://github.com/djust-org/djust/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/djust-org/djust/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/djust-org/djust/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/djust-org/djust/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/djust-org/djust/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/djust-org/djust/compare/v0.2.1...v0.2.2
