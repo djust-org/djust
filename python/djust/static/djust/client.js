@@ -74,6 +74,9 @@ window.djustInitialized = false;
 // Track pending turbo:load reinit
 let pendingTurboReinit = false;
 
+// Guard against concurrent reinitializations during rapid navigation
+let reinitInProgress = false;
+
 window.addEventListener('turbo:load', function(event) {
     console.log('[LiveView:TurboNav] turbo:load event received!');
     console.log('[LiveView:TurboNav] djustInitialized:', window.djustInitialized);
@@ -94,14 +97,28 @@ window.addEventListener('turbo:load', function(event) {
 
 // Reinitialize LiveView after TurboNav navigation
 function reinitLiveViewForTurboNav() {
+    // Guard against concurrent reinitializations (rapid navigation)
+    if (reinitInProgress) {
+        console.log('[LiveView:TurboNav] Reinit already in progress, skipping duplicate');
+        return;
+    }
+    reinitInProgress = true;
+    
     console.log('[LiveView:TurboNav] Reinitializing LiveView...');
 
-    // Disconnect existing WebSocket
+    // Disconnect existing WebSocket (including any on window.djust.liveViewInstance)
     if (liveViewWS) {
         console.log('[LiveView:TurboNav] Disconnecting existing WebSocket');
         liveViewWS.disconnect();
         liveViewWS = null;
     }
+    
+    // Also check window.djust.liveViewInstance for orphaned connections
+    if (window.djust.liveViewInstance && window.djust.liveViewInstance !== liveViewWS) {
+        console.log('[LiveView:TurboNav] Cleaning up orphaned liveViewInstance');
+        window.djust.liveViewInstance.disconnect();
+    }
+    window.djust.liveViewInstance = null;
 
     // Reset client VDOM version
     clientVdomVersion = null;
@@ -143,6 +160,9 @@ function reinitLiveViewForTurboNav() {
     // Re-scan dj-loading attributes
     globalLoadingManager.scanAndRegister();
 
+    // Reset reinit guard
+    reinitInProgress = false;
+    
     console.log('[LiveView:TurboNav] Reinitialization complete');
 }
 
@@ -337,24 +357,35 @@ class LiveViewWebSocket {
         if (this.heartbeatInterval) {
             clearInterval(this.heartbeatInterval);
             this.heartbeatInterval = null;
+            console.log('[LiveView] Heartbeat stopped');
         }
 
         // Clear reconnect attempts so we don't auto-reconnect
         this.reconnectAttempts = this.maxReconnectAttempts;
 
-        // Close WebSocket if open
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.close();
+        // Close WebSocket if open or connecting
+        if (this.ws) {
+            if (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN) {
+                this.ws.close();
+                console.log('[LiveView] WebSocket closed');
+            }
         }
 
         this.ws = null;
         this.sessionId = null;
         this.viewMounted = false;
         this.vdomVersion = null;
+        this.stats.connectedAt = null; // Reset connection timestamp
     }
 
     connect(url = null) {
         if (!this.enabled) return;
+        
+        // Guard: prevent duplicate connections
+        if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
+            console.log('[LiveView] WebSocket already connected or connecting, skipping');
+            return;
+        }
 
         if (!url) {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -833,11 +864,18 @@ class LiveViewWebSocket {
     }
 
     startHeartbeat(interval = 30000) {
-        setInterval(() => {
+        // Guard: prevent multiple heartbeat intervals
+        if (this.heartbeatInterval) {
+            console.log('[LiveView] Heartbeat already running, skipping duplicate');
+            return;
+        }
+        
+        this.heartbeatInterval = setInterval(() => {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 this.sendMessage({ type: 'ping' });
             }
         }, interval);
+        console.log('[LiveView] Heartbeat started (interval:', interval, 'ms)');
     }
 }
 

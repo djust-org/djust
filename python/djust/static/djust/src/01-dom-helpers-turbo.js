@@ -50,6 +50,9 @@ window.djustInitialized = false;
 // Track pending turbo:load reinit
 let pendingTurboReinit = false;
 
+// Guard against concurrent reinitializations during rapid navigation
+let reinitInProgress = false;
+
 window.addEventListener('turbo:load', function(event) {
     console.log('[LiveView:TurboNav] turbo:load event received!');
     console.log('[LiveView:TurboNav] djustInitialized:', window.djustInitialized);
@@ -70,14 +73,28 @@ window.addEventListener('turbo:load', function(event) {
 
 // Reinitialize LiveView after TurboNav navigation
 function reinitLiveViewForTurboNav() {
+    // Guard against concurrent reinitializations (rapid navigation)
+    if (reinitInProgress) {
+        console.log('[LiveView:TurboNav] Reinit already in progress, skipping duplicate');
+        return;
+    }
+    reinitInProgress = true;
+    
     console.log('[LiveView:TurboNav] Reinitializing LiveView...');
 
-    // Disconnect existing WebSocket
+    // Disconnect existing WebSocket (including any on window.djust.liveViewInstance)
     if (liveViewWS) {
         console.log('[LiveView:TurboNav] Disconnecting existing WebSocket');
         liveViewWS.disconnect();
         liveViewWS = null;
     }
+    
+    // Also check window.djust.liveViewInstance for orphaned connections
+    if (window.djust.liveViewInstance && window.djust.liveViewInstance !== liveViewWS) {
+        console.log('[LiveView:TurboNav] Cleaning up orphaned liveViewInstance');
+        window.djust.liveViewInstance.disconnect();
+    }
+    window.djust.liveViewInstance = null;
 
     // Reset client VDOM version
     clientVdomVersion = null;
@@ -119,5 +136,8 @@ function reinitLiveViewForTurboNav() {
     // Re-scan dj-loading attributes
     globalLoadingManager.scanAndRegister();
 
+    // Reset reinit guard
+    reinitInProgress = false;
+    
     console.log('[LiveView:TurboNav] Reinitialization complete');
 }

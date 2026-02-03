@@ -27,21 +27,26 @@ Understand memory pressure and evaluate client-side or external storage.
 - What is the Redis serialization cost vs memory backend? Is there a hybrid approach?
 - What is a typical session size and how does it scale with concurrent users?
 
-## 3. TurboNav Integration
+## 3. TurboNav Integration — ✅ Complete
 
 Make djust + TurboNav a first-class documented pattern.
 
 **Issues found and fixed:**
-- Injected scripts need `data-turbo-track="reload"` for `loadPageScripts` to pick them up
-- Inline `<script>` tags inside `<main>` require explicit execution after `innerHTML` swap
-- `DOMContentLoaded` doesn't fire on dynamically loaded scripts — must check `document.readyState`
+- ✅ Injected scripts need `data-turbo-track="reload"` for `loadPageScripts` to pick them up
+- ✅ Inline `<script>` tags inside `<main>` require explicit execution after `innerHTML` swap
+- ✅ `DOMContentLoaded` doesn't fire on dynamically loaded scripts — must check `document.readyState`
+- ✅ Triple-initialization bug: `startHeartbeat()` now stores interval ID and has guard against duplicates
+- ✅ Duplicate WebSocket connections: Added guards in `connect()` and `disconnect()` methods
+- ✅ Rapid navigation: Added `reinitInProgress` guard to prevent concurrent reinitializations
+- ✅ Orphaned connections: `reinitLiveViewForTurboNav()` now cleans up `window.djust.liveViewInstance`
 
-**Remaining work:**
-- Document the contract: TurboNav swaps `<main>` innerHTML, `loadPageScripts` handles tracked scripts
-- Fix triple-initialization on navigation (console shows 3 rounds of client.js init logs)
-- Guard against duplicate WebSocket connections on repeated navigation
-- Decide: should TurboNav ship with djust or remain a separate integration concern?
-- Write a guide for integrating djust LiveViews into existing Django sites using TurboNav
+**Decision:** TurboNav remains a separate integration concern. djust provides hooks (`turbo:load` handler, `reinitLiveViewForTurboNav()`) but doesn't bundle TurboNav, allowing flexibility to use Turbo Drive, other SPA navigation libraries, or custom solutions.
+
+**Documentation:** See `docs/guides/turbonav-integration.md` for:
+- The contract between TurboNav and djust
+- Setup instructions
+- Common pitfalls and solutions
+- Best practices and troubleshooting
 
 ## 4. Evaluate & Improve Developer Experience
 

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### TurboNav Integration
+- **Triple-initialization bug** — `startHeartbeat()` now properly stores the interval ID and guards against duplicate heartbeats. Previously, each navigation would create additional heartbeat intervals without clearing old ones.
+- **Duplicate WebSocket connections** — Added guards in `connect()` to prevent connecting when already connected or connecting. The `disconnect()` method now handles both CONNECTING and OPEN states.
+- **Rapid navigation race conditions** — Added `reinitInProgress` guard to prevent concurrent reinitializations when users rapidly click between pages.
+- **Orphaned connections** — `reinitLiveViewForTurboNav()` now explicitly cleans up `window.djust.liveViewInstance` in addition to the local `liveViewWS` reference.
+- **Connection timestamp reset** — `disconnect()` now resets `stats.connectedAt` to properly track reconnection statistics.
+
+### Added
+
+#### Documentation
+- **TurboNav Integration Guide** — New comprehensive guide at `docs/guides/turbonav-integration.md` covering:
+  - The contract between TurboNav and djust
+  - Setup instructions for base templates
+  - Common pitfalls and their solutions
+  - Best practices for combining TurboNav with LiveViews
+  - Troubleshooting guide and FAQ
+
 ## [0.3.0] - 2026-02-03 — "Phoenix Rising" 🔥
 
 The biggest djust release yet — 13 major features bringing djust to full parity with Phoenix LiveView.
