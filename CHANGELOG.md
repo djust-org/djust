@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-02-03 — "Global Scale" 🌍
+
+A transformative release bringing multi-tenancy, offline-first PWA capabilities, comprehensive API integrations, and full internationalization to djust.
+
+### Added
+
+#### Multi-Tenant Support
+- **`TenantMixin`** — Comprehensive multi-tenancy with automatic tenant resolution
+- **Tenant resolution strategies** — Subdomain, header-based, and custom resolvers
+- **Isolated state/presence** — Complete data isolation between tenants
+- **Tenant-aware routing** — Automatic tenant context in all LiveView operations
+
+#### Offline/PWA Support
+- **`OfflineMixin`** — Complete offline-first architecture for LiveViews
+- **Service worker generator** — Automatic PWA service worker with intelligent caching
+- **IndexedDB persistence** — Client-side data storage with automatic sync
+- **Offline directives** — `dj-offline-cache`, `dj-sync-when-online` for declarative offline behavior
+- **Progressive enhancement** — Graceful degradation when offline
+
+#### GraphQL/REST Integration
+- **`GraphQLMixin`** — Real-time GraphQL subscriptions integrated with LiveView state
+- **`RESTMixin`** — Bidirectional REST API sync with automatic conflict resolution
+- **`DRFMixin`** — Deep Django REST Framework integration with serializer support
+- **`dj-api-sync` directive** — Declarative API synchronization with optimistic updates
+
+#### Internationalization (i18n)
+- **`I18nMixin`** — Comprehensive internationalization with 38 locale support
+- **Live language switching** — Dynamic locale changes without page reload
+- **RTL support** — Automatic right-to-left layout handling
+- **Locale-aware formatting** — Dates, numbers, currency with proper localization
+
+### Tests
+- **~158 new tests** — Comprehensive coverage across all new features
+- **62 i18n tests** — Multi-locale validation, RTL layout, formatting edge cases
+- **40 offline tests** — PWA functionality, IndexedDB operations, sync conflict resolution
+- **56 API integration tests** — GraphQL subscriptions, REST sync, DRF serializer compatibility
+
 ## [0.6.0] - 2026-02-03 — "Universal Access" 🌐
 
 A major release expanding djust's reach with TypeScript support, SSE alternative, accessibility features, mobile/touch gestures, and Django Admin integration.
