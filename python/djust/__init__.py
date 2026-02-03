@@ -26,6 +26,26 @@ from .push import push_to_view, apush_to_view, push_event_to_view, apush_event_t
 from .presence import PresenceMixin, LiveCursorMixin, PresenceManager, CursorTracker
 from .routing import live_session, get_route_map_script
 from .sse import SSEView, SSEMixin, sse_event, sse_comment
+from .i18n import (
+    I18nMixin,
+    format_date,
+    format_datetime,
+    format_time,
+    format_number,
+    format_currency,
+    format_percent,
+    format_decimal,
+)
+from .offline import OfflineMixin
+from .integrations import (
+    GraphQLMixin,
+    GraphQLSubscription,
+    RESTMixin,
+    APIError,
+    APIResponse,
+    DRFMixin,
+    DRFSerializerMixin,
+)
 
 # Import Rust functions
 try:
@@ -219,4 +239,15 @@ __all__ = [
     "SSEMixin",
     "sse_event",
     "sse_comment",
+    # Internationalization (i18n)
+    "I18nMixin",
+    "format_date",
+    "format_datetime",
+    "format_time",
+    "format_number",
+    "format_currency",
+    "format_percent",
+    "format_decimal",
+    # Offline/PWA support
+    "OfflineMixin",
 ]
