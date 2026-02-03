@@ -1016,5 +1016,15 @@ function applyPatches(patches, targetSelector = null) {
         return false;
     }
 
+    // Update hooks after DOM patches
+    if (typeof updateHooks === 'function') {
+        updateHooks();
+    }
+
+    // Rebind dj-model elements after DOM patches
+    if (typeof bindModelElements === 'function') {
+        bindModelElements();
+    }
+
     return true;
 }

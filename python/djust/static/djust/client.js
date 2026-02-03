@@ -372,6 +372,8 @@ class LiveViewWebSocket {
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
                 this.stats.reconnections++;
+                // Notify hooks of reconnection
+                if (typeof notifyHooksReconnected === 'function') notifyHooksReconnected();
             }
             this.stats.connectedAt = Date.now();
         };
@@ -379,6 +381,9 @@ class LiveViewWebSocket {
         this.ws.onclose = (_event) => {
             console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
+
+            // Notify hooks of disconnection
+            if (typeof notifyHooksDisconnected === 'function') notifyHooksDisconnected();
 
             // Clear all decorator state on disconnect
             // Phase 2: Debounce timers
@@ -414,6 +419,7 @@ class LiveViewWebSocket {
             } else {
                 console.warn('[LiveView] Max reconnection attempts reached. Falling back to HTTP mode.');
                 this.enabled = false;
+                this._showConnectionErrorOverlay();
             }
         };
 
@@ -573,12 +579,9 @@ class LiveViewWebSocket {
                 window.dispatchEvent(new CustomEvent('djust:push_event', {
                     detail: { event: data.event, payload: data.payload }
                 }));
-                // Also dispatch to hooks that registered via handleEvent
-                if (window.djust.hooks && window.djust.hooks._eventListeners) {
-                    const listeners = window.djust.hooks._eventListeners[data.event];
-                    if (listeners) {
-                        listeners.forEach(cb => cb(data.payload));
-                    }
+                // Dispatch to dj-hook instances that registered via handleEvent
+                if (typeof dispatchPushEventToHooks === 'function') {
+                    dispatchPushEventToHooks(data.event, data.payload);
                 }
                 break;
 
@@ -586,6 +589,18 @@ class LiveViewWebSocket {
                 // Scoped HTML update for an embedded child LiveView
                 this.handleEmbeddedUpdate(data);
                 // Stop loading state
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
+            case 'rate_limit_exceeded':
+                // Server is dropping events due to rate limiting — show brief warning, do NOT retry
+                console.warn('[LiveView] Rate limited:', data.message || 'Too many events');
+                this._showRateLimitWarning();
+                // Stop loading state if applicable
                 if (this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                     this.lastEventName = null;
@@ -613,12 +628,21 @@ class LiveViewWebSocket {
         }
 
         console.log('[LiveView] Mounting view:', viewPath);
+        // Detect browser timezone for server-side local time rendering
+        let clientTimezone = null;
+        try {
+            clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        } catch (e) {
+            console.warn('[LiveView] Could not detect browser timezone:', e);
+        }
+
         this.sendMessage({
             type: 'mount',
             view: viewPath,
             params: params,
             url: window.location.pathname,
-            has_prerendered: this.skipMountHtml || false  // Tell server we have pre-rendered content
+            has_prerendered: this.skipMountHtml || false,  // Tell server we have pre-rendered content
+            client_timezone: clientTimezone  // IANA timezone string (e.g. "America/New_York")
         });
         return true;
     }
@@ -741,6 +765,71 @@ class LiveViewWebSocket {
 
         // Re-bind events within the updated container
         bindLiveViewEvents();
+    }
+
+    _showConnectionErrorOverlay() {
+        // Only show in DEBUG mode
+        if (!window.DEBUG_MODE) return;
+
+        // Don't duplicate
+        if (document.getElementById('djust-connection-error-overlay')) return;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'djust-connection-error-overlay';
+        overlay.style.cssText = `
+            position: fixed; bottom: 0; left: 0; right: 0; z-index: 99999;
+            background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+            border-top: 3px solid #ef4444; padding: 20px 24px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            color: #e2e8f0; font-size: 14px; box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+        `;
+        overlay.innerHTML = `
+            <div style="display:flex; align-items:flex-start; gap:16px; max-width:900px; margin:0 auto;">
+                <span style="font-size:24px; line-height:1;">❌</span>
+                <div style="flex:1;">
+                    <div style="font-weight:700; font-size:16px; margin-bottom:8px; color:#fca5a5;">
+                        WebSocket Connection Failed
+                    </div>
+                    <div style="margin-bottom:10px; color:#cbd5e1; line-height:1.6;">
+                        djust could not establish a WebSocket connection. Common causes:
+                    </div>
+                    <ul style="margin:0 0 12px 18px; padding:0; color:#94a3b8; line-height:1.8;">
+                        <li>ASGI server not running (need <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">daphne</code> or <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">uvicorn</code>, not <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">manage.py runserver</code>)</li>
+                        <li>If using daphne, wrap HTTP handler with <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">ASGIStaticFilesHandler</code> or use <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">djust.asgi.get_application()</code></li>
+                        <li>WebSocket route not configured (need <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">/ws/live/</code> path)</li>
+                    </ul>
+                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+                        <code style="background:#1e293b; padding:6px 12px; border-radius:4px; color:#86efac; font-size:13px;">
+                            python manage.py djust_check
+                        </code>
+                        <span style="color:#64748b; font-size:12px;">← Run this to diagnose configuration issues</span>
+                    </div>
+                </div>
+                <button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:20px;padding:4px;">✕</button>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+    }
+
+    _showRateLimitWarning() {
+        // Show a brief non-intrusive toast; debounce so rapid limits don't spam
+        if (this._rateLimitToast) return;
+        const toast = document.createElement('div');
+        toast.textContent = 'Slow down — some actions were dropped';
+        toast.style.cssText = `
+            position: fixed; bottom: 20px; right: 20px; z-index: 99999;
+            background: #f59e0b; color: #1c1917; padding: 10px 18px;
+            border-radius: 8px; font-size: 13px; font-weight: 600;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2); opacity: 0;
+            transition: opacity 0.3s; pointer-events: none;
+        `;
+        document.body.appendChild(toast);
+        this._rateLimitToast = toast;
+        requestAnimationFrame(() => { toast.style.opacity = '1'; });
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => { toast.remove(); this._rateLimitToast = null; }, 300);
+        }, 2500);
     }
 
     startHeartbeat(interval = 30000) {
@@ -3423,6 +3512,16 @@ function applyPatches(patches, targetSelector = null) {
         return false;
     }
 
+    // Update hooks after DOM patches
+    if (typeof updateHooks === 'function') {
+        updateHooks();
+    }
+
+    // Rebind dj-model elements after DOM patches
+    if (typeof bindModelElements === 'function') {
+        bindModelElements();
+    }
+
     return true;
 }
 
@@ -3675,6 +3774,12 @@ function djustInit() {
 
     // Scan and register dj-loading attributes
     globalLoadingManager.scanAndRegister();
+
+    // Mount dj-hook elements
+    mountHooks();
+
+    // Bind dj-model elements
+    if (typeof bindModelElements === 'function') bindModelElements();
 
     // Mark as initialized so turbo:load handler knows we're ready
     window.djustInitialized = true;
@@ -4820,3 +4925,408 @@ window.djust.handleStreamMessage = handleStreamMessage;
         window.djust._routeMap = {};
     }
 })();
+// ============================================================================
+// dj-hook — Client-Side JavaScript Hooks
+// ============================================================================
+//
+// Allows custom JavaScript to run when elements with dj-hook="HookName"
+// are mounted, updated, or destroyed in the DOM.
+//
+// Usage:
+//   1. Register hooks:
+//      window.djust.hooks = {
+//        MyChart: {
+//          mounted() { /* this.el is the DOM element */ },
+//          updated() { /* called after server re-render */ },
+//          destroyed() { /* cleanup */ },
+//          disconnected() { /* WebSocket lost */ },
+//          reconnected() { /* WebSocket restored */ },
+//        }
+//      };
+//
+//   2. In template:
+//      <canvas dj-hook="MyChart" data-values="1,2,3"></canvas>
+//
+//   The hook instance has access to:
+//     this.el       — the DOM element
+//     this.viewName — the LiveView name
+//     this.pushEvent(event, payload) — send event to server
+//     this.handleEvent(event, callback) — listen for server push_events
+//
+// ============================================================================
+
+/**
+ * Registry of hook definitions provided by the user.
+ * Users set this via: window.djust.hooks = { HookName: { mounted(){}, ... } }
+ */
+
+/**
+ * Map of active hook instances keyed by element id.
+ * Each entry: { hookName, instance, el }
+ */
+const _activeHooks = new Map();
+
+/**
+ * Counter for generating unique IDs for hooked elements.
+ */
+let _hookIdCounter = 0;
+
+/**
+ * Get a stable ID for an element, creating one if needed.
+ */
+function _getHookElId(el) {
+    if (!el._djustHookId) {
+        el._djustHookId = `djust-hook-${++_hookIdCounter}`;
+    }
+    return el._djustHookId;
+}
+
+/**
+ * Create a hook instance with the standard API.
+ */
+function _createHookInstance(hookDef, el) {
+    const instance = Object.create(hookDef);
+
+    instance.el = el;
+    instance.viewName = el.closest('[data-djust-view]')?.getAttribute('data-djust-view') || '';
+
+    // pushEvent: send a custom event to the server
+    instance.pushEvent = function(event, payload = {}) {
+        if (window.djust.liveViewInstance && window.djust.liveViewInstance.ws) {
+            window.djust.liveViewInstance.ws.send(JSON.stringify({
+                type: 'event',
+                event: event,
+                data: payload,
+            }));
+        } else {
+            console.warn(`[dj-hook] Cannot pushEvent "${event}" — no WebSocket connection`);
+        }
+    };
+
+    // handleEvent: register a callback for server-pushed events
+    instance._eventHandlers = {};
+    instance.handleEvent = function(eventName, callback) {
+        if (!instance._eventHandlers[eventName]) {
+            instance._eventHandlers[eventName] = [];
+        }
+        instance._eventHandlers[eventName].push(callback);
+    };
+
+    return instance;
+}
+
+/**
+ * Scan the DOM for elements with dj-hook and mount their hooks.
+ * Called on init and after DOM patches.
+ */
+function mountHooks(root) {
+    root = root || document;
+    const hooks = window.djust.hooks || {};
+    const elements = root.querySelectorAll('[dj-hook]');
+
+    elements.forEach(el => {
+        const hookName = el.getAttribute('dj-hook');
+        const elId = _getHookElId(el);
+
+        // Skip if already mounted
+        if (_activeHooks.has(elId)) {
+            return;
+        }
+
+        const hookDef = hooks[hookName];
+        if (!hookDef) {
+            console.warn(`[dj-hook] No hook registered for "${hookName}"`);
+            return;
+        }
+
+        const instance = _createHookInstance(hookDef, el);
+        _activeHooks.set(elId, { hookName, instance, el });
+
+        // Call mounted()
+        if (typeof instance.mounted === 'function') {
+            try {
+                instance.mounted();
+            } catch (e) {
+                console.error(`[dj-hook] Error in ${hookName}.mounted():`, e);
+            }
+        }
+    });
+}
+
+/**
+ * Called after a DOM patch to update/mount/destroy hooks as needed.
+ */
+function updateHooks(root) {
+    root = root || document;
+    const hooks = window.djust.hooks || {};
+
+    // 1. Find all currently hooked elements in the DOM
+    const currentElements = new Set();
+    root.querySelectorAll('[dj-hook]').forEach(el => {
+        const elId = _getHookElId(el);
+        currentElements.add(elId);
+
+        const hookName = el.getAttribute('dj-hook');
+        const existing = _activeHooks.get(elId);
+
+        if (existing) {
+            // Element still exists — call updated()
+            existing.el = el; // Update reference in case DOM was replaced
+            existing.instance.el = el;
+            if (typeof existing.instance.updated === 'function') {
+                try {
+                    existing.instance.updated();
+                } catch (e) {
+                    console.error(`[dj-hook] Error in ${hookName}.updated():`, e);
+                }
+            }
+        } else {
+            // New element — mount it
+            const hookDef = hooks[hookName];
+            if (!hookDef) {
+                console.warn(`[dj-hook] No hook registered for "${hookName}"`);
+                return;
+            }
+            const instance = _createHookInstance(hookDef, el);
+            _activeHooks.set(elId, { hookName, instance, el });
+            if (typeof instance.mounted === 'function') {
+                try {
+                    instance.mounted();
+                } catch (e) {
+                    console.error(`[dj-hook] Error in ${hookName}.mounted():`, e);
+                }
+            }
+        }
+    });
+
+    // 2. Destroy hooks whose elements were removed
+    for (const [elId, entry] of _activeHooks) {
+        if (!currentElements.has(elId)) {
+            if (typeof entry.instance.destroyed === 'function') {
+                try {
+                    entry.instance.destroyed();
+                } catch (e) {
+                    console.error(`[dj-hook] Error in ${entry.hookName}.destroyed():`, e);
+                }
+            }
+            _activeHooks.delete(elId);
+        }
+    }
+}
+
+/**
+ * Notify all hooks of WebSocket disconnect.
+ */
+function notifyHooksDisconnected() {
+    for (const [, entry] of _activeHooks) {
+        if (typeof entry.instance.disconnected === 'function') {
+            try {
+                entry.instance.disconnected();
+            } catch (e) {
+                console.error(`[dj-hook] Error in ${entry.hookName}.disconnected():`, e);
+            }
+        }
+    }
+}
+
+/**
+ * Notify all hooks of WebSocket reconnect.
+ */
+function notifyHooksReconnected() {
+    for (const [, entry] of _activeHooks) {
+        if (typeof entry.instance.reconnected === 'function') {
+            try {
+                entry.instance.reconnected();
+            } catch (e) {
+                console.error(`[dj-hook] Error in ${entry.hookName}.reconnected():`, e);
+            }
+        }
+    }
+}
+
+/**
+ * Dispatch a push_event to hooks that registered handleEvent listeners.
+ */
+function dispatchPushEventToHooks(eventName, payload) {
+    for (const [, entry] of _activeHooks) {
+        const handlers = entry.instance._eventHandlers[eventName];
+        if (handlers) {
+            handlers.forEach(cb => {
+                try {
+                    cb(payload);
+                } catch (e) {
+                    console.error(`[dj-hook] Error in ${entry.hookName}.handleEvent("${eventName}"):`, e);
+                }
+            });
+        }
+    }
+}
+
+/**
+ * Destroy all hooks (cleanup).
+ */
+function destroyAllHooks() {
+    for (const [elId, entry] of _activeHooks) {
+        if (typeof entry.instance.destroyed === 'function') {
+            try {
+                entry.instance.destroyed();
+            } catch (e) {
+                console.error(`[dj-hook] Error in ${entry.hookName}.destroyed():`, e);
+            }
+        }
+    }
+    _activeHooks.clear();
+}
+
+// Export to namespace
+window.djust.mountHooks = mountHooks;
+window.djust.updateHooks = updateHooks;
+window.djust.notifyHooksDisconnected = notifyHooksDisconnected;
+window.djust.notifyHooksReconnected = notifyHooksReconnected;
+window.djust.dispatchPushEventToHooks = dispatchPushEventToHooks;
+window.djust.destroyAllHooks = destroyAllHooks;
+window.djust._activeHooks = _activeHooks;
+// ============================================================================
+// dj-model — Two-Way Data Binding
+// ============================================================================
+//
+// Automatically syncs form input values with server-side view attributes.
+//
+// Usage in template:
+//   <input type="text" dj-model="search_query" />
+//   <textarea dj-model="description"></textarea>
+//   <select dj-model="category">...</select>
+//   <input type="checkbox" dj-model="is_active" />
+//
+// Options:
+//   dj-model="field_name"              — sync on 'input' event (default)
+//   dj-model.lazy="field_name"         — sync on 'change' event (blur)
+//   dj-model.debounce-300="field_name" — debounce by 300ms
+//
+// The server-side ModelBindingMixin handles the 'update_model' event
+// and sets the attribute on the view instance.
+//
+// ============================================================================
+
+const _modelDebounceTimers = new Map();
+
+/**
+ * Parse dj-model attribute value and modifiers.
+ * "field_name" → { field: "field_name", lazy: false, debounce: 0 }
+ * With attribute dj-model.lazy="field_name" → { field: "field_name", lazy: true }
+ */
+function _parseModelAttr(el) {
+    // Check for dj-model.lazy and dj-model.debounce-N
+    const attrs = el.attributes;
+    let field = null;
+    let lazy = false;
+    let debounce = 0;
+
+    for (let i = 0; i < attrs.length; i++) {
+        const name = attrs[i].name;
+        if (name === 'dj-model') {
+            field = attrs[i].value;
+        } else if (name === 'dj-model.lazy') {
+            field = attrs[i].value;
+            lazy = true;
+        } else if (name.startsWith('dj-model.debounce')) {
+            field = attrs[i].value;
+            const match = name.match(/debounce-?(\d+)/);
+            debounce = match ? parseInt(match[1], 10) : 300;
+        }
+    }
+
+    return { field, lazy, debounce };
+}
+
+/**
+ * Get the current value from a form element.
+ */
+function _getElementValue(el) {
+    if (el.type === 'checkbox') {
+        return el.checked;
+    }
+    if (el.type === 'radio') {
+        // For radio buttons, find the checked one in the same group
+        const form = el.closest('form') || document;
+        const checked = form.querySelector(`input[name="${el.name}"]:checked`);
+        return checked ? checked.value : null;
+    }
+    if (el.tagName === 'SELECT' && el.multiple) {
+        return Array.from(el.selectedOptions).map(o => o.value);
+    }
+    return el.value;
+}
+
+/**
+ * Send update_model event to server.
+ */
+function _sendModelUpdate(field, value) {
+    if (window.djust.liveViewInstance && window.djust.liveViewInstance.ws &&
+        window.djust.liveViewInstance.ws.readyState === WebSocket.OPEN) {
+        window.djust.liveViewInstance.ws.send(JSON.stringify({
+            type: 'event',
+            event: 'update_model',
+            data: { field, value },
+        }));
+    }
+}
+
+/**
+ * Bind dj-model to a single element.
+ */
+function _bindModel(el) {
+    if (el._djustModelBound) return;
+    el._djustModelBound = true;
+
+    const { field, lazy, debounce } = _parseModelAttr(el);
+    if (!field) return;
+
+    const eventType = lazy ? 'change' : 'input';
+
+    const handler = () => {
+        const value = _getElementValue(el);
+
+        if (debounce > 0) {
+            const timerKey = `model:${field}`;
+            if (_modelDebounceTimers.has(timerKey)) {
+                clearTimeout(_modelDebounceTimers.get(timerKey));
+            }
+            _modelDebounceTimers.set(timerKey, setTimeout(() => {
+                _sendModelUpdate(field, value);
+                _modelDebounceTimers.delete(timerKey);
+            }, debounce));
+        } else {
+            _sendModelUpdate(field, value);
+        }
+    };
+
+    el.addEventListener(eventType, handler);
+
+    // For checkboxes and radios, also listen on change
+    if (el.type === 'checkbox' || el.type === 'radio') {
+        el.addEventListener('change', handler);
+    }
+}
+
+/**
+ * Scan and bind all dj-model elements.
+ */
+function bindModelElements(root) {
+    root = root || document;
+    const elements = root.querySelectorAll('[dj-model], [dj-model\\.lazy], [dj-model\\.debounce]');
+    elements.forEach(_bindModel);
+
+    // Also check for dj-model with modifiers via attribute prefix
+    root.querySelectorAll('input, textarea, select').forEach(el => {
+        for (let i = 0; i < el.attributes.length; i++) {
+            if (el.attributes[i].name.startsWith('dj-model')) {
+                _bindModel(el);
+                break;
+            }
+        }
+    });
+}
+
+// Export
+window.djust.bindModelElements = bindModelElements;

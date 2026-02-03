@@ -43,6 +43,12 @@ function djustInit() {
     // Scan and register dj-loading attributes
     globalLoadingManager.scanAndRegister();
 
+    // Mount dj-hook elements
+    mountHooks();
+
+    // Bind dj-model elements
+    if (typeof bindModelElements === 'function') bindModelElements();
+
     // Mark as initialized so turbo:load handler knows we're ready
     window.djustInitialized = true;
     console.log('[LiveView] Initialization complete, window.djustInitialized = true');

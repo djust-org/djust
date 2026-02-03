@@ -72,6 +72,8 @@ class LiveViewWebSocket {
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
                 this.stats.reconnections++;
+                // Notify hooks of reconnection
+                if (typeof notifyHooksReconnected === 'function') notifyHooksReconnected();
             }
             this.stats.connectedAt = Date.now();
         };
@@ -79,6 +81,9 @@ class LiveViewWebSocket {
         this.ws.onclose = (_event) => {
             console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
+
+            // Notify hooks of disconnection
+            if (typeof notifyHooksDisconnected === 'function') notifyHooksDisconnected();
 
             // Clear all decorator state on disconnect
             // Phase 2: Debounce timers
@@ -274,12 +279,9 @@ class LiveViewWebSocket {
                 window.dispatchEvent(new CustomEvent('djust:push_event', {
                     detail: { event: data.event, payload: data.payload }
                 }));
-                // Also dispatch to hooks that registered via handleEvent
-                if (window.djust.hooks && window.djust.hooks._eventListeners) {
-                    const listeners = window.djust.hooks._eventListeners[data.event];
-                    if (listeners) {
-                        listeners.forEach(cb => cb(data.payload));
-                    }
+                // Dispatch to dj-hook instances that registered via handleEvent
+                if (typeof dispatchPushEventToHooks === 'function') {
+                    dispatchPushEventToHooks(data.event, data.payload);
                 }
                 break;
 
