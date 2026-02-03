@@ -1365,3 +1365,415 @@ fn torture_rapid_sequential_diffs_growing_list() {
         }
     }
 }
+
+// ============================================================================
+// 13. LARGE LIST STRESS TESTS (>1000 items)
+// ============================================================================
+
+/// Create a large keyed list with `n` items
+fn create_large_keyed_list(n: usize, prefix: &str) -> VNode {
+    let children: Vec<VNode> = (0..n)
+        .map(|i| {
+            VNode::element("li")
+                .with_key(format!("key-{}", i))
+                .with_djust_id(format!("{}{}", prefix, i))
+                .with_child(VNode::text(format!("Item {}", i)))
+        })
+        .collect();
+
+    VNode::element("ul")
+        .with_djust_id("list")
+        .with_children(children)
+}
+
+/// Create a large unkeyed list with `n` items
+fn create_large_unkeyed_list(n: usize, prefix: &str) -> VNode {
+    let children: Vec<VNode> = (0..n)
+        .map(|i| {
+            VNode::element("li")
+                .with_djust_id(format!("{}{}", prefix, i))
+                .with_child(VNode::text(format!("Item {}", i)))
+        })
+        .collect();
+
+    VNode::element("ul")
+        .with_djust_id("list")
+        .with_children(children)
+}
+
+#[test]
+fn torture_large_list_empty_to_1000() {
+    let old = VNode::element("ul").with_djust_id("list");
+    let new = create_large_unkeyed_list(1000, "li");
+
+    let patches = diff_nodes(&old, &new, &[]);
+
+    // Should insert exactly 1000 children
+    let insert_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::InsertChild { .. }))
+        .count();
+    assert_eq!(insert_count, 1000, "Should insert 1000 children");
+}
+
+#[test]
+fn torture_large_list_1000_to_empty() {
+    let old = create_large_unkeyed_list(1000, "li");
+    let new = VNode::element("ul").with_djust_id("list");
+
+    let patches = diff_nodes(&old, &new, &[]);
+
+    // Should remove exactly 1000 children
+    let remove_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::RemoveChild { .. }))
+        .count();
+    assert_eq!(remove_count, 1000, "Should remove 1000 children");
+
+    // Verify remove indices are in descending order (for safe batch removal)
+    let remove_indices: Vec<usize> = patches
+        .iter()
+        .filter_map(|p| match p {
+            Patch::RemoveChild { index, .. } => Some(*index),
+            _ => None,
+        })
+        .collect();
+    for i in 1..remove_indices.len() {
+        assert!(
+            remove_indices[i] < remove_indices[i - 1],
+            "Remove indices must be descending for safe removal"
+        );
+    }
+}
+
+#[test]
+fn torture_large_list_5000_identical() {
+    // Identity diff: should produce 0 patches
+    let list = create_large_keyed_list(5000, "li");
+    let patches = diff_nodes(&list, &list, &[]);
+    assert!(
+        patches.is_empty(),
+        "Identical 5000-item list should produce 0 patches, got {}",
+        patches.len()
+    );
+}
+
+#[test]
+fn torture_large_list_1000_all_text_changed() {
+    let old_children: Vec<VNode> = (0..1000)
+        .map(|i| {
+            VNode::element("li")
+                .with_djust_id(format!("li{}", i))
+                .with_child(VNode::text(format!("Old Item {}", i)))
+        })
+        .collect();
+    let old = VNode::element("ul")
+        .with_djust_id("list")
+        .with_children(old_children);
+
+    let new_children: Vec<VNode> = (0..1000)
+        .map(|i| {
+            VNode::element("li")
+                .with_djust_id(format!("li{}", i))
+                .with_child(VNode::text(format!("New Item {}", i)))
+        })
+        .collect();
+    let new = VNode::element("ul")
+        .with_djust_id("list")
+        .with_children(new_children);
+
+    let patches = diff_nodes(&old, &new, &[]);
+
+    // Should have exactly 1000 SetText patches
+    let text_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::SetText { .. }))
+        .count();
+    assert_eq!(text_count, 1000, "Should change 1000 text nodes");
+
+    // No structural changes
+    let insert_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::InsertChild { .. }))
+        .count();
+    let remove_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::RemoveChild { .. }))
+        .count();
+    assert_eq!(insert_count, 0, "Should have no inserts");
+    assert_eq!(remove_count, 0, "Should have no removes");
+}
+
+#[test]
+fn torture_large_list_1000_keyed_full_reverse() {
+    let old = create_large_keyed_list(1000, "o");
+
+    // Create reversed list with same keys
+    let children: Vec<VNode> = (0..1000)
+        .rev()
+        .map(|i| {
+            VNode::element("li")
+                .with_key(format!("key-{}", i))
+                .with_djust_id(format!("n{}", i))
+                .with_child(VNode::text(format!("Item {}", i)))
+        })
+        .collect();
+    let new = VNode::element("ul")
+        .with_djust_id("list")
+        .with_children(children);
+
+    let patches = diff_nodes(&old, &new, &[]);
+
+    // Should have moves, no inserts/removes
+    let move_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::MoveChild { .. }))
+        .count();
+    let insert_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::InsertChild { .. }))
+        .count();
+    let remove_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::RemoveChild { .. }))
+        .count();
+
+    assert!(move_count > 0, "Should have move patches for reversal");
+    assert_eq!(insert_count, 0, "Reversal should not insert");
+    assert_eq!(remove_count, 0, "Reversal should not remove");
+}
+
+#[test]
+fn torture_large_list_1000_keyed_shuffle() {
+    // Deterministic shuffle using modular arithmetic
+    let old = create_large_keyed_list(1000, "o");
+
+    // Shuffle: item at position i goes to position (i * 7 + 11) % 1000
+    let mut order: Vec<usize> = (0..1000).collect();
+    order.sort_by_key(|&i| (i * 7 + 11) % 1000);
+
+    let children: Vec<VNode> = order
+        .iter()
+        .map(|&i| {
+            VNode::element("li")
+                .with_key(format!("key-{}", i))
+                .with_djust_id(format!("n{}", i))
+                .with_child(VNode::text(format!("Item {}", i)))
+        })
+        .collect();
+    let new = VNode::element("ul")
+        .with_djust_id("list")
+        .with_children(children);
+
+    let patches = diff_nodes(&old, &new, &[]);
+
+    // No inserts or removes for a pure shuffle
+    let insert_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::InsertChild { .. }))
+        .count();
+    let remove_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::RemoveChild { .. }))
+        .count();
+
+    assert_eq!(insert_count, 0, "Shuffle should not insert");
+    assert_eq!(remove_count, 0, "Shuffle should not remove");
+}
+
+#[test]
+fn torture_large_list_mixed_operations() {
+    // Start with 1000 items, remove first 100, add 100 at end, change 100 in middle
+    let old = create_large_keyed_list(1000, "o");
+
+    let mut children = Vec::new();
+
+    // Skip first 100 (remove them)
+    // Keep items 100-899 (changed text for 400-499)
+    for i in 100..1000 {
+        let text = if i >= 400 && i < 500 {
+            format!("Changed Item {}", i)
+        } else {
+            format!("Item {}", i)
+        };
+        children.push(
+            VNode::element("li")
+                .with_key(format!("key-{}", i))
+                .with_djust_id(format!("n{}", i))
+                .with_child(VNode::text(text)),
+        );
+    }
+
+    // Add 100 new items at end
+    for i in 1000..1100 {
+        children.push(
+            VNode::element("li")
+                .with_key(format!("key-{}", i))
+                .with_djust_id(format!("n{}", i))
+                .with_child(VNode::text(format!("New Item {}", i))),
+        );
+    }
+
+    let new = VNode::element("ul")
+        .with_djust_id("list")
+        .with_children(children);
+
+    let patches = diff_nodes(&old, &new, &[]);
+
+    // Should have: 100 removes + 100 inserts + 100 text changes
+    let remove_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::RemoveChild { .. }))
+        .count();
+    let insert_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::InsertChild { .. }))
+        .count();
+    let text_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::SetText { .. }))
+        .count();
+
+    assert_eq!(remove_count, 100, "Should remove 100 items");
+    assert_eq!(insert_count, 100, "Should insert 100 items");
+    assert_eq!(text_count, 100, "Should change 100 text nodes");
+}
+
+#[test]
+fn torture_large_list_10000_append_one() {
+    // Large list, append single item (common operation)
+    let old = create_large_keyed_list(10000, "o");
+
+    let mut children = old.children.clone();
+    children.push(
+        VNode::element("li")
+            .with_key("key-10000")
+            .with_djust_id("n10000")
+            .with_child(VNode::text("New Item")),
+    );
+    let new = VNode::element("ul")
+        .with_djust_id("list")
+        .with_children(children);
+
+    let patches = diff_nodes(&old, &new, &[]);
+
+    // Should be exactly 1 InsertChild
+    assert_eq!(patches.len(), 1, "Appending to 10000-item list should be 1 patch");
+    assert!(matches!(&patches[0], Patch::InsertChild { index: 10000, .. }));
+}
+
+#[test]
+fn torture_large_list_10000_prepend_one() {
+    // Large list, prepend single item (worst case for unkeyed)
+    let old = create_large_keyed_list(10000, "o");
+
+    let mut children = vec![VNode::element("li")
+        .with_key("key-new")
+        .with_djust_id("new")
+        .with_child(VNode::text("New Item"))];
+    children.extend(old.children.clone());
+    let new = VNode::element("ul")
+        .with_djust_id("list")
+        .with_children(children);
+
+    let patches = diff_nodes(&old, &new, &[]);
+
+    // With keys, should be 1 insert + moves, no text changes
+    let insert_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::InsertChild { .. }))
+        .count();
+    let text_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::SetText { .. }))
+        .count();
+
+    assert_eq!(insert_count, 1, "Prepend should be 1 insert");
+    assert_eq!(text_count, 0, "Keyed prepend should not change text");
+}
+
+#[test]
+fn torture_large_list_5000_keyed_apply_verify() {
+    // Full round-trip: diff + apply = structurally equal
+    let old = create_large_keyed_list(5000, "o");
+
+    // Shuffle and modify
+    let mut children: Vec<VNode> = (0..5000)
+        .map(|i| {
+            let new_i = (i + 500) % 5000;
+            VNode::element("li")
+                .with_key(format!("key-{}", new_i))
+                .with_djust_id(format!("n{}", new_i))
+                .with_child(VNode::text(format!("Modified Item {}", new_i)))
+        })
+        .collect();
+
+    // Remove last 100
+    children.truncate(4900);
+
+    // Add 50 new
+    for i in 5000..5050 {
+        children.push(
+            VNode::element("li")
+                .with_key(format!("key-{}", i))
+                .with_djust_id(format!("n{}", i))
+                .with_child(VNode::text(format!("New Item {}", i))),
+        );
+    }
+
+    let new = VNode::element("ul")
+        .with_djust_id("list")
+        .with_children(children);
+
+    diff_apply_verify(&old, &new);
+}
+
+#[test]
+fn torture_large_list_1000_data_djust_replace() {
+    // Large list with data-djust-replace (skip diffing, full replace)
+    let old_children: Vec<VNode> = (0..1000)
+        .map(|i| {
+            VNode::element("li")
+                .with_djust_id(format!("o{}", i))
+                .with_child(VNode::text(format!("Old {}", i)))
+        })
+        .collect();
+    let old = VNode::element("ul")
+        .with_djust_id("list")
+        .with_attr("data-djust-replace", "")
+        .with_children(old_children);
+
+    let new_children: Vec<VNode> = (0..500)
+        .map(|i| {
+            VNode::element("li")
+                .with_djust_id(format!("n{}", i))
+                .with_child(VNode::text(format!("New {}", i)))
+        })
+        .collect();
+    let new = VNode::element("ul")
+        .with_djust_id("list")
+        .with_attr("data-djust-replace", "")
+        .with_children(new_children);
+
+    let patches = diff_nodes(&old, &new, &[]);
+
+    // Should have 1000 removes + 500 inserts
+    let remove_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::RemoveChild { .. }))
+        .count();
+    let insert_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::InsertChild { .. }))
+        .count();
+
+    assert_eq!(remove_count, 1000, "Replace mode should remove all 1000");
+    assert_eq!(insert_count, 500, "Replace mode should insert all 500");
+
+    // No text patches (no diffing in replace mode)
+    let text_count = patches
+        .iter()
+        .filter(|p| matches!(p, Patch::SetText { .. }))
+        .count();
+    assert_eq!(text_count, 0, "Replace mode should not diff text");
+}

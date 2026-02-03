@@ -364,6 +364,211 @@ fn bench_diff_deep_trees(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_diff_large_lists(c: &mut Criterion) {
+    let mut group = c.benchmark_group("diff_large_lists");
+    group.sample_size(50); // Reduce sample size for expensive benchmarks
+
+    // Create keyed list helper
+    let create_keyed_list = |n: usize, prefix: &str| {
+        let children: Vec<VNode> = (0..n)
+            .map(|i| {
+                VNode::element("li")
+                    .with_key(format!("key-{}", i))
+                    .with_djust_id(format!("{}{}", prefix, i))
+                    .with_child(VNode::text(format!("Item {}", i)))
+            })
+            .collect();
+        VNode::element("ul")
+            .with_djust_id("list")
+            .with_children(children)
+    };
+
+    // Create unkeyed list helper
+    let create_unkeyed_list = |n: usize, prefix: &str| {
+        let children: Vec<VNode> = (0..n)
+            .map(|i| {
+                VNode::element("li")
+                    .with_djust_id(format!("{}{}", prefix, i))
+                    .with_child(VNode::text(format!("Item {}", i)))
+            })
+            .collect();
+        VNode::element("ul")
+            .with_djust_id("list")
+            .with_children(children)
+    };
+
+    // Benchmark 1: Identity diff (no changes) - tests early termination
+    for n in [1000, 5000, 10000] {
+        let list = create_keyed_list(n, "li");
+        group.bench_with_input(
+            BenchmarkId::new("identity", n),
+            &list,
+            |b, list| b.iter(|| diff(black_box(list), black_box(list))),
+        );
+    }
+
+    // Benchmark 2: Append single item
+    for n in [1000, 5000, 10000] {
+        let old = create_keyed_list(n, "o");
+        let mut children = old.children.clone();
+        children.push(
+            VNode::element("li")
+                .with_key(format!("key-{}", n))
+                .with_djust_id(format!("n{}", n))
+                .with_child(VNode::text("New Item")),
+        );
+        let new = VNode::element("ul")
+            .with_djust_id("list")
+            .with_children(children);
+
+        group.bench_with_input(
+            BenchmarkId::new("append_one", n),
+            &(old.clone(), new.clone()),
+            |b, (old, new)| b.iter(|| diff(black_box(old), black_box(new))),
+        );
+    }
+
+    // Benchmark 3: Prepend single item (keyed)
+    for n in [1000, 5000, 10000] {
+        let old = create_keyed_list(n, "o");
+        let mut children = vec![VNode::element("li")
+            .with_key("key-new")
+            .with_djust_id("new")
+            .with_child(VNode::text("New Item"))];
+        children.extend(old.children.clone());
+        let new = VNode::element("ul")
+            .with_djust_id("list")
+            .with_children(children);
+
+        group.bench_with_input(
+            BenchmarkId::new("prepend_one_keyed", n),
+            &(old.clone(), new.clone()),
+            |b, (old, new)| b.iter(|| diff(black_box(old), black_box(new))),
+        );
+    }
+
+    // Benchmark 4: Reverse list (keyed)
+    for n in [1000, 5000] {
+        let old = create_keyed_list(n, "o");
+        let children: Vec<VNode> = (0..n)
+            .rev()
+            .map(|i| {
+                VNode::element("li")
+                    .with_key(format!("key-{}", i))
+                    .with_djust_id(format!("n{}", i))
+                    .with_child(VNode::text(format!("Item {}", i)))
+            })
+            .collect();
+        let new = VNode::element("ul")
+            .with_djust_id("list")
+            .with_children(children);
+
+        group.bench_with_input(
+            BenchmarkId::new("reverse_keyed", n),
+            &(old.clone(), new.clone()),
+            |b, (old, new)| b.iter(|| diff(black_box(old), black_box(new))),
+        );
+    }
+
+    // Benchmark 5: All text changed (same structure)
+    for n in [1000, 5000] {
+        let old_children: Vec<VNode> = (0..n)
+            .map(|i| {
+                VNode::element("li")
+                    .with_djust_id(format!("li{}", i))
+                    .with_child(VNode::text(format!("Old Item {}", i)))
+            })
+            .collect();
+        let old = VNode::element("ul")
+            .with_djust_id("list")
+            .with_children(old_children);
+
+        let new_children: Vec<VNode> = (0..n)
+            .map(|i| {
+                VNode::element("li")
+                    .with_djust_id(format!("li{}", i))
+                    .with_child(VNode::text(format!("New Item {}", i)))
+            })
+            .collect();
+        let new = VNode::element("ul")
+            .with_djust_id("list")
+            .with_children(new_children);
+
+        group.bench_with_input(
+            BenchmarkId::new("all_text_changed", n),
+            &(old.clone(), new.clone()),
+            |b, (old, new)| b.iter(|| diff(black_box(old), black_box(new))),
+        );
+    }
+
+    // Benchmark 6: Empty to large
+    for n in [1000, 5000] {
+        let old = VNode::element("ul").with_djust_id("list");
+        let new = create_unkeyed_list(n, "li");
+
+        group.bench_with_input(
+            BenchmarkId::new("empty_to_n", n),
+            &(old.clone(), new.clone()),
+            |b, (old, new)| b.iter(|| diff(black_box(old), black_box(new))),
+        );
+    }
+
+    // Benchmark 7: Large to empty
+    for n in [1000, 5000] {
+        let old = create_unkeyed_list(n, "li");
+        let new = VNode::element("ul").with_djust_id("list");
+
+        group.bench_with_input(
+            BenchmarkId::new("n_to_empty", n),
+            &(old.clone(), new.clone()),
+            |b, (old, new)| b.iter(|| diff(black_box(old), black_box(new))),
+        );
+    }
+
+    // Benchmark 8: Mixed operations (remove 10%, add 10%, change 10%)
+    for n in [1000, 5000] {
+        let old = create_keyed_list(n, "o");
+        let remove_count = n / 10;
+        let add_count = n / 10;
+        let change_start = n / 4;
+        let change_count = n / 10;
+
+        let mut children = Vec::new();
+        for i in remove_count..n {
+            let text = if i >= change_start && i < change_start + change_count {
+                format!("Changed Item {}", i)
+            } else {
+                format!("Item {}", i)
+            };
+            children.push(
+                VNode::element("li")
+                    .with_key(format!("key-{}", i))
+                    .with_djust_id(format!("n{}", i))
+                    .with_child(VNode::text(text)),
+            );
+        }
+        for i in n..n + add_count {
+            children.push(
+                VNode::element("li")
+                    .with_key(format!("key-{}", i))
+                    .with_djust_id(format!("n{}", i))
+                    .with_child(VNode::text(format!("New Item {}", i))),
+            );
+        }
+        let new = VNode::element("ul")
+            .with_djust_id("list")
+            .with_children(children);
+
+        group.bench_with_input(
+            BenchmarkId::new("mixed_ops", n),
+            &(old.clone(), new.clone()),
+            |b, (old, new)| b.iter(|| diff(black_box(old), black_box(new))),
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_diff_no_changes,
@@ -374,5 +579,6 @@ criterion_group!(
     bench_diff_tag_replace,
     bench_diff_real_world,
     bench_diff_deep_trees,
+    bench_diff_large_lists,
 );
 criterion_main!(benches);
