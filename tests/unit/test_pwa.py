@@ -85,7 +85,9 @@ class TestDjustPwaManifest:
             template = Template('{% load djust_pwa %}{% djust_pwa_manifest name="Explicit Name" %}')
             result = template.render(Context({}))
 
-            manifest_json = result.split("data:application/manifest+json,")[1].split("'")[0]
+            manifest_json = unescape(
+                result.split("data:application/manifest+json,")[1].split("'")[0]
+            )
             manifest = json.loads(manifest_json)
 
             assert manifest["name"] == "Explicit Name"
