@@ -1,7 +1,7 @@
 # Multi-Tenant Support - COMPLETE ✅
 
-**Status**: FINISHED  
-**Priority**: v0.7 #14  
+**Status**: FINISHED
+**Priority**: v0.7 #14
 **Date**: February 4, 2026
 
 ---
@@ -73,7 +73,7 @@ DJUST_CONFIG = {
 ```python
 class ItemView(TenantScopedMixin, LiveView):
     model = Item
-    
+
     def mount(self, request, **kwargs):
         self.items = self.get_tenant_queryset()  # Auto-filtered
 ```

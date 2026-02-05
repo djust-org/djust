@@ -3,7 +3,7 @@ djust.pwa — Progressive Web App support for djust LiveViews.
 
 Enables offline-first djust applications with:
 - Service worker integration for caching rendered HTML
-- Optimistic state persistence to IndexedDB  
+- Optimistic state persistence to IndexedDB
 - Auto-sync when connection restored
 - `dj-offline` directive for offline-aware UI states
 
@@ -15,10 +15,10 @@ Quick Start::
     class TaskListView(PWAMixin, OfflineMixin, LiveView):
         template_name = 'task_list.html'
         offline_storage = 'tasks'  # IndexedDB store name
-        
+
         def mount(self, request, **kwargs):
             self.tasks = self.get_cached_or_fetch('tasks', Task.objects.all())
-        
+
         def add_task(self, title):
             # Works offline - queued for sync when online
             task = self.create_offline(Task, title=title)
@@ -34,17 +34,17 @@ Configuration in settings.py::
         'PWA_THEME_COLOR': '#000000',
         'PWA_BACKGROUND_COLOR': '#ffffff',
         'PWA_DISPLAY': 'standalone',  # 'fullscreen', 'minimal-ui', 'browser'
-        
+
         # Service worker
         'PWA_SERVICE_WORKER_PATH': '/sw.js',
         'PWA_CACHE_STRATEGY': 'cache_first',  # 'network_first', 'stale_while_revalidate'
         'PWA_CACHE_DURATION': 86400,  # 24 hours
-        
+
         # Offline storage
         'PWA_OFFLINE_STORAGE': 'indexeddb',  # 'localstorage', 'sessionstorage'
         'PWA_SYNC_ENDPOINT': '/api/sync/',
         'PWA_MAX_OFFLINE_ACTIONS': 100,
-        
+
         # Network detection
         'PWA_CONNECTION_TIMEOUT': 5000,  # ms
         'PWA_RETRY_INTERVAL': 30000,  # 30 seconds
@@ -56,7 +56,7 @@ Template usage::
     <div dj-offline="show" class="offline-banner">
         You're offline. Changes will sync when connected.
     </div>
-    
+
     <!-- Offline-aware actions -->
     <button dj-offline="disable" dj-click="delete_item">Delete</button>
     <button dj-offline="queue" dj-click="save_draft">Save Draft</button>
@@ -97,37 +97,32 @@ from .utils import (
 
 __all__ = [
     # Mixins
-    'PWAMixin',
-    'OfflineMixin', 
-    'SyncMixin',
-    
+    "PWAMixin",
+    "OfflineMixin",
+    "SyncMixin",
     # Manifest
-    'PWAManifestGenerator',
-    'manifest_view',
-    
+    "PWAManifestGenerator",
+    "manifest_view",
     # Service Worker
-    'ServiceWorkerGenerator',
-    'service_worker_view',
-    
+    "ServiceWorkerGenerator",
+    "service_worker_view",
     # Storage
-    'OfflineStorage',
-    'IndexedDBStorage',
-    'LocalStorage',
-    'SyncQueue',
-    'OfflineAction',
-    'get_storage_backend',
-    
+    "OfflineStorage",
+    "IndexedDBStorage",
+    "LocalStorage",
+    "SyncQueue",
+    "OfflineAction",
+    "get_storage_backend",
     # Sync
-    'SyncManager',
-    'ConflictResolver',
-    'MergeStrategy',
-    'register_sync_handler',
-    'sync_endpoint_view',
-    
+    "SyncManager",
+    "ConflictResolver",
+    "MergeStrategy",
+    "register_sync_handler",
+    "sync_endpoint_view",
     # Utils
-    'is_online',
-    'get_connection_info',
-    'estimate_sync_time',
-    'compress_state',
-    'decompress_state',
+    "is_online",
+    "get_connection_info",
+    "estimate_sync_time",
+    "compress_state",
+    "decompress_state",
 ]

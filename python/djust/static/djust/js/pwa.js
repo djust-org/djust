@@ -1,6 +1,6 @@
 /**
  * djust PWA Client-Side Integration
- * 
+ *
  * Provides offline support, service worker communication,
  * and PWA functionality for djust LiveView applications.
  */
@@ -31,22 +31,22 @@
 
         async init() {
             console.log('[PWA] Initializing djust PWA support');
-            
+
             // Initialize storage
             await this.initStorage();
-            
+
             // Setup service worker
             await this.initServiceWorker();
-            
+
             // Setup network detection
             this.initNetworkDetection();
-            
+
             // Setup offline directive handling
             this.initOfflineDirectives();
-            
+
             // Start sync monitoring
             this.startSyncMonitoring();
-            
+
             console.log('[PWA] djust PWA initialization complete');
         }
 
@@ -57,7 +57,7 @@
                 } else {
                     this.offlineStorage = new LocalStorageBackend();
                 }
-                
+
                 await this.offlineStorage.init();
                 console.log('[PWA] Storage initialized:', this.config.offlineStorage);
             } catch (error) {
@@ -73,16 +73,16 @@
                     const registration = await navigator.serviceWorker.getRegistration();
                     if (registration) {
                         this.serviceWorker = registration;
-                        
+
                         // Listen for service worker messages
                         navigator.serviceWorker.addEventListener('message', this.handleServiceWorkerMessage.bind(this));
-                        
+
                         // Check for updates
                         registration.addEventListener('updatefound', () => {
                             console.log('[PWA] Service worker update found');
                             this.dispatchEvent('sw-update-available', { registration });
                         });
-                        
+
                         console.log('[PWA] Service worker connected');
                     }
                 } catch (error) {
@@ -133,10 +133,10 @@
 
         processOfflineDirectives(element) {
             const offlineElements = element.querySelectorAll('[dj-offline]');
-            
+
             offlineElements.forEach((el) => {
                 const behavior = el.getAttribute('dj-offline');
-                
+
                 switch (behavior) {
                     case 'show':
                         el.style.display = this.isOnline ? 'none' : '';
@@ -161,10 +161,10 @@
 
         handleConnectionChange(online) {
             this.isOnline = online;
-            
+
             // Update UI
             this.processOfflineDirectives(document.body);
-            
+
             // Dispatch event for LiveView
             if (window.djust && window.djust.liveViewInstance) {
                 window.djust.liveViewInstance.pushEvent('pwa:connection_change', {
@@ -172,12 +172,12 @@
                     timestamp: Date.now()
                 });
             }
-            
+
             // Trigger sync if came back online
             if (online) {
                 this.triggerSync();
             }
-            
+
             // Dispatch custom event
             this.dispatchEvent('connection-change', { online });
         }
@@ -186,16 +186,16 @@
             if (this.isOnline) {
                 return; // Let normal handling proceed
             }
-            
+
             event.preventDefault();
-            
+
             // Extract action data from element
             const element = event.target;
             const action = this.extractActionFromElement(element);
-            
+
             if (action) {
                 this.queueOfflineAction(action);
-                
+
                 // Show feedback
                 this.showOfflineActionFeedback(element, 'Action queued for sync');
             }
@@ -206,10 +206,10 @@
             const djClick = element.getAttribute('dj-click');
             const djSubmit = element.getAttribute('dj-submit');
             const djChange = element.getAttribute('dj-change');
-            
+
             let eventName = null;
             let eventData = {};
-            
+
             if (djClick) {
                 eventName = djClick;
             } else if (djSubmit) {
@@ -224,7 +224,7 @@
                 eventName = djChange;
                 eventData = { value: element.value };
             }
-            
+
             if (eventName) {
                 return {
                     type: 'liveview_event',
@@ -234,7 +234,7 @@
                     timestamp: Date.now()
                 };
             }
-            
+
             return null;
         }
 
@@ -243,12 +243,12 @@
                 // Add unique ID
                 action.id = `offline_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
                 action.status = 'pending';
-                
+
                 // Store in offline storage
                 await this.offlineStorage.addAction(action);
-                
+
                 console.log('[PWA] Queued offline action:', action);
-                
+
                 // Notify LiveView if available
                 if (window.djust && window.djust.liveViewInstance) {
                     window.djust.liveViewInstance.pushEvent('pwa:action_queued', {
@@ -277,17 +277,17 @@
                 opacity: 0;
                 transition: opacity 0.3s;
             `;
-            
+
             // Position near element
             const rect = element.getBoundingClientRect();
             feedback.style.top = (rect.bottom + window.scrollY + 5) + 'px';
             feedback.style.left = (rect.left + window.scrollX) + 'px';
-            
+
             document.body.appendChild(feedback);
-            
+
             // Fade in
             setTimeout(() => feedback.style.opacity = '1', 10);
-            
+
             // Remove after 3 seconds
             setTimeout(() => {
                 feedback.style.opacity = '0';
@@ -300,17 +300,17 @@
                 console.log('[PWA] Cannot sync while offline');
                 return;
             }
-            
+
             try {
                 const pendingActions = await this.offlineStorage.getPendingActions();
-                
+
                 if (pendingActions.length === 0) {
                     console.log('[PWA] No actions to sync');
                     return;
                 }
-                
+
                 console.log(`[PWA] Starting sync of ${pendingActions.length} actions`);
-                
+
                 // Send sync request
                 const response = await fetch(this.config.syncEndpoint, {
                     method: 'POST',
@@ -323,21 +323,21 @@
                         version: '1.0.0'
                     })
                 });
-                
+
                 if (response.ok) {
                     const result = await response.json();
                     console.log('[PWA] Sync successful:', result);
-                    
+
                     // Mark actions as synced
                     if (result.synced_ids) {
                         await this.offlineStorage.markActionsSynced(result.synced_ids);
                     }
-                    
+
                     // Notify LiveView
                     if (window.djust && window.djust.liveViewInstance) {
                         window.djust.liveViewInstance.pushEvent('pwa:sync_complete', result);
                     }
-                    
+
                     this.dispatchEvent('sync-complete', result);
                 } else {
                     console.error('[PWA] Sync failed:', response.status, response.statusText);
@@ -360,18 +360,18 @@
 
         handleServiceWorkerMessage(event) {
             const { type, data } = event.data;
-            
+
             switch (type) {
                 case 'SYNC_COMPLETE':
                     console.log('[PWA] Service worker sync complete:', data);
                     this.dispatchEvent('sw-sync-complete', data);
                     break;
-                    
+
                 case 'CACHE_UPDATED':
                     console.log('[PWA] Cache updated:', data);
                     this.dispatchEvent('cache-updated', data);
                     break;
-                    
+
                 default:
                     console.log('[PWA] Unknown service worker message:', type, data);
             }
@@ -405,7 +405,7 @@
                     }
                 });
             }
-            
+
             // Also dispatch as DOM event
             window.dispatchEvent(new CustomEvent(`pwa-${event}`, { detail: data }));
         }
@@ -442,16 +442,16 @@
         async init() {
             return new Promise((resolve, reject) => {
                 const request = indexedDB.open(this.dbName, this.version);
-                
+
                 request.onerror = () => reject(request.error);
                 request.onsuccess = () => {
                     this.db = request.result;
                     resolve();
                 };
-                
+
                 request.onupgradeneeded = (event) => {
                     const db = event.target.result;
-                    
+
                     // Create object store for offline actions
                     if (!db.objectStoreNames.contains('actions')) {
                         const actionStore = db.createObjectStore('actions', { keyPath: 'id' });
@@ -467,7 +467,7 @@
                 const transaction = this.db.transaction(['actions'], 'readwrite');
                 const store = transaction.objectStore('actions');
                 const request = store.add(action);
-                
+
                 request.onerror = () => reject(request.error);
                 request.onsuccess = () => resolve();
             });
@@ -479,7 +479,7 @@
                 const store = transaction.objectStore('actions');
                 const index = store.index('status');
                 const request = index.getAll('pending');
-                
+
                 request.onerror = () => reject(request.error);
                 request.onsuccess = () => resolve(request.result);
             });
@@ -489,7 +489,7 @@
             return new Promise((resolve, reject) => {
                 const transaction = this.db.transaction(['actions'], 'readwrite');
                 const store = transaction.objectStore('actions');
-                
+
                 const promises = actionIds.map(id => {
                     return new Promise((res, rej) => {
                         const getRequest = store.get(id);
@@ -498,7 +498,7 @@
                             if (action) {
                                 action.status = 'synced';
                                 action.synced_at = Date.now();
-                                
+
                                 const putRequest = store.put(action);
                                 putRequest.onerror = () => rej(putRequest.error);
                                 putRequest.onsuccess = () => res();
@@ -509,7 +509,7 @@
                         getRequest.onerror = () => rej(getRequest.error);
                     });
                 });
-                
+
                 Promise.all(promises)
                     .then(() => resolve())
                     .catch(reject);
@@ -521,7 +521,7 @@
                 const transaction = this.db.transaction(['actions'], 'readwrite');
                 const store = transaction.objectStore('actions');
                 const request = store.clear();
-                
+
                 request.onerror = () => reject(request.error);
                 request.onsuccess = () => resolve();
             });
@@ -551,14 +551,14 @@
         async markActionsSynced(actionIds) {
             const actions = this.getActions();
             const actionIdSet = new Set(actionIds);
-            
+
             actions.forEach(action => {
                 if (actionIdSet.has(action.id)) {
                     action.status = 'synced';
                     action.synced_at = Date.now();
                 }
             });
-            
+
             localStorage.setItem(this.storageKey, JSON.stringify(actions));
         }
 
@@ -596,7 +596,7 @@
 
         async markActionsSynced(actionIds) {
             const actionIdSet = new Set(actionIds);
-            
+
             this.actions.forEach(action => {
                 if (actionIdSet.has(action.id)) {
                     action.status = 'synced';
@@ -614,7 +614,7 @@
     function initDjustPWA() {
         // Get config from global variable or data attribute
         let config = {};
-        
+
         if (window.djustPWAConfig) {
             config = window.djustPWAConfig;
         } else {
@@ -627,10 +627,10 @@
                 }
             }
         }
-        
+
         // Create global PWA instance
         window.djustPWA = new DjustPWA(config);
-        
+
         // Integrate with djust LiveView if available
         if (window.djust) {
             window.djust.pwa = window.djustPWA;
