@@ -7,10 +7,9 @@ Tests the templatetags in djust_pwa.py and the generate_sw management command.
 import json
 import os
 import tempfile
+from html import unescape
 from io import StringIO
-from unittest.mock import patch, MagicMock
 
-import pytest
 from django.template import Template, Context
 from django.test import override_settings
 
@@ -31,7 +30,7 @@ class TestDjustPwaManifest:
         assert "data:application/manifest+json," in result
 
         # Parse the manifest JSON from the data URI
-        manifest_json = result.split("data:application/manifest+json,")[1].split("'")[0]
+        manifest_json = unescape(result.split("data:application/manifest+json,")[1].split("'")[0])
         manifest = json.loads(manifest_json)
 
         assert manifest["name"] == "djust App"
@@ -44,7 +43,7 @@ class TestDjustPwaManifest:
     def test_manifest_with_custom_values(self):
         """Test manifest generation with custom values."""
         template = Template(
-            '{% load djust_pwa %}'
+            "{% load djust_pwa %}"
             '{% djust_pwa_manifest name="My App" short_name="MyApp" '
             'theme_color="#ff5500" background_color="#000000" display="fullscreen" %}'
         )
@@ -54,7 +53,7 @@ class TestDjustPwaManifest:
         assert '<meta name="theme-color" content="#ff5500">' in result
 
         # Parse manifest
-        manifest_json = result.split("data:application/manifest+json,")[1].split("'")[0]
+        manifest_json = unescape(result.split("data:application/manifest+json,")[1].split("'")[0])
         manifest = json.loads(manifest_json)
 
         assert manifest["name"] == "My App"
@@ -73,7 +72,7 @@ class TestDjustPwaManifest:
         template = Template("{% load djust_pwa %}{% djust_pwa_manifest %}")
         result = template.render(Context({}))
 
-        manifest_json = result.split("data:application/manifest+json,")[1].split("'")[0]
+        manifest_json = unescape(result.split("data:application/manifest+json,")[1].split("'")[0])
         manifest = json.loads(manifest_json)
 
         assert manifest["name"] == "Settings App"
@@ -83,9 +82,7 @@ class TestDjustPwaManifest:
     def test_manifest_explicit_values_override_settings(self):
         """Test that explicit values override Django settings."""
         with override_settings(DJUST_PWA_NAME="Settings Name"):
-            template = Template(
-                '{% load djust_pwa %}{% djust_pwa_manifest name="Explicit Name" %}'
-            )
+            template = Template('{% load djust_pwa %}{% djust_pwa_manifest name="Explicit Name" %}')
             result = template.render(Context({}))
 
             manifest_json = result.split("data:application/manifest+json,")[1].split("'")[0]
@@ -98,7 +95,7 @@ class TestDjustPwaManifest:
         template = Template("{% load djust_pwa %}{% djust_pwa_manifest %}")
         result = template.render(Context({}))
 
-        manifest_json = result.split("data:application/manifest+json,")[1].split("'")[0]
+        manifest_json = unescape(result.split("data:application/manifest+json,")[1].split("'")[0])
         manifest = json.loads(manifest_json)
 
         assert "icons" in manifest
@@ -126,21 +123,17 @@ class TestDjustSwRegister:
 
     def test_sw_register_custom_url(self):
         """Test service worker registration with custom URL."""
-        template = Template(
-            '{% load djust_pwa %}{% djust_sw_register sw_url="/my-sw.js" %}'
-        )
+        template = Template('{% load djust_pwa %}{% djust_sw_register sw_url="/my-sw.js" %}')
         result = template.render(Context({}))
 
-        assert "navigator.serviceWorker.register('/my-sw.js'" in result
+        assert 'navigator.serviceWorker.register("/my-sw.js"' in result
 
     def test_sw_register_custom_scope(self):
         """Test service worker registration with custom scope."""
-        template = Template(
-            '{% load djust_pwa %}{% djust_sw_register scope="/app/" %}'
-        )
+        template = Template('{% load djust_pwa %}{% djust_sw_register scope="/app/" %}')
         result = template.render(Context({}))
 
-        assert "scope: '/app/'" in result
+        assert 'scope: "/app/"' in result
 
     def test_sw_register_contains_update_handler(self):
         """Test that registration includes update handler."""
@@ -183,7 +176,7 @@ class TestDjustOfflineIndicator:
     def test_indicator_custom_text(self):
         """Test offline indicator with custom text."""
         template = Template(
-            '{% load djust_pwa %}'
+            "{% load djust_pwa %}"
             '{% djust_offline_indicator online_text="Connected" offline_text="Disconnected" %}'
         )
         result = template.render(Context({}))
@@ -194,7 +187,7 @@ class TestDjustOfflineIndicator:
     def test_indicator_custom_classes(self):
         """Test offline indicator with custom CSS classes."""
         template = Template(
-            '{% load djust_pwa %}'
+            "{% load djust_pwa %}"
             '{% djust_offline_indicator online_class="my-online" offline_class="my-offline" %}'
         )
         result = template.render(Context({}))
@@ -204,9 +197,7 @@ class TestDjustOfflineIndicator:
 
     def test_indicator_show_when_offline(self):
         """Test indicator configured to show only when offline."""
-        template = Template(
-            '{% load djust_pwa %}{% djust_offline_indicator show_when="offline" %}'
-        )
+        template = Template('{% load djust_pwa %}{% djust_offline_indicator show_when="offline" %}')
         result = template.render(Context({}))
 
         # Should have dj-offline-show attribute and be hidden by default
@@ -215,9 +206,7 @@ class TestDjustOfflineIndicator:
 
     def test_indicator_show_when_always(self):
         """Test indicator configured to show always."""
-        template = Template(
-            '{% load djust_pwa %}{% djust_offline_indicator show_when="always" %}'
-        )
+        template = Template('{% load djust_pwa %}{% djust_offline_indicator show_when="always" %}')
         result = template.render(Context({}))
 
         # Should not have visibility attributes
@@ -302,36 +291,28 @@ class TestOfflineFallbackFilter:
 
     def test_fallback_returns_value_when_present(self):
         """Test that filter returns original value when present."""
-        template = Template(
-            '{% load djust_pwa %}{{ name|offline_fallback:"Guest" }}'
-        )
+        template = Template('{% load djust_pwa %}{{ name|offline_fallback:"Guest" }}')
         result = template.render(Context({"name": "John"}))
 
         assert result.strip() == "John"
 
     def test_fallback_returns_fallback_when_none(self):
         """Test that filter returns fallback when value is None."""
-        template = Template(
-            '{% load djust_pwa %}{{ name|offline_fallback:"Guest" }}'
-        )
+        template = Template('{% load djust_pwa %}{{ name|offline_fallback:"Guest" }}')
         result = template.render(Context({"name": None}))
 
         assert result.strip() == "Guest"
 
     def test_fallback_returns_fallback_when_empty_string(self):
         """Test that filter returns fallback when value is empty string."""
-        template = Template(
-            '{% load djust_pwa %}{{ name|offline_fallback:"Guest" }}'
-        )
+        template = Template('{% load djust_pwa %}{{ name|offline_fallback:"Guest" }}')
         result = template.render(Context({"name": ""}))
 
         assert result.strip() == "Guest"
 
     def test_fallback_returns_fallback_when_missing(self):
         """Test that filter returns fallback when variable is missing."""
-        template = Template(
-            '{% load djust_pwa %}{{ undefined_var|offline_fallback:"Default" }}'
-        )
+        template = Template('{% load djust_pwa %}{{ undefined_var|offline_fallback:"Default" }}')
         result = template.render(Context({}))
 
         assert result.strip() == "Default"
@@ -385,18 +366,14 @@ class TestDjustPwaHead:
 
     def test_pwa_head_custom_name(self):
         """Test PWA head with custom app name."""
-        template = Template(
-            '{% load djust_pwa %}{% djust_pwa_head name="Custom App" %}'
-        )
+        template = Template('{% load djust_pwa %}{% djust_pwa_head name="Custom App" %}')
         result = template.render(Context({}))
 
         assert "Custom App" in result
 
     def test_pwa_head_custom_theme_color(self):
         """Test PWA head with custom theme color."""
-        template = Template(
-            '{% load djust_pwa %}{% djust_pwa_head theme_color="#ff0000" %}'
-        )
+        template = Template('{% load djust_pwa %}{% djust_pwa_head theme_color="#ff0000" %}')
         result = template.render(Context({}))
 
         assert 'content="#ff0000"' in result
