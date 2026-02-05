@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-05
+
+### Added
+
+- **Progressive Web App (PWA) Support** — Complete offline-first PWA implementation with service worker integration, IndexedDB/LocalStorage abstraction, optimistic UI updates, and offline-aware template directives. Includes comprehensive template tags (`{% pwa_head %}`, `{% pwa_manifest %}`), PWA mixins (`PWAMixin`, `OfflineMixin`, `SyncMixin`), and automatic synchronization when online. ([#235](https://github.com/djust-org/djust/pull/235))
+- **Multi-Tenant SaaS Support** — Production-ready multi-tenant architecture with flexible tenant resolution strategies (subdomain, path, header, session, custom, chained), automatic data isolation, tenant-aware state backends, and comprehensive template context injection. Includes `TenantMixin` and `TenantScopedMixin` for views. ([#235](https://github.com/djust-org/djust/pull/235))
+- **PWA Template Tags** — 8 new template tags for PWA functionality: `pwa_head`, `pwa_manifest`, `pwa_service_worker_register`, `pwa_offline_indicator`, `pwa_offline_styles`, plus offline directives `dj-offline-hide`, `dj-offline-show`, `dj-offline-disable`, `dj-offline-queued`.
+- **PWA Management Command** — `generate_sw` command for automatic service worker generation with customizable caching strategies, static file collection, and version management.
+- **Comprehensive Test Coverage** — 114 new tests (53 PWA tests, 61 multi-tenant tests) covering template tags, service worker generation, tenant resolution, isolation, and security.
+
+### Changed
+
+- **State Backends** — Enhanced with tenant-aware isolation support (`TenantAwareRedisBackend`, `TenantAwareMemoryBackend`).
+- **Template Context** — Automatic tenant information injection in multi-tenant mode.
+
 ## [0.2.2] - 2026-02-01
 
 ### Fixed

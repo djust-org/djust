@@ -1,5 +1,14 @@
 # djust Roadmap
 
+## ✅ v0.3.0 "Phoenix Rising" - Complete
+
+Major feature release introducing PWA and multi-tenant capabilities:
+
+- **Progressive Web App Support** — Complete offline-first implementation with service worker integration, IndexedDB/LocalStorage abstraction, optimistic UI updates, and offline-aware template directives. Includes 8 PWA template tags, PWA mixins, and automatic sync.
+- **Multi-Tenant Architecture** — Production-ready SaaS support with flexible tenant resolution (subdomain, path, header, session, custom), automatic data isolation, tenant-aware state backends, and comprehensive template integration.
+- **114 New Tests** — Comprehensive test coverage (53 PWA, 61 multi-tenant) with full CI integration.
+- **Complete Documentation** — New guides for PWA and multi-tenant development, updated API references.
+
 ## 1. Profile & Improve Performance
 
 Identify bottlenecks in the render cycle and optimize.

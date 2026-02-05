@@ -6,6 +6,8 @@ This directory contains comprehensive documentation for djust organized by topic
 
 ### 📚 Getting Started
 - **[Quick Start Guide](guides/QUICKSTART.md)** - Get up and running in 5 minutes
+- **[PWA Guide](guides/pwa.md)** - Build offline-first Progressive Web Apps
+- **[Multi-Tenant Guide](guides/multi-tenant.md)** - SaaS architecture with tenant isolation
 - **[Deployment Guide](guides/DEPLOYMENT.md)** - Deploy djust to production
 - **[HTTP Mode Example](guides/HTTP_MODE_EXAMPLE.md)** - Use djust without WebSockets
 
