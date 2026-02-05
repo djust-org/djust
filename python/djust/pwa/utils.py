@@ -13,21 +13,19 @@ logger = logging.getLogger(__name__)
 
 def is_online() -> bool:
     """
-    Check if the application is online.
+    Check if the server-side application is online.
 
-    This is a server-side check that would be paired with
-    client-side navigator.onLine detection.
+    On the server side, this always returns True since the server is
+    inherently "online" if it's processing a request. Offline detection
+    is handled client-side via JavaScript's navigator.onLine API and
+    the service worker.
+
+    The OfflineMixin.handle_connection_change() method receives client-side
+    connection state changes via WebSocket events.
 
     Returns:
-        True if online, False if offline
+        True — server-side code is always online by definition
     """
-    # In a real implementation, this would check various indicators:
-    # - Last successful API call timestamp
-    # - Network connectivity tests
-    # - WebSocket connection status
-
-    # For now, return True (online by default)
-    # Client-side JS will provide more accurate online/offline detection
     return True
 
 
@@ -96,13 +94,15 @@ def compress_state(data: Any) -> bytes:
         compressed = zlib.compress(json_data.encode("utf-8"), level=6)
 
         logger.debug(
-            f"Compressed {len(json_data)} bytes to {len(compressed)} bytes "
-            f"({len(compressed)/len(json_data)*100:.1f}%)"
+            "Compressed %d bytes to %d bytes (%.1f%%)",
+            len(json_data),
+            len(compressed),
+            len(compressed) / len(json_data) * 100,
         )
 
         return compressed
     except Exception as e:
-        logger.error(f"Failed to compress state: {e}")
+        logger.error("Failed to compress state: %s", e, exc_info=True)
         # Fall back to JSON without compression
         return json.dumps(data, default=str).encode("utf-8")
 
@@ -128,7 +128,7 @@ def decompress_state(compressed_data: bytes) -> Any:
 
         return json.loads(json_data)
     except Exception as e:
-        logger.error(f"Failed to decompress state: {e}")
+        logger.error("Failed to decompress state: %s", e, exc_info=True)
         return None
 
 
@@ -142,23 +142,26 @@ def calculate_storage_quota(storage_type: str = "indexeddb") -> Dict[str, int]:
     Returns:
         Dictionary with quota information in bytes
     """
-    # These are rough estimates for different storage types
-    # In practice, this would use the StorageManager API
-
-    quotas = {
+    # Browser-typical quota limits. Actual quota is determined client-side
+    # via the StorageManager API (navigator.storage.estimate()). These
+    # server-side defaults represent conservative browser limits for
+    # capacity planning and are NOT live measurements.
+    default_quotas = {
         "indexeddb": {
-            "total": 50 * 1024 * 1024 * 1024,  # 50GB (estimated)
-            "available": 45 * 1024 * 1024 * 1024,  # 45GB available
-            "used": 5 * 1024 * 1024 * 1024,  # 5GB used
+            "total": 50 * 1024 * 1024 * 1024,  # 50GB typical browser limit
+            "available": 0,  # Unknown server-side
+            "used": 0,  # Unknown server-side
+            "note": "Actual usage available via navigator.storage.estimate()",
         },
         "localstorage": {
-            "total": 10 * 1024 * 1024,  # 10MB
-            "available": 8 * 1024 * 1024,  # 8MB available
-            "used": 2 * 1024 * 1024,  # 2MB used
+            "total": 10 * 1024 * 1024,  # 10MB typical browser limit
+            "available": 0,  # Unknown server-side
+            "used": 0,  # Unknown server-side
+            "note": "Actual usage available via client-side measurement",
         },
     }
 
-    return quotas.get(storage_type, quotas["indexeddb"])
+    return default_quotas.get(storage_type, default_quotas["indexeddb"])
 
 
 def format_bytes(bytes_count: int) -> str:
@@ -214,9 +217,9 @@ def cleanup_old_data(storage_backend, max_age_hours: int = 168) -> Dict[str, int
                             removed_count += 1
                             bytes_freed += size
             except Exception as e:
-                logger.warning(f"Error checking key {key} during cleanup: {e}")
+                logger.warning("Error checking key %s during cleanup: %s", key, e)
 
-        logger.info(f"Cleanup removed {removed_count} items, freed {format_bytes(bytes_freed)}")
+        logger.info("Cleanup removed %d items, freed %s", removed_count, format_bytes(bytes_freed))
 
         return {
             "removed_count": removed_count,
@@ -224,7 +227,7 @@ def cleanup_old_data(storage_backend, max_age_hours: int = 168) -> Dict[str, int
             "keys_checked": len(keys),
         }
     except Exception as e:
-        logger.error(f"Cleanup failed: {e}")
+        logger.error("Cleanup failed: %s", e, exc_info=True)
         return {"removed_count": 0, "bytes_freed": 0, "keys_checked": 0}
 
 
@@ -332,12 +335,12 @@ def merge_offline_changes(
                     result["data"][field] = value
 
         else:
-            logger.warning(f"Unknown merge strategy: {strategy}, using client_wins")
+            logger.warning("Unknown merge strategy: %s, using client_wins", strategy)
             result["data"].update(offline_changes)
             result["strategy_used"] = "client_wins"
 
     except Exception as e:
-        logger.error(f"Merge failed: {e}")
+        logger.error("Merge failed: %s", e, exc_info=True)
         result["data"] = server_data  # Fall back to server data
         result["conflicts"].append({"error": str(e), "resolution": "used_server_data"})
 
@@ -372,9 +375,12 @@ class PWAHealthMonitor:
         self.metrics["average_sync_time"] = sum(self._sync_times) / len(self._sync_times)
 
     def record_sync_failure(self):
-        """Record sync failure."""
-        # This would be used to calculate success rate
-        pass
+        """Record sync failure for health monitoring."""
+        self.metrics["sync_failures"] = self.metrics.get("sync_failures", 0) + 1
+        total = self.metrics.get("total_syncs", 0)
+        if total > 0:
+            failures = self.metrics["sync_failures"]
+            self.metrics["sync_success_rate"] = (total - failures) / total
 
     def record_cache_request(self, hit: bool):
         """Record cache request."""

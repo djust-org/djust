@@ -9,6 +9,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **Breaking Changes** are clearly identified and documented
 - [ ] **Linked Issues** are referenced (if applicable)
 - [ ] **Target Branch** is correct (typically `main` for releases)
+- [ ] **All new files are tracked** — `git status` shows no untracked files that should be part of the PR. Tests must not depend on files absent from the diff
 
 ## 🧪 Testing Requirements
 
@@ -18,11 +19,14 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **Test coverage maintained** - No significant decrease in overall test coverage
 - [ ] **Edge cases covered** - Tests include error conditions and boundary cases
 - [ ] **Existing tests pass** - All pre-existing tests continue to pass
+- [ ] **Integration tests pass** - End-to-end verification that features work together, not just unit tests in isolation
 
 ### Test Quality
 - [ ] **Tests are deterministic** - No flaky or randomly failing tests
 - [ ] **Test names are descriptive** - Clear what is being tested and expected outcome
 - [ ] **Test isolation** - Tests don't depend on other tests or external state
+- [ ] **Test-implementation alignment** - Tests actually import and exercise the code in the PR. No references to phantom modules, renamed tags, or APIs that don't exist in the diff
+- [ ] **Import names match shipped code** - Template tag library names, module paths, and class names used in tests match the actual files in the PR diff
 - [ ] **Performance tests** for features affecting rendering/VDOM (if applicable)
 
 ## 💻 Code Quality
@@ -33,6 +37,8 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **Appropriate abstractions** - No over-engineering or under-engineering
 - [ ] **No code duplication** - Shared logic is properly abstracted
 - [ ] **Separation of concerns** - UI, business logic, and data access properly separated
+- [ ] **No placeholder/stub implementations** - No hardcoded `return True`, simulated APIs, or fake data in shipped code. If a feature isn't ready, mark it clearly as `NotImplementedError` or exclude it from the PR
+- [ ] **No simulated/stub code** - Comments containing "simulate", "would be implemented", "in a real implementation", or "for now" indicate incomplete code that should not ship
 
 ### Python Code Standards
 - [ ] **Type hints** are present for all public APIs and complex functions
@@ -51,6 +57,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 ### JavaScript Code Standards
 - [ ] **ESLint rules** pass - Code follows project style guide
 - [ ] **No console.log** in production code - Use proper logging/debug tools
+- [ ] **Generated JS follows same rules** - Python code that generates JavaScript strings (e.g., service worker generators, template tags) must also avoid `console.log` and use proper escaping
 - [ ] **Browser compatibility** maintained for supported versions
 - [ ] **Security considerations** - No XSS vulnerabilities, proper sanitization
 
@@ -75,6 +82,15 @@ except ValueError as e:
 except ValueError as e:
     print(f"Error: {e}")  # ❌ No print statements
     pass  # ❌ No silent failures
+```
+
+- [ ] **Use `%s` formatting in logger calls, not f-strings** - Django convention; avoids formatting strings that may never be emitted:
+```python
+# Correct
+logger.error("Operation failed for key %s: %s", key, err, exc_info=True)
+
+# Incorrect - f-string is evaluated even when log level is disabled
+logger.error(f"Operation failed for key {key}: {err}")
 ```
 
 - [ ] **Appropriate log levels** used:
@@ -110,6 +126,7 @@ console.error(error); // ❌ Won't be captured in production
 - [ ] **Breaking changes documented** - Migration path provided
 - [ ] **CHANGELOG.md updated** - All changes properly categorized
 - [ ] **API references updated** - If public API changes
+- [ ] **No internal tracking documents** - Completion checklists, internal status docs (e.g., `*_COMPLETE.md`), and private planning docs must not be committed to the public repo
 
 ### Developer Documentation
 - [ ] **Architecture decisions documented** - Design rationale explained
@@ -122,7 +139,10 @@ console.error(error); // ❌ Won't be captured in production
 - [ ] **User input validated** - All user data is properly sanitized/validated
 - [ ] **SQL injection prevention** - Proper use of parameterized queries
 - [ ] **XSS prevention** - Template output is properly escaped
+- [ ] **Template tags escape user input** - Any use of `mark_safe()` must escape interpolated values with `django.utils.html.escape()` or `django.utils.html.format_html()`. Never inject raw parameters into HTML or JavaScript strings
+- [ ] **JS string context uses `json.dumps()`** - Values embedded in JavaScript strings use `json.dumps()` for escaping, not HTML `escape()` which is insufficient for JS contexts
 - [ ] **CSRF protection** maintained - No bypass of Django's CSRF protection
+- [ ] **No unjustified `@csrf_exempt`** - New endpoints must not use `@csrf_exempt` without documented justification. Service worker / API endpoints should use token-based auth instead
 
 ### Access Control
 - [ ] **Authentication required** where appropriate
@@ -206,11 +226,19 @@ console.error(error); // ❌ Won't be captured in production
 
 **Auto-reject if:**
 - Uses `print()` statements instead of logging system
+- Uses f-string formatting in logger calls instead of `%s` style
 - Introduces silent exception handling (`except: pass`)
 - No tests for new functionality
+- Tests reference modules/APIs that don't exist in the PR
 - Breaks existing functionality
-- Security vulnerabilities identified
+- Security vulnerabilities identified (XSS, CSRF bypass, injection)
+- `mark_safe()` used with unescaped interpolated values
+- `@csrf_exempt` on endpoints without documented justification
 - No documentation for user-facing changes
+- Internal tracking documents (e.g., `*_COMPLETE.md`) included in public repo
+- Placeholder/stub implementations shipped as production code (e.g., `return True`, hardcoded fake data)
+- Untracked files that tests depend on are missing from the PR
+- Comments indicate incomplete code ("simulate", "would be implemented", "for now")
 
 ## 📋 Reviewer Responsibility
 
@@ -229,6 +257,16 @@ Escalate to project maintainers when:
 - **Security concerns** are complex
 - **Breaking changes** affect many users
 - **Disagreement** between reviewer and author cannot be resolved
+
+## 📁 Review Feedback
+
+All PR review feedback must be saved to `pr/feedback/` for traceability:
+
+- **File naming**: `pr-{number}-{short-description}.md` (e.g., `pr-235-v0.3.0-phoenix-rising.md`)
+- **Contents**: Checklist evaluation, issues found, verdict (APPROVED / CHANGES REQUESTED), and any checklist improvement suggestions
+- **When**: After completing a review, before or alongside posting comments on the PR itself
+
+This ensures review decisions are durable, searchable, and not lost in GitHub comment threads.
 
 ---
 

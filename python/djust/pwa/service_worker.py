@@ -43,7 +43,7 @@ class ServiceWorkerGenerator:
                 "version": djust_config.get("PWA_VERSION", "1.0.0"),
             }
         except Exception as e:
-            logger.error(f"Error loading service worker config: {e}")
+            logger.error("Error loading service worker config: %s", e, exc_info=True)
             return self._get_minimal_config()
 
     def _get_minimal_config(self) -> Dict[str, Any]:
@@ -101,6 +101,8 @@ class ServiceWorkerGenerator:
         precache_urls = json.dumps(self.config["precache_urls"])
         exclude_patterns = json.dumps(self.config["exclude_patterns"])
 
+        debug_enabled = json.dumps(self.config.get("debug", False))
+
         return f"""
 const CACHE_NAME = '{self.config['cache_name']}';
 const CACHE_DURATION = {self.config['cache_duration']} * 1000; // Convert to milliseconds
@@ -110,6 +112,18 @@ const CACHE_STRATEGY = '{self.config['cache_strategy']}';
 const PRECACHE_URLS = {precache_urls};
 const EXCLUDE_PATTERNS = {exclude_patterns};
 const SW_VERSION = '{self.config['version']}';
+const SW_DEBUG = {debug_enabled};
+
+// Conditional logging — silent in production unless SW_DEBUG is true
+function _log(level) {{
+    if (!SW_DEBUG) return;
+    var args = Array.prototype.slice.call(arguments, 1);
+    if (level === 'error' && console.error) {{
+        console.error.apply(console, args);
+    }} else if (console.log) {{
+        console.log.apply(console, args);
+    }}
+}}
 
 """
 
@@ -118,21 +132,21 @@ const SW_VERSION = '{self.config['version']}';
         return """
 // Install event - cache initial resources
 self.addEventListener('install', event => {
-    console.log('[SW] Installing service worker version:', SW_VERSION);
+    _log('info','[SW] Installing service worker version:', SW_VERSION);
 
     event.waitUntil(
         caches.open(CACHE_NAME)
             .then(cache => {
-                console.log('[SW] Caching precache URLs:', PRECACHE_URLS);
+                _log('info','[SW] Caching precache URLs:', PRECACHE_URLS);
                 return cache.addAll(PRECACHE_URLS);
             })
             .then(() => {
-                console.log('[SW] Installation complete');
+                _log('info','[SW] Installation complete');
                 // Skip waiting to activate immediately
                 return self.skipWaiting();
             })
             .catch(error => {
-                console.error('[SW] Installation failed:', error);
+                _log('error','[SW] Installation failed:', error);
             })
     );
 });
@@ -144,7 +158,7 @@ self.addEventListener('install', event => {
         return """
 // Activate event - clean up old caches
 self.addEventListener('activate', event => {
-    console.log('[SW] Activating service worker version:', SW_VERSION);
+    _log('info','[SW] Activating service worker version:', SW_VERSION);
 
     event.waitUntil(
         caches.keys()
@@ -153,18 +167,18 @@ self.addEventListener('activate', event => {
                     cacheNames
                         .filter(cacheName => cacheName !== CACHE_NAME)
                         .map(cacheName => {
-                            console.log('[SW] Deleting old cache:', cacheName);
+                            _log('info','[SW] Deleting old cache:', cacheName);
                             return caches.delete(cacheName);
                         })
                 );
             })
             .then(() => {
-                console.log('[SW] Activation complete');
+                _log('info','[SW] Activation complete');
                 // Claim all clients immediately
                 return self.clients.claim();
             })
             .catch(error => {
-                console.error('[SW] Activation failed:', error);
+                _log('error','[SW] Activation failed:', error);
             })
     );
 });
@@ -209,10 +223,10 @@ self.addEventListener('fetch', event => {
                     const now = Date.now();
 
                     if (now - cachedTime < CACHE_DURATION) {
-                        console.log('[SW] Cache hit (fresh):', request.url);
+                        _log('info','[SW] Cache hit (fresh):', request.url);
                         return cachedResponse;
                     } else {
-                        console.log('[SW] Cache hit (stale):', request.url);
+                        _log('info','[SW] Cache hit (stale):', request.url);
                         // Return cached but fetch new version in background
                         fetchAndCache(request);
                         return cachedResponse;
@@ -220,11 +234,11 @@ self.addEventListener('fetch', event => {
                 }
 
                 // Not in cache, fetch from network
-                console.log('[SW] Cache miss, fetching:', request.url);
+                _log('info','[SW] Cache miss, fetching:', request.url);
                 return fetchAndCache(request);
             })
             .catch(error => {
-                console.error('[SW] Fetch failed:', error);
+                _log('error','[SW] Fetch failed:', error);
 
                 // Return offline page for navigation requests
                 if (request.mode === 'navigate') {
@@ -260,7 +274,7 @@ self.addEventListener('fetch', event => {
     event.respondWith(
         fetch(request)
             .then(response => {
-                console.log('[SW] Network success:', request.url);
+                _log('info','[SW] Network success:', request.url);
 
                 // Cache successful responses
                 if (response && response.status === 200) {
@@ -284,13 +298,13 @@ self.addEventListener('fetch', event => {
                 return response;
             })
             .catch(error => {
-                console.log('[SW] Network failed, trying cache:', request.url);
+                _log('info','[SW] Network failed, trying cache:', request.url);
 
                 // Network failed, try cache
                 return caches.match(request)
                     .then(cachedResponse => {
                         if (cachedResponse) {
-                            console.log('[SW] Cache fallback:', request.url);
+                            _log('info','[SW] Cache fallback:', request.url);
                             return cachedResponse;
                         }
 
@@ -351,18 +365,18 @@ self.addEventListener('fetch', event => {
                                 return networkResponse;
                             })
                             .catch(error => {
-                                console.log('[SW] Network failed:', request.url, error);
+                                _log('info','[SW] Network failed:', request.url, error);
                                 return null;
                             });
 
                         // Return cached version immediately if available
                         if (cachedResponse) {
-                            console.log('[SW] Serving from cache (revalidating):', request.url);
+                            _log('info','[SW] Serving from cache (revalidating):', request.url);
                             return cachedResponse;
                         }
 
                         // No cache, wait for network
-                        console.log('[SW] No cache, waiting for network:', request.url);
+                        _log('info','[SW] No cache, waiting for network:', request.url);
                         return fetchPromise
                             .then(response => {
                                 if (response) {
@@ -388,7 +402,7 @@ self.addEventListener('fetch', event => {
         return """
 // Background sync event
 self.addEventListener('sync', event => {
-    console.log('[SW] Background sync triggered:', event.tag);
+    _log('info','[SW] Background sync triggered:', event.tag);
 
     if (event.tag === 'djust-offline-sync') {
         event.waitUntil(syncOfflineData());
@@ -398,18 +412,18 @@ self.addEventListener('sync', event => {
 // Sync offline data with server
 async function syncOfflineData() {
     try {
-        console.log('[SW] Starting offline data sync');
+        _log('info','[SW] Starting offline data sync');
 
         // Get offline actions from IndexedDB
         const db = await openIndexedDB();
         const actions = await getOfflineActions(db);
 
         if (actions.length === 0) {
-            console.log('[SW] No offline actions to sync');
+            _log('info','[SW] No offline actions to sync');
             return;
         }
 
-        console.log(`[SW] Syncing ${actions.length} offline actions`);
+        _log('info',`[SW] Syncing ${actions.length} offline actions`);
 
         // Send batch sync request
         const response = await fetch(SYNC_ENDPOINT, {
@@ -425,7 +439,7 @@ async function syncOfflineData() {
 
         if (response.ok) {
             const result = await response.json();
-            console.log('[SW] Sync successful:', result);
+            _log('info','[SW] Sync successful:', result);
 
             // Clear synced actions
             await clearSyncedActions(db, result.synced_ids || []);
@@ -439,10 +453,10 @@ async function syncOfflineData() {
                 });
             });
         } else {
-            console.error('[SW] Sync failed:', response.status, response.statusText);
+            _log('error','[SW] Sync failed:', response.status, response.statusText);
         }
     } catch (error) {
-        console.error('[SW] Sync error:', error);
+        _log('error','[SW] Sync error:', error);
     }
 }
 
@@ -453,7 +467,7 @@ async function syncOfflineData() {
         return """
 // Push notification event
 self.addEventListener('push', event => {
-    console.log('[SW] Push received:', event);
+    _log('info','[SW] Push received:', event);
 
     let data = {};
     if (event.data) {
@@ -485,13 +499,13 @@ self.addEventListener('push', event => {
 
 // Notification click event
 self.addEventListener('notificationclick', event => {
-    console.log('[SW] Notification clicked:', event);
+    _log('info','[SW] Notification clicked:', event);
 
     event.notification.close();
 
     // Handle action clicks
     if (event.action) {
-        console.log('[SW] Action clicked:', event.action);
+        _log('info','[SW] Action clicked:', event.action);
         // Handle specific actions
     }
 
@@ -521,7 +535,7 @@ self.addEventListener('notificationclick', event => {
         return """
 // Message event - handle messages from clients
 self.addEventListener('message', event => {
-    console.log('[SW] Message received:', event.data);
+    _log('info','[SW] Message received:', event.data);
 
     const { type, data } = event.data;
 
@@ -564,7 +578,7 @@ self.addEventListener('message', event => {
             break;
 
         default:
-            console.log('[SW] Unknown message type:', type);
+            _log('info','[SW] Unknown message type:', type);
     }
 });
 
@@ -602,7 +616,7 @@ async function fetchAndCache(request) {
 
         return response;
     } catch (error) {
-        console.error('[SW] Fetch and cache failed:', error);
+        _log('error','[SW] Fetch and cache failed:', error);
         throw error;
     }
 }
@@ -668,7 +682,7 @@ async function clearSyncedActions(db, syncedIds) {
     });
 }
 
-console.log('[SW] Service worker loaded, version:', SW_VERSION);
+_log('info','[SW] Service worker loaded, version:', SW_VERSION);
 """
 
 
@@ -693,19 +707,19 @@ def service_worker_view(request: HttpRequest) -> HttpResponse:
 
         return response
     except Exception as e:
-        logger.error(f"Error generating service worker: {e}")
+        logger.error("Error generating service worker: %s", e)
 
         # Return minimal service worker
         minimal_sw = """
-console.log('[SW] Minimal service worker loaded');
+_log('info','[SW] Minimal service worker loaded');
 
 self.addEventListener('install', event => {
-    console.log('[SW] Installing');
+    _log('info','[SW] Installing');
     self.skipWaiting();
 });
 
 self.addEventListener('activate', event => {
-    console.log('[SW] Activating');
+    _log('info','[SW] Activating');
     event.waitUntil(self.clients.claim());
 });
 """

@@ -6,7 +6,7 @@ djust v0.3.0 introduces comprehensive Progressive Web App support, enabling offl
 
 The PWA implementation provides:
 - **Service Worker Integration** - Automatic caching of HTML responses
-- **Offline State Management** - IndexedDB/LocalStorage abstraction  
+- **Offline State Management** - IndexedDB/LocalStorage abstraction
 - **Optimistic UI Updates** - Immediate feedback with sync when online
 - **Offline Awareness** - Template directives for offline states
 - **Automatic Manifest Generation** - PWA manifest with customizable settings
@@ -16,19 +16,19 @@ The PWA implementation provides:
 ### 1. Enable PWA in your templates
 
 ```html
-{% load pwa_tags %}
+{% load djust_pwa %}
 <!DOCTYPE html>
 <html>
 <head>
-    {% pwa_head %}
+    {% djust_pwa_head %}
     <!-- Or individual components -->
-    {% pwa_manifest %}
-    {% pwa_service_worker_register %}
+    {% djust_pwa_manifest %}
+    {% djust_sw_register %}
 </head>
 <body>
-    {% pwa_offline_indicator %}
-    {% pwa_offline_styles %}
-    
+    {% djust_offline_indicator %}
+    {% djust_offline_styles %}
+
     <div dj-offline-hide>Only shown when online</div>
     <div dj-offline-show>Only shown when offline</div>
     <button dj-offline-disable>Disabled when offline</button>
@@ -45,7 +45,7 @@ class MyView(PWAMixin, LiveView):
     def mount(self, request):
         self.enable_offline()  # Enable offline functionality
         self.items = []
-    
+
     def add_item(self, name):
         # Works offline with automatic sync
         self.items.append(name)
@@ -68,10 +68,10 @@ Base mixin for PWA functionality:
 class PWAMixin:
     def enable_offline(self, storage='indexeddb'):
         """Enable offline mode with specified storage backend."""
-        
+
     def disable_offline(self):
         """Disable offline functionality."""
-        
+
     def is_offline_enabled(self):
         """Check if offline mode is enabled."""
 ```
@@ -84,18 +84,18 @@ Enhanced offline state management:
 class OfflineMixin(PWAMixin):
     def save_offline_state(self, key, data):
         """Save data for offline access."""
-        
+
     def load_offline_state(self, key, default=None):
         """Load saved offline data."""
-        
+
     def sync_when_online(self):
         """Queue current state for sync when online."""
-        
+
     def handle_online(self):
         """Called when connection restored."""
 ```
 
-### SyncMixin  
+### SyncMixin
 
 Automatic synchronization:
 
@@ -103,27 +103,27 @@ Automatic synchronization:
 class SyncMixin(OfflineMixin):
     def queue_sync(self, action, data):
         """Queue action for background sync."""
-        
+
     def process_sync_queue(self):
         """Process queued sync actions."""
 ```
 
 ## Template Tags
 
-### pwa_head
+### djust_pwa_head
 
 Complete PWA setup in one tag:
 
 ```html
-{% pwa_head name="My App" theme_color="#007bff" %}
+{% djust_pwa_head name="My App" theme_color="#007bff" %}
 ```
 
-### pwa_manifest
+### djust_pwa_manifest
 
 Generate PWA manifest:
 
 ```html
-{% pwa_manifest 
+{% djust_pwa_manifest
    name="My Application"
    short_name="MyApp"
    theme_color="#007bff"
@@ -131,33 +131,33 @@ Generate PWA manifest:
    display="standalone" %}
 ```
 
-### pwa_service_worker_register
+### djust_sw_register
 
 Register service worker with custom options:
 
 ```html
-{% pwa_service_worker_register 
-   url="/sw.js"
+{% djust_sw_register
+   sw_url="/sw.js"
    scope="/" %}
 ```
 
-### pwa_offline_indicator
+### djust_offline_indicator
 
 Visual offline status indicator:
 
 ```html
-{% pwa_offline_indicator 
-   text="You're offline"
-   classes="offline-banner"
-   show="offline" %}
+{% djust_offline_indicator
+   offline_text="You're offline"
+   online_class="online-banner"
+   show_when="offline" %}
 ```
 
-### pwa_offline_styles
+### djust_offline_styles
 
 CSS for offline directives:
 
 ```html
-{% pwa_offline_styles %}
+{% djust_offline_styles %}
 ```
 
 ## Offline Directives
@@ -172,7 +172,7 @@ Hide elements when offline:
 </div>
 ```
 
-### dj-offline-show  
+### dj-offline-show
 
 Show elements only when offline:
 
@@ -217,7 +217,7 @@ For structured offline data:
 For simple key-value storage:
 
 ```javascript
-// Automatic via PWAMixin.enable_offline('localstorage')  
+// Automatic via PWAMixin.enable_offline('localstorage')
 ```
 
 ## Service Worker Configuration
@@ -243,7 +243,7 @@ DJUST_PWA = {
 ```python
 DJUST_PWA = {
     'MANIFEST': {
-        'name': 'My Application', 
+        'name': 'My Application',
         'short_name': 'MyApp',
         'theme_color': '#007bff',
         'background_color': '#ffffff',
@@ -276,7 +276,7 @@ Generate service worker file:
 # Basic generation
 python manage.py generate_sw
 
-# Custom output path  
+# Custom output path
 python manage.py generate_sw --output static/custom-sw.js
 
 # Include static file collection
@@ -296,22 +296,22 @@ from djust.pwa.mixins import OfflineMixin
 
 class TodoView(OfflineMixin, LiveView):
     template_name = 'todos.html'
-    
+
     def mount(self, request):
         self.enable_offline()
         self.todos = self.load_offline_state('todos', [])
-    
+
     def add_todo(self, text):
         todo = {'id': len(self.todos), 'text': text, 'done': False}
         self.todos.append(todo)
         self.save_offline_state('todos', self.todos)
         self.sync_when_online()
-    
+
     def toggle_todo(self, todo_id):
         for todo in self.todos:
             if todo['id'] == todo_id:
                 todo['done'] = not todo['done']
-        self.save_offline_state('todos', self.todos) 
+        self.save_offline_state('todos', self.todos)
         self.sync_when_online()
 ```
 
@@ -320,22 +320,22 @@ class TodoView(OfflineMixin, LiveView):
 ```python
 class ContactForm(SyncMixin, LiveView):
     template_name = 'contact.html'
-    
+
     def mount(self, request):
         self.enable_offline()
         self.form_data = {}
         self.errors = {}
-    
+
     def update_field(self, field, value):
         self.form_data[field] = value
         self.validate_field(field, value)
-        
+
     def validate_field(self, field, value):
         if field == 'email' and '@' not in value:
             self.errors[field] = 'Invalid email'
         else:
             self.errors.pop(field, None)
-    
+
     def submit_form(self):
         if not self.errors:
             if self.is_online():
@@ -348,7 +348,7 @@ class ContactForm(SyncMixin, LiveView):
 ## Browser Support
 
 - **Chrome/Edge**: Full support
-- **Firefox**: Full support  
+- **Firefox**: Full support
 - **Safari**: Partial support (no background sync)
 - **Mobile Safari**: Full support with install prompt
 
@@ -370,8 +370,8 @@ class ContactForm(SyncMixin, LiveView):
 
 No breaking changes. To add PWA support to existing views:
 
-1. Add `{% load pwa_tags %}` to templates
-2. Include `{% pwa_head %}` in your base template
+1. Add `{% load djust_pwa %}` to templates
+2. Include `{% djust_pwa_head %}` in your base template
 3. Mix `PWAMixin` into existing LiveViews
 4. Run `python manage.py generate_sw`
 5. Deploy with HTTPS
@@ -401,4 +401,4 @@ Check:
 
 ## API Reference
 
-See [PWA API Documentation](../api/pwa.md) for complete API details.
+<!-- TODO: Create docs/api/pwa.md with full API documentation -->

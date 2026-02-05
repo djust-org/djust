@@ -46,7 +46,7 @@ class PWAManifestGenerator:
                 "screenshots": djust_config.get("PWA_SCREENSHOTS", []),
             }
         except Exception as e:
-            logger.error(f"Error loading PWA config: {e}")
+            logger.error("Error loading PWA config: %s", e, exc_info=True)
             return self._get_minimal_config()
 
     def _get_minimal_config(self) -> Dict[str, Any]:
@@ -200,7 +200,7 @@ def manifest_view(request: HttpRequest) -> JsonResponse:
 
         return response
     except Exception as e:
-        logger.error(f"Error generating manifest: {e}")
+        logger.error("Error generating manifest: %s", e, exc_info=True)
 
         # Return minimal manifest
         minimal_manifest = {

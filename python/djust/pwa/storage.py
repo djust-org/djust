@@ -110,7 +110,8 @@ class OfflineStorage(ABC):
         try:
             parsed = json.loads(data)
             return parsed.get("data")
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.debug("Failed to deserialize storage data: %s", e)
             return None
 
 
@@ -129,10 +130,14 @@ class IndexedDBStorage(OfflineStorage):
         self._js_bridge = None
 
     def _get_js_bridge(self):
-        """Get JavaScript bridge for IndexedDB operations."""
+        """
+        Get JavaScript bridge for IndexedDB operations.
+
+        Note: This is a server-side in-memory simulation of IndexedDB.
+        Actual IndexedDB operations happen client-side in pwa.js.
+        This backend is used for server-side state tracking and testing.
+        """
         if not self._js_bridge:
-            # This would be implemented with a JavaScript bridge
-            # For now, we'll simulate with memory storage
             self._js_bridge = {}
         return self._js_bridge
 
@@ -148,7 +153,7 @@ class IndexedDBStorage(OfflineStorage):
 
             return default
         except Exception as e:
-            logger.error(f"IndexedDB get error: {e}")
+            logger.error("IndexedDB get error: %s", e, exc_info=True)
             return default
 
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
@@ -168,7 +173,7 @@ class IndexedDBStorage(OfflineStorage):
             bridge[namespaced_key] = json.dumps(storage_data, default=str)
             return True
         except Exception as e:
-            logger.error(f"IndexedDB set error: {e}")
+            logger.error("IndexedDB set error: %s", e, exc_info=True)
             return False
 
     def delete(self, key: str) -> bool:
@@ -181,7 +186,7 @@ class IndexedDBStorage(OfflineStorage):
                 del bridge[namespaced_key]
             return True
         except Exception as e:
-            logger.error(f"IndexedDB delete error: {e}")
+            logger.error("IndexedDB delete error: %s", e, exc_info=True)
             return False
 
     def clear(self) -> bool:
@@ -196,7 +201,7 @@ class IndexedDBStorage(OfflineStorage):
 
             return True
         except Exception as e:
-            logger.error(f"IndexedDB clear error: {e}")
+            logger.error("IndexedDB clear error: %s", e, exc_info=True)
             return False
 
     def keys(self) -> List[str]:
@@ -210,7 +215,7 @@ class IndexedDBStorage(OfflineStorage):
                 k[len(namespace_prefix) :] for k in bridge.keys() if k.startswith(namespace_prefix)
             ]
         except Exception as e:
-            logger.error(f"IndexedDB keys error: {e}")
+            logger.error("IndexedDB keys error: %s", e, exc_info=True)
             return []
 
     def size(self) -> int:
@@ -231,7 +236,7 @@ class IndexedDBStorage(OfflineStorage):
 
             return total_size
         except Exception as e:
-            logger.error(f"IndexedDB size error: {e}")
+            logger.error("IndexedDB size error: %s", e, exc_info=True)
             return 0
 
     def cleanup_expired(self) -> int:
@@ -263,11 +268,11 @@ class IndexedDBStorage(OfflineStorage):
                 removed_count += 1
 
             if removed_count > 0:
-                logger.info(f"Cleaned up {removed_count} expired IndexedDB entries")
+                logger.info("Cleaned up %d expired IndexedDB entries", removed_count)
 
             return removed_count
         except Exception as e:
-            logger.error(f"IndexedDB cleanup error: {e}")
+            logger.error("IndexedDB cleanup error: %s", e, exc_info=True)
             return 0
 
 
@@ -294,7 +299,7 @@ class LocalStorage(OfflineStorage):
 
             return default
         except Exception as e:
-            logger.error(f"localStorage get error: {e}")
+            logger.error("localStorage get error: %s", e, exc_info=True)
             return default
 
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
@@ -320,7 +325,7 @@ class LocalStorage(OfflineStorage):
             self._storage[namespaced_key] = serialized
             return True
         except Exception as e:
-            logger.error(f"localStorage set error: {e}")
+            logger.error("localStorage set error: %s", e, exc_info=True)
             return False
 
     def delete(self, key: str) -> bool:
@@ -332,7 +337,7 @@ class LocalStorage(OfflineStorage):
                 del self._storage[namespaced_key]
             return True
         except Exception as e:
-            logger.error(f"localStorage delete error: {e}")
+            logger.error("localStorage delete error: %s", e, exc_info=True)
             return False
 
     def clear(self) -> bool:
@@ -343,7 +348,7 @@ class LocalStorage(OfflineStorage):
                 del self._storage[key]
             return True
         except Exception as e:
-            logger.error(f"localStorage clear error: {e}")
+            logger.error("localStorage clear error: %s", e, exc_info=True)
             return False
 
     def keys(self) -> List[str]:
@@ -356,7 +361,7 @@ class LocalStorage(OfflineStorage):
                 if k.startswith(namespace_prefix)
             ]
         except Exception as e:
-            logger.error(f"localStorage keys error: {e}")
+            logger.error("localStorage keys error: %s", e, exc_info=True)
             return []
 
     def size(self) -> int:
@@ -372,7 +377,7 @@ class LocalStorage(OfflineStorage):
 
             return total_size
         except Exception as e:
-            logger.error(f"localStorage size error: {e}")
+            logger.error("localStorage size error: %s", e, exc_info=True)
             return 0
 
 
@@ -403,7 +408,7 @@ class SyncQueue:
             # Save queue
             return self._storage.set(self._queue_key, queue)
         except Exception as e:
-            logger.error(f"Failed to add action to sync queue: {e}")
+            logger.error("Failed to add action to sync queue: %s", e, exc_info=True)
             return False
 
     def get_pending(self) -> List[OfflineAction]:
@@ -414,7 +419,7 @@ class SyncQueue:
                 OfflineAction.from_dict(item) for item in queue if item.get("status") == "pending"
             ]
         except Exception as e:
-            logger.error(f"Failed to get pending actions: {e}")
+            logger.error("Failed to get pending actions: %s", e, exc_info=True)
             return []
 
     def mark_completed(self, action_id: str) -> bool:
@@ -443,7 +448,7 @@ class SyncQueue:
 
             return self._storage.set(self._queue_key, queue)
         except Exception as e:
-            logger.error(f"Failed to retry action {action_id}: {e}")
+            logger.error("Failed to retry action %s: %s", action_id, e, exc_info=True)
             return False
 
     def remove_completed(self, older_than_hours: int = 24) -> int:
@@ -465,11 +470,11 @@ class SyncQueue:
 
             if removed_count > 0:
                 self._storage.set(self._queue_key, queue)
-                logger.info(f"Removed {removed_count} completed sync actions")
+                logger.info("Removed %d completed sync actions", removed_count)
 
             return removed_count
         except Exception as e:
-            logger.error(f"Failed to remove completed actions: {e}")
+            logger.error("Failed to remove completed actions: %s", e, exc_info=True)
             return 0
 
     def clear(self) -> bool:
@@ -501,7 +506,7 @@ class SyncQueue:
 
             return self._storage.set(self._queue_key, queue)
         except Exception as e:
-            logger.error(f"Failed to update action status: {e}")
+            logger.error("Failed to update action status: %s", e, exc_info=True)
             return False
 
 
@@ -534,5 +539,5 @@ def get_storage_backend(storage_name: str, backend_type: Optional[str] = None) -
         return LocalStorage(storage_name)
     else:
         # Default to IndexedDB
-        logger.warning(f"Unknown storage backend: {backend_type}, using IndexedDB")
+        logger.warning("Unknown storage backend: %s, using IndexedDB", backend_type)
         return IndexedDBStorage(storage_name)

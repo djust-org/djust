@@ -80,7 +80,7 @@ class PWAMixin:
                 }
             )
         except Exception:
-            pass
+            logger.warning("Failed to load DJUST_CONFIG settings, using defaults", exc_info=True)
 
         # Override with view-level settings
         if self.pwa_name:
@@ -212,10 +212,10 @@ class OfflineMixin:
             # Try to get from cache
             cached = self.storage.get(key)
             if cached:
-                logger.info(f"Using cached data for key: {key}")
+                logger.info("Using cached data for key: %s", key)
                 return cached
 
-            logger.warning(f"No cached data for key: {key}, returning empty")
+            logger.warning("No cached data for key: %s, returning empty", key)
             return []
 
         # Online - fetch from database and cache
@@ -227,11 +227,11 @@ class OfflineMixin:
 
             # Cache the data
             self.storage.set(key, data, ttl=self.offline_cache_duration)
-            logger.info(f"Cached {len(data)} items for key: {key}")
+            logger.info("Cached %d items for key: %s", len(data), key)
             return data
 
         except Exception as e:
-            logger.error(f"Failed to fetch data for key {key}: {e}")
+            logger.error("Failed to fetch data for key %s: %s", key, e, exc_info=True)
             # Fall back to cache if available
             cached = self.storage.get(key)
             return cached if cached else []
@@ -268,7 +268,7 @@ class OfflineMixin:
         )
         self.sync_queue.add(action)
 
-        logger.info(f"Created offline object: {model_name} with temp_id: {temp_id}")
+        logger.info("Created offline object: %s with temp_id: %s", model_name, temp_id)
         return obj_data
 
     def update_offline(
@@ -298,7 +298,7 @@ class OfflineMixin:
         )
         self.sync_queue.add(action)
 
-        logger.info(f"Updated offline object: {model_name} id: {obj_id}")
+        logger.info("Updated offline object: %s id: %s", model_name, obj_id)
         return obj_data
 
     def delete_offline(self, model_name: str, obj_id: Union[str, int], **kwargs) -> bool:
@@ -322,7 +322,7 @@ class OfflineMixin:
         )
         self.sync_queue.add(action)
 
-        logger.info(f"Deleted offline object: {model_name} id: {obj_id}")
+        logger.info("Deleted offline object: %s id: %s", model_name, obj_id)
         return True
 
     def sync_when_online(self):
@@ -336,7 +336,7 @@ class OfflineMixin:
             logger.info("No pending sync actions")
             return
 
-        logger.info(f"Syncing {len(pending_actions)} offline actions")
+        logger.info("Syncing %d offline actions", len(pending_actions))
 
         # Trigger sync via event
         self.push_event("offline:sync_start", {"count": len(pending_actions)})
@@ -467,10 +467,10 @@ class SyncMixin:
                 },
             )
 
-            logger.info(f"Sync complete: {total_processed} processed, {total_failed} failed")
+            logger.info("Sync complete: %d processed, %d failed", total_processed, total_failed)
 
         except Exception as e:
-            logger.error(f"Sync failed: {e}")
+            logger.error("Sync failed: %s", e, exc_info=True)
             self.push_event("offline:sync_error", {"error": str(e)})
         finally:
             self._sync_in_progress = False
@@ -493,14 +493,14 @@ class SyncMixin:
                 if result:
                     self.sync_queue.mark_completed(action.id)
                     processed += 1
-                    logger.debug(f"Synced create action: {action.id}")
+                    logger.debug("Synced create action: %s", action.id)
                 else:
                     failed += 1
-                    logger.warning(f"Failed to sync create action: {action.id}")
+                    logger.warning("Failed to sync create action: %s", action.id)
 
             except Exception as e:
                 failed += 1
-                logger.error(f"Error syncing create action {action.id}: {e}")
+                logger.error("Error syncing create action %s: %s", action.id, e, exc_info=True)
                 self.sync_queue.mark_failed(action.id, str(e))
 
         return processed, failed
@@ -523,14 +523,14 @@ class SyncMixin:
                 if result:
                     self.sync_queue.mark_completed(action.id)
                     processed += 1
-                    logger.debug(f"Synced update action: {action.id}")
+                    logger.debug("Synced update action: %s", action.id)
                 else:
                     failed += 1
-                    logger.warning(f"Failed to sync update action: {action.id}")
+                    logger.warning("Failed to sync update action: %s", action.id)
 
             except Exception as e:
                 failed += 1
-                logger.error(f"Error syncing update action {action.id}: {e}")
+                logger.error("Error syncing update action %s: %s", action.id, e, exc_info=True)
                 self.sync_queue.mark_failed(action.id, str(e))
 
         return processed, failed
@@ -553,14 +553,14 @@ class SyncMixin:
                 if result:
                     self.sync_queue.mark_completed(action.id)
                     processed += 1
-                    logger.debug(f"Synced delete action: {action.id}")
+                    logger.debug("Synced delete action: %s", action.id)
                 else:
                     failed += 1
-                    logger.warning(f"Failed to sync delete action: {action.id}")
+                    logger.warning("Failed to sync delete action: %s", action.id)
 
             except Exception as e:
                 failed += 1
-                logger.error(f"Error syncing delete action {action.id}: {e}")
+                logger.error("Error syncing delete action %s: %s", action.id, e, exc_info=True)
                 self.sync_queue.mark_failed(action.id, str(e))
 
         return processed, failed
@@ -580,11 +580,11 @@ class SyncMixin:
 
             # Create object
             obj = self.sync_model.objects.create(**data)
-            logger.info(f"Created {self.sync_model.__name__} with ID {obj.id}")
+            logger.info("Created %s with ID %s", self.sync_model.__name__, obj.id)
             return True
 
         except Exception as e:
-            logger.error(f"Default create sync failed: {e}")
+            logger.error("Default create sync failed: %s", e)
             return False
 
     def _default_update_sync(self, action: OfflineAction) -> bool:
@@ -607,14 +607,14 @@ class SyncMixin:
                     setattr(obj, field, value)
 
             obj.save()
-            logger.info(f"Updated {self.sync_model.__name__} ID {action.id}")
+            logger.info("Updated %s ID %s", self.sync_model.__name__, action.id)
             return True
 
         except self.sync_model.DoesNotExist:
-            logger.error(f"Object not found for update: {action.id}")
+            logger.error("Object not found for update: %s", action.id)
             return False
         except Exception as e:
-            logger.error(f"Default update sync failed: {e}")
+            logger.error("Default update sync failed: %s", e)
             return False
 
     def _default_delete_sync(self, action: OfflineAction) -> bool:
@@ -626,12 +626,12 @@ class SyncMixin:
         try:
             obj = self.sync_model.objects.get(id=action.id)
             obj.delete()
-            logger.info(f"Deleted {self.sync_model.__name__} ID {action.id}")
+            logger.info("Deleted %s ID %s", self.sync_model.__name__, action.id)
             return True
 
         except self.sync_model.DoesNotExist:
-            logger.warning(f"Object already deleted: {action.id}")
+            logger.warning("Object already deleted: %s", action.id)
             return True  # Consider this successful
         except Exception as e:
-            logger.error(f"Default delete sync failed: {e}")
+            logger.error("Default delete sync failed: %s", e)
             return False

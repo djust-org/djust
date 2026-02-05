@@ -8,6 +8,16 @@
 (function() {
     'use strict';
 
+    // Debug logging helper - uses djust debug system when available,
+    // otherwise silently drops messages in production
+    function _log(level, msg) {
+        if (window.djust && window.djust.reportError && level === 'error') {
+            window.djust.reportError(msg);
+        } else if (window.djust && window.djust.debug) {
+            window.djust.debug('[PWA] ' + msg);
+        }
+    }
+
     // PWA Manager Class
     class DjustPWA {
         constructor(config = {}) {
@@ -30,7 +40,7 @@
         }
 
         async init() {
-            console.log('[PWA] Initializing djust PWA support');
+            _log('info', 'Initializing djust PWA support');
 
             // Initialize storage
             await this.initStorage();
@@ -47,7 +57,7 @@
             // Start sync monitoring
             this.startSyncMonitoring();
 
-            console.log('[PWA] djust PWA initialization complete');
+            _log('info', 'djust PWA initialization complete');
         }
 
         async initStorage() {
@@ -59,9 +69,9 @@
                 }
 
                 await this.offlineStorage.init();
-                console.log('[PWA] Storage initialized:', this.config.offlineStorage);
+                _log('info', 'Storage initialized: ' + this.config.offlineStorage);
             } catch (error) {
-                console.error('[PWA] Storage initialization failed:', error);
+                _log('error', 'Storage initialization failed');
                 // Fall back to in-memory storage
                 this.offlineStorage = new MemoryStorage();
             }
@@ -79,27 +89,27 @@
 
                         // Check for updates
                         registration.addEventListener('updatefound', () => {
-                            console.log('[PWA] Service worker update found');
+                            _log('info', 'Service worker update found');
                             this.dispatchEvent('sw-update-available', { registration });
                         });
 
-                        console.log('[PWA] Service worker connected');
+                        _log('info', 'Service worker connected');
                     }
                 } catch (error) {
-                    console.error('[PWA] Service worker setup failed:', error);
+                    _log('error', 'Service worker setup failed');
                 }
             }
         }
 
         initNetworkDetection() {
             window.addEventListener('online', () => {
-                console.log('[PWA] Connection restored');
+                _log('info', 'Connection restored');
                 this.isOnline = true;
                 this.handleConnectionChange(true);
             });
 
             window.addEventListener('offline', () => {
-                console.log('[PWA] Connection lost');
+                _log('info', 'Connection lost');
                 this.isOnline = false;
                 this.handleConnectionChange(false);
             });
@@ -247,7 +257,7 @@
                 // Store in offline storage
                 await this.offlineStorage.addAction(action);
 
-                console.log('[PWA] Queued offline action:', action);
+                _log('info', 'Queued offline action: ' + action.id);
 
                 // Notify LiveView if available
                 if (window.djust && window.djust.liveViewInstance) {
@@ -257,7 +267,7 @@
                     });
                 }
             } catch (error) {
-                console.error('[PWA] Failed to queue offline action:', error);
+                _log('error', 'Failed to queue offline action');
             }
         }
 
@@ -297,7 +307,7 @@
 
         async triggerSync() {
             if (!this.isOnline) {
-                console.log('[PWA] Cannot sync while offline');
+                _log('info', 'Cannot sync while offline');
                 return;
             }
 
@@ -305,11 +315,11 @@
                 const pendingActions = await this.offlineStorage.getPendingActions();
 
                 if (pendingActions.length === 0) {
-                    console.log('[PWA] No actions to sync');
+                    _log('info', 'No actions to sync');
                     return;
                 }
 
-                console.log(`[PWA] Starting sync of ${pendingActions.length} actions`);
+                _log('info', 'Starting sync of ' + pendingActions.length + ' actions');
 
                 // Send sync request
                 const response = await fetch(this.config.syncEndpoint, {
@@ -326,7 +336,7 @@
 
                 if (response.ok) {
                     const result = await response.json();
-                    console.log('[PWA] Sync successful:', result);
+                    _log('info', 'Sync successful');
 
                     // Mark actions as synced
                     if (result.synced_ids) {
@@ -340,11 +350,11 @@
 
                     this.dispatchEvent('sync-complete', result);
                 } else {
-                    console.error('[PWA] Sync failed:', response.status, response.statusText);
+                    _log('error', 'Sync failed: ' + response.status + ' ' + response.statusText);
                     this.dispatchEvent('sync-error', { status: response.status });
                 }
             } catch (error) {
-                console.error('[PWA] Sync error:', error);
+                _log('error', 'Sync error: ' + error.message);
                 this.dispatchEvent('sync-error', { error: error.message });
             }
         }
@@ -363,17 +373,17 @@
 
             switch (type) {
                 case 'SYNC_COMPLETE':
-                    console.log('[PWA] Service worker sync complete:', data);
+                    _log('info', 'Service worker sync complete');
                     this.dispatchEvent('sw-sync-complete', data);
                     break;
 
                 case 'CACHE_UPDATED':
-                    console.log('[PWA] Cache updated:', data);
+                    _log('info', 'Cache updated');
                     this.dispatchEvent('cache-updated', data);
                     break;
 
                 default:
-                    console.log('[PWA] Unknown service worker message:', type, data);
+                    _log('info', 'Unknown service worker message: ' + type);
             }
         }
 
@@ -401,7 +411,7 @@
                     try {
                         callback(data);
                     } catch (error) {
-                        console.error(`[PWA] Event listener error for ${event}:`, error);
+                        _log('error', 'Event listener error for ' + event);
                     }
                 });
             }
@@ -571,7 +581,7 @@
                 const data = localStorage.getItem(this.storageKey);
                 return data ? JSON.parse(data) : [];
             } catch (error) {
-                console.error('[PWA] LocalStorage parse error:', error);
+                _log('error', 'LocalStorage parse error');
                 return [];
             }
         }
@@ -623,7 +633,7 @@
                 try {
                     config = JSON.parse(configElement.dataset.djustPwaConfig);
                 } catch (error) {
-                    console.error('[PWA] Invalid config JSON:', error);
+                    _log('error', 'Invalid config JSON');
                 }
             }
         }

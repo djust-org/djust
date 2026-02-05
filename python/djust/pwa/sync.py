@@ -60,7 +60,7 @@ class ConflictResolver:
             resolver_func: Function that takes (local_data, server_data) and returns merged data
         """
         self._custom_resolvers[model_name] = resolver_func
-        logger.info(f"Registered custom conflict resolver for model: {model_name}")
+        logger.info("Registered custom conflict resolver for model: %s", model_name)
 
     def resolve_conflict(
         self,
@@ -88,7 +88,7 @@ class ConflictResolver:
             try:
                 return self._custom_resolvers[model_name](local_data, server_data)
             except Exception as e:
-                logger.error(f"Custom resolver failed for {model_name}: {e}")
+                logger.error("Custom resolver failed for %s: %s", model_name, e, exc_info=True)
                 # Fall back to default strategy
 
         if strategy == MergeStrategy.CLIENT_WINS:
@@ -205,7 +205,7 @@ class SyncManager:
             handler_func: Function that handles sync for this model type
         """
         self._sync_handlers[model_name] = handler_func
-        logger.info(f"Registered sync handler for model: {model_name}")
+        logger.info("Registered sync handler for model: %s", model_name)
 
     def sync_actions(self, actions: List[OfflineAction]) -> SyncResult:
         """
@@ -235,7 +235,7 @@ class SyncManager:
             return self._perform_sync(actions)
         finally:
             self._sync_in_progress = False
-            logger.info(f"Sync completed in {time.time() - start_time:.2f} seconds")
+            logger.info("Sync completed in %.2f seconds", time.time() - start_time)
 
     def _perform_sync(self, actions: List[OfflineAction]) -> SyncResult:
         """Perform the actual synchronization."""
@@ -252,7 +252,9 @@ class SyncManager:
         for group_key, group_actions in action_groups.items():
             action_type, model_name = group_key
 
-            logger.info(f"Processing {len(group_actions)} {action_type} actions for {model_name}")
+            logger.info(
+                "Processing %d %s actions for %s", len(group_actions), action_type, model_name
+            )
 
             # Process in batches
             for batch in self._create_batches(group_actions):
@@ -264,7 +266,7 @@ class SyncManager:
                     errors.extend(batch_result.get("errors", []))
 
                 except Exception as e:
-                    logger.error(f"Batch sync failed: {e}")
+                    logger.error("Batch sync failed: %s", e, exc_info=True)
                     failed_count += len(batch)
                     errors.append(f"Batch sync error: {str(e)}")
 
@@ -325,7 +327,12 @@ class SyncManager:
             }
 
     def _sync_create_batch(self, batch: List[OfflineAction], model_name: str) -> Dict[str, Any]:
-        """Sync create actions."""
+        """
+        Sync create actions. Override via register_sync_handler() for real persistence.
+
+        The default implementation logs but does not persist. Subclasses or
+        registered sync handlers should override this to make actual API/DB calls.
+        """
         processed = 0
         failed = 0
         errors = []
@@ -338,8 +345,11 @@ class SyncManager:
                 data.pop("created_offline", None)
                 data.pop("id", None)  # Let server assign real ID
 
-                # In a real implementation, this would make an API call
-                logger.info(f"Creating {model_name} with data: {data}")
+                # Default: log only. Override via register_sync_handler() for persistence.
+                logger.warning(
+                    "No sync handler registered for %s create — action logged but not persisted",
+                    model_name,
+                )
                 processed += 1
 
             except Exception as e:
@@ -349,7 +359,13 @@ class SyncManager:
         return {"processed": processed, "failed": failed, "errors": errors}
 
     def _sync_update_batch(self, batch: List[OfflineAction], model_name: str) -> Dict[str, Any]:
-        """Sync update actions."""
+        """
+        Sync update actions. Override via register_sync_handler() for real persistence.
+
+        The default implementation performs conflict resolution but logs instead
+        of persisting. Subclasses or registered sync handlers should override
+        this to make actual API/DB calls.
+        """
         processed = 0
         failed = 0
         conflicts = []
@@ -357,7 +373,6 @@ class SyncManager:
 
         for action in batch:
             try:
-                # Get current server data (simulate API call)
                 server_data = self._fetch_server_data(model_name, action.id)
 
                 if server_data:
@@ -378,8 +393,11 @@ class SyncManager:
                             }
                         )
 
-                    # Send update to server (simulate API call)
-                    logger.info(f"Updating {model_name} {action.id} with data: {resolved_data}")
+                    # Default: log only. Override via register_sync_handler() for persistence.
+                    logger.warning(
+                        "No sync handler registered for %s update — action logged but not persisted",
+                        model_name,
+                    )
                     processed += 1
                 else:
                     # Object doesn't exist on server
@@ -393,15 +411,23 @@ class SyncManager:
         return {"processed": processed, "failed": failed, "conflicts": conflicts, "errors": errors}
 
     def _sync_delete_batch(self, batch: List[OfflineAction], model_name: str) -> Dict[str, Any]:
-        """Sync delete actions."""
+        """
+        Sync delete actions. Override via register_sync_handler() for real persistence.
+
+        The default implementation logs but does not persist. Subclasses or
+        registered sync handlers should override this to make actual API/DB calls.
+        """
         processed = 0
         failed = 0
         errors = []
 
         for action in batch:
             try:
-                # Send delete to server (simulate API call)
-                logger.info(f"Deleting {model_name} {action.id}")
+                # Default: log only. Override via register_sync_handler() for persistence.
+                logger.warning(
+                    "No sync handler registered for %s delete — action logged but not persisted",
+                    model_name,
+                )
                 processed += 1
 
             except Exception as e:
@@ -411,16 +437,28 @@ class SyncManager:
         return {"processed": processed, "failed": failed, "errors": errors}
 
     def _fetch_server_data(self, model_name: str, obj_id: Any) -> Optional[Dict[str, Any]]:
-        """Fetch current server data for an object (simulate API call)."""
-        # In a real implementation, this would make an API call
-        logger.debug(f"Fetching server data for {model_name} {obj_id}")
+        """
+        Fetch current server data for an object.
 
-        # Simulate server data
-        return {
-            "id": obj_id,
-            "updated_at": time.time() - 3600,  # 1 hour ago
-            "name": f"Server value for {obj_id}",
-        }
+        Override this method in subclasses to provide actual data fetching.
+        The default implementation raises NotImplementedError to make it
+        clear that this must be implemented for update sync to work.
+
+        Args:
+            model_name: The model name to fetch
+            obj_id: The object ID to fetch
+
+        Returns:
+            Dictionary of server data, or None if not found
+
+        Raises:
+            NotImplementedError: If not overridden in a subclass
+        """
+        raise NotImplementedError(
+            "SyncManager._fetch_server_data() must be overridden to provide "
+            "actual data fetching. Register a custom sync handler via "
+            "register_sync_handler() or subclass SyncManager."
+        )
 
 
 # Global sync handler registry
@@ -441,7 +479,7 @@ def register_sync_handler(model_name: str, action_type: str):
     def decorator(func: Callable):
         handler_key = f"{action_type}_{model_name}"
         _sync_handlers[handler_key] = func
-        logger.info(f"Registered sync handler: {handler_key}")
+        logger.info("Registered sync handler: %s", handler_key)
         return func
 
     return decorator
@@ -450,6 +488,9 @@ def register_sync_handler(model_name: str, action_type: str):
 def sync_endpoint_view(request):
     """
     Django view to handle sync requests from service worker.
+
+    Requires authentication. Uses Django's CSRF protection (service workers
+    should include the CSRF token in requests, or use token-based auth).
 
     Expected POST data:
     {
@@ -466,51 +507,89 @@ def sync_endpoint_view(request):
     }
     """
     from django.http import JsonResponse
-    from django.views.decorators.csrf import csrf_exempt
 
-    @csrf_exempt
-    def sync_view(request):
-        if request.method != "POST":
-            return JsonResponse({"error": "Method not allowed"}, status=405)
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
 
-        try:
-            data = json.loads(request.body)
-            actions_data = data.get("actions", [])
-            version = data.get("version", "unknown")
+    # Require authentication
+    if not request.user or not request.user.is_authenticated:
+        return JsonResponse({"error": "Authentication required"}, status=401)
 
-            logger.info(
-                f"Received sync request with {len(actions_data)} actions from version {version}"
-            )
+    try:
+        data = json.loads(request.body)
 
-            # Convert to OfflineAction objects
-            actions = [OfflineAction.from_dict(action_data) for action_data in actions_data]
+        # Validate payload structure
+        if not isinstance(data, dict):
+            return JsonResponse({"error": "Invalid payload format"}, status=400)
 
-            # Create sync manager and process
-            sync_manager = SyncManager()
+        actions_data = data.get("actions", [])
+        version = data.get("version", "unknown")
 
-            # Register any handlers from global registry
-            for handler_key, handler_func in _sync_handlers.items():
-                model_name = handler_key.split("_", 1)[1]
-                sync_manager.register_sync_handler(model_name, handler_func)
+        if not isinstance(actions_data, list):
+            return JsonResponse({"error": "actions must be a list"}, status=400)
 
-            # Perform sync
-            result = sync_manager.sync_actions(actions)
+        # Validate and limit action count to prevent abuse
+        max_actions = 100
+        if len(actions_data) > max_actions:
+            return JsonResponse({"error": "Too many actions (max %d)" % max_actions}, status=400)
 
-            # Prepare response
-            response_data = {
-                "success": result.success,
-                "synced_ids": [action.id for action in actions[: result.processed_count]],
-                "processed_count": result.processed_count,
-                "failed_count": result.failed_count,
-                "conflicts": result.conflicts,
-                "errors": result.errors,
-                "duration_seconds": result.duration_seconds,
+        logger.info(
+            "Received sync request with %d actions from version %s",
+            len(actions_data),
+            version,
+        )
+
+        # Validate and convert to OfflineAction objects
+        actions = []
+        valid_action_types = {"create", "update", "delete"}
+        required_fields = {"type", "model", "data", "timestamp"}
+        for action_data in actions_data:
+            if not isinstance(action_data, dict):
+                continue
+            # Validate required fields
+            if not required_fields.issubset(action_data.keys()):
+                continue
+            # Validate action type
+            if action_data.get("type") not in valid_action_types:
+                continue
+            # Only pass known fields to prevent arbitrary kwargs
+            safe_data = {
+                "id": str(action_data.get("id", "")),
+                "type": action_data["type"],
+                "model": str(action_data["model"]),
+                "data": action_data["data"] if isinstance(action_data["data"], dict) else {},
+                "timestamp": float(action_data.get("timestamp", 0)),
+                "retries": int(action_data.get("retries", 0)),
+                "status": "pending",
             }
+            actions.append(OfflineAction(**safe_data))
 
-            return JsonResponse(response_data)
+        # Create sync manager and process
+        sync_manager = SyncManager()
 
-        except Exception as e:
-            logger.error(f"Sync endpoint error: {e}")
-            return JsonResponse({"success": False, "error": str(e)}, status=500)
+        # Register any handlers from global registry
+        for handler_key, handler_func in _sync_handlers.items():
+            model_name = handler_key.split("_", 1)[1]
+            sync_manager.register_sync_handler(model_name, handler_func)
 
-    return sync_view(request)
+        # Perform sync
+        result = sync_manager.sync_actions(actions)
+
+        # Prepare response
+        response_data = {
+            "success": result.success,
+            "synced_ids": [action.id for action in actions[: result.processed_count]],
+            "processed_count": result.processed_count,
+            "failed_count": result.failed_count,
+            "conflicts": result.conflicts,
+            "errors": result.errors,
+            "duration_seconds": result.duration_seconds,
+        }
+
+        return JsonResponse(response_data)
+
+    except json.JSONDecodeError:
+        return JsonResponse({"success": False, "error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        logger.error("Sync endpoint error: %s", e, exc_info=True)
+        return JsonResponse({"success": False, "error": "Internal server error"}, status=500)
