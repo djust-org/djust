@@ -8,7 +8,9 @@ This document outlines security best practices for contributing to djust. Follow
 2. [Banned Patterns](#banned-patterns)
 3. [Code Review Checklist](#code-review-checklist)
 4. [Common Vulnerabilities](#common-vulnerabilities)
-5. [Security Testing](#security-testing)
+5. [Multi-Tenant Security](#multi-tenant-security)
+6. [PWA / Offline Sync Security](#pwa--offline-sync-security)
+7. [Security Testing](#security-testing)
 
 ---
 
@@ -211,6 +213,8 @@ The following patterns are **prohibited** in djust code:
 | `exec(user_input)` | Never use exec | Code injection |
 | `getattr(obj, user_input)` without guard | `is_safe_event_name()` + `@event_handler` check | Arbitrary method invocation |
 | Event handler without `@event_handler` | Add `@event_handler` decorator | Unrestricted WebSocket access |
+| `mark_safe(f'...')` with user values | `format_html()` or `escape()` | XSS via template tags |
+| `@csrf_exempt` without justification | Token-based auth or standard CSRF | CSRF bypass |
 
 ### JavaScript
 
@@ -220,6 +224,7 @@ The following patterns are **prohibited** in djust code:
 | `Object.assign(target, untrusted)` | `djustSecurity.safeObjectAssign()` | Prototype pollution |
 | Direct console.log of user data | `djustSecurity.sanitizeForLog()` | Log injection |
 | `new Function(userCode)` | Never use | Code injection |
+| `console.log`/`console.error` in production JS | `_log()` helper or `window.djust.reportError()` | Debug info leakage |
 
 ---
 
@@ -251,10 +256,15 @@ When reviewing PRs, check for these security issues:
 - [ ] Sensitive data (passwords, tokens) never logged
 - [ ] No raw exception messages with user data
 
+### Template Tags
+- [ ] Template tags use `format_html()` or `escape()`, never `mark_safe(f'...')`
+- [ ] New endpoints have CSRF protection (no unjustified `@csrf_exempt`)
+
 ### JavaScript
 - [ ] innerHTML assignments reviewed for XSS
 - [ ] Object merges use `safeObjectAssign()`
 - [ ] No `eval()`, `new Function()`, or similar
+- [ ] No `console.log`/`console.error` in production JS — use `_log()` helper
 
 ### Dependencies
 - [ ] No known vulnerable dependencies
@@ -351,6 +361,114 @@ def my_handler(self, **kwargs):
 # Use the debug panel for inspection instead
 response = create_safe_error_response(e)  # No params!
 ```
+
+### 7. Template Tag XSS
+
+**What it is:** Using `mark_safe()` with f-string interpolation of user-controlled values (e.g., URLs, class names, CSS selectors) in template tags.
+
+**Impact:** Script injection via manipulated template tag parameters.
+
+**Prevention:**
+```python
+# BAD - user-controlled URL injected into mark_safe f-string
+from django.utils.safestring import mark_safe
+
+def pwa_head(manifest_url, theme_color):
+    return mark_safe(f'<link rel="manifest" href="{manifest_url}">'
+                     f'<meta name="theme-color" content="{theme_color}">')
+
+# GOOD - format_html auto-escapes interpolated values
+from django.utils.html import format_html
+
+def pwa_head(manifest_url, theme_color):
+    return format_html(
+        '<link rel="manifest" href="{}">'
+        '<meta name="theme-color" content="{}">',
+        manifest_url, theme_color
+    )
+```
+
+Use `escape()` for values embedded in JavaScript strings:
+```python
+from django.utils.html import escape
+
+# Safe for embedding in JS string contexts
+js_selector = escape(user_selector)
+```
+
+---
+
+## Multi-Tenant Security
+
+When building multi-tenant features, follow these principles to prevent cross-tenant data leakage:
+
+### Tenant Isolation Principles
+
+1. **Key Prefixing** — All storage keys (cache, state backends, session data) must be prefixed with the tenant identifier. Never use global keys that could collide across tenants.
+
+2. **QuerySet Scoping** — All database queries in tenant-aware views must be filtered by the current tenant. Use `TenantScopedMixin` to enforce this automatically.
+
+3. **Tenant-Aware Backends** — Storage backends (Redis, memory, file) must isolate data per tenant. All keys should include the tenant ID prefix.
+
+4. **Context Isolation** — Template context processors in multi-tenant mode must only inject data for the current tenant.
+
+### Code Example: TenantScopedMixin
+
+```python
+from djust.tenant.mixins import TenantScopedMixin
+
+class TenantDocumentView(TenantScopedMixin, LiveView):
+    """Queries are automatically filtered by current tenant."""
+
+    def get_queryset(self):
+        # TenantScopedMixin auto-filters: .filter(tenant=self.tenant)
+        return Document.objects.all()
+```
+
+### Cross-Tenant Prevention Checklist
+
+- [ ] All cache/state keys include tenant prefix
+- [ ] Database queries scoped to current tenant
+- [ ] File uploads stored in tenant-specific paths
+- [ ] Background tasks carry tenant context
+- [ ] Admin views respect tenant boundaries
+
+---
+
+## PWA / Offline Sync Security
+
+The PWA sync system allows offline actions to be replayed when connectivity is restored. This creates a trust boundary — all data from the client must be treated as untrusted.
+
+### Sync Endpoint Requirements
+
+1. **Authentication Required** — The sync endpoint must require authentication. Never use `@csrf_exempt` without equivalent protection (e.g., token-based auth).
+
+2. **Payload Validation** — Validate the sync payload structure before processing:
+   - Type-check the top-level payload (must be a dict)
+   - Type-check the actions list (must be a list)
+   - Enforce an action count limit (default: 100) to prevent abuse
+   - Validate each action's fields against a whitelist
+
+3. **Safe Field Extraction** — Never pass client data as arbitrary `**kwargs`. Extract only known fields:
+
+```python
+# BAD - arbitrary kwargs from client data
+def process_action(action_data):
+    MyModel.objects.create(**action_data)
+
+# GOOD - explicit field extraction with validation
+ALLOWED_FIELDS = frozenset({"title", "content", "status"})
+
+def process_action(action_data):
+    if not isinstance(action_data, dict):
+        logger.warning("Invalid action data type: %s", type(action_data).__name__)
+        return
+
+    safe_fields = {k: v for k, v in action_data.items() if k in ALLOWED_FIELDS}
+    MyModel.objects.create(**safe_fields)
+```
+
+4. **Offline Data Validation** — Data collected offline may be stale or manipulated. Validate timestamps, check for conflicts, and verify permissions before applying synced changes.
 
 ---
 

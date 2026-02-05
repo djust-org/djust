@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **State Backends** — Enhanced with tenant-aware isolation support (`TenantAwareRedisBackend`, `TenantAwareMemoryBackend`).
 - **Template Context** — Automatic tenant information injection in multi-tenant mode.
 
+### Security
+
+- **Template tag XSS prevention** — All PWA template tags (`pwa_tags.py`, `djust_pwa.py`) now use `format_html()` and `escape()` instead of `mark_safe()` with f-string interpolation. Prevents script injection via manipulated URLs, class names, or CSS selectors.
+- **Sync endpoint hardening** — Removed `@csrf_exempt` from `sync_endpoint_view`. Added authentication requirement, payload validation (type checking, field whitelist, action count limit of 100), and safe field extraction to prevent arbitrary kwargs injection.
+- **Silent exception elimination** — All `except: pass` patterns replaced with appropriate `logger.warning()` or `logger.debug()` calls across PWA and tenant modules.
+- **f-string logging conversion** — Converted 75+ `logger.*(f"...")` calls to `%s`-style formatting across all PWA, tenant, and template tag files.
+- **Production JS hardened** — Replaced all `console.log`/`console.error` calls in `pwa.js` with `_log()` helper that routes through `window.djust.reportError` / `window.djust.debug`.
+
 ## [0.2.2] - 2026-02-01
 
 ### Fixed

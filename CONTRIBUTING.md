@@ -79,10 +79,15 @@ Key requirements:
 - Use `sanitize_for_log()` before logging user input
 - Use `create_safe_error_response()` for error responses
 - Never include stack traces or params in production error responses
+- **Template tags**: Always use `format_html()` or `escape()` — never `mark_safe(f'...')` with user-controlled values
+- **Multi-tenant**: New features touching data storage or queries must respect tenant isolation (key prefixing, queryset scoping)
+- **CSRF**: New endpoints must maintain Django CSRF protection — do not add `@csrf_exempt` without documented justification and equivalent protection
 
 ```python
 from djust.security import safe_setattr, sanitize_for_log, create_safe_error_response
 ```
+
+See [`docs/SECURITY_GUIDELINES.md`](docs/SECURITY_GUIDELINES.md) for complete details on template tag security, multi-tenant isolation, and PWA/offline sync hardening.
 
 ## Testing
 
