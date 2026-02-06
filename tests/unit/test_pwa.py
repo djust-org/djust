@@ -30,7 +30,7 @@ class TestDjustPwaManifest:
         assert "data:application/manifest+json," in result
 
         # Parse the manifest JSON from the data URI
-        manifest_json = unescape(result.split("data:application/manifest+json,")[1].split("'")[0])
+        manifest_json = unescape(result.split("data:application/manifest+json,")[1].split('"')[0])
         manifest = json.loads(manifest_json)
 
         assert manifest["name"] == "djust App"
@@ -53,7 +53,7 @@ class TestDjustPwaManifest:
         assert '<meta name="theme-color" content="#ff5500">' in result
 
         # Parse manifest
-        manifest_json = unescape(result.split("data:application/manifest+json,")[1].split("'")[0])
+        manifest_json = unescape(result.split("data:application/manifest+json,")[1].split('"')[0])
         manifest = json.loads(manifest_json)
 
         assert manifest["name"] == "My App"
@@ -72,7 +72,7 @@ class TestDjustPwaManifest:
         template = Template("{% load djust_pwa %}{% djust_pwa_manifest %}")
         result = template.render(Context({}))
 
-        manifest_json = unescape(result.split("data:application/manifest+json,")[1].split("'")[0])
+        manifest_json = unescape(result.split("data:application/manifest+json,")[1].split('"')[0])
         manifest = json.loads(manifest_json)
 
         assert manifest["name"] == "Settings App"
@@ -86,7 +86,7 @@ class TestDjustPwaManifest:
             result = template.render(Context({}))
 
             manifest_json = unescape(
-                result.split("data:application/manifest+json,")[1].split("'")[0]
+                result.split("data:application/manifest+json,")[1].split('"')[0]
             )
             manifest = json.loads(manifest_json)
 
@@ -97,7 +97,7 @@ class TestDjustPwaManifest:
         template = Template("{% load djust_pwa %}{% djust_pwa_manifest %}")
         result = template.render(Context({}))
 
-        manifest_json = unescape(result.split("data:application/manifest+json,")[1].split("'")[0])
+        manifest_json = unescape(result.split("data:application/manifest+json,")[1].split('"')[0])
         manifest = json.loads(manifest_json)
 
         assert "icons" in manifest

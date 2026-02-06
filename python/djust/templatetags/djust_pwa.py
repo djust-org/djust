@@ -102,9 +102,12 @@ def djust_pwa_manifest(
         manifest["theme_color"],
     )
 
-    # The data URI contains JSON which is safe (no user-controlled raw HTML),
-    # but we still escape the manifest JSON for the href attribute
-    return mark_safe("%s\n<link rel=\"manifest\" href='%s'>" % (theme_meta, escape(data_uri)))
+    # Build the manifest link tag with format_html to avoid mark_safe(% ...) anti-pattern
+    manifest_link = format_html(
+        '<link rel="manifest" href="{}">',
+        data_uri,
+    )
+    return format_html("{}\n{}", theme_meta, manifest_link)
 
 
 @register.simple_tag

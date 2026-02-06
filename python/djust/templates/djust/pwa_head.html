@@ -54,7 +54,9 @@ if ('serviceWorker' in navigator) {
     window.addEventListener('load', function() {
         navigator.serviceWorker.register('/sw.js', { scope: '/' })
             .then(function(registration) {
-                console.log('[djust] ServiceWorker registered, scope:', registration.scope);
+                if (window.djust && window.djust.debug) {
+                    window.djust.debug('[djust] ServiceWorker registered, scope:', registration.scope);
+                }
 
                 // Check for updates periodically
                 setInterval(() => {
@@ -74,7 +76,9 @@ if ('serviceWorker' in navigator) {
                 });
             })
             .catch(function(error) {
-                console.warn('[djust] ServiceWorker registration failed:', error);
+                if (window.djust && window.djust.reportError) {
+                    window.djust.reportError('[djust] ServiceWorker registration failed:', error);
+                }
             });
     });
 }
