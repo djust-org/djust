@@ -486,6 +486,33 @@ class TestPWADemoView:
         assert isinstance(parsed, dict)
         assert "name" in parsed
 
+    def test_manifest_preview_in_context(self):
+        """manifest_preview must be in the returned context dict."""
+        view = _mount_pwa_view()
+        context = view.get_context_data()
+        assert "manifest_preview" in context
+        parsed = json.loads(context["manifest_preview"])
+        assert isinstance(parsed, dict)
+        assert parsed["name"] == "djust PWA Demo"
+
+    def test_pwa_head_html_in_context(self):
+        """pwa_head_html must contain SW registration and theme-color meta."""
+        view = _mount_pwa_view()
+        context = view.get_context_data()
+        assert "pwa_head_html" in context
+        html = context["pwa_head_html"]
+        assert "theme-color" in html
+        assert "serviceWorker" in html
+        assert "manifest.json" in html
+
+    def test_pwa_head_html_contains_configured_values(self):
+        """pwa_head_html should use the view's pwa_name and pwa_theme_color."""
+        view = _mount_pwa_view()
+        context = view.get_context_data()
+        html = context["pwa_head_html"]
+        assert "djust PWA Demo" in html
+        assert "#6366f1" in html
+
 
 # ===========================================================================
 # Integration Tests — URL Registration
@@ -526,3 +553,39 @@ class TestDemoRegistration:
         client = Client()
         response = client.get("/demos/tenant/?tenant=acme")
         assert response.status_code == 200
+
+    def test_service_worker_url_resolves(self):
+        """Service worker URL /sw.js resolves."""
+        from django.urls import resolve
+
+        match = resolve("/sw.js")
+        assert match is not None
+
+    def test_manifest_url_resolves(self):
+        """Manifest URL /manifest.json resolves."""
+        from django.urls import resolve
+
+        match = resolve("/manifest.json")
+        assert match is not None
+
+    @pytest.mark.django_db
+    def test_service_worker_http_get(self):
+        """GET /sw.js returns 200 with JavaScript content type."""
+        from django.test import Client
+
+        client = Client()
+        response = client.get("/sw.js")
+        assert response.status_code == 200
+        assert "javascript" in response["Content-Type"]
+
+    @pytest.mark.django_db
+    def test_manifest_http_get(self):
+        """GET /manifest.json returns 200 with JSON content type."""
+        from django.test import Client
+
+        client = Client()
+        response = client.get("/manifest.json")
+        assert response.status_code == 200
+        assert "json" in response["Content-Type"]
+        data = json.loads(response.content)
+        assert "name" in data

@@ -404,3 +404,151 @@ class TestVariableExtraction:
         assert "literal" not in variables
         # But post.id should
         assert "post" in variables
+
+
+class TestPwaTagHandlers:
+    """Tests for the PWA tag handlers."""
+
+    def test_pwa_manifest_handler_renders_theme_color(self):
+        """{% djust_pwa_manifest %} renders theme-color meta tag."""
+        from djust.template_tags.pwa import PwaManifestHandler
+
+        handler = PwaManifestHandler()
+        result = handler.render([], {})
+        assert "theme-color" in result
+        assert "<meta" in result
+
+    def test_pwa_manifest_handler_renders_manifest_link(self):
+        """{% djust_pwa_manifest %} renders manifest link tag."""
+        from djust.template_tags.pwa import PwaManifestHandler
+
+        handler = PwaManifestHandler()
+        result = handler.render([], {})
+        assert '<link rel="manifest"' in result
+
+    def test_pwa_manifest_handler_with_name(self):
+        """{% djust_pwa_manifest name="Test" %} passes name kwarg."""
+        from djust.template_tags.pwa import PwaManifestHandler
+
+        handler = PwaManifestHandler()
+        result = handler.render(['name="Test App"'], {})
+        assert "Test App" in result
+
+    def test_sw_register_handler_renders_script(self):
+        """{% djust_sw_register %} renders service worker script."""
+        from djust.template_tags.pwa import SwRegisterHandler
+
+        handler = SwRegisterHandler()
+        result = handler.render([], {})
+        assert "serviceWorker" in result
+        assert "<script>" in result
+
+    def test_offline_indicator_handler_renders_indicator(self):
+        """{% djust_offline_indicator %} renders indicator HTML."""
+        from djust.template_tags.pwa import OfflineIndicatorHandler
+
+        handler = OfflineIndicatorHandler()
+        result = handler.render([], {})
+        assert "djust-offline-indicator" in result
+        assert "djust-indicator-dot" in result
+
+    def test_pwa_head_handler_renders_full_head(self):
+        """{% djust_pwa_head %} renders manifest, SW script, and meta tags."""
+        from djust.template_tags.pwa import PwaHeadHandler
+
+        handler = PwaHeadHandler()
+        result = handler.render([], {})
+        assert "theme-color" in result
+        assert "serviceWorker" in result
+        assert "manifest.json" in result
+
+    def test_pwa_head_handler_with_kwargs(self):
+        """{% djust_pwa_head name="X" theme_color="#fff" %} passes kwargs."""
+        from djust.template_tags.pwa import PwaHeadHandler
+
+        handler = PwaHeadHandler()
+        result = handler.render(['name="My PWA"', 'theme_color="#ff0000"'], {})
+        assert "My PWA" in result
+        assert "#ff0000" in result
+
+
+class TestTemplatetagHandler:
+    """Tests for the templatetag handler."""
+
+    def test_openblock(self):
+        """{% templatetag openblock %} renders '{%'."""
+        from djust.template_tags.templatetag import TemplatetagHandler
+
+        handler = TemplatetagHandler()
+        assert handler.render(["openblock"], {}) == "{%"
+
+    def test_closeblock(self):
+        """{% templatetag closeblock %} renders '%}'."""
+        from djust.template_tags.templatetag import TemplatetagHandler
+
+        handler = TemplatetagHandler()
+        assert handler.render(["closeblock"], {}) == "%}"
+
+    def test_openvariable(self):
+        """{% templatetag openvariable %} renders '{{'."""
+        from djust.template_tags.templatetag import TemplatetagHandler
+
+        handler = TemplatetagHandler()
+        assert handler.render(["openvariable"], {}) == "{{"
+
+    def test_closevariable(self):
+        """{% templatetag closevariable %} renders '}}'."""
+        from djust.template_tags.templatetag import TemplatetagHandler
+
+        handler = TemplatetagHandler()
+        assert handler.render(["closevariable"], {}) == "}}"
+
+    def test_openbrace(self):
+        """{% templatetag openbrace %} renders '{'."""
+        from djust.template_tags.templatetag import TemplatetagHandler
+
+        handler = TemplatetagHandler()
+        assert handler.render(["openbrace"], {}) == "{"
+
+    def test_closebrace(self):
+        """{% templatetag closebrace %} renders '}'."""
+        from djust.template_tags.templatetag import TemplatetagHandler
+
+        handler = TemplatetagHandler()
+        assert handler.render(["closebrace"], {}) == "}"
+
+    def test_opencomment(self):
+        """{% templatetag opencomment %} renders '{#'."""
+        from djust.template_tags.templatetag import TemplatetagHandler
+
+        handler = TemplatetagHandler()
+        assert handler.render(["opencomment"], {}) == "{#"
+
+    def test_closecomment(self):
+        """{% templatetag closecomment %} renders '#}'."""
+        from djust.template_tags.templatetag import TemplatetagHandler
+
+        handler = TemplatetagHandler()
+        assert handler.render(["closecomment"], {}) == "#}"
+
+    def test_unknown_keyword(self):
+        """Unknown keyword returns empty string."""
+        from djust.template_tags.templatetag import TemplatetagHandler
+
+        handler = TemplatetagHandler()
+        assert handler.render(["badkeyword"], {}) == ""
+
+    def test_no_args(self):
+        """No arguments returns empty string."""
+        from djust.template_tags.templatetag import TemplatetagHandler
+
+        handler = TemplatetagHandler()
+        assert handler.render([], {}) == ""
+
+    def test_quoted_keyword(self):
+        """Quoted keywords are handled (quotes stripped)."""
+        from djust.template_tags.templatetag import TemplatetagHandler
+
+        handler = TemplatetagHandler()
+        assert handler.render(["'openblock'"], {}) == "{%"
+        assert handler.render(['"closeblock"'], {}) == "%}"

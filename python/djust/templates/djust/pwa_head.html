@@ -11,7 +11,7 @@ PWA head tags for djust - include all PWA-related meta tags and scripts.
 <meta name="application-name" content="{{ name }}">
 
 <!-- PWA Manifest -->
-<link rel="manifest" href="{{ static_url }}manifest.json">
+<link rel="manifest" href="/manifest.json">
 
 <!-- PWA Icons -->
 <link rel="apple-touch-icon" href="{{ static_url }}icons/icon-192.png">
@@ -52,7 +52,7 @@ body.djust-offline .djust-indicator-dot {
 <script>
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', function() {
-        navigator.serviceWorker.register('{{ static_url }}sw.js', { scope: '/' })
+        navigator.serviceWorker.register('/sw.js', { scope: '/' })
             .then(function(registration) {
                 console.log('[djust] ServiceWorker registered, scope:', registration.scope);
 

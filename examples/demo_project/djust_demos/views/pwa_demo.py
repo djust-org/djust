@@ -84,5 +84,21 @@ class PWADemoView(PWAMixin, BaseViewWithNavbar):
         # Add a formatted JSON preview for display
         pwa_config = context.get("pwa_config", {})
         self.manifest_preview = json.dumps(pwa_config, indent=2)
+        context["manifest_preview"] = self.manifest_preview
+
+        # Render PWA head HTML via Django's template engine and pass as
+        # context variable.  The Rust VDOM engine can't reliably process
+        # inclusion tags like {% djust_pwa_head %} in {% block extra_head %}
+        # (arg-splitting breaks quoted values with spaces), so we
+        # pre-render and inject with {{ pwa_head_html|safe }}.
+        from django.template import Template, Context as DjangoContext
+
+        pwa_head_tpl = (
+            '{%% load djust_pwa %%}'
+            '{%% djust_pwa_head name="%s" theme_color="%s" %%}'
+            % (self.pwa_name, self.pwa_theme_color)
+        )
+        self.pwa_head_html = Template(pwa_head_tpl).render(DjangoContext({}))
+        context["pwa_head_html"] = self.pwa_head_html
 
         return context

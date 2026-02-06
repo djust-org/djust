@@ -226,6 +226,8 @@ def _register_builtins():
     try:
         from . import url  # noqa: F401
         from . import static  # noqa: F401
+        from . import pwa  # noqa: F401
+        from . import templatetag  # noqa: F401
     except ImportError as e:
         logger.debug(f"Could not import built-in handlers: {e}")
 

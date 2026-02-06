@@ -54,4 +54,8 @@ urlpatterns = [
 
     # Kitchen Sink
     path('kitchen-sink/', KitchenSinkView.as_view(), name='kitchen-sink'),
+
+    # PWA & Multi-Tenant Demos
+    path('pwa/', PWADemoView.as_view(), name='pwa'),
+    path('tenant/', TenantDemoView.as_view(), name='tenant'),
 ]
