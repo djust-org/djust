@@ -453,13 +453,55 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
  * @param {HTMLElement} existingRoot - The current DOM root
  * @param {HTMLElement} newRoot - The new content from server
  */
+/**
+ * Preserve form values (textarea, input, select) across innerHTML replacement.
+ * innerHTML destroys the DOM property .value; this saves and restores it.
+ */
+function preserveFormValues(container, updateFn) {
+    const saved = [];
+    container.querySelectorAll('textarea, input, select').forEach(el => {
+        const key = el.id || el.name;
+        if (!key) return;
+        const entry = { key, tag: el.tagName.toLowerCase() };
+        if (el.tagName === 'TEXTAREA') {
+            entry.value = el.value;
+        } else if (el.type === 'checkbox' || el.type === 'radio') {
+            entry.checked = el.checked;
+        } else if (el.tagName === 'SELECT') {
+            entry.value = el.value;
+        } else {
+            entry.value = el.value;
+        }
+        saved.push(entry);
+    });
+
+    updateFn();
+
+    for (const entry of saved) {
+        const selector = entry.key.match(/^[a-zA-Z]/)
+            ? `#${CSS.escape(entry.key)}, [name="${CSS.escape(entry.key)}"]`
+            : `[name="${CSS.escape(entry.key)}"]`;
+        const el = container.querySelector(selector);
+        if (!el) continue;
+        if (entry.tag === 'textarea' || entry.tag === 'select') {
+            el.value = entry.value;
+        } else if (el.type === 'checkbox' || el.type === 'radio') {
+            el.checked = entry.checked;
+        } else if (entry.value !== undefined) {
+            el.value = entry.value;
+        }
+    }
+}
+
 function applyDjUpdateElements(existingRoot, newRoot) {
     // Find all elements with dj-update attribute in the new content
     const djUpdateElements = newRoot.querySelectorAll('[dj-update]');
 
     if (djUpdateElements.length === 0) {
         // No dj-update elements, do a full replacement
-        existingRoot.innerHTML = newRoot.innerHTML;
+        preserveFormValues(existingRoot, () => {
+            existingRoot.innerHTML = newRoot.innerHTML;
+        });
         return;
     }
 
@@ -530,7 +572,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
             case 'replace':
             default:
                 // Standard replacement
-                existingElement.innerHTML = newElement.innerHTML;
+                preserveFormValues(existingElement, () => {
+                    existingElement.innerHTML = newElement.innerHTML;
+                });
                 // Copy attributes except dj-update
                 for (const attr of newElement.attributes) {
                     if (attr.name !== 'dj-update') {
@@ -572,7 +616,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                     applyDjUpdateElements(existing, newChild);
                 } else {
                     // Replace content
-                    existing.innerHTML = newChild.innerHTML;
+                    preserveFormValues(existing, () => {
+                        existing.innerHTML = newChild.innerHTML;
+                    });
                     for (const attr of newChild.attributes) {
                         existing.setAttribute(attr.name, attr.value);
                     }

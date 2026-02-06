@@ -31,9 +31,9 @@ function createEnv(bodyHtml = '') {
         // client.js may throw on missing DOM APIs
     }
 
-    // _sendModelUpdate (outside the double-load guard) uses window.djust.liveViewInstance.
-    // It first checks `typeof handleEvent === 'function'` which is false (handleEvent is scoped
-    // inside the guard), then falls back to inst.sendEvent(). Mock liveViewInstance to capture calls.
+    // _sendModelUpdate tries window.djust.liveViewInstance.sendEvent() first (fast
+    // synchronous path), then falls back to handleEvent() for HTTP-only mode.
+    // Mock liveViewInstance to capture model update calls.
     window.djust.liveViewInstance = {
         sendEvent: vi.fn((eventName, params) => {
             if (eventName === 'update_model') {
