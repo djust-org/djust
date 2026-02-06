@@ -47,12 +47,14 @@ function _getHookDefs() {
  * Map of active hook instances keyed by element id.
  * Each entry: { hookName, instance, el }
  */
-const _activeHooks = new Map();
+// Use var (not const/let) so these hoist above the IIFE guard block
+// that calls djustInit() → mountHooks() before this file executes.
+var _activeHooks = new Map();
 
 /**
  * Counter for generating unique IDs for hooked elements.
  */
-let _hookIdCounter = 0;
+var _hookIdCounter = 0;
 
 /**
  * Get a stable ID for an element, creating one if needed.
