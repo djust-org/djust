@@ -11,6 +11,14 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[Deployment Guide](guides/DEPLOYMENT.md)** - Deploy djust to production
 - **[HTTP Mode Example](guides/HTTP_MODE_EXAMPLE.md)** - Use djust without WebSockets
 
+### 🔌 Real-Time Features
+- **[Navigation](guides/navigation.md)** - URL state management with live_patch and live_redirect
+- **[Presence](guides/presence.md)** - Real-time user presence tracking and live cursors
+- **[Streaming](guides/streaming.md)** - Real-time partial DOM updates for LLM chat and live feeds
+- **[Uploads](guides/uploads.md)** - Chunked binary file uploads via WebSocket
+- **[Hooks](guides/hooks.md)** - Client-side JavaScript lifecycle hooks
+- **[Model Binding](guides/model-binding.md)** - Two-way data binding for form inputs
+
 ### 🎨 Components
 - **[Component System Overview](components/COMPONENTS.md)** - shadcn-style component philosophy
 - **[API Reference](components/API_REFERENCE_COMPONENTS.md)** - Complete component API

@@ -5,7 +5,6 @@ WebSocket consumer for LiveView real-time updates
 import asyncio
 import json
 import logging
-import sys
 import msgpack
 from typing import Any, Dict, Optional
 from asgiref.sync import sync_to_async
@@ -366,7 +365,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 await self.actor_handle.shutdown()
             except Exception as e:
-                logger.warning(f"Error shutting down actor: {e}")
+                logger.warning("Error shutting down actor: %s", e)
 
         # Clean up uploads
         if self.view_instance and hasattr(self.view_instance, "_cleanup_uploads"):
@@ -389,9 +388,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def receive(self, text_data=None, bytes_data=None):
         """Handle incoming WebSocket messages"""
-        print(
-            f"[WebSocket] receive called: text_data={text_data[:100] if text_data else None}, bytes_data={bytes_data is not None}",
-            file=sys.stderr,
+        logger.debug(
+            "[WebSocket] receive called: text_data=%s, bytes_data=%s",
+            text_data[:100] if text_data else None,
+            bytes_data is not None,
         )
 
         try:
@@ -463,7 +463,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             elif msg_type == "cursor_move":
                 await self.handle_cursor_move(data)
             else:
-                logger.warning(f"Unknown message type: {msg_type}")
+                logger.warning("Unknown message type: %s", msg_type)
                 await self.send_error(f"Unknown message type: {msg_type}")
 
         except json.JSONDecodeError as e:
@@ -507,7 +507,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # Check if view_path starts with any allowed module
             if not any(view_path.startswith(module) for module in allowed_modules):
                 logger.warning(
-                    f"Blocked attempt to mount view from unauthorized module: {view_path}"
+                    "Blocked attempt to mount view from unauthorized module: %s", view_path
                 )
                 await self.send_error(
                     _safe_error(f"View {view_path} is not in allowed modules", "View not found")
@@ -595,9 +595,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
             if self.use_actors and create_session_actor:
                 # Create SessionActor for this session
-                logger.info(f"Creating SessionActor for {view_path}")
+                logger.info("Creating SessionActor for %s", view_path)
                 self.actor_handle = await create_session_actor(self.session_id)
-                logger.info(f"SessionActor created: {self.actor_handle.session_id}")
+                logger.info("SessionActor created: %s", self.actor_handle.session_id)
 
         except Exception as e:
             response = handle_exception(
@@ -706,7 +706,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
             elif self.use_actors and self.actor_handle:
                 # Phase 5: Use actor system for rendering
-                logger.info(f"Mounting {view_path} with actor system")
+                logger.info("Mounting %s with actor system", view_path)
 
                 # Get initial state from Python view
                 context_data = await sync_to_async(self.view_instance.get_context_data)()
@@ -719,7 +719,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
 
                 html = result["html"]
-                logger.info(f"Actor mount successful, HTML length: {len(html)}")
+                logger.info("Actor mount successful, HTML length: %d", len(html))
 
             else:
                 # Non-actor mode: Use traditional flow
@@ -751,7 +751,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
 
         # Send success response (HTML only if generated)
-        logger.info(f"Successfully mounted view: {view_path}")
+        logger.info("Successfully mounted view: %s", view_path)
         response = {
             "type": "mount",
             "session_id": self.session_id,
@@ -804,9 +804,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # e.g., @click="set_period('month')" sends params._args = ['month']
         positional_args = params.pop("_args", [])
 
-        print(
-            f"[WebSocket] handle_event called: {event_name} with params: {params}", file=sys.stderr
-        )
+        logger.debug("[WebSocket] handle_event called: %s with params: %s", event_name, params)
 
         if not self.view_instance:
             await self.send_error("View not mounted. Please reload the page.")
@@ -830,7 +828,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if self.use_actors and self.actor_handle:
             # Phase 5: Use actor system for event handling
             try:
-                logger.info(f"Handling event '{event_name}' with actor system")
+                logger.info("Handling event '%s' with actor system", event_name)
 
                 # Security checks (shared with non-actor paths)
                 handler = await _validate_event_security(
@@ -845,7 +843,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     handler, params, event_name, coerce=coerce, positional_args=positional_args
                 )
                 if not validation["valid"]:
-                    logger.error(f"Parameter validation failed: {validation['error']}")
+                    logger.error("Parameter validation failed: %s", validation["error"])
                     await self.send_error(
                         validation["error"],
                         validation_details={
@@ -871,7 +869,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 else:
                     # No patches - send full HTML update
                     logger.info(
-                        f"No patches from actor, sending full HTML update (length: {len(html) if html else 0})"
+                        "No patches from actor, sending full HTML update (length: %d)",
+                        len(html) if html else 0,
                     )
 
                 await self._send_update(
@@ -938,7 +937,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         positional_args=positional_args,
                     )
                     if not validation["valid"]:
-                        logger.error(f"Parameter validation failed: {validation['error']}")
+                        logger.error("Parameter validation failed: %s", validation["error"])
                         await self.send_error(
                             validation["error"],
                             validation_details={
@@ -975,7 +974,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         handler, params, event_name, coerce=coerce, positional_args=positional_args
                     )
                     if not validation["valid"]:
-                        logger.error(f"Parameter validation failed: {validation['error']}")
+                        logger.error("Parameter validation failed: %s", validation["error"])
                         await self.send_error(
                             validation["error"],
                             validation_details={
@@ -1126,13 +1125,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             self.view_instance._extract_liveview_content
                         )(html)
 
-                        print(
-                            "[WebSocket] No patches generated, sending full HTML update",
-                            file=sys.stderr,
-                        )
-                        print(
-                            f"[WebSocket] html_content length: {len(html_content)}, starts with: {html_content[:150]}...",
-                            file=sys.stderr,
+                        logger.debug("[WebSocket] No patches generated, sending full HTML update")
+                        logger.debug(
+                            "[WebSocket] html_content length: %d, starts with: %s...",
+                            len(html_content),
+                            html_content[:150],
                         )
 
                         await self._send_update(
@@ -1300,7 +1297,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         }
             except Exception as e:
                 # Skip methods that can't be inspected, but log for debugging
-                logger.debug(f"Could not inspect method '{name}' for cache config: {e}")
+                logger.debug("Could not inspect method '%s' for cache config: %s", name, e)
 
         return cache_config
 
@@ -1339,10 +1336,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 caches_cleared += 1
                 except Exception as e:
                     hotreload_logger.warning(
-                        f"Could not clear template cache for {engine.name}: {e}"
+                        "Could not clear template cache for %s: %s", engine.name, e
                     )
 
-        hotreload_logger.debug(f"Cleared {caches_cleared} template caches")
+        hotreload_logger.debug("Cleared %d template caches", caches_cleared)
         return caches_cleared
 
     async def hotreload(self, event):
@@ -1382,7 +1379,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 try:
                     new_template = await database_sync_to_async(self.view_instance.get_template)()
                 except TemplateDoesNotExist as e:
-                    hotreload_logger.error(f"Template not found for hot reload: {e}")
+                    hotreload_logger.error("Template not found for hot reload: %s", e)
                     await self.send_json(
                         {
                             "type": "reload",
@@ -1407,13 +1404,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 patch_count = len(patches) if patches else 0
                 hotreload_logger.info(
-                    f"Generated {patch_count} patches in {render_time:.2f}ms, version={version}"
+                    "Generated %d patches in %.2fms, version=%d", patch_count, render_time, version
                 )
 
                 # Warn if patch generation is slow
                 if render_time > 100:
                     hotreload_logger.warning(
-                        f"Slow patch generation: {render_time:.2f}ms for {file_path}"
+                        "Slow patch generation: %.2fms for %s", render_time, file_path
                     )
 
                 # Handle case where no patches are generated
@@ -1432,7 +1429,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     if isinstance(patches, str):
                         patches = json.loads(patches)
                 except (json.JSONDecodeError, ValueError) as e:
-                    hotreload_logger.error(f"Failed to parse patches JSON: {e}")
+                    hotreload_logger.error("Failed to parse patches JSON: %s", e)
                     await self.send_json(
                         {
                             "type": "reload",
@@ -1451,12 +1448,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 total_time = (time.time() - start_time) * 1000
                 hotreload_logger.info(
-                    f"Sent {patch_count} patches for {file_path} (total: {total_time:.2f}ms)"
+                    "Sent %d patches for %s (total: %.2fms)", patch_count, file_path, total_time
                 )
 
             except Exception as e:
                 # Catch-all for unexpected errors
-                hotreload_logger.exception(f"Error generating patches for {file_path}: {e}")
+                hotreload_logger.exception("Error generating patches for %s: %s", file_path, e)
                 # Fallback to full reload on error
                 await self.send_json(
                     {
@@ -1466,7 +1463,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
         else:
             # No active view, just reload the page
-            hotreload_logger.debug(f"No active view, sending full reload for {file_path}")
+            hotreload_logger.debug("No active view, sending full reload for %s", file_path)
             await self.send_json(
                 {
                     "type": "reload",
@@ -1647,7 +1644,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self._flush_push_events()
 
         except Exception as e:
-            logger.exception(f"Error in server_push: {e}")
+            logger.exception("Error in server_push: %s", e)
 
     async def client_push_event(self, event):
         """
@@ -1691,7 +1688,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             patches = json.loads(patches)
                         await self._send_update(patches=patches, version=version)
                 except Exception as e:
-                    logger.exception(f"Error in tick handler: {e}")
+                    logger.exception("Error in tick handler: %s", e)
         except asyncio.CancelledError:
             pass
 

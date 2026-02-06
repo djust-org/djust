@@ -8,6 +8,7 @@ and emitting a client-side route map for live_redirect navigation.
 from typing import List, Optional
 
 from django.urls import URLPattern, path
+from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
 
@@ -120,9 +121,8 @@ def get_route_map_script() -> str:
     if not all_routes:
         return ""
 
-    script = (
-        "<script>window.djust = window.djust || {};"
-        f"window.djust._routeMap = {json.dumps(all_routes)};"
-        "</script>"
+    route_json = json.dumps(all_routes)
+    return format_html(
+        "<script>window.djust=window.djust||{{}};window.djust._routeMap={};</script>",
+        mark_safe(route_json),  # json.dumps escapes <, >, quotes; data is developer-defined
     )
-    return mark_safe(script)
