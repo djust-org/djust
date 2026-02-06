@@ -225,6 +225,8 @@ class Command(BaseCommand):
 
 const CACHE_NAME = 'djust-cache-v{{ version }}';
 const OFFLINE_URL = '/offline/';
+const SW_DEBUG = false;
+function _log() { if (SW_DEBUG) console.log.apply(console, arguments); }
 
 // Static assets to cache
 const STATIC_ASSETS = [
@@ -241,16 +243,16 @@ const PRECACHE_URLS = [...STATIC_ASSETS, ...TEMPLATE_URLS];
 
 // Install event - cache assets
 self.addEventListener('install', (event) => {
-    console.log('[djust SW] Installing version {{ version }}...');
+    _log('[djust SW] Installing version {{ version }}...');
     event.waitUntil(
         caches.open(CACHE_NAME)
             .then((cache) => {
-                console.log('[djust SW] Caching', PRECACHE_URLS.length, 'assets');
+                _log('[djust SW] Caching', PRECACHE_URLS.length, 'assets');
                 // Cache assets individually to handle failures gracefully
                 return Promise.allSettled(
                     PRECACHE_URLS.map(url =>
                         cache.add(url).catch(err => {
-                            console.warn('[djust SW] Failed to cache:', url, err);
+                            _log('[djust SW] Failed to cache:', url, err);
                         })
                     )
                 );
@@ -261,13 +263,13 @@ self.addEventListener('install', (event) => {
 
 // Activate event - clean old caches
 self.addEventListener('activate', (event) => {
-    console.log('[djust SW] Activating...');
+    _log('[djust SW] Activating...');
     event.waitUntil(
         caches.keys().then((cacheNames) => {
             return Promise.all(
                 cacheNames.map((cacheName) => {
                     if (cacheName.startsWith('djust-cache-') && cacheName !== CACHE_NAME) {
-                        console.log('[djust SW] Deleting old cache:', cacheName);
+                        _log('[djust SW] Deleting old cache:', cacheName);
                         return caches.delete(cacheName);
                     }
                 })
@@ -343,7 +345,7 @@ self.addEventListener('fetch', (event) => {
 // Background sync for queued events
 self.addEventListener('sync', (event) => {
     if (event.tag === 'djust-event-sync') {
-        console.log('[djust SW] Background sync triggered');
+        _log('[djust SW] Background sync triggered');
         event.waitUntil(notifyClientsToSync());
     }
 });
@@ -401,7 +403,7 @@ self.addEventListener('notificationclick', (event) => {
     }
 });
 
-console.log('[djust SW] Service worker loaded, version {{ version }}');
+_log('[djust SW] Service worker loaded, version {{ version }}');
 {% endautoescape %}"""
         template = Template(template_str)
         context = Context(

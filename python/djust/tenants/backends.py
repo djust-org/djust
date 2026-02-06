@@ -233,7 +233,11 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
     Tenant-scoped in-memory backend for presence tracking.
 
     Useful for development and single-node deployments.
-    All data is isolated per tenant.
+    All data is isolated per tenant via class-level dicts keyed by tenant ID.
+
+    WARNING: Data lives in process memory and is not shared across workers.
+    Use ``TenantAwareRedisBackend`` in production multi-tenant environments
+    for proper isolation, persistence, and cross-process visibility.
     """
 
     PRESENCE_TIMEOUT = 60

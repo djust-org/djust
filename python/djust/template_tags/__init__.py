@@ -229,7 +229,7 @@ def _register_builtins():
         from . import pwa  # noqa: F401
         from . import templatetag  # noqa: F401
     except ImportError as e:
-        logger.debug(f"Could not import built-in handlers: {e}")
+        logger.debug("Could not import built-in handlers: %s", e)
 
 
 # Register on module load

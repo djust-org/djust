@@ -202,7 +202,7 @@ Usage:
 class MyView(TenantMixin, LiveView):
     def mount(self, request):
         # self.tenant available
-        print(f"Current tenant: {self.tenant.name}")
+        logger.info("Mounted for tenant: %s", self.tenant.name)
 ```
 
 ### TenantScopedMixin
