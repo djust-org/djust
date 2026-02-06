@@ -159,6 +159,10 @@ class RequestMixin:
             event_name = data.get("event")
             params = data.get("params", {})
 
+            if not event_name:
+                logger.warning("HTTP fallback POST with no event name from %s", request.path)
+                return JsonResponse({"error": "No event name provided"}, status=400)
+
             # Restore state from session
             view_key = f"liveview_{request.path}"
             saved_state = request.session.get(view_key, {})

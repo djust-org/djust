@@ -30,7 +30,7 @@ djust brings Phoenix LiveView-style reactive components to Django, with performa
 ## 🎯 Quick Example
 
 ```python
-from djust import LiveView
+from djust import LiveView, event_handler
 
 class CounterView(LiveView):
     template_string = """
@@ -44,9 +44,11 @@ class CounterView(LiveView):
     def mount(self, request, **kwargs):
         self.count = 0
 
+    @event_handler
     def increment(self):
         self.count += 1  # Automatically updates client!
 
+    @event_handler
     def decrement(self):
         self.count -= 1
 ```
@@ -215,7 +217,7 @@ CHANNEL_LAYERS = {
 #### Class-Based LiveView
 
 ```python
-from djust import LiveView
+from djust import LiveView, event_handler
 
 class TodoListView(LiveView):
     template_name = 'todos.html'  # Or use template_string
@@ -224,10 +226,12 @@ class TodoListView(LiveView):
         """Called when view is first loaded"""
         self.todos = []
 
+    @event_handler
     def add_todo(self, text):
         """Event handler - called from client"""
         self.todos.append({'text': text, 'done': False})
 
+    @event_handler
     def toggle_todo(self, index):
         self.todos[index]['done'] = not self.todos[index]['done']
 ```
@@ -346,6 +350,7 @@ class MyView(LiveView):
             dismissible=True
         )
 
+    @event_handler
     def dismiss(self, component_id: str = None):
         """Handle dismissal - automatically routes to correct component"""
         if component_id and hasattr(self, component_id):
@@ -359,7 +364,7 @@ When the dismiss button is clicked, the client sends `component_id="alert_warnin
 #### Creating Custom Components
 
 ```python
-from djust import Component, register_component
+from djust import Component, register_component, event_handler
 
 @register_component('my-button')
 class Button(Component):
@@ -370,6 +375,7 @@ class Button(Component):
         self.label = label
         self.clicks = 0
 
+    @event_handler
     def on_click(self):
         self.clicks += 1
         print(f"Clicked {self.clicks} times!")
