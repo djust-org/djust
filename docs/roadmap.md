@@ -24,6 +24,11 @@ To provide a "Unibody" architecture that combines Django's simplicity with Rust'
     *   **Real-Time Validation**: "The Red Squiggly Killer". Validate fields as users type via Rust-debounced events.
     *   **Dynamic Dependent Fields**: Handle logic like "Show State if Country is US" entirely in Python.
     *   **Auto-Save**: Google Docs-style auto-saving hooks.
+*   **Service Worker Enhancements**:
+    *   Prefetch on hover for near-instant navigation.
+    *   App Shell pattern for instant page loads.
+    *   WebSocket reconnection bridge with event buffering.
+    *   See [SW Enhancements Guide](guides/sw-enhancements.md) for full details.
 *   **Zero-JS File Uploads**:
     *   Chunked uploads over WebSockets.
     *   Server-driven progress bars without client-side `FormData` complexity.
