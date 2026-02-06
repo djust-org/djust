@@ -73,9 +73,9 @@ window.djust.hooks.CursorOverlay = {
         this.textarea.addEventListener('click', this._sendCursorPosition);
         this.textarea.addEventListener('select', this._sendCursorPosition);
 
-        // Scroll sync: keep overlay aligned with textarea scroll
+        // Scroll sync: reposition carets when textarea scrolls
         this._onScroll = function() {
-            self.overlay.scrollTop = self.textarea.scrollTop;
+            self._repositionAll();
         };
         this.textarea.addEventListener('scroll', this._onScroll);
 
@@ -115,14 +115,17 @@ window.djust.hooks.CursorOverlay = {
             'fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing',
             'wordSpacing', 'textIndent', 'wordWrap', 'overflowWrap', 'whiteSpace',
             'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
-            'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
-            'boxSizing'
+            'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth'
         ];
         for (var i = 0; i < props.length; i++) {
             this.mirror.style[props[i]] = cs[props[i]];
         }
-        // Match textarea width exactly for correct line wrapping
-        this.mirror.style.width = cs.width;
+        // Use content-box width matching the textarea's actual text area
+        // (clientWidth excludes scrollbar and border; subtract padding for content)
+        var padL = parseFloat(cs.paddingLeft) || 0;
+        var padR = parseFloat(cs.paddingRight) || 0;
+        this.mirror.style.boxSizing = 'content-box';
+        this.mirror.style.width = (this.textarea.clientWidth - padL - padR) + 'px';
     },
 
     _measureCursorPosition: function(charIndex) {
@@ -188,9 +191,11 @@ window.djust.hooks.CursorOverlay = {
     },
 
     _repositionAll: function() {
-        // Re-sync mirror width in case textarea resized
+        // Re-sync mirror width in case textarea resized or scrollbar appeared
         var cs = window.getComputedStyle(this.textarea);
-        this.mirror.style.width = cs.width;
+        var padL = parseFloat(cs.paddingLeft) || 0;
+        var padR = parseFloat(cs.paddingRight) || 0;
+        this.mirror.style.width = (this.textarea.clientWidth - padL - padR) + 'px';
 
         // Reposition using cached cursor data
         if (Object.keys(this._lastCursors).length > 0) {
