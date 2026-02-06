@@ -271,6 +271,37 @@ describe('hooks', () => {
             window.djust.mountHooks(document);
             expect(hasPushEvent).toBe(true);
         });
+
+        it('sends params (not data) in the WS message', () => {
+            const { window, document } = createEnv('<div dj-hook="MyHook" data-djust-view="test"></div>');
+            const sentMessages = [];
+            let hookInstance = null;
+
+            // Mock WebSocket on the liveViewInstance
+            window.djust.liveViewInstance = {
+                ws: {
+                    send(msg) { sentMessages.push(JSON.parse(msg)); },
+                },
+            };
+
+            window.djust.hooks = {
+                MyHook: {
+                    mounted() { hookInstance = this; },
+                },
+            };
+
+            window.djust.mountHooks(document);
+            hookInstance.pushEvent('my_event', { foo: 42 });
+
+            expect(sentMessages.length).toBe(1);
+            expect(sentMessages[0]).toEqual({
+                type: 'event',
+                event: 'my_event',
+                params: { foo: 42 },
+            });
+            // Ensure "data" key is NOT present
+            expect(sentMessages[0].data).toBeUndefined();
+        });
     });
 
     describe('exports', () => {

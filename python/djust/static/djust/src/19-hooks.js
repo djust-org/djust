@@ -79,7 +79,7 @@ function _createHookInstance(hookDef, el) {
             window.djust.liveViewInstance.ws.send(JSON.stringify({
                 type: 'event',
                 event: event,
-                data: payload,
+                params: payload,
             }));
         } else {
             console.warn(`[dj-hook] Cannot pushEvent "${event}" — no WebSocket connection`);
