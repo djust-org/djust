@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Diff engine keyed+unkeyed interleaving** — The diff engine now emits `MoveChild` patches for unkeyed element children (with `djust_id`) when their absolute position changes due to keyed sibling moves, fixing incorrect patch targeting in mixed keyed/unkeyed child lists. ([#219](https://github.com/djust-org/djust/issues/219))
 - **Text node targeting after keyed moves** — `SetText` patches now carry `djust_id` when available (for test infrastructure), and `sync_ids` propagates IDs to text nodes. Test `assign_ids` gives synthetic IDs to text nodes so `apply_patches` resolves them by ID after structural changes shift path indices. ([#221](https://github.com/djust-org/djust/issues/221))
 
-## [0.3.0] - 2026-02-05
+## [0.3.0rc1] - 2026-02-05
 
 ### Added
 
