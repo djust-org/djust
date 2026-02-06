@@ -345,12 +345,13 @@ class SyncManager:
                 data.pop("created_offline", None)
                 data.pop("id", None)  # Let server assign real ID
 
-                # Default: log only. Override via register_sync_handler() for persistence.
+                # Default: no handler registered — count as failed to prevent data loss.
                 logger.warning(
                     "No sync handler registered for %s create — action logged but not persisted",
                     model_name,
                 )
-                processed += 1
+                failed += 1
+                errors.append(f"No sync handler registered for {model_name} create")
 
             except Exception as e:
                 failed += 1
@@ -393,12 +394,13 @@ class SyncManager:
                             }
                         )
 
-                    # Default: log only. Override via register_sync_handler() for persistence.
+                    # Default: no handler registered — count as failed to prevent data loss.
                     logger.warning(
                         "No sync handler registered for %s update — action logged but not persisted",
                         model_name,
                     )
-                    processed += 1
+                    failed += 1
+                    errors.append(f"No sync handler registered for {model_name} update")
                 else:
                     # Object doesn't exist on server
                     failed += 1
@@ -423,12 +425,13 @@ class SyncManager:
 
         for action in batch:
             try:
-                # Default: log only. Override via register_sync_handler() for persistence.
+                # Default: no handler registered — count as failed to prevent data loss.
                 logger.warning(
                     "No sync handler registered for %s delete — action logged but not persisted",
                     model_name,
                 )
-                processed += 1
+                failed += 1
+                errors.append(f"No sync handler registered for {model_name} delete")
 
             except Exception as e:
                 failed += 1

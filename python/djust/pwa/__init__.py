@@ -64,9 +64,9 @@ Template usage::
 Service Worker registration::
 
     <!-- In your base template -->
-    {% load pwa_tags %}
-    {% pwa_manifest %}
-    {% pwa_service_worker %}
+    {% load djust_pwa %}
+    {% djust_pwa_manifest %}
+    {% djust_sw_register %}
 """
 
 from .mixins import PWAMixin, OfflineMixin, SyncMixin

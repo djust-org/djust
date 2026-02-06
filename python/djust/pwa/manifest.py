@@ -7,6 +7,7 @@ import logging
 from typing import Any, Dict, List, Optional
 from django.http import JsonResponse, HttpRequest
 from django.conf import settings
+from django.utils.html import format_html
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,7 @@ class PWAManifestGenerator:
 
     def _generate_default_icons(self) -> List[Dict[str, Any]]:
         """Generate default icon set if none configured."""
-        # This would generate placeholder icons or use defaults
+        # Default icon paths when no custom icons are configured
         return [
             {
                 "src": "/static/icons/icon-192x192.png",
@@ -228,7 +229,7 @@ def generate_manifest_link_tag(manifest_url: str = "/manifest.json") -> str:
     Returns:
         HTML link tag string
     """
-    return f'<link rel="manifest" href="{manifest_url}">'
+    return format_html('<link rel="manifest" href="{}">', manifest_url)
 
 
 def generate_theme_color_meta(theme_color: Optional[str] = None) -> str:
@@ -246,9 +247,10 @@ def generate_theme_color_meta(theme_color: Optional[str] = None) -> str:
             djust_config = getattr(settings, "DJUST_CONFIG", {})
             theme_color = djust_config.get("PWA_THEME_COLOR", "#000000")
         except Exception:
+            logger.debug("Could not load DJUST_CONFIG for PWA_THEME_COLOR, using default")
             theme_color = "#000000"
 
-    return f'<meta name="theme-color" content="{theme_color}">'
+    return format_html('<meta name="theme-color" content="{}">', theme_color)
 
 
 def generate_apple_touch_icon_tags(icons: Optional[List[Dict[str, Any]]] = None) -> List[str]:
@@ -270,9 +272,13 @@ def generate_apple_touch_icon_tags(icons: Optional[List[Dict[str, Any]]] = None)
     for icon in icons:
         if "sizes" in icon:
             tags.append(
-                f'<link rel="apple-touch-icon" sizes="{icon["sizes"]}" href="{icon["src"]}">'
+                format_html(
+                    '<link rel="apple-touch-icon" sizes="{}" href="{}">',
+                    icon["sizes"],
+                    icon["src"],
+                )
             )
         else:
-            tags.append(f'<link rel="apple-touch-icon" href="{icon["src"]}">')
+            tags.append(format_html('<link rel="apple-touch-icon" href="{}">', icon["src"]))
 
     return tags

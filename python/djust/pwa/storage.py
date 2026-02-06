@@ -7,9 +7,10 @@ Provides persistent storage for offline data using various browser APIs.
 import json
 import logging
 import time
+import uuid
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, field, asdict
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +31,14 @@ class OfflineAction:
         error: Error message if failed
     """
 
-    id: str
     type: str  # 'create', 'update', 'delete'
     model: str
     data: Dict[str, Any]
-    timestamp: float
+    timestamp: float = field(default_factory=time.time)
     retries: int = 0
     status: str = "pending"
     error: Optional[str] = None
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage."""
@@ -286,7 +287,7 @@ class LocalStorage(OfflineStorage):
 
     def __init__(self, storage_name: str, **kwargs):
         super().__init__(storage_name, **kwargs)
-        self._storage = {}  # Simulated localStorage
+        self._storage = {}  # In-memory fallback for server-side usage
 
     def get(self, key: str, default=None) -> Any:
         """Get value from localStorage."""
@@ -529,6 +530,7 @@ def get_storage_backend(storage_name: str, backend_type: Optional[str] = None) -
             config = getattr(settings, "DJUST_CONFIG", {})
             backend_type = config.get("PWA_OFFLINE_STORAGE", "indexeddb")
         except Exception:
+            logger.debug("Could not load DJUST_CONFIG for PWA_OFFLINE_STORAGE, using default")
             backend_type = "indexeddb"
 
     backend_type = backend_type.lower()

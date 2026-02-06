@@ -707,7 +707,7 @@ def service_worker_view(request: HttpRequest) -> HttpResponse:
 
         return response
     except Exception as e:
-        logger.error("Error generating service worker: %s", e)
+        logger.error("Error generating service worker: %s", e, exc_info=True)
 
         # Return minimal service worker
         minimal_sw = """
