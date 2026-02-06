@@ -1003,6 +1003,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             time.perf_counter() - handler_start
                         ) * 1000  # Convert to ms
 
+                        # Views can set _skip_render = True in a handler to
+                        # suppress the re-render cycle (e.g. no-op heartbeats,
+                        # sender ignoring its own broadcast).
+                        if getattr(self.view_instance, "_skip_render", False):
+                            self.view_instance._skip_render = False
+                            await self._flush_push_events()
+                            return
+
                         # Get updated HTML and patches with tracking
                         render_start = time.perf_counter()
                         with tracker.track("Template Render"):
