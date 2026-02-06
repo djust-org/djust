@@ -2747,56 +2747,74 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
 /**
  * Preserve form values across innerHTML replacement.
  *
- * innerHTML destroys the DOM, creating new elements. For textareas the
- * new element's .value is set from textContent, but for focused elements
- * we must save and restore the user's in-progress value to avoid clobbering.
+ * innerHTML destroys the DOM, creating new elements. For the focused
+ * element we save and restore the user's in-progress value + cursor.
+ * For all textareas, we sync .value from textContent after replacement
+ * (innerHTML only sets the DOM attribute, not the JS property).
  *
- * After the replacement, all textareas get their .value synced from
- * textContent (innerHTML only sets the attribute, not the property).
+ * Matching strategy: id → name → positional index within container.
  */
 function preserveFormValues(container, updateFn) {
-    // Save values for focused form elements only (user is actively editing)
-    const saved = [];
     const active = document.activeElement;
-    container.querySelectorAll('textarea, input, select').forEach(el => {
-        if (el !== active) return;
-        const key = el.id || el.name;
-        if (!key) return;
-        const entry = { key, tag: el.tagName.toLowerCase() };
-        if (el.tagName === 'TEXTAREA') {
-            entry.value = el.value;
-            entry.selStart = el.selectionStart;
-            entry.selEnd = el.selectionEnd;
-        } else if (el.type === 'checkbox' || el.type === 'radio') {
-            entry.checked = el.checked;
+    let saved = null;
+
+    // Only save the focused form element (user is actively editing)
+    if (active && container.contains(active) &&
+        (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.tagName === 'SELECT')) {
+        saved = { tag: active.tagName.toLowerCase() };
+        // Build a matching key: prefer id, then name, then positional index
+        if (active.id) {
+            saved.findBy = 'id';
+            saved.key = active.id;
+        } else if (active.name) {
+            saved.findBy = 'name';
+            saved.key = active.name;
         } else {
-            entry.value = el.value;
+            // Positional: find index among same-tag siblings in container
+            saved.findBy = 'index';
+            const siblings = container.querySelectorAll(active.tagName.toLowerCase());
+            saved.key = Array.from(siblings).indexOf(active);
         }
-        saved.push(entry);
-    });
+        if (active.tagName === 'TEXTAREA') {
+            saved.value = active.value;
+            saved.selStart = active.selectionStart;
+            saved.selEnd = active.selectionEnd;
+        } else if (active.type === 'checkbox' || active.type === 'radio') {
+            saved.checked = active.checked;
+        } else {
+            saved.value = active.value;
+        }
+    }
 
     updateFn();
 
-    // Sync textarea .value from textContent (innerHTML doesn't set .value)
+    // Sync all textarea .value from textContent (innerHTML doesn't set .value)
     container.querySelectorAll('textarea').forEach(el => {
         el.value = el.textContent || '';
     });
 
-    // Restore focused element values
-    for (const entry of saved) {
-        const selector = entry.key.match(/^[a-zA-Z]/)
-            ? `#${CSS.escape(entry.key)}, [name="${CSS.escape(entry.key)}"]`
-            : `[name="${CSS.escape(entry.key)}"]`;
-        const el = container.querySelector(selector);
-        if (!el) continue;
-        if (entry.tag === 'textarea') {
-            el.value = entry.value;
-            try { el.setSelectionRange(entry.selStart, entry.selEnd); } catch (e) { /* */ }
-            el.focus();
-        } else if (el.type === 'checkbox' || el.type === 'radio') {
-            el.checked = entry.checked;
-        } else if (entry.value !== undefined) {
-            el.value = entry.value;
+    // Restore the focused element's value
+    if (saved) {
+        let el = null;
+        if (saved.findBy === 'id') {
+            el = container.querySelector(`#${CSS.escape(saved.key)}`);
+        } else if (saved.findBy === 'name') {
+            el = container.querySelector(`[name="${CSS.escape(saved.key)}"]`);
+        } else {
+            // Positional fallback
+            const candidates = container.querySelectorAll(saved.tag);
+            el = candidates[saved.key] || null;
+        }
+        if (el) {
+            if (saved.tag === 'textarea') {
+                el.value = saved.value;
+                try { el.setSelectionRange(saved.selStart, saved.selEnd); } catch (e) { /* */ }
+                el.focus();
+            } else if (el.type === 'checkbox' || el.type === 'radio') {
+                el.checked = saved.checked;
+            } else if (saved.value !== undefined) {
+                el.value = saved.value;
+            }
         }
     }
 }
