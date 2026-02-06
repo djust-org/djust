@@ -237,3 +237,4 @@ function clearOptimisticState(eventName) {
         optimisticUpdates.delete(eventName);
     }
 }
+window.djust.bindLiveViewEvents = bindLiveViewEvents;

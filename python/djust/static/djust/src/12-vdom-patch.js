@@ -48,7 +48,10 @@ function getNodeByPath(path, djustId = null) {
         const children = Array.from(node.childNodes).filter(child => {
             if (child.nodeType === Node.ELEMENT_NODE) return true;
             if (child.nodeType === Node.TEXT_NODE) {
-                return child.textContent.trim().length > 0;
+                // Preserve non-breaking spaces (\u00A0) as significant, matching Rust VDOM parser.
+                // Only filter out ASCII whitespace-only text nodes (space, tab, newline, CR).
+                // JS \s includes \u00A0, so we use an explicit ASCII whitespace pattern instead.
+                return (/[^ \t\n\r\f]/.test(child.textContent));
             }
             return false;
         });
@@ -653,7 +656,9 @@ function getSignificantChildren(node) {
         if (child.nodeType === Node.TEXT_NODE) {
             // Preserve all text nodes inside pre/code/textarea
             if (preserveWhitespace) return true;
-            return child.textContent.trim().length > 0;
+            // Preserve non-breaking spaces (\u00A0) as significant, matching Rust VDOM parser.
+            // Only filter out ASCII whitespace-only text nodes.
+            return (/[^ \t\n\r\f]/.test(child.textContent));
         }
         return false;
     });
@@ -679,14 +684,24 @@ function isWhitespacePreserving(node) {
 window.djust.getSignificantChildren = getSignificantChildren;
 window.djust._applySinglePatch = applySinglePatch;
 window.djust._stampDjIds = _stampDjIds;
+window.djust._getNodeByPath = getNodeByPath;
+window.djust.createNodeFromVNode = createNodeFromVNode;
 
 /**
  * Group patches by their parent path for batching.
+ *
+ * Child operations (InsertChild, RemoveChild, MoveChild) use the full path
+ * as the parent key because the path points to the parent container.
+ * Node-targeting operations (SetAttribute, SetText, etc.) use slice(0,-1)
+ * because the path points to the node itself, and the parent is one level up.
  */
+const CHILD_OPS = new Set(['InsertChild', 'RemoveChild', 'MoveChild']);
 function groupPatchesByParent(patches) {
     const groups = new Map(); // Use Map to avoid prototype pollution
     for (const patch of patches) {
-        const parentPath = patch.path.slice(0, -1).join('/');
+        const parentPath = CHILD_OPS.has(patch.type)
+            ? patch.path.join('/')
+            : patch.path.slice(0, -1).join('/');
         if (!groups.has(parentPath)) {
             groups.set(parentPath, []);
         }
@@ -694,6 +709,7 @@ function groupPatchesByParent(patches) {
     }
     return groups;
 }
+window.djust._groupPatchesByParent = groupPatchesByParent;
 
 /**
  * Group InsertChild patches with consecutive indices.
@@ -714,8 +730,8 @@ function groupConsecutiveInserts(inserts) {
     let currentGroup = [inserts[0]];
 
     for (let i = 1; i < inserts.length; i++) {
-        // Check if this insert is consecutive with the previous one
-        if (inserts[i].index === inserts[i - 1].index + 1) {
+        // Check if this insert is consecutive with the previous one AND targets same parent
+        if (inserts[i].index === inserts[i - 1].index + 1 && inserts[i].d === inserts[i - 1].d) {
             currentGroup.push(inserts[i]);
         } else {
             // Start a new group
@@ -729,6 +745,39 @@ function groupConsecutiveInserts(inserts) {
 
     return groups;
 }
+window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
+
+/**
+ * Sort patches in 4-phase order for correct DOM mutation sequencing:
+ * Phase 0: RemoveChild (descending index within same parent)
+ * Phase 1: MoveChild
+ * Phase 2: InsertChild
+ * Phase 3: SetText, SetAttribute, and other node-targeting patches
+ */
+function _sortPatches(patches) {
+    function patchPhase(p) {
+        switch (p.type) {
+            case 'RemoveChild': return 0;
+            case 'MoveChild':   return 1;
+            case 'InsertChild': return 2;
+            default:            return 3;
+        }
+    }
+    patches.sort(function(a, b) {
+        const phaseA = patchPhase(a);
+        const phaseB = patchPhase(b);
+        if (phaseA !== phaseB) return phaseA - phaseB;
+        // Within RemoveChild phase, sort by descending index per parent
+        if (phaseA === 0) {
+            const pA = JSON.stringify(a.path);
+            const pB = JSON.stringify(b.path);
+            if (pA === pB) return b.index - a.index;
+        }
+        return 0;
+    });
+    return patches;
+}
+window.djust._sortPatches = _sortPatches;
 
 /**
  * Apply a single patch operation.
@@ -871,17 +920,8 @@ function applyPatches(patches) {
         return true;
     }
 
-    // Sort patches: RemoveChild in descending order to preserve indices
-    patches.sort((a, b) => {
-        if (a.type === 'RemoveChild' && b.type === 'RemoveChild') {
-            const pathA = JSON.stringify(a.path);
-            const pathB = JSON.stringify(b.path);
-            if (pathA === pathB) {
-                return b.index - a.index;
-            }
-        }
-        return 0;
-    });
+    // Sort patches in 4-phase order for correct DOM mutation sequencing
+    _sortPatches(patches);
 
     // For small patch sets, apply directly without batching overhead
     if (patches.length <= 10) {
@@ -905,7 +945,7 @@ function applyPatches(patches) {
     // Group patches by parent for potential batching
     const patchGroups = groupPatchesByParent(patches);
 
-    for (const [parentPath, group] of patchGroups) {
+    for (const [, group] of patchGroups) {
         // Optimization: Use DocumentFragment for consecutive InsertChild on same parent
         const insertPatches = group.filter(p => p.type === 'InsertChild');
 

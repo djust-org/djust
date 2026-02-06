@@ -6,8 +6,6 @@
 
 // Create djust namespace at the top to ensure it's available for all exports
 window.djust = window.djust || {};
-window.djust.VERSION = '0.2.2rc3';
-window.djust.JS_BUILD = '20260201-1830';
 
 // ============================================================================
 // Double-Load Guard
@@ -18,7 +16,6 @@ if (window._djustClientLoaded) {
     console.log('[LiveView] client.js already loaded, skipping duplicate initialization');
 } else {
 window._djustClientLoaded = true;
-console.log(`[djust] client.js v${window.djust.VERSION} build ${window.djust.JS_BUILD}`);
 
 // ============================================================================
 // Security Constants
@@ -60,7 +57,7 @@ window.djustInitialized = false;
 // Track pending turbo:load reinit
 let pendingTurboReinit = false;
 
-window.addEventListener('turbo:load', function(_event) {
+window.addEventListener('turbo:load', function(event) {
     console.log('[LiveView:TurboNav] turbo:load event received!');
     console.log('[LiveView:TurboNav] djustInitialized:', window.djustInitialized);
 
@@ -897,7 +894,7 @@ class StateBus {
     }
 }
 
-const _globalStateBus = new StateBus();
+const globalStateBus = new StateBus();
 
 // DraftManager for localStorage-based draft saving
 class DraftManager {
@@ -1017,9 +1014,9 @@ function initDraftMode() {
             const field = document.querySelector(`[name="${fieldName}"]`);
             if (field) {
                 if (field.type === 'checkbox') {
-                    field.checked = savedDraft[fieldName]; // eslint-disable-line security/detect-object-injection
+                    field.checked = savedDraft[fieldName];
                 } else {
-                    field.value = savedDraft[fieldName]; // eslint-disable-line security/detect-object-injection
+                    field.value = savedDraft[fieldName];
                 }
             }
         });
@@ -1057,7 +1054,7 @@ function initDraftMode() {
     }
 }
 
-function _collectFormData(container) {
+function collectFormData(container) {
     const data = {};
 
     const fields = container.querySelectorAll('input, textarea, select');
@@ -1080,14 +1077,14 @@ function _collectFormData(container) {
         const name = editable.getAttribute('name') || editable.id;
         // Prevent prototype pollution attacks
         if (name && !UNSAFE_KEYS.includes(name)) {
-            data[name] = editable.innerHTML; // eslint-disable-line security/detect-object-injection
+            data[name] = editable.innerHTML;
         }
     });
 
     return data;
 }
 
-function _restoreFormData(container, data) {
+function restoreFormData(container, data) {
     if (!data) return;
 
     Object.entries(data).forEach(([name, value]) => {
@@ -1466,12 +1463,10 @@ function bindLiveViewEvents() {
         const clickHandler = element.getAttribute('dj-click');
         if (clickHandler && !element.dataset.liveviewClickBound) {
             element.dataset.liveviewClickBound = 'true';
+            // Parse handler string to extract function name and arguments
+            const parsed = parseEventHandler(clickHandler);
             element.addEventListener('click', async (e) => {
                 e.preventDefault();
-
-                // Re-parse handler from DOM attribute at event time to pick up
-                // any changes made by SetAttribute patches since binding.
-                const parsed = parseEventHandler(element.getAttribute('dj-click'));
 
                 // Extract all data-* attributes with type coercion support
                 const params = extractTypedParams(element);
@@ -1513,7 +1508,7 @@ function bindLiveViewEvents() {
                 // Pass target element for optimistic updates (Phase 3)
                 params._targetElement = e.target;
 
-                await handleEvent(element.getAttribute('dj-submit'), params);
+                await handleEvent(submitHandler, params);
                 e.target.reset();
             });
         }
@@ -1563,7 +1558,7 @@ function bindLiveViewEvents() {
                 if (globalThis.djustDebug) {
                     console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
                 }
-                await handleEvent(element.getAttribute('dj-change'), params);
+                await handleEvent(changeHandler, params);
             });
         }
 
@@ -1587,7 +1582,7 @@ function bindLiveViewEvents() {
 
             const handler = async (e) => {
                 const params = buildFormEventParams(e.target, e.target.value);
-                await handleEvent(element.getAttribute('dj-input'), params);
+                await handleEvent(inputHandler, params);
             };
 
             // Apply rate limiting wrapper
@@ -1607,7 +1602,7 @@ function bindLiveViewEvents() {
             element.dataset.liveviewBlurBound = 'true';
             element.addEventListener('blur', async (e) => {
                 const params = buildFormEventParams(e.target, e.target.value);
-                await handleEvent(element.getAttribute('dj-blur'), params);
+                await handleEvent(blurHandler, params);
             });
         }
 
@@ -1617,7 +1612,7 @@ function bindLiveViewEvents() {
             element.dataset.liveviewFocusBound = 'true';
             element.addEventListener('focus', async (e) => {
                 const params = buildFormEventParams(e.target, e.target.value);
-                await handleEvent(element.getAttribute('dj-focus'), params);
+                await handleEvent(focusHandler, params);
             });
         }
 
@@ -1627,10 +1622,8 @@ function bindLiveViewEvents() {
             if (keyHandler && !element.dataset[`liveview${eventType}Bound`]) {
                 element.dataset[`liveview${eventType}Bound`] = 'true';
                 element.addEventListener(eventType, async (e) => {
-                    // Re-read attribute at event time to pick up SetAttribute patches
-                    const currentHandler = element.getAttribute(`dj-${eventType}`);
                     // Check for key modifiers (e.g. dj-keydown.enter)
-                    const modifiers = currentHandler.split('.');
+                    const modifiers = keyHandler.split('.');
                     const handlerName = modifiers[0];
                     const requiredKey = modifiers.length > 1 ? modifiers[1] : null;
 
@@ -1700,6 +1693,7 @@ function clearOptimisticState(eventName) {
         optimisticUpdates.delete(eventName);
     }
 }
+window.djust.bindLiveViewEvents = bindLiveViewEvents;
 
 // Global Loading Manager (Phase 5)
 // Handles dj-loading.disable, dj-loading.class, dj-loading.show, dj-loading.hide attributes
@@ -1980,6 +1974,7 @@ async function handleEvent(eventName, params = {}) {
         globalLoadingManager.stopLoading(eventName, triggerElement);
     }
 }
+window.djust.handleEvent = handleEvent;
 
 // === VDOM Patch Application ===
 
@@ -2027,18 +2022,13 @@ function getNodeByPath(path, djustId = null) {
 
     for (let i = 0; i < path.length; i++) {
         const index = path[i]; // eslint-disable-line security/detect-object-injection -- path is a server-provided integer array
-        // Filter children to match server's Rust VDOM which strips whitespace-only
-        // text nodes (parser.rs). Must use same logic as getSignificantChildren().
-        // NOTE: \xa0 (non-breaking space / &nbsp;) is preserved by both server and
-        // client since it's semantically significant (e.g., syntax highlighting).
         const children = Array.from(node.childNodes).filter(child => {
             if (child.nodeType === Node.ELEMENT_NODE) return true;
             if (child.nodeType === Node.TEXT_NODE) {
-                if (isWhitespacePreserving(node)) return true;
-                // Preserve text nodes containing \xa0 (non-breaking space)
-                const text = child.textContent;
-                if (text.indexOf('\xa0') !== -1) return true;
-                return text.trim().length > 0;
+                // Preserve non-breaking spaces (\u00A0) as significant, matching Rust VDOM parser.
+                // Only filter out ASCII whitespace-only text nodes (space, tab, newline, CR).
+                // JS \s includes \u00A0, so we use an explicit ASCII whitespace pattern instead.
+                return (/[^ \t\n\r\f]/.test(child.textContent));
             }
             return false;
         });
@@ -2643,7 +2633,9 @@ function getSignificantChildren(node) {
         if (child.nodeType === Node.TEXT_NODE) {
             // Preserve all text nodes inside pre/code/textarea
             if (preserveWhitespace) return true;
-            return child.textContent.trim().length > 0;
+            // Preserve non-breaking spaces (\u00A0) as significant, matching Rust VDOM parser.
+            // Only filter out ASCII whitespace-only text nodes.
+            return (/[^ \t\n\r\f]/.test(child.textContent));
         }
         return false;
     });
@@ -2668,28 +2660,23 @@ function isWhitespacePreserving(node) {
 // Export for testing
 window.djust.getSignificantChildren = getSignificantChildren;
 window.djust._applySinglePatch = applySinglePatch;
-window.djust._getNodeByPath = getNodeByPath;
 window.djust._stampDjIds = _stampDjIds;
-window.djust._groupPatchesByParent = groupPatchesByParent;
-window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
+window.djust._getNodeByPath = getNodeByPath;
 window.djust.createNodeFromVNode = createNodeFromVNode;
-window.djust.bindLiveViewEvents = bindLiveViewEvents;
-window.djust.handleEvent = handleEvent;
-window.djust._sortPatches = sortPatches;
 
 /**
  * Group patches by their parent path for batching.
+ *
+ * Child operations (InsertChild, RemoveChild, MoveChild) use the full path
+ * as the parent key because the path points to the parent container.
+ * Node-targeting operations (SetAttribute, SetText, etc.) use slice(0,-1)
+ * because the path points to the node itself, and the parent is one level up.
  */
+const CHILD_OPS = new Set(['InsertChild', 'RemoveChild', 'MoveChild']);
 function groupPatchesByParent(patches) {
     const groups = new Map(); // Use Map to avoid prototype pollution
     for (const patch of patches) {
-        // For child operations (InsertChild, RemoveChild, MoveChild), patch.path
-        // is already the parent container path. For node-targeting ops, we need
-        // to slice off the last element to get the parent.
-        const isChildOp = patch.type === 'InsertChild' ||
-                          patch.type === 'RemoveChild' ||
-                          patch.type === 'MoveChild';
-        const parentPath = isChildOp
+        const parentPath = CHILD_OPS.has(patch.type)
             ? patch.path.join('/')
             : patch.path.slice(0, -1).join('/');
         if (!groups.has(parentPath)) {
@@ -2699,6 +2686,7 @@ function groupPatchesByParent(patches) {
     }
     return groups;
 }
+window.djust._groupPatchesByParent = groupPatchesByParent;
 
 /**
  * Group InsertChild patches with consecutive indices.
@@ -2719,9 +2707,8 @@ function groupConsecutiveInserts(inserts) {
     let currentGroup = [inserts[0]];
 
     for (let i = 1; i < inserts.length; i++) {
-        // Check if this insert is consecutive with the previous one
-        if (inserts[i].index === inserts[i - 1].index + 1 &&
-            inserts[i].d === inserts[i - 1].d) {
+        // Check if this insert is consecutive with the previous one AND targets same parent
+        if (inserts[i].index === inserts[i - 1].index + 1 && inserts[i].d === inserts[i - 1].d) {
             currentGroup.push(inserts[i]);
         } else {
             // Start a new group
@@ -2735,6 +2722,39 @@ function groupConsecutiveInserts(inserts) {
 
     return groups;
 }
+window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
+
+/**
+ * Sort patches in 4-phase order for correct DOM mutation sequencing:
+ * Phase 0: RemoveChild (descending index within same parent)
+ * Phase 1: MoveChild
+ * Phase 2: InsertChild
+ * Phase 3: SetText, SetAttribute, and other node-targeting patches
+ */
+function _sortPatches(patches) {
+    function patchPhase(p) {
+        switch (p.type) {
+            case 'RemoveChild': return 0;
+            case 'MoveChild':   return 1;
+            case 'InsertChild': return 2;
+            default:            return 3;
+        }
+    }
+    patches.sort(function(a, b) {
+        const phaseA = patchPhase(a);
+        const phaseB = patchPhase(b);
+        if (phaseA !== phaseB) return phaseA - phaseB;
+        // Within RemoveChild phase, sort by descending index per parent
+        if (phaseA === 0) {
+            const pA = JSON.stringify(a.path);
+            const pB = JSON.stringify(b.path);
+            if (pA === pB) return b.index - a.index;
+        }
+        return 0;
+    });
+    return patches;
+}
+window.djust._sortPatches = _sortPatches;
 
 /**
  * Apply a single patch operation.
@@ -2865,39 +2885,6 @@ function applySinglePatch(patch) {
 }
 
 /**
- * Sort patches into 4-phase order for correct DOM mutation sequencing:
- *   Phase 0: RemoveChild  (descending index within same parent)
- *   Phase 1: MoveChild
- *   Phase 2: InsertChild  (ascending index within same parent)
- *   Phase 3: SetText / SetAttribute / all others
- *
- * Descending removal prevents index shifting (Issue #142).
- * Ascending insertion ensures earlier indices exist before later ones.
- */
-function sortPatches(patches) {
-    const phaseOrder = { RemoveChild: 0, MoveChild: 1, InsertChild: 2 };
-
-    patches.sort((a, b) => {
-        const phaseA = phaseOrder[a.type] ?? 3;
-        const phaseB = phaseOrder[b.type] ?? 3;
-        if (phaseA !== phaseB) return phaseA - phaseB;
-
-        // Within same phase and same parent, sort by index
-        if (a.type === 'RemoveChild' && b.type === 'RemoveChild') {
-            const pathA = JSON.stringify(a.path);
-            const pathB = JSON.stringify(b.path);
-            if (pathA === pathB) return (b.index || 0) - (a.index || 0); // descending
-        }
-        if (a.type === 'InsertChild' && b.type === 'InsertChild') {
-            const pathA = JSON.stringify(a.path);
-            const pathB = JSON.stringify(b.path);
-            if (pathA === pathB) return (a.index || 0) - (b.index || 0); // ascending
-        }
-        return 0;
-    });
-}
-
-/**
  * Apply VDOM patches with optimized batching.
  *
  * Improvements over sequential application:
@@ -2910,7 +2897,8 @@ function applyPatches(patches) {
         return true;
     }
 
-    sortPatches(patches);
+    // Sort patches in 4-phase order for correct DOM mutation sequencing
+    _sortPatches(patches);
 
     // For small patch sets, apply directly without batching overhead
     if (patches.length <= 10) {
@@ -2929,37 +2917,14 @@ function applyPatches(patches) {
 
     // For larger patch sets, use batching
     let failedCount = 0;
-    let _successCount = 0;
+    let successCount = 0;
 
     // Group patches by parent for potential batching
     const patchGroups = groupPatchesByParent(patches);
 
-    for (const [_parentPath, group] of patchGroups) {
-        // IMPORTANT: Apply RemoveChild patches first before any InsertChild.
-        // For data-djust-replace, Rust emits all RemoveChild then all InsertChild.
-        // If InsertChild runs first, old children shift indices and RemoveChild
-        // targets the wrong nodes (Issue #142).
-        const removePatches = [];
-        const remainingPatches = [];
-        for (const patch of group) {
-            if (patch.type === 'RemoveChild') {
-                removePatches.push(patch);
-            } else {
-                remainingPatches.push(patch);
-            }
-        }
-
-        // Apply all RemoveChild patches first (already sorted descending by index)
-        for (const patch of removePatches) {
-            if (applySinglePatch(patch)) {
-                _successCount++;
-            } else {
-                failedCount++;
-            }
-        }
-
+    for (const [, group] of patchGroups) {
         // Optimization: Use DocumentFragment for consecutive InsertChild on same parent
-        const insertPatches = remainingPatches.filter(p => p.type === 'InsertChild');
+        const insertPatches = group.filter(p => p.type === 'InsertChild');
 
         if (insertPatches.length >= 3) {
             // Group only consecutive inserts (can't batch non-consecutive indices)
@@ -2980,7 +2945,7 @@ function applyPatches(patches) {
                         for (const patch of consecutiveGroup) {
                             const newChild = createNodeFromVNode(patch.node, svgContext);
                             fragment.appendChild(newChild);
-                            _successCount++;
+                            successCount++;
                         }
 
                         // Insert fragment at the first index position
@@ -2996,24 +2961,24 @@ function applyPatches(patches) {
 
                         // Mark these patches as processed
                         const processedSet = new Set(consecutiveGroup);
-                        for (let i = remainingPatches.length - 1; i >= 0; i--) {
-                            if (processedSet.has(remainingPatches[i])) {
-                                remainingPatches.splice(i, 1);
+                        for (let i = group.length - 1; i >= 0; i--) {
+                            if (processedSet.has(group[i])) {
+                                group.splice(i, 1);
                             }
                         }
                     } catch (error) {
                         console.error('[LiveView] Batch insert failed, falling back to individual patches:', error.message);
-                        // On failure, patches remain for individual processing
-                        _successCount -= consecutiveGroup.length;  // Undo count
+                        // On failure, patches remain in group for individual processing
+                        successCount -= consecutiveGroup.length;  // Undo count
                     }
                 }
             }
         }
 
-        // Apply remaining non-remove patches individually
-        for (const patch of remainingPatches) {
+        // Apply remaining patches individually
+        for (const patch of group) {
             if (applySinglePatch(patch)) {
-                _successCount++;
+                successCount++;
             } else {
                 failedCount++;
             }

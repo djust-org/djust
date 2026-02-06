@@ -102,3 +102,4 @@ async function handleEvent(eventName, params = {}) {
         globalLoadingManager.stopLoading(eventName, triggerElement);
     }
 }
+window.djust.handleEvent = handleEvent;
