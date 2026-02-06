@@ -1636,6 +1636,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         payload = event.get("payload") or {}
                         await sync_to_async(handler_fn)(**payload)
 
+            # Views can set _skip_render = True in a handler to
+            # suppress the re-render cycle (e.g. sender ignoring its own broadcast).
+            if getattr(self.view_instance, "_skip_render", False):
+                self.view_instance._skip_render = False
+                await self._flush_push_events()
+                return
+
             # Sync state and re-render
             # TODO: add patch compression (PATCH_COUNT_THRESHOLD) matching handle_event
             if hasattr(self.view_instance, "_sync_state_to_rust"):

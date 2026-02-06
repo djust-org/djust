@@ -3058,6 +3058,7 @@ window.djust._applySinglePatch = applySinglePatch;
 window.djust._stampDjIds = _stampDjIds;
 window.djust._getNodeByPath = getNodeByPath;
 window.djust.createNodeFromVNode = createNodeFromVNode;
+window.djust.preserveFormValues = preserveFormValues;
 
 /**
  * Group patches by their parent path for batching.
