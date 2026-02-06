@@ -214,12 +214,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         """
         Strip HTML comments and normalize whitespace to match Rust VDOM parser behavior.
 
-        IMPORTANT: Preserve whitespace inside <pre> and <code> tags.
+        IMPORTANT: Preserve whitespace inside <pre>, <code>, and <textarea> tags.
         """
         # Remove HTML comments
         html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
 
-        # Preserve whitespace inside <pre> and <code> tags
+        # Preserve whitespace inside <pre>, <code>, and <textarea> tags
         preserved_blocks = []
 
         def preserve_block(match):
@@ -229,6 +229,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         html = re.sub(r"<pre[^>]*>.*?</pre>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE)
         html = re.sub(
             r"<code[^>]*>.*?</code>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
+        )
+        html = re.sub(
+            r"<textarea[^>]*>.*?</textarea>", preserve_block, html, flags=re.DOTALL | re.IGNORECASE
         )
 
         # Normalize whitespace
