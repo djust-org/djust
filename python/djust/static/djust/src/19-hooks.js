@@ -47,19 +47,29 @@ function _getHookDefs() {
  * Map of active hook instances keyed by element id.
  * Each entry: { hookName, instance, el }
  */
-// Use var (not const/let) so these hoist above the IIFE guard block
-// that calls djustInit() → mountHooks() before this file executes.
-var _activeHooks = new Map();
+// Use var so declarations hoist above the IIFE guard that calls
+// djustInit() → mountHooks() before this file executes.
+// Initializations are deferred to _ensureHooksInit() since var hoists
+// the name but not the `= new Map()` assignment.
+var _activeHooks;
+var _hookIdCounter;
 
 /**
- * Counter for generating unique IDs for hooked elements.
+ * Lazy-initialize hook state.  Called at the top of every public function
+ * so the Map/counter exist regardless of source-file concatenation order.
  */
-var _hookIdCounter = 0;
+function _ensureHooksInit() {
+    if (!_activeHooks) {
+        _activeHooks = new Map();
+        _hookIdCounter = 0;
+    }
+}
 
 /**
  * Get a stable ID for an element, creating one if needed.
  */
 function _getHookElId(el) {
+    _ensureHooksInit();
     if (!el._djustHookId) {
         el._djustHookId = `djust-hook-${++_hookIdCounter}`;
     }
@@ -105,6 +115,7 @@ function _createHookInstance(hookDef, el) {
  * Called on init and after DOM patches.
  */
 function mountHooks(root) {
+    _ensureHooksInit();
     root = root || document;
     const hooks = _getHookDefs();
     const elements = root.querySelectorAll('[dj-hook]');
@@ -143,6 +154,7 @@ function mountHooks(root) {
  * Call this BEFORE applying patches.
  */
 function beforeUpdateHooks(root) {
+    _ensureHooksInit();
     root = root || document;
     for (const [, entry] of _activeHooks) {
         // Only call if element is still in the DOM
@@ -160,6 +172,7 @@ function beforeUpdateHooks(root) {
  * Called after a DOM patch to update/mount/destroy hooks as needed.
  */
 function updateHooks(root) {
+    _ensureHooksInit();
     root = root || document;
     const hooks = _getHookDefs();
 
@@ -221,6 +234,7 @@ function updateHooks(root) {
  * Notify all hooks of WebSocket disconnect.
  */
 function notifyHooksDisconnected() {
+    _ensureHooksInit();
     for (const [, entry] of _activeHooks) {
         if (typeof entry.instance.disconnected === 'function') {
             try {
@@ -236,6 +250,7 @@ function notifyHooksDisconnected() {
  * Notify all hooks of WebSocket reconnect.
  */
 function notifyHooksReconnected() {
+    _ensureHooksInit();
     for (const [, entry] of _activeHooks) {
         if (typeof entry.instance.reconnected === 'function') {
             try {
@@ -251,6 +266,7 @@ function notifyHooksReconnected() {
  * Dispatch a push_event to hooks that registered handleEvent listeners.
  */
 function dispatchPushEventToHooks(eventName, payload) {
+    _ensureHooksInit();
     for (const [, entry] of _activeHooks) {
         const handlers = entry.instance._eventHandlers[eventName];
         if (handlers) {
@@ -269,6 +285,7 @@ function dispatchPushEventToHooks(eventName, payload) {
  * Destroy all hooks (cleanup).
  */
 function destroyAllHooks() {
+    _ensureHooksInit();
     for (const [elId, entry] of _activeHooks) {
         if (typeof entry.instance.destroyed === 'function') {
             try {
@@ -289,4 +306,8 @@ window.djust.notifyHooksDisconnected = notifyHooksDisconnected;
 window.djust.notifyHooksReconnected = notifyHooksReconnected;
 window.djust.dispatchPushEventToHooks = dispatchPushEventToHooks;
 window.djust.destroyAllHooks = destroyAllHooks;
-window.djust._activeHooks = _activeHooks;
+// Use a getter so callers always see the live Map (initialized lazily)
+Object.defineProperty(window.djust, '_activeHooks', {
+    get() { _ensureHooksInit(); return _activeHooks; },
+    configurable: true,
+});
