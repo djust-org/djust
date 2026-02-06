@@ -935,6 +935,9 @@ function applyPatches(patches) {
             console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
             return false;
         }
+        // Update hooks and model bindings after DOM patches
+        if (typeof updateHooks === 'function') { updateHooks(); }
+        if (typeof bindModelElements === 'function') { bindModelElements(); }
         return true;
     }
 
@@ -1012,6 +1015,10 @@ function applyPatches(patches) {
         console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
         return false;
     }
+
+    // Update hooks and model bindings after DOM patches
+    if (typeof updateHooks === 'function') { updateHooks(); }
+    if (typeof bindModelElements === 'function') { bindModelElements(); }
 
     return true;
 }

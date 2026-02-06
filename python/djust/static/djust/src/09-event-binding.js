@@ -1,5 +1,15 @@
 
 function bindLiveViewEvents() {
+    // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
+    if (window.djust.uploads) {
+        window.djust.uploads.bindHandlers();
+    }
+
+    // Bind navigation directives (dj-patch, dj-navigate)
+    if (window.djust.navigation) {
+        window.djust.navigation.bindDirectives();
+    }
+
     // Find all interactive elements
     const allElements = document.querySelectorAll('*');
     allElements.forEach(element => {
@@ -9,8 +19,21 @@ function bindLiveViewEvents() {
             element.dataset.liveviewClickBound = 'true';
             // Parse handler string to extract function name and arguments
             const parsed = parseEventHandler(clickHandler);
-            element.addEventListener('click', async (e) => {
+
+            const clickHandlerFn = async (e) => {
                 e.preventDefault();
+
+                // dj-confirm: show confirmation dialog before sending event
+                const confirmMsg = element.getAttribute('dj-confirm');
+                if (confirmMsg && !window.confirm(confirmMsg)) {
+                    return; // User cancelled
+                }
+
+                // Apply optimistic update if specified
+                let optimisticUpdateId = null;
+                if (window.djust.optimistic) {
+                    optimisticUpdateId = window.djust.optimistic.applyOptimisticUpdate(e.currentTarget, parsed.name);
+                }
 
                 // Extract all data-* attributes with type coercion support
                 const params = extractTypedParams(element);
@@ -27,11 +50,31 @@ function bindLiveViewEvents() {
                     params.component_id = componentId;
                 }
 
-                // Pass target element for optimistic updates (Phase 3)
+                // Embedded LiveView: route event to correct child view
+                const embeddedViewId = getEmbeddedViewId(e.currentTarget);
+                if (embeddedViewId) {
+                    params.view_id = embeddedViewId;
+                }
+
+                // Pass target element and optimistic update ID
                 params._targetElement = e.currentTarget;
+                params._optimisticUpdateId = optimisticUpdateId;
+
+                // Handle dj-target for scoped updates
+                const targetSelector = element.getAttribute('dj-target');
+                if (targetSelector) {
+                    params._djTargetSelector = targetSelector;
+                }
 
                 await handleEvent(parsed.name, params);
-            });
+            };
+
+            // Apply rate limiting if specified
+            const wrappedHandler = window.djust.rateLimit
+                ? window.djust.rateLimit.wrapWithRateLimit(element, 'click', clickHandlerFn)
+                : clickHandlerFn;
+
+            element.addEventListener('click', wrappedHandler);
         }
 
         // Handle dj-submit events on forms
@@ -47,6 +90,12 @@ function bindLiveViewEvents() {
                 const componentId = getComponentId(e.target);
                 if (componentId) {
                     params.component_id = componentId;
+                }
+
+                // Embedded LiveView: route event to correct child view
+                const embeddedViewId = getEmbeddedViewId(e.target);
+                if (embeddedViewId) {
+                    params.view_id = embeddedViewId;
                 }
 
                 // Pass target element for optimistic updates (Phase 3)
@@ -87,6 +136,11 @@ function bindLiveViewEvents() {
             if (componentId) {
                 params.component_id = componentId;
             }
+            // Embedded LiveView: route event to correct child view
+            const embeddedViewId = getEmbeddedViewId(element);
+            if (embeddedViewId) {
+                params.view_id = embeddedViewId;
+            }
             return params;
         }
 
@@ -94,16 +148,32 @@ function bindLiveViewEvents() {
         const changeHandler = element.getAttribute('dj-change');
         if (changeHandler && !element.dataset.liveviewChangeBound) {
             element.dataset.liveviewChangeBound = 'true';
-            element.addEventListener('change', async (e) => {
+
+            const changeHandlerFn = async (e) => {
                 const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
                 const params = buildFormEventParams(e.target, value);
+
                 // Add target element for loading state (consistent with other handlers)
                 params._targetElement = e.target;
+
+                // Handle dj-target for scoped updates
+                const targetSelector = element.getAttribute('dj-target');
+                if (targetSelector) {
+                    params._djTargetSelector = targetSelector;
+                }
+
                 if (globalThis.djustDebug) {
                     console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
                 }
                 await handleEvent(changeHandler, params);
-            });
+            };
+
+            // Apply rate limiting if specified
+            const wrappedHandler = window.djust.rateLimit
+                ? window.djust.rateLimit.wrapWithRateLimit(element, 'change', changeHandlerFn)
+                : changeHandlerFn;
+
+            element.addEventListener('change', wrappedHandler);
         }
 
         // Handle dj-input events (with smart debouncing/throttling)
@@ -165,7 +235,8 @@ function bindLiveViewEvents() {
             const keyHandler = element.getAttribute(`dj-${eventType}`);
             if (keyHandler && !element.dataset[`liveview${eventType}Bound`]) {
                 element.dataset[`liveview${eventType}Bound`] = 'true';
-                element.addEventListener(eventType, async (e) => {
+
+                const keyHandlerFn = async (e) => {
                     // Check for key modifiers (e.g. dj-keydown.enter)
                     const modifiers = keyHandler.split('.');
                     const handlerName = modifiers[0];
@@ -192,8 +263,28 @@ function bindLiveViewEvents() {
                         params.component_id = componentId;
                     }
 
+                    // Embedded LiveView: route event to correct child view
+                    const embeddedViewId = getEmbeddedViewId(e.target);
+                    if (embeddedViewId) {
+                        params.view_id = embeddedViewId;
+                    }
+
+                    // Add target element and handle dj-target
+                    params._targetElement = e.target;
+                    const targetSelector = element.getAttribute('dj-target');
+                    if (targetSelector) {
+                        params._djTargetSelector = targetSelector;
+                    }
+
                     await handleEvent(handlerName, params);
-                });
+                };
+
+                // Apply rate limiting if specified
+                const wrappedHandler = window.djust.rateLimit
+                    ? window.djust.rateLimit.wrapWithRateLimit(element, eventType, keyHandlerFn)
+                    : keyHandlerFn;
+
+                element.addEventListener(eventType, wrappedHandler);
             }
         });
     });
@@ -237,4 +328,6 @@ function clearOptimisticState(eventName) {
         optimisticUpdates.delete(eventName);
     }
 }
+
+// Export for testing
 window.djust.bindLiveViewEvents = bindLiveViewEvents;

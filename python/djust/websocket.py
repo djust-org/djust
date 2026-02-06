@@ -24,6 +24,7 @@ from .websocket_utils import (
     _validate_event_security,
     get_handler_coerce_setting,
 )
+from .presence import PresenceManager
 
 logger = logging.getLogger(__name__)
 hotreload_logger = logging.getLogger("djust.hotreload")
@@ -44,6 +45,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     - Event dispatching from client
     - Sending DOM patches to client
     - Session state management
+    - File uploads via binary WebSocket frames
     """
 
     def __init__(self, *args, **kwargs):
@@ -54,7 +56,102 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         self.use_binary = False  # Use JSON for now (MessagePack support TODO)
         self.use_actors = False  # Will be set based on view class
         self._view_group: Optional[str] = None
+        self._presence_group: Optional[str] = None
         self._tick_task = None
+
+    async def _flush_push_events(self) -> None:
+        """
+        Send any pending push_event messages queued by the view during handler execution.
+
+        Called after each _send_update to deliver server-pushed events to the client.
+        """
+        if not self.view_instance:
+            return
+        if not hasattr(self.view_instance, "_drain_push_events"):
+            return
+        events = self.view_instance._drain_push_events()
+        for event_name, payload in events:
+            await self.send_json(
+                {
+                    "type": "push_event",
+                    "event": event_name,
+                    "payload": payload,
+                }
+            )
+
+    async def _flush_navigation(self) -> None:
+        """
+        Send any pending navigation commands (live_patch / live_redirect)
+        queued by the view during handler execution.
+        """
+        if not self.view_instance:
+            return
+        if not hasattr(self.view_instance, "_drain_navigation"):
+            return
+        commands = self.view_instance._drain_navigation()
+        for cmd in commands:
+            await self.send_json(
+                {
+                    "type": "navigation",
+                    **cmd,
+                }
+            )
+
+    async def _flush_i18n(self) -> None:
+        """
+        Send any pending i18n commands (language changes, etc.)
+        queued by the view during handler execution.
+        """
+        if not self.view_instance:
+            return
+        if not hasattr(self.view_instance, "_drain_i18n_commands"):
+            return
+        commands = self.view_instance._drain_i18n_commands()
+        for cmd in commands:
+            await self.send_json(
+                {
+                    "type": "i18n",
+                    **cmd,
+                }
+            )
+
+    async def _flush_accessibility(self) -> None:
+        """
+        Send any pending accessibility commands (announcements, focus)
+        queued by the view during handler execution.
+        """
+        if not self.view_instance:
+            return
+
+        # Flush screen reader announcements
+        if hasattr(self.view_instance, "_drain_announcements"):
+            try:
+                announcements = self.view_instance._drain_announcements()
+                if announcements and isinstance(announcements, list) and len(announcements) > 0:
+                    await self.send_json(
+                        {
+                            "type": "accessibility",
+                            "announcements": announcements,
+                        }
+                    )
+            except Exception:
+                pass  # Gracefully handle mocks or missing mixin
+
+        # Flush focus command
+        if hasattr(self.view_instance, "_drain_focus"):
+            try:
+                focus_cmd = self.view_instance._drain_focus()
+                if focus_cmd and isinstance(focus_cmd, tuple) and len(focus_cmd) == 2:
+                    selector, options = focus_cmd
+                    await self.send_json(
+                        {
+                            "type": "focus",
+                            "selector": selector,
+                            "options": options,
+                        }
+                    )
+            except Exception:
+                pass  # Gracefully handle mocks or missing mixin
 
     async def send_error(self, error: str, **context) -> None:
         """
@@ -126,6 +223,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         response["file"] = file_path
                 self._attach_debug_payload(response, event_name, performance)
                 await self.send_json(response)
+                await self._flush_push_events()
+                await self._flush_navigation()
+                await self._flush_accessibility()
+                await self._flush_i18n()
         else:
             response = {
                 "type": "html_update",
@@ -138,6 +239,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 response["cache_request_id"] = cache_request_id
             self._attach_debug_payload(response, event_name)
             await self.send_json(response)
+            await self._flush_push_events()
+            await self._flush_navigation()
+            await self._flush_accessibility()
+            await self._flush_i18n()
 
     def _attach_debug_payload(
         self,
@@ -236,6 +341,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if self._view_group:
             await self.channel_layer.group_discard(self._view_group, self.channel_name)
 
+        # Leave presence group and clean up presence
+        if self._presence_group:
+            await self.channel_layer.group_discard(self._presence_group, self.channel_name)
+
+        # Clean up presence tracking if view supports it
+        if self.view_instance and hasattr(self.view_instance, "untrack_presence"):
+            try:
+                await sync_to_async(self.view_instance.untrack_presence)()
+            except Exception as e:
+                logger.warning(f"Error cleaning up presence: {e}")
+
         # Cancel tick task and wait for it to finish
         if self._tick_task:
             self._tick_task.cancel()
@@ -251,6 +367,21 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.actor_handle.shutdown()
             except Exception as e:
                 logger.warning(f"Error shutting down actor: {e}")
+
+        # Clean up uploads
+        if self.view_instance and hasattr(self.view_instance, "_cleanup_uploads"):
+            try:
+                self.view_instance._cleanup_uploads()
+            except Exception as e:
+                logger.warning(f"Error cleaning up uploads: {e}")
+
+        # Clean up embedded child views
+        if self.view_instance and hasattr(self.view_instance, "_child_views"):
+            try:
+                for child_id in list(self.view_instance._child_views.keys()):
+                    self.view_instance._unregister_child(child_id)
+            except Exception as e:
+                logger.warning(f"Error cleaning up embedded children: {e}")
 
         # Clean up session state
         self.view_instance = None
@@ -281,6 +412,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.send_error(f"Message too large ({raw_size} bytes)")
                 return
 
+            # Check for binary upload frames
+            if bytes_data and len(bytes_data) >= 17:
+                # Check if this looks like an upload frame (first byte is 0x01-0x03)
+                frame_type = bytes_data[0]
+                if frame_type in (0x01, 0x02, 0x03):
+                    await self._handle_upload_frame(bytes_data)
+                    return
+
             # Decode message
             if bytes_data:
                 data = msgpack.unpackb(bytes_data, raw=False)
@@ -299,7 +438,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         ip_tracker.add_cooldown(self._client_ip, cooldown)
                     await self.close(code=4429)
                     return
-                await self.send_error("Rate limit exceeded")
+                await self.send_json(
+                    {
+                        "type": "rate_limit_exceeded",
+                        "message": "Too many messages, some events are being dropped",
+                    }
+                )
                 return
 
             if msg_type == "event":
@@ -308,6 +452,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.handle_mount(data)
             elif msg_type == "ping":
                 await self.send_json({"type": "pong"})
+            elif msg_type == "url_change":
+                await self.handle_url_change(data)
+            elif msg_type == "live_redirect_mount":
+                await self.handle_live_redirect_mount(data)
+            elif msg_type == "upload_register":
+                await self._handle_upload_register(data)
+            elif msg_type == "presence_heartbeat":
+                await self.handle_presence_heartbeat(data)
+            elif msg_type == "cursor_move":
+                await self.handle_cursor_move(data)
             else:
                 logger.warning(f"Unknown message type: {msg_type}")
                 await self.send_error(f"Unknown message type: {msg_type}")
@@ -341,6 +495,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         view_path = data.get("view")
         params = data.get("params", {})
         has_prerendered = data.get("has_prerendered", False)
+        client_timezone = data.get("client_timezone")
 
         if not view_path:
             await self.send_error("Missing view path in mount request")
@@ -386,6 +541,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         try:
             self.view_instance = view_class()
 
+            # Store reference to WS consumer for streaming support
+            self.view_instance._ws_consumer = self
+
+            # Store client timezone for local time rendering
+            self.view_instance.client_timezone = None
+            if client_timezone:
+                try:
+                    from zoneinfo import ZoneInfo
+
+                    ZoneInfo(client_timezone)  # Validate IANA timezone string
+                    self.view_instance.client_timezone = client_timezone
+                except (KeyError, Exception):
+                    logger.warning("Invalid client timezone: %s", client_timezone)
+
             # Store WebSocket session_id in view for consistent VDOM caching
             # This ensures mount and all subsequent events use the same VDOM instance
             self.view_instance._websocket_session_id = self.session_id
@@ -402,6 +571,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._view_path = view_path
             self._view_group = view_group_name(view_path)
             await self.channel_layer.group_add(self._view_group, self.channel_name)
+
+            # Join presence group if view supports presence tracking
+            self._presence_group = None
+            if hasattr(self.view_instance, "get_presence_key"):
+                try:
+                    presence_key = self.view_instance.get_presence_key()
+                    self._presence_group = PresenceManager.presence_group_name(presence_key)
+                    await self.channel_layer.group_add(self._presence_group, self.channel_name)
+                except Exception as e:
+                    logger.warning(f"Error setting up presence group: {e}")
 
             # Start periodic tick if subclass overrides handle_tick
             tick_interval = getattr(view_class, "tick_interval", None)
@@ -592,6 +771,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if cache_config:
             response["cache_config"] = cache_config
 
+        # Include upload configurations if view uses UploadMixin
+        if hasattr(self.view_instance, "_upload_manager") and self.view_instance._upload_manager:
+            upload_state = self.view_instance._upload_manager.get_upload_state()
+            if upload_state:
+                response["upload_configs"] = {
+                    name: info["config"] for name, info in upload_state.items()
+                }
+
         await self.send_json(response)
 
     async def handle_event(self, data: Dict[str, Any]):
@@ -624,6 +811,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if not self.view_instance:
             await self.send_error("View not mounted. Please reload the page.")
             return
+
+        # Route to embedded child view if view_id is specified
+        view_id = params.pop("view_id", None)
+        target_view = self.view_instance
+        if view_id and view_id != getattr(self.view_instance, "_view_id", None):
+            # Look up child view by view_id
+            all_children = {}
+            if hasattr(self.view_instance, "_get_all_child_views"):
+                all_children = self.view_instance._get_all_child_views()
+            target_view = all_children.get(view_id)
+            if target_view is None:
+                await self.send_error(f"Embedded view not found: {view_id}")
+                return
 
         # Handle the event
 
@@ -700,6 +900,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # Non-actor mode: Use traditional flow
             # Check if this is a component event (Phase 4)
             component_id = params.get("component_id")
+            is_embedded_child = target_view is not self.view_instance
             html = None
             patches = None
             version = 0
@@ -759,9 +960,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         time.perf_counter() - handler_start
                     ) * 1000  # Convert to ms
                 else:
+                    # Use target_view for handler lookup (may be an embedded child)
                     # Security checks (shared with actor and component paths)
                     handler = await _validate_event_security(
-                        self, event_name, self.view_instance, self._rate_limiter
+                        self, event_name, target_view, self._rate_limiter
                     )
                     if handler is None:
                         return
@@ -805,23 +1007,35 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # Get updated HTML and patches with tracking
                         render_start = time.perf_counter()
                         with tracker.track("Template Render"):
-                            # Get context with tracking
-                            with tracker.track("Context Preparation"):
-                                context = await sync_to_async(self.view_instance.get_context_data)()
-                                tracker.track_context_size(context)
-
-                            # Render and generate patches with tracking
-                            with tracker.track("VDOM Diff"):
-                                with profiler.profile(profiler.OP_RENDER):
-                                    html, patches, version = await sync_to_async(
-                                        self.view_instance.render_with_diff
+                            if is_embedded_child:
+                                # Embedded child: render just the child's template
+                                # and send full HTML scoped to the child's container
+                                with tracker.track("Embedded Child Render"):
+                                    html = await sync_to_async(self._render_embedded_child)(
+                                        target_view
+                                    )
+                                    patches = None  # Send full HTML for the child subtree
+                                    version = 0
+                            else:
+                                # Get context with tracking
+                                with tracker.track("Context Preparation"):
+                                    context = await sync_to_async(
+                                        self.view_instance.get_context_data
                                     )()
-                                patch_list = None  # Initialize for later use
-                                # patches can be: JSON string with patches, "[]" for empty, or None
-                                if patches is not None:
-                                    patch_list = json.loads(patches) if patches else []
-                                    tracker.track_patches(len(patch_list), patch_list)
-                                    profiler.record(profiler.OP_DIFF, 0)  # Mark diff occurred
+                                    tracker.track_context_size(context)
+
+                                # Render and generate patches with tracking
+                                with tracker.track("VDOM Diff"):
+                                    with profiler.profile(profiler.OP_RENDER):
+                                        html, patches, version = await sync_to_async(
+                                            self.view_instance.render_with_diff
+                                        )()
+                                    patch_list = None  # Initialize for later use
+                                    # patches can be: JSON string with patches, "[]" for empty, or None
+                                    if patches is not None:
+                                        patch_list = json.loads(patches) if patches else []
+                                        tracker.track_patches(len(patch_list), patch_list)
+                                        profiler.record(profiler.OP_DIFF, 0)  # Mark diff occurred
                         timing["render"] = (
                             time.perf_counter() - render_start
                         ) * 1000  # Convert to ms
@@ -832,86 +1046,102 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # Clear the flag
                     self.view_instance._should_reset_form = False
 
-                # For component events, send full HTML instead of patches
-                # Component VDOM is separate from parent VDOM, causing path mismatches
-                # TODO Phase 4.1: Implement per-component VDOM tracking
-                if component_id:
-                    patches = None
-
-                # For views with dynamic templates (template as property),
-                # patches may be empty because VDOM state is lost on recreation.
-                # In that case, send full HTML update.
-
-                # Patch compression: if patch count exceeds threshold and HTML is smaller,
-                # send HTML instead of patches for better performance
-                PATCH_COUNT_THRESHOLD = 100
-                # Note: patch_list was already parsed earlier for performance tracking
-                if patches and patch_list:
-                    patch_count = len(patch_list)
-                    if patch_count > PATCH_COUNT_THRESHOLD:
-                        # Compare sizes to decide whether to send patches or HTML
-                        patches_size = len(patches.encode("utf-8"))
-                        html_size = len(html.encode("utf-8"))
-                        # If HTML is at least 30% smaller, send HTML instead
-                        if html_size < patches_size * 0.7:
-                            logger.debug(
-                                "Patch compression: %d patches (%dB) -> sending HTML (%dB) instead",
-                                patch_count,
-                                patches_size,
-                                html_size,
-                            )
-                            # Reset VDOM and send HTML
-                            if (
-                                hasattr(self.view_instance, "_rust_view")
-                                and self.view_instance._rust_view
-                            ):
-                                self.view_instance._rust_view.reset()
-                            patches = None
-                            patch_list = None
-
-                # Note: patch_list can be [] (empty list) which is valid - means no changes needed
-                # Only send full HTML if patches is None (not just falsy)
-                if patches is not None and patch_list is not None:
-                    # Calculate timing for JSON mode
-                    timing["total"] = (time.perf_counter() - start_time) * 1000  # Total server time
-                    perf_summary = tracker.get_summary()
-
-                    await self._send_update(
-                        patches=patch_list,
-                        version=version,
-                        cache_request_id=cache_request_id,
-                        reset_form=should_reset_form,
-                        timing=timing,
-                        performance=perf_summary,
-                        event_name=event_name,
+                # Embedded child view: send scoped HTML update
+                if is_embedded_child and view_id:
+                    await self.send_json(
+                        {
+                            "type": "embedded_update",
+                            "view_id": view_id,
+                            "html": html,
+                            "event_name": event_name,
+                        }
                     )
+                    await self._flush_push_events()
+                    await self._flush_navigation()
+                    await self._flush_i18n()
                 else:
-                    # patches=None means VDOM diff failed or was skipped - send full HTML
-                    # Strip comments and whitespace to match Rust VDOM parser
-                    html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(
-                        html
-                    )
-                    # Extract innerHTML to avoid nesting <div data-djust-root> divs
-                    html_content = await sync_to_async(
-                        self.view_instance._extract_liveview_content
-                    )(html)
+                    # For component events, send full HTML instead of patches
+                    # Component VDOM is separate from parent VDOM, causing path mismatches
+                    # TODO Phase 4.1: Implement per-component VDOM tracking
+                    if component_id:
+                        patches = None
 
-                    print(
-                        "[WebSocket] No patches generated, sending full HTML update",
-                        file=sys.stderr,
-                    )
-                    print(
-                        f"[WebSocket] html_content length: {len(html_content)}, starts with: {html_content[:150]}...",
-                        file=sys.stderr,
-                    )
+                    # For views with dynamic templates (template as property),
+                    # patches may be empty because VDOM state is lost on recreation.
+                    # In that case, send full HTML update.
 
-                    await self._send_update(
-                        html=html_content,
-                        version=version,
-                        cache_request_id=cache_request_id,
-                        reset_form=should_reset_form,
-                        event_name=event_name,
-                    )
+                    # Patch compression: if patch count exceeds threshold and HTML is smaller,
+                    # send HTML instead of patches for better performance
+                    PATCH_COUNT_THRESHOLD = 100
+                    # Note: patch_list was already parsed earlier for performance tracking
+                    if patches and patch_list:
+                        patch_count = len(patch_list)
+                        if patch_count > PATCH_COUNT_THRESHOLD:
+                            # Compare sizes to decide whether to send patches or HTML
+                            patches_size = len(patches.encode("utf-8"))
+                            html_size = len(html.encode("utf-8"))
+                            # If HTML is at least 30% smaller, send HTML instead
+                            if html_size < patches_size * 0.7:
+                                logger.debug(
+                                    "Patch compression: %d patches (%dB) -> sending HTML (%dB) instead",
+                                    patch_count,
+                                    patches_size,
+                                    html_size,
+                                )
+                                # Reset VDOM and send HTML
+                                if (
+                                    hasattr(self.view_instance, "_rust_view")
+                                    and self.view_instance._rust_view
+                                ):
+                                    self.view_instance._rust_view.reset()
+                                patches = None
+                                patch_list = None
+
+                    # Note: patch_list can be [] (empty list) which is valid - means no changes needed
+                    # Only send full HTML if patches is None (not just falsy)
+                    if patches is not None and patch_list is not None:
+                        # Calculate timing for JSON mode
+                        timing["total"] = (
+                            time.perf_counter() - start_time
+                        ) * 1000  # Total server time
+                        perf_summary = tracker.get_summary()
+
+                        await self._send_update(
+                            patches=patch_list,
+                            version=version,
+                            cache_request_id=cache_request_id,
+                            reset_form=should_reset_form,
+                            timing=timing,
+                            performance=perf_summary,
+                            event_name=event_name,
+                        )
+                    else:
+                        # patches=None means VDOM diff failed or was skipped - send full HTML
+                        # Strip comments and whitespace to match Rust VDOM parser
+                        html = await sync_to_async(
+                            self.view_instance._strip_comments_and_whitespace
+                        )(html)
+                        # Extract innerHTML to avoid nesting <div data-djust-root> divs
+                        html_content = await sync_to_async(
+                            self.view_instance._extract_liveview_content
+                        )(html)
+
+                        print(
+                            "[WebSocket] No patches generated, sending full HTML update",
+                            file=sys.stderr,
+                        )
+                        print(
+                            f"[WebSocket] html_content length: {len(html_content)}, starts with: {html_content[:150]}...",
+                            file=sys.stderr,
+                        )
+
+                        await self._send_update(
+                            html=html_content,
+                            version=version,
+                            cache_request_id=cache_request_id,
+                            reset_form=should_reset_form,
+                            event_name=event_name,
+                        )
 
             except Exception as e:
                 view_class_name = (
@@ -927,6 +1157,116 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     log_message=f"Error in {view_class_name}.{sanitize_for_log(event_name)}() ({event_type})",
                 )
                 await self.send_json(response)
+
+    # ========================================================================
+    # Embedded LiveView Rendering
+    # ========================================================================
+
+    def _render_embedded_child(self, child_view) -> str:
+        """
+        Render an embedded child view's template and return the inner HTML.
+
+        This re-renders just the child's template using Django's template engine,
+        without going through the parent's VDOM at all.
+        """
+        try:
+            context = child_view.get_context_data()
+            from django.template import engines
+
+            template_str = child_view.get_template()
+            engine = engines["django"] if "django" in engines else list(engines.all())[0]
+            tmpl = engine.from_string(template_str)
+            html = tmpl.render(context)
+            return html
+        except Exception as e:
+            logger.error("Failed to render embedded child %s: %s", child_view.__class__.__name__, e)
+            return f"<!-- Error rendering embedded child: {e} -->"
+
+    # ========================================================================
+    # File Upload Handling
+    # ========================================================================
+
+    async def _handle_upload_register(self, data: Dict[str, Any]) -> None:
+        """Handle upload_register message: client announces a file to upload."""
+        if not self.view_instance:
+            await self.send_error("View not mounted")
+            return
+
+        if (
+            not hasattr(self.view_instance, "_upload_manager")
+            or not self.view_instance._upload_manager
+        ):
+            await self.send_error("No uploads configured for this view")
+            return
+
+        mgr = self.view_instance._upload_manager
+        entry = mgr.register_entry(
+            upload_name=data.get("upload_name", ""),
+            ref=data.get("ref", ""),
+            client_name=data.get("client_name", ""),
+            client_type=data.get("client_type", ""),
+            client_size=data.get("client_size", 0),
+        )
+
+        if entry:
+            await self.send_json(
+                {
+                    "type": "upload_registered",
+                    "ref": entry.ref,
+                    "upload_name": entry.upload_name,
+                }
+            )
+        else:
+            await self.send_error("Upload rejected (check file type, size, or max entries)")
+
+    async def _handle_upload_frame(self, data: bytes) -> None:
+        """Handle binary upload frame (chunk, complete, cancel)."""
+        from .uploads import parse_upload_frame, build_progress_message
+
+        if not self.view_instance or not hasattr(self.view_instance, "_upload_manager"):
+            return
+
+        mgr = self.view_instance._upload_manager
+        if not mgr:
+            return
+
+        frame = parse_upload_frame(data)
+        if not frame:
+            logger.warning("Invalid upload frame received")
+            return
+
+        ref = frame["ref"]
+
+        if frame["type"] == "chunk":
+            progress = mgr.add_chunk(ref, frame["chunk_index"], frame["data"])
+            if progress is not None:
+                # Send progress update (throttle to every 10%)
+                entry = mgr._entries.get(ref)
+                if entry and (progress % 10 == 0 or progress >= 100):
+                    await self.send_json(build_progress_message(ref, progress))
+            else:
+                await self.send_json(build_progress_message(ref, 0, "error"))
+
+        elif frame["type"] == "complete":
+            entry = mgr.complete_upload(ref)
+            if entry:
+                await self.send_json(build_progress_message(ref, 100, "complete"))
+            else:
+                err_entry = mgr._entries.get(ref)
+                error_msg = err_entry.error if err_entry else "Unknown error"
+                await self.send_json(
+                    {
+                        "type": "upload_progress",
+                        "ref": ref,
+                        "progress": 0,
+                        "status": "error",
+                        "error": error_msg,
+                    }
+                )
+
+        elif frame["type"] == "cancel":
+            mgr.cancel_upload(ref)
+            await self.send_json(build_progress_message(ref, 0, "cancelled"))
 
     def _extract_cache_config(self) -> Dict[str, Any]:
         """
@@ -1134,6 +1474,123 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 }
             )
 
+    async def handle_url_change(self, data: Dict[str, Any]):
+        """
+        Handle URL change from browser back/forward (popstate) or dj-patch clicks.
+
+        Calls handle_params() on the view so it can update state based on the
+        new URL params, then re-renders and sends patches.
+        """
+        if not self.view_instance:
+            await self.send_error("View not mounted")
+            return
+
+        params = data.get("params", {})
+        uri = data.get("uri", "")
+
+        try:
+            # Call handle_params on the view
+            await sync_to_async(self.view_instance.handle_params)(params, uri)
+
+            # Sync state and re-render
+            if hasattr(self.view_instance, "_sync_state_to_rust"):
+                await sync_to_async(self.view_instance._sync_state_to_rust)()
+
+            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+
+            if patches is not None:
+                if isinstance(patches, str):
+                    patches = json.loads(patches)
+                await self._send_update(patches=patches, version=version, event_name="url_change")
+            else:
+                html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
+                html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
+                await self._send_update(html=html, version=version, event_name="url_change")
+
+        except Exception as e:
+            response = handle_exception(
+                e,
+                error_type="event",
+                event_name="url_change",
+                logger=logger,
+                log_message="Error in handle_params()",
+            )
+            await self.send_json(response)
+
+    async def handle_live_redirect_mount(self, data: Dict[str, Any]):
+        """
+        Handle mounting a new view via live_redirect (no WS reconnect).
+
+        The client sends this after receiving a live_redirect navigation command.
+        We unmount the current view and mount the new one on the same connection.
+        """
+        # Reuse handle_mount — it already handles everything
+        # But first, clean up the old view instance
+        old_view = self.view_instance
+
+        # Leave old view's channel group
+        if self._view_group:
+            await self.channel_layer.group_discard(self._view_group, self.channel_name)
+            self._view_group = None
+
+        # Cancel old tick task
+        if self._tick_task:
+            self._tick_task.cancel()
+            try:
+                await self._tick_task
+            except asyncio.CancelledError:
+                pass
+            self._tick_task = None
+
+        # Clean up old view
+        if old_view:
+            if hasattr(old_view, "_cleanup_uploads"):
+                try:
+                    old_view._cleanup_uploads()
+                except Exception:
+                    pass
+
+        self.view_instance = None
+
+        # Now mount the new view using the standard mount flow
+        await self.handle_mount(data)
+
+    async def handle_presence_heartbeat(self, data: Dict[str, Any]):
+        """Handle presence heartbeat from client."""
+        if not self.view_instance or not hasattr(self.view_instance, "update_presence_heartbeat"):
+            return
+
+        try:
+            await sync_to_async(self.view_instance.update_presence_heartbeat)()
+        except Exception as e:
+            logger.error(f"Error updating presence heartbeat: {e}")
+
+    async def handle_cursor_move(self, data: Dict[str, Any]):
+        """Handle cursor movement for live cursors."""
+        if not self.view_instance or not hasattr(self.view_instance, "handle_cursor_move"):
+            return
+
+        try:
+            x = data.get("x", 0)
+            y = data.get("y", 0)
+            await sync_to_async(self.view_instance.handle_cursor_move)(x, y)
+        except Exception as e:
+            logger.error(f"Error handling cursor move: {e}")
+
+    async def presence_event(self, event):
+        """
+        Handle presence-related events from the channel layer.
+
+        These events are broadcasted to all users in a presence group.
+        """
+        await self.send_json(
+            {
+                "type": "presence_event",
+                "event": event.get("event", ""),
+                "payload": event.get("payload", {}),
+            }
+        )
+
     async def server_push(self, event):
         """
         Handle a server-push message from the channel layer.
@@ -1185,9 +1642,26 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if isinstance(patches, str):
                     patches = json.loads(patches)
                 await self._send_update(patches=patches, version=version)
+            else:
+                # Even if no patches, flush any push_events
+                await self._flush_push_events()
 
         except Exception as e:
             logger.exception(f"Error in server_push: {e}")
+
+    async def client_push_event(self, event):
+        """
+        Handle a direct push_event from the channel layer (via push_event_to_view).
+
+        Sends the event directly to the client without re-rendering.
+        """
+        await self.send_json(
+            {
+                "type": "push_event",
+                "event": event.get("event", ""),
+                "payload": event.get("payload", {}),
+            }
+        )
 
     async def _run_tick(self, interval_ms):
         """

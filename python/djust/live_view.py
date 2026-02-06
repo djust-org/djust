@@ -20,6 +20,7 @@ from .session_utils import (  # noqa: F401
 
 from .mixins import (
     StreamsMixin,
+    StreamingMixin,
     TemplateMixin,
     ComponentMixin,
     JITMixin,
@@ -28,6 +29,9 @@ from .mixins import (
     HandlerMixin,
     RequestMixin,
     PostProcessingMixin,
+    ModelBindingMixin,
+    PushEventMixin,
+    NavigationMixin,
 )
 
 # Configure logger
@@ -49,6 +53,7 @@ except ImportError:
 
 class LiveView(
     StreamsMixin,
+    StreamingMixin,
     TemplateMixin,
     ComponentMixin,
     JITMixin,
@@ -57,6 +62,9 @@ class LiveView(
     HandlerMixin,
     RequestMixin,
     PostProcessingMixin,
+    ModelBindingMixin,
+    PushEventMixin,
+    NavigationMixin,
     View,
 ):
     """
@@ -146,6 +154,8 @@ class LiveView(
         self._temporary_assigns_initialized: bool = False  # Track if temp assigns are set up
         self._streams: Dict[str, Stream] = {}  # Stream collections
         self._stream_operations: list = []  # Pending stream operations for this render
+        # Initialize navigation support (live_patch, live_redirect)
+        self._init_navigation()
 
     def handle_tick(self):
         """Override for periodic server-side updates. Called every tick_interval ms."""

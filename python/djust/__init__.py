@@ -23,6 +23,10 @@ from .react import react_components, register_react_component, ReactMixin
 from .forms import FormMixin, LiveViewForm, form_field
 from .drafts import DraftModeMixin
 from .push import push_to_view, apush_to_view
+from .presence import PresenceMixin, LiveCursorMixin, PresenceManager, CursorTracker
+from .routing import live_session, get_route_map_script
+from .streaming import StreamingMixin
+from .uploads import UploadMixin
 
 # Import Rust functions
 try:
@@ -205,4 +209,16 @@ __all__ = [
     "enable_hot_reload",
     "get_template_dirs",
     "clear_template_dirs_cache",
+    # Presence tracking
+    "PresenceMixin",
+    "LiveCursorMixin",
+    "PresenceManager",
+    "CursorTracker",
+    # Navigation & URL state
+    "live_session",
+    "get_route_map_script",
+    # Streaming
+    "StreamingMixin",
+    # File uploads
+    "UploadMixin",
 ]

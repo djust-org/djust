@@ -44,6 +44,23 @@ function getComponentId(element) {
     return null;
 }
 
+/**
+ * Find the closest parent embedded view ID by walking up the DOM tree.
+ * Used by event handlers to route events to embedded child views.
+ * @param {HTMLElement} element - Starting element
+ * @returns {string|null} - Embedded view ID or null if not found
+ */
+function getEmbeddedViewId(element) {
+    let currentElement = element;
+    while (currentElement && currentElement !== document.body) {
+        if (currentElement.dataset.djustEmbedded) {
+            return currentElement.dataset.djustEmbedded;
+        }
+        currentElement = currentElement.parentElement;
+    }
+    return null;
+}
+
 // ============================================================================
 // TurboNav Integration - Early Registration
 // ============================================================================
@@ -307,24 +324,35 @@ class LiveViewWebSocket {
         if (this.heartbeatInterval) {
             clearInterval(this.heartbeatInterval);
             this.heartbeatInterval = null;
+            console.log('[LiveView] Heartbeat stopped');
         }
 
         // Clear reconnect attempts so we don't auto-reconnect
         this.reconnectAttempts = this.maxReconnectAttempts;
 
-        // Close WebSocket if open
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.close();
+        // Close WebSocket if open or connecting
+        if (this.ws) {
+            if (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN) {
+                this.ws.close();
+                console.log('[LiveView] WebSocket closed');
+            }
         }
 
         this.ws = null;
         this.sessionId = null;
         this.viewMounted = false;
         this.vdomVersion = null;
+        this.stats.connectedAt = null; // Reset connection timestamp
     }
 
     connect(url = null) {
         if (!this.enabled) return;
+
+        // Guard: prevent duplicate connections
+        if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
+            console.log('[LiveView] WebSocket already connected or connecting, skipping');
+            return;
+        }
 
         if (!url) {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -342,6 +370,8 @@ class LiveViewWebSocket {
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
                 this.stats.reconnections++;
+                // Notify hooks of reconnection
+                if (typeof notifyHooksReconnected === 'function') notifyHooksReconnected();
             }
             this.stats.connectedAt = Date.now();
         };
@@ -349,6 +379,9 @@ class LiveViewWebSocket {
         this.ws.onclose = (_event) => {
             console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
+
+            // Notify hooks of disconnection
+            if (typeof notifyHooksDisconnected === 'function') notifyHooksDisconnected();
 
             // Clear all decorator state on disconnect
             // Phase 2: Debounce timers
@@ -384,6 +417,7 @@ class LiveViewWebSocket {
             } else {
                 console.warn('[LiveView] Max reconnection attempts reached. Falling back to HTTP mode.');
                 this.enabled = false;
+                this._showConnectionErrorOverlay();
             }
         };
 
@@ -439,6 +473,11 @@ class LiveViewWebSocket {
                 // Initialize cache configuration from mount response
                 if (data.cache_config) {
                     setCacheConfig(data.cache_config);
+                }
+
+                // Initialize upload configurations from mount response
+                if (data.upload_configs && window.djust.uploads) {
+                    window.djust.uploads.setConfigs(data.upload_configs);
                 }
 
                 // OPTIMIZATION: Skip HTML replacement if content was pre-rendered via HTTP GET
@@ -514,6 +553,80 @@ class LiveViewWebSocket {
                 // Heartbeat response
                 break;
 
+            case 'upload_progress':
+                // File upload progress update
+                if (window.djust.uploads) {
+                    window.djust.uploads.handleProgress(data);
+                }
+                break;
+
+            case 'upload_registered':
+                // Upload registration acknowledged
+                console.log('[Upload] Registered:', data.ref, 'for', data.upload_name);
+                break;
+
+            case 'stream':
+                // Streaming partial DOM updates (LLM chat, live feeds)
+                if (window.djust.handleStreamMessage) {
+                    window.djust.handleStreamMessage(data);
+                }
+                break;
+
+            case 'push_event':
+                // Server-pushed event for JS hooks
+                window.dispatchEvent(new CustomEvent('djust:push_event', {
+                    detail: { event: data.event, payload: data.payload }
+                }));
+                // Dispatch to dj-hook instances that registered via handleEvent
+                if (typeof dispatchPushEventToHooks === 'function') {
+                    dispatchPushEventToHooks(data.event, data.payload);
+                }
+                break;
+
+            case 'embedded_update':
+                // Scoped HTML update for an embedded child LiveView
+                this.handleEmbeddedUpdate(data);
+                // Stop loading state
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
+            case 'rate_limit_exceeded':
+                // Server is dropping events due to rate limiting — show brief warning, do NOT retry
+                console.warn('[LiveView] Rate limited:', data.message || 'Too many events');
+                this._showRateLimitWarning();
+                // Stop loading state if applicable
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
+            case 'navigation':
+                // Server-side live_patch or live_redirect
+                if (window.djust.navigation) {
+                    window.djust.navigation.handleNavigation(data);
+                }
+                break;
+
+            case 'accessibility':
+                // Screen reader announcements from server
+                if (window.djust.accessibility) {
+                    window.djust.accessibility.processAnnouncements(data.announcements);
+                }
+                break;
+
+            case 'focus':
+                // Focus command from server
+                if (window.djust.accessibility) {
+                    window.djust.accessibility.processFocus([data.selector, data.options]);
+                }
+                break;
+
             case 'reload':
                 // Hot reload: file changed, refresh the page
                 window.location.reload();
@@ -527,12 +640,21 @@ class LiveViewWebSocket {
         }
 
         console.log('[LiveView] Mounting view:', viewPath);
+        // Detect browser timezone for server-side local time rendering
+        let clientTimezone = null;
+        try {
+            clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        } catch (e) {
+            console.warn('[LiveView] Could not detect browser timezone:', e);
+        }
+
         this.sendMessage({
             type: 'mount',
             view: viewPath,
             params: params,
             url: window.location.pathname,
-            has_prerendered: this.skipMountHtml || false  // Tell server we have pre-rendered content
+            has_prerendered: this.skipMountHtml || false,  // Tell server we have pre-rendered content
+            client_timezone: clientTimezone  // IANA timezone string (e.g. "America/New_York")
         });
         return true;
     }
@@ -632,12 +754,109 @@ class LiveViewWebSocket {
     // Removed duplicate applyPatches and patch helper methods
     // Now using centralized handleServerResponse() -> applyPatches()
 
+    /**
+     * Handle scoped HTML update for an embedded child LiveView.
+     * Replaces only the innerHTML of the embedded view's container div.
+     */
+    handleEmbeddedUpdate(data) {
+        const viewId = data.view_id;
+        const html = data.html;
+        if (!viewId || html === undefined) {
+            console.warn('[LiveView] Invalid embedded_update message:', data);
+            return;
+        }
+
+        const container = document.querySelector(`[data-djust-embedded="${CSS.escape(viewId)}"]`);
+        if (!container) {
+            console.warn(`[LiveView] Embedded view container not found: ${viewId}`);
+            return;
+        }
+
+        container.innerHTML = html;
+        console.log(`[LiveView] Updated embedded view: ${viewId}`);
+
+        // Re-bind events within the updated container
+        bindLiveViewEvents();
+    }
+
+    _showConnectionErrorOverlay() {
+        // Only show in DEBUG mode
+        if (!window.DEBUG_MODE) return;
+
+        // Don't duplicate
+        if (document.getElementById('djust-connection-error-overlay')) return;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'djust-connection-error-overlay';
+        overlay.style.cssText = `
+            position: fixed; bottom: 0; left: 0; right: 0; z-index: 99999;
+            background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+            border-top: 3px solid #ef4444; padding: 20px 24px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            color: #e2e8f0; font-size: 14px; box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+        `;
+        overlay.innerHTML = `
+            <div style="display:flex; align-items:flex-start; gap:16px; max-width:900px; margin:0 auto;">
+                <span style="font-size:24px; line-height:1;">❌</span>
+                <div style="flex:1;">
+                    <div style="font-weight:700; font-size:16px; margin-bottom:8px; color:#fca5a5;">
+                        WebSocket Connection Failed
+                    </div>
+                    <div style="margin-bottom:10px; color:#cbd5e1; line-height:1.6;">
+                        djust could not establish a WebSocket connection. Common causes:
+                    </div>
+                    <ul style="margin:0 0 12px 18px; padding:0; color:#94a3b8; line-height:1.8;">
+                        <li>ASGI server not running (need <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">daphne</code> or <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">uvicorn</code>, not <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">manage.py runserver</code>)</li>
+                        <li>If using daphne, wrap HTTP handler with <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">ASGIStaticFilesHandler</code> or use <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">djust.asgi.get_application()</code></li>
+                        <li>WebSocket route not configured (need <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">/ws/live/</code> path)</li>
+                    </ul>
+                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+                        <code style="background:#1e293b; padding:6px 12px; border-radius:4px; color:#86efac; font-size:13px;">
+                            python manage.py djust_check
+                        </code>
+                        <span style="color:#64748b; font-size:12px;">← Run this to diagnose configuration issues</span>
+                    </div>
+                </div>
+                <button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:20px;padding:4px;">✕</button>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+    }
+
+    _showRateLimitWarning() {
+        // Show a brief non-intrusive toast; debounce so rapid limits don't spam
+        if (this._rateLimitToast) return;
+        const toast = document.createElement('div');
+        toast.textContent = 'Slow down — some actions were dropped';
+        toast.style.cssText = `
+            position: fixed; bottom: 20px; right: 20px; z-index: 99999;
+            background: #f59e0b; color: #1c1917; padding: 10px 18px;
+            border-radius: 8px; font-size: 13px; font-weight: 600;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2); opacity: 0;
+            transition: opacity 0.3s; pointer-events: none;
+        `;
+        document.body.appendChild(toast);
+        this._rateLimitToast = toast;
+        requestAnimationFrame(() => { toast.style.opacity = '1'; });
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => { toast.remove(); this._rateLimitToast = null; }, 300);
+        }, 2500);
+    }
+
     startHeartbeat(interval = 30000) {
-        setInterval(() => {
+        // Guard: prevent multiple heartbeat intervals
+        if (this.heartbeatInterval) {
+            console.log('[LiveView] Heartbeat already running, skipping duplicate');
+            return;
+        }
+
+        this.heartbeatInterval = setInterval(() => {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 this.sendMessage({ type: 'ping' });
             }
         }, interval);
+        console.log('[LiveView] Heartbeat started (interval:', interval, 'ms)');
     }
 }
 
@@ -1456,6 +1675,16 @@ window.djust = window.djust || {};
 window.djust.extractTypedParams = extractTypedParams;
 
 function bindLiveViewEvents() {
+    // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
+    if (window.djust.uploads) {
+        window.djust.uploads.bindHandlers();
+    }
+
+    // Bind navigation directives (dj-patch, dj-navigate)
+    if (window.djust.navigation) {
+        window.djust.navigation.bindDirectives();
+    }
+
     // Find all interactive elements
     const allElements = document.querySelectorAll('*');
     allElements.forEach(element => {
@@ -1465,8 +1694,21 @@ function bindLiveViewEvents() {
             element.dataset.liveviewClickBound = 'true';
             // Parse handler string to extract function name and arguments
             const parsed = parseEventHandler(clickHandler);
-            element.addEventListener('click', async (e) => {
+
+            const clickHandlerFn = async (e) => {
                 e.preventDefault();
+
+                // dj-confirm: show confirmation dialog before sending event
+                const confirmMsg = element.getAttribute('dj-confirm');
+                if (confirmMsg && !window.confirm(confirmMsg)) {
+                    return; // User cancelled
+                }
+
+                // Apply optimistic update if specified
+                let optimisticUpdateId = null;
+                if (window.djust.optimistic) {
+                    optimisticUpdateId = window.djust.optimistic.applyOptimisticUpdate(e.currentTarget, parsed.name);
+                }
 
                 // Extract all data-* attributes with type coercion support
                 const params = extractTypedParams(element);
@@ -1483,11 +1725,31 @@ function bindLiveViewEvents() {
                     params.component_id = componentId;
                 }
 
-                // Pass target element for optimistic updates (Phase 3)
+                // Embedded LiveView: route event to correct child view
+                const embeddedViewId = getEmbeddedViewId(e.currentTarget);
+                if (embeddedViewId) {
+                    params.view_id = embeddedViewId;
+                }
+
+                // Pass target element and optimistic update ID
                 params._targetElement = e.currentTarget;
+                params._optimisticUpdateId = optimisticUpdateId;
+
+                // Handle dj-target for scoped updates
+                const targetSelector = element.getAttribute('dj-target');
+                if (targetSelector) {
+                    params._djTargetSelector = targetSelector;
+                }
 
                 await handleEvent(parsed.name, params);
-            });
+            };
+
+            // Apply rate limiting if specified
+            const wrappedHandler = window.djust.rateLimit
+                ? window.djust.rateLimit.wrapWithRateLimit(element, 'click', clickHandlerFn)
+                : clickHandlerFn;
+
+            element.addEventListener('click', wrappedHandler);
         }
 
         // Handle dj-submit events on forms
@@ -1503,6 +1765,12 @@ function bindLiveViewEvents() {
                 const componentId = getComponentId(e.target);
                 if (componentId) {
                     params.component_id = componentId;
+                }
+
+                // Embedded LiveView: route event to correct child view
+                const embeddedViewId = getEmbeddedViewId(e.target);
+                if (embeddedViewId) {
+                    params.view_id = embeddedViewId;
                 }
 
                 // Pass target element for optimistic updates (Phase 3)
@@ -1543,6 +1811,11 @@ function bindLiveViewEvents() {
             if (componentId) {
                 params.component_id = componentId;
             }
+            // Embedded LiveView: route event to correct child view
+            const embeddedViewId = getEmbeddedViewId(element);
+            if (embeddedViewId) {
+                params.view_id = embeddedViewId;
+            }
             return params;
         }
 
@@ -1550,16 +1823,32 @@ function bindLiveViewEvents() {
         const changeHandler = element.getAttribute('dj-change');
         if (changeHandler && !element.dataset.liveviewChangeBound) {
             element.dataset.liveviewChangeBound = 'true';
-            element.addEventListener('change', async (e) => {
+
+            const changeHandlerFn = async (e) => {
                 const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
                 const params = buildFormEventParams(e.target, value);
+
                 // Add target element for loading state (consistent with other handlers)
                 params._targetElement = e.target;
+
+                // Handle dj-target for scoped updates
+                const targetSelector = element.getAttribute('dj-target');
+                if (targetSelector) {
+                    params._djTargetSelector = targetSelector;
+                }
+
                 if (globalThis.djustDebug) {
                     console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
                 }
                 await handleEvent(changeHandler, params);
-            });
+            };
+
+            // Apply rate limiting if specified
+            const wrappedHandler = window.djust.rateLimit
+                ? window.djust.rateLimit.wrapWithRateLimit(element, 'change', changeHandlerFn)
+                : changeHandlerFn;
+
+            element.addEventListener('change', wrappedHandler);
         }
 
         // Handle dj-input events (with smart debouncing/throttling)
@@ -1621,7 +1910,8 @@ function bindLiveViewEvents() {
             const keyHandler = element.getAttribute(`dj-${eventType}`);
             if (keyHandler && !element.dataset[`liveview${eventType}Bound`]) {
                 element.dataset[`liveview${eventType}Bound`] = 'true';
-                element.addEventListener(eventType, async (e) => {
+
+                const keyHandlerFn = async (e) => {
                     // Check for key modifiers (e.g. dj-keydown.enter)
                     const modifiers = keyHandler.split('.');
                     const handlerName = modifiers[0];
@@ -1648,8 +1938,28 @@ function bindLiveViewEvents() {
                         params.component_id = componentId;
                     }
 
+                    // Embedded LiveView: route event to correct child view
+                    const embeddedViewId = getEmbeddedViewId(e.target);
+                    if (embeddedViewId) {
+                        params.view_id = embeddedViewId;
+                    }
+
+                    // Add target element and handle dj-target
+                    params._targetElement = e.target;
+                    const targetSelector = element.getAttribute('dj-target');
+                    if (targetSelector) {
+                        params._djTargetSelector = targetSelector;
+                    }
+
                     await handleEvent(handlerName, params);
-                });
+                };
+
+                // Apply rate limiting if specified
+                const wrappedHandler = window.djust.rateLimit
+                    ? window.djust.rateLimit.wrapWithRateLimit(element, eventType, keyHandlerFn)
+                    : keyHandlerFn;
+
+                element.addEventListener(eventType, wrappedHandler);
             }
         });
     });
@@ -1693,6 +2003,8 @@ function clearOptimisticState(eventName) {
         optimisticUpdates.delete(eventName);
     }
 }
+
+// Export for testing
 window.djust.bindLiveViewEvents = bindLiveViewEvents;
 
 // Global Loading Manager (Phase 5)
@@ -2912,6 +3224,9 @@ function applyPatches(patches) {
             console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
             return false;
         }
+        // Update hooks and model bindings after DOM patches
+        if (typeof updateHooks === 'function') { updateHooks(); }
+        if (typeof bindModelElements === 'function') { bindModelElements(); }
         return true;
     }
 
@@ -2989,6 +3304,10 @@ function applyPatches(patches) {
         console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
         return false;
     }
+
+    // Update hooks and model bindings after DOM patches
+    if (typeof updateHooks === 'function') { updateHooks(); }
+    if (typeof bindModelElements === 'function') { bindModelElements(); }
 
     return true;
 }
@@ -3237,6 +3556,12 @@ function djustInit() {
     // Bind initial events
     bindLiveViewEvents();
 
+    // Mount dj-hook elements
+    if (typeof mountHooks === 'function') mountHooks();
+
+    // Bind dj-model elements
+    if (typeof bindModelElements === 'function') bindModelElements();
+
     // Initialize Draft Mode
     initDraftMode();
 
@@ -3262,3 +3587,1345 @@ if (document.readyState === 'loading') {
 }
 
 } // End of double-load guard
+// ============================================================================
+// File Upload Support
+// ============================================================================
+// Handles: file selection, chunked binary WebSocket upload, progress tracking,
+// image previews, and drag-and-drop zones.
+//
+// Template directives:
+//   dj-upload="name"         — file input bound to upload slot
+//   dj-upload-drop="name"    — drop zone for drag-and-drop
+//   dj-upload-preview="name" — container for image previews
+//   dj-upload-progress="name"— container for progress bars
+
+(function() {
+    'use strict';
+
+    // Frame types matching server protocol
+    const FRAME_CHUNK    = 0x01;
+    const FRAME_COMPLETE = 0x02;
+    const FRAME_CANCEL   = 0x03;
+
+    const DEFAULT_CHUNK_SIZE = 64 * 1024; // 64KB
+
+    // Active uploads: ref -> { file, config, chunkIndex, resolve, reject }
+    const activeUploads = new Map();
+
+    // Upload configs from server mount response
+    let uploadConfigs = {};
+
+    /**
+     * Initialize upload configs from server mount data.
+     * Called when mount response includes upload configuration.
+     */
+    function setUploadConfigs(configs) {
+        uploadConfigs = configs || {};
+        console.log('[Upload] Configs loaded:', Object.keys(uploadConfigs));
+    }
+
+    /**
+     * Generate a UUID v4 as bytes (Uint8Array of 16 bytes).
+     */
+    function uuidBytes() {
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+        bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1
+        return bytes;
+    }
+
+    /**
+     * Convert UUID bytes to string format.
+     */
+    function uuidToString(bytes) {
+        const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+        return [
+            hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16),
+            hex.slice(16, 20), hex.slice(20)
+        ].join('-');
+    }
+
+    /**
+     * Build a binary upload frame.
+     * @param {number} frameType - FRAME_CHUNK, FRAME_COMPLETE, or FRAME_CANCEL
+     * @param {Uint8Array} refBytes - 16-byte UUID
+     * @param {ArrayBuffer|null} payload - Chunk data (for FRAME_CHUNK)
+     * @param {number} chunkIndex - Chunk index (for FRAME_CHUNK)
+     * @returns {ArrayBuffer}
+     */
+    function buildFrame(frameType, refBytes, payload, chunkIndex) {
+        if (frameType === FRAME_CHUNK && payload) {
+            const header = new Uint8Array(21); // 1 + 16 + 4
+            header[0] = frameType;
+            header.set(refBytes, 1);
+            const view = new DataView(header.buffer);
+            view.setUint32(17, chunkIndex, false); // big-endian
+            const frame = new Uint8Array(21 + payload.byteLength);
+            frame.set(header);
+            frame.set(new Uint8Array(payload), 21);
+            return frame.buffer;
+        } else {
+            // COMPLETE or CANCEL: just type + ref
+            const frame = new Uint8Array(17);
+            frame[0] = frameType;
+            frame.set(refBytes, 1);
+            return frame.buffer;
+        }
+    }
+
+    /**
+     * Upload a single file via chunked binary WebSocket frames.
+     */
+    async function uploadFile(ws, uploadName, file, config) {
+        const refBytes = uuidBytes();
+        const ref = uuidToString(refBytes);
+        const chunkSize = (config && config.chunk_size) || DEFAULT_CHUNK_SIZE;
+
+        // Announce the upload to the server via JSON
+        ws.sendMessage({
+            type: 'upload_register',
+            upload_name: uploadName,
+            ref: ref,
+            client_name: file.name,
+            client_type: file.type,
+            client_size: file.size,
+        });
+
+        return new Promise((resolve, reject) => {
+            activeUploads.set(ref, {
+                file, config, uploadName, refBytes, resolve, reject,
+                chunkIndex: 0, sent: 0,
+            });
+
+            // Read file and send chunks
+            const reader = new FileReader();
+            reader.onload = function() {
+                const buffer = reader.result;
+                let offset = 0;
+                let chunkIndex = 0;
+
+                function sendNextChunk() {
+                    if (offset >= buffer.byteLength) {
+                        // All chunks sent — send complete frame
+                        const completeFrame = buildFrame(FRAME_COMPLETE, refBytes);
+                        ws.ws.send(completeFrame);
+                        return;
+                    }
+
+                    const end = Math.min(offset + chunkSize, buffer.byteLength);
+                    const chunk = buffer.slice(offset, end);
+                    const frame = buildFrame(FRAME_CHUNK, refBytes, chunk, chunkIndex);
+                    ws.ws.send(frame);
+
+                    const upload = activeUploads.get(ref);
+                    if (upload) {
+                        upload.sent = end;
+                        upload.chunkIndex = chunkIndex + 1;
+                    }
+
+                    offset = end;
+                    chunkIndex++;
+
+                    // Small delay to avoid overwhelming the WebSocket
+                    if (ws.ws.bufferedAmount > chunkSize * 4) {
+                        setTimeout(sendNextChunk, 10);
+                    } else {
+                        sendNextChunk();
+                    }
+                }
+
+                sendNextChunk();
+            };
+
+            reader.onerror = function() {
+                reject(new Error('Failed to read file: ' + file.name));
+                activeUploads.delete(ref);
+            };
+
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
+    /**
+     * Cancel an active upload.
+     */
+    function cancelUpload(ws, ref) {
+        const upload = activeUploads.get(ref);
+        if (upload) {
+            const cancelFrame = buildFrame(FRAME_CANCEL, upload.refBytes);
+            ws.ws.send(cancelFrame);
+            activeUploads.delete(ref);
+            if (upload.reject) {
+                upload.reject(new Error('Upload cancelled'));
+            }
+        }
+    }
+
+    /**
+     * Handle upload progress message from server.
+     */
+    function handleUploadProgress(data) {
+        const { ref, progress, status } = data;
+        const upload = activeUploads.get(ref);
+
+        // Update progress bars in DOM
+        document.querySelectorAll(`[data-upload-ref="${ref}"] .upload-progress-bar`).forEach(bar => {
+            bar.style.width = progress + '%';
+            bar.setAttribute('aria-valuenow', progress);
+        });
+
+        // Update progress text
+        document.querySelectorAll(`[data-upload-ref="${ref}"] .upload-progress-text`).forEach(el => {
+            el.textContent = progress + '%';
+        });
+
+        // Dispatch custom event for app-level handling
+        window.dispatchEvent(new CustomEvent('djust:upload:progress', {
+            detail: { ref, progress, status, uploadName: upload ? upload.uploadName : null }
+        }));
+
+        if (status === 'complete') {
+            if (upload && upload.resolve) {
+                upload.resolve({ ref, status: 'complete' });
+            }
+            activeUploads.delete(ref);
+        } else if (status === 'error') {
+            if (upload && upload.reject) {
+                upload.reject(new Error('Upload failed on server'));
+            }
+            activeUploads.delete(ref);
+        }
+    }
+
+    /**
+     * Generate image preview for a file.
+     * @returns {Promise<string>} Data URL
+     */
+    function generatePreview(file) {
+        return new Promise((resolve, reject) => {
+            if (!file.type.startsWith('image/')) {
+                reject(new Error('Not an image'));
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(file);
+        });
+    }
+
+    /**
+     * Show previews in a dj-upload-preview container.
+     */
+    async function showPreviews(uploadName, files) {
+        const containers = document.querySelectorAll(`[dj-upload-preview="${uploadName}"]`);
+        if (containers.length === 0) return;
+
+        for (const container of containers) {
+            container.innerHTML = '';
+
+            for (const file of files) {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'upload-preview-item';
+
+                if (file.type.startsWith('image/')) {
+                    try {
+                        const dataUrl = await generatePreview(file);
+                        const img = document.createElement('img');
+                        img.src = dataUrl;
+                        img.alt = file.name;
+                        img.className = 'upload-preview-image';
+                        wrapper.appendChild(img);
+                    } catch (e) {
+                        // Fall through to filename display
+                    }
+                }
+
+                const info = document.createElement('span');
+                info.className = 'upload-preview-name';
+                info.textContent = file.name;
+                wrapper.appendChild(info);
+
+                const size = document.createElement('span');
+                size.className = 'upload-preview-size';
+                size.textContent = formatSize(file.size);
+                wrapper.appendChild(size);
+
+                container.appendChild(wrapper);
+            }
+        }
+    }
+
+    /**
+     * Create progress bar HTML for an upload.
+     */
+    function createProgressBar(ref, fileName) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'upload-progress-item';
+        wrapper.setAttribute('data-upload-ref', ref);
+
+        wrapper.innerHTML = `
+            <div class="upload-progress-name">${escapeHtml(fileName)}</div>
+            <div class="upload-progress-track">
+                <div class="upload-progress-bar" role="progressbar"
+                     aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"
+                     style="width: 0%"></div>
+            </div>
+            <span class="upload-progress-text">0%</span>
+        `;
+
+        return wrapper;
+    }
+
+    function formatSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    /**
+     * Handle file selection from dj-upload input.
+     */
+    async function handleFileSelect(input, uploadName) {
+        const files = Array.from(input.files);
+        if (files.length === 0) return;
+
+        const config = uploadConfigs[uploadName];
+
+        // Show previews
+        await showPreviews(uploadName, files);
+
+        // Create progress bars
+        const progressContainers = document.querySelectorAll(`[dj-upload-progress="${uploadName}"]`);
+
+        // Auto-upload if configured (default)
+        if (!config || config.auto_upload !== false) {
+            if (!liveViewWS || !liveViewWS.ws || liveViewWS.ws.readyState !== WebSocket.OPEN) {
+                console.error('[Upload] WebSocket not connected');
+                return;
+            }
+
+            for (const file of files) {
+                // Validate client-side
+                if (config) {
+                    if (file.size > config.max_file_size) {
+                        console.warn(`[Upload] File too large: ${file.name} (${file.size} > ${config.max_file_size})`);
+                        window.dispatchEvent(new CustomEvent('djust:upload:error', {
+                            detail: { file: file.name, error: 'File too large' }
+                        }));
+                        continue;
+                    }
+                }
+
+                try {
+                    const result = await uploadFile(liveViewWS, uploadName, file, config);
+                    console.log(`[Upload] Complete: ${file.name}`, result);
+                } catch (err) {
+                    console.error(`[Upload] Failed: ${file.name}`, err);
+                }
+            }
+        }
+    }
+
+    /**
+     * Bind upload-related event handlers.
+     * Called after DOM updates (mount, patch, etc.)
+     */
+    function bindUploadHandlers() {
+        // File inputs with dj-upload
+        document.querySelectorAll('[dj-upload]').forEach(input => {
+            if (input._djUploadBound) return;
+            input._djUploadBound = true;
+
+            const uploadName = input.getAttribute('dj-upload');
+
+            // Set accept attribute from config
+            const config = uploadConfigs[uploadName];
+            if (config && config.accept && !input.getAttribute('accept')) {
+                input.setAttribute('accept', config.accept);
+            }
+            if (config && config.max_entries > 1 && !input.hasAttribute('multiple')) {
+                input.setAttribute('multiple', '');
+            }
+
+            input.addEventListener('change', () => handleFileSelect(input, uploadName));
+        });
+
+        // Drop zones with dj-upload-drop
+        document.querySelectorAll('[dj-upload-drop]').forEach(zone => {
+            if (zone._djDropBound) return;
+            zone._djDropBound = true;
+
+            const uploadName = zone.getAttribute('dj-upload-drop');
+
+            zone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zone.classList.add('upload-dragover');
+            });
+
+            zone.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zone.classList.remove('upload-dragover');
+            });
+
+            zone.addEventListener('drop', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zone.classList.remove('upload-dragover');
+
+                const files = Array.from(e.dataTransfer.files);
+                if (files.length === 0) return;
+
+                const config = uploadConfigs[uploadName];
+                await showPreviews(uploadName, files);
+
+                if (!liveViewWS || !liveViewWS.ws || liveViewWS.ws.readyState !== WebSocket.OPEN) {
+                    console.error('[Upload] WebSocket not connected');
+                    return;
+                }
+
+                for (const file of files) {
+                    if (config && file.size > config.max_file_size) {
+                        window.dispatchEvent(new CustomEvent('djust:upload:error', {
+                            detail: { file: file.name, error: 'File too large' }
+                        }));
+                        continue;
+                    }
+                    try {
+                        await uploadFile(liveViewWS, uploadName, file, config);
+                    } catch (err) {
+                        console.error(`[Upload] Drop upload failed: ${file.name}`, err);
+                    }
+                }
+            });
+        });
+    }
+
+    // ========================================================================
+    // Exports
+    // ========================================================================
+
+    window.djust.uploads = {
+        setConfigs: setUploadConfigs,
+        handleProgress: handleUploadProgress,
+        bindHandlers: bindUploadHandlers,
+        cancelUpload: (ref) => cancelUpload(liveViewWS, ref),
+        activeUploads: activeUploads,
+    };
+
+})();
+
+// ============================================================================
+// Streaming — Real-time partial DOM updates (LLM chat, live feeds, etc.)
+// ============================================================================
+
+/**
+ * Handle a "stream" WebSocket message by applying DOM operations directly.
+ *
+ * Message format:
+ *   { type: "stream", stream: "messages", ops: [
+ *       { op: "replace", target: "#message-list", html: "..." },
+ *       { op: "append",  target: "#message-list", html: "<div>...</div>" },
+ *       { op: "prepend", target: "#message-list", html: "<div>...</div>" },
+ *       { op: "delete",  target: "#msg-42" },
+ *       { op: "text",    target: "#output",       text: "partial token" },
+ *       { op: "error",   target: "#output",       error: "Something failed" },
+ *   ]}
+ *
+ * DOM attributes:
+ *   dj-stream="stream_name"           — marks an element as a stream target
+ *   dj-stream-mode="append|replace|prepend" — default insertion mode for text ops
+ */
+
+// Track active streams for error recovery and state
+const _activeStreams = new Map();
+
+function handleStreamMessage(data) {
+    const ops = data.ops;
+    if (!ops || !Array.isArray(ops)) return;
+
+    const streamName = data.stream || '__default__';
+
+    // Track stream as active
+    if (!_activeStreams.has(streamName)) {
+        _activeStreams.set(streamName, { started: Date.now(), errorCount: 0 });
+    }
+
+    for (const op of ops) {
+        try {
+            _applyStreamOp(op, streamName);
+        } catch (err) {
+            console.error('[LiveView:stream] Error applying op:', op, err);
+            const info = _activeStreams.get(streamName);
+            if (info) info.errorCount++;
+        }
+    }
+
+    // Re-bind events on new DOM content
+    if (typeof bindLiveViewEvents === 'function') {
+        bindLiveViewEvents();
+    }
+}
+
+/**
+ * Apply a single stream operation to the DOM.
+ */
+function _applyStreamOp(op, streamName) {
+    const target = op.target;
+    if (!target) return;
+
+    // Resolve target element(s)
+    const el = document.querySelector(target);
+    if (!el) {
+        if (globalThis.djustDebug) {
+            console.warn('[LiveView:stream] Target not found:', target);
+        }
+        return;
+    }
+
+    switch (op.op) {
+        case 'replace':
+            el.innerHTML = op.html || '';
+            _removeStreamError(el);
+            _dispatchStreamEvent(el, 'stream:update', { op: 'replace', stream: streamName });
+            break;
+
+        case 'append': {
+            const frag = _htmlToFragment(op.html);
+            el.appendChild(frag);
+            _autoScroll(el);
+            _removeStreamError(el);
+            _dispatchStreamEvent(el, 'stream:update', { op: 'append', stream: streamName });
+            break;
+        }
+
+        case 'prepend': {
+            const frag = _htmlToFragment(op.html);
+            el.insertBefore(frag, el.firstChild);
+            _removeStreamError(el);
+            _dispatchStreamEvent(el, 'stream:update', { op: 'prepend', stream: streamName });
+            break;
+        }
+
+        case 'delete':
+            _dispatchStreamEvent(el, 'stream:remove', { stream: streamName });
+            el.remove();
+            break;
+
+        case 'text': {
+            // Streaming text content — respects dj-stream-mode attribute
+            const text = op.text || '';
+            const mode = op.mode || el.getAttribute('dj-stream-mode') || 'append';
+            _applyTextOp(el, text, mode);
+            _autoScroll(el);
+            _removeStreamError(el);
+            _dispatchStreamEvent(el, 'stream:text', { text, mode, stream: streamName });
+            break;
+        }
+
+        case 'error': {
+            // Show error state while preserving partial content
+            const errorMsg = op.error || 'Stream error';
+            _showStreamError(el, errorMsg);
+            _dispatchStreamEvent(el, 'stream:error', { error: errorMsg, stream: streamName });
+            break;
+        }
+
+        case 'done': {
+            // Stream completed
+            _activeStreams.delete(streamName);
+            el.removeAttribute('data-stream-active');
+            _dispatchStreamEvent(el, 'stream:done', { stream: streamName });
+            break;
+        }
+
+        case 'start': {
+            // Stream started — set active state
+            el.setAttribute('data-stream-active', 'true');
+            _removeStreamError(el);
+            _dispatchStreamEvent(el, 'stream:start', { stream: streamName });
+            break;
+        }
+
+        default:
+            console.warn('[LiveView:stream] Unknown op:', op.op);
+    }
+}
+
+/**
+ * Apply text content with append/replace/prepend modes.
+ */
+function _applyTextOp(el, text, mode) {
+    switch (mode) {
+        case 'replace':
+            el.textContent = text;
+            break;
+        case 'prepend':
+            el.textContent = text + el.textContent;
+            break;
+        case 'append':
+        default:
+            el.textContent += text;
+            break;
+    }
+    el.setAttribute('data-stream-active', 'true');
+}
+
+/**
+ * Show an error indicator on a stream target, preserving existing content.
+ */
+function _showStreamError(el, message) {
+    el.setAttribute('data-stream-error', 'true');
+    el.removeAttribute('data-stream-active');
+
+    // Add error element if not already present
+    let errorEl = el.querySelector('.dj-stream-error');
+    if (!errorEl) {
+        errorEl = document.createElement('div');
+        errorEl.className = 'dj-stream-error';
+        errorEl.setAttribute('role', 'alert');
+        el.appendChild(errorEl);
+    }
+    errorEl.textContent = message;
+}
+
+/**
+ * Remove error state from a stream target.
+ */
+function _removeStreamError(el) {
+    el.removeAttribute('data-stream-error');
+    const errorEl = el.querySelector('.dj-stream-error');
+    if (errorEl) errorEl.remove();
+}
+
+/**
+ * Dispatch a custom event on a stream target element.
+ */
+function _dispatchStreamEvent(el, eventName, detail) {
+    el.dispatchEvent(new CustomEvent(eventName, {
+        bubbles: true,
+        detail: detail,
+    }));
+}
+
+/**
+ * Parse an HTML string into a DocumentFragment.
+ */
+function _htmlToFragment(html) {
+    const template = document.createElement('template');
+    template.innerHTML = html || '';
+    return template.content;
+}
+
+/**
+ * Auto-scroll a container to the bottom if the user is near the bottom.
+ * "Near" = within 100px of the bottom before the update.
+ */
+function _autoScroll(el) {
+    const threshold = 100;
+    const isNearBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) < threshold;
+    if (isNearBottom) {
+        requestAnimationFrame(() => {
+            el.scrollTop = el.scrollHeight;
+        });
+    }
+}
+
+/**
+ * Get info about active streams (for debugging).
+ */
+function getActiveStreams() {
+    const result = {};
+    for (const [name, info] of _activeStreams) {
+        result[name] = { ...info };
+    }
+    return result;
+}
+
+// Expose for WebSocket handler
+window.djust = window.djust || {};
+window.djust.handleStreamMessage = handleStreamMessage;
+window.djust.getActiveStreams = getActiveStreams;
+
+// ============================================================================
+// Navigation — URL State Management (live_patch / live_redirect)
+// ============================================================================
+
+(function () {
+    'use strict';
+
+    /**
+     * Handle navigation commands from the server.
+     *
+     * Called when the server sends a { type: "navigation", ... } message
+     * after a handler calls live_patch() or live_redirect().
+     */
+    function handleNavigation(data) {
+        if (data.type === 'live_patch') {
+            handleLivePatch(data);
+        } else if (data.type === 'live_redirect') {
+            handleLiveRedirect(data);
+        }
+    }
+
+    /**
+     * live_patch: Update URL without remounting the view.
+     * Uses history.pushState/replaceState.
+     */
+    function handleLivePatch(data) {
+        const currentUrl = new URL(window.location.href);
+        let newUrl;
+
+        if (data.path) {
+            newUrl = new URL(data.path, window.location.origin);
+        } else {
+            newUrl = new URL(currentUrl);
+        }
+
+        // Set query params
+        if (data.params !== undefined) {
+            // Clear existing params and set new ones
+            newUrl.search = '';
+            for (const [key, value] of Object.entries(data.params || {})) {
+                if (value !== null && value !== undefined && value !== '') {
+                    newUrl.searchParams.set(key, String(value));
+                }
+            }
+        }
+
+        const method = data.replace ? 'replaceState' : 'pushState';
+        window.history[method]({ djust: true }, '', newUrl.toString());
+
+        console.log(`[LiveView] live_patch: ${method} → ${newUrl.toString()}`);
+    }
+
+    /**
+     * live_redirect: Navigate to a different view over the same WebSocket.
+     * Updates URL, then sends a mount message for the new view.
+     */
+    function handleLiveRedirect(data) {
+        const newUrl = new URL(data.path, window.location.origin);
+
+        if (data.params) {
+            for (const [key, value] of Object.entries(data.params)) {
+                if (value !== null && value !== undefined && value !== '') {
+                    newUrl.searchParams.set(key, String(value));
+                }
+            }
+        }
+
+        const method = data.replace ? 'replaceState' : 'pushState';
+        window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
+
+        console.log(`[LiveView] live_redirect: ${method} → ${newUrl.toString()}`);
+
+        // Send a mount request for the new view path over the existing WebSocket
+        // The server will unmount the old view and mount the new one
+        if (liveViewWS && liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) {
+            // Look up the view path for the new URL from the route map
+            const viewPath = resolveViewPath(newUrl.pathname);
+            if (viewPath) {
+                const urlParams = Object.fromEntries(newUrl.searchParams);
+                liveViewWS.sendMessage({
+                    type: 'live_redirect_mount',
+                    view: viewPath,
+                    params: urlParams,
+                    url: newUrl.pathname,
+                });
+            } else {
+                // Fallback: full page navigation if we can't resolve the view
+                console.warn('[LiveView] Cannot resolve view for', newUrl.pathname, '— doing full navigation');
+                window.location.href = newUrl.toString();
+            }
+        }
+    }
+
+    /**
+     * Resolve a URL path to a view path using the route map.
+     *
+     * The route map is populated by live_session() via a <script> tag
+     * or by data attributes on the container.
+     */
+    function resolveViewPath(pathname) {
+        // Check the route map (populated by live_session)
+        const routeMap = window.djust._routeMap || {};
+
+        // Try exact match first
+        if (routeMap[pathname]) {
+            return routeMap[pathname];
+        }
+
+        // Try pattern matching (for paths with parameters like /items/42/)
+        for (const [pattern, viewPath] of Object.entries(routeMap)) {
+            if (pattern.includes(':')) {
+                // Convert Django-style pattern to regex
+                // e.g., "/items/:id/" → /^\/items\/([^\/]+)\/$/
+                const regexStr = pattern.replace(/:([^/]+)/g, '([^/]+)');
+                const regex = new RegExp('^' + regexStr + '$');
+                if (regex.test(pathname)) {
+                    return viewPath;
+                }
+            }
+        }
+
+        // Fallback: check the current container's data-djust-view
+        // (only works for live_patch, not cross-view navigation)
+        const container = document.querySelector('[data-djust-view]');
+        if (container) {
+            return container.dataset.djustView;
+        }
+
+        return null;
+    }
+
+    /**
+     * Listen for browser back/forward (popstate) and send url_change to server.
+     */
+    window.addEventListener('popstate', function (event) {
+        if (!liveViewWS || !liveViewWS.viewMounted) return;
+        if (!liveViewWS.ws || liveViewWS.ws.readyState !== WebSocket.OPEN) return;
+
+        const url = new URL(window.location.href);
+        const params = Object.fromEntries(url.searchParams);
+
+        // Check if this is a redirect (different path) vs patch (same path, different params)
+        const isRedirect = event.state && event.state.redirect;
+
+        if (isRedirect) {
+            // Different view — need to remount
+            const viewPath = resolveViewPath(url.pathname);
+            if (viewPath) {
+                liveViewWS.sendMessage({
+                    type: 'live_redirect_mount',
+                    view: viewPath,
+                    params: params,
+                    url: url.pathname,
+                });
+            } else {
+                // Fallback
+                window.location.reload();
+            }
+        } else {
+            // Same view, different params — send url_change
+            liveViewWS.sendMessage({
+                type: 'url_change',
+                params: params,
+                uri: url.pathname + url.search,
+            });
+        }
+    });
+
+    /**
+     * Bind dj-patch and dj-navigate directives.
+     *
+     * Called from bindLiveViewEvents() after DOM updates.
+     */
+    function bindNavigationDirectives() {
+        // dj-patch: Update URL params without remount
+        document.querySelectorAll('[dj-patch]').forEach(function (el) {
+            if (el.dataset.djustPatchBound) return;
+            el.dataset.djustPatchBound = 'true';
+
+            el.addEventListener('click', function (e) {
+                e.preventDefault();
+                if (!liveViewWS || !liveViewWS.viewMounted) return;
+
+                const patchValue = el.getAttribute('dj-patch');
+                const url = new URL(patchValue, window.location.href);
+                const params = Object.fromEntries(url.searchParams);
+
+                // Update browser URL
+                const newUrl = new URL(window.location.href);
+                newUrl.search = url.search;
+                if (url.pathname !== '/' && patchValue.startsWith('/')) {
+                    newUrl.pathname = url.pathname;
+                }
+                window.history.pushState({ djust: true }, '', newUrl.toString());
+
+                // Send url_change to server
+                liveViewWS.sendMessage({
+                    type: 'url_change',
+                    params: params,
+                    uri: newUrl.pathname + newUrl.search,
+                });
+            });
+        });
+
+        // dj-navigate: Navigate to a different view
+        document.querySelectorAll('[dj-navigate]').forEach(function (el) {
+            if (el.dataset.djustNavigateBound) return;
+            el.dataset.djustNavigateBound = 'true';
+
+            el.addEventListener('click', function (e) {
+                e.preventDefault();
+                if (!liveViewWS || !liveViewWS.ws) return;
+
+                const path = el.getAttribute('dj-navigate');
+                handleLiveRedirect({ path: path, replace: false });
+            });
+        });
+    }
+
+    // Expose to djust namespace
+    window.djust.navigation = {
+        handleNavigation: handleNavigation,
+        bindDirectives: bindNavigationDirectives,
+        resolveViewPath: resolveViewPath,
+    };
+
+    // Initialize route map
+    if (!window.djust._routeMap) {
+        window.djust._routeMap = {};
+    }
+})();
+// ============================================================================
+// dj-hook — Client-Side JavaScript Hooks
+// ============================================================================
+//
+// Allows custom JavaScript to run when elements with dj-hook="HookName"
+// are mounted, updated, or destroyed in the DOM.
+//
+// Usage:
+//   1. Register hooks:
+//      window.djust.hooks = {
+//        MyChart: {
+//          mounted() { /* this.el is the DOM element */ },
+//          updated() { /* called after server re-render */ },
+//          destroyed() { /* cleanup */ },
+//          disconnected() { /* WebSocket lost */ },
+//          reconnected() { /* WebSocket restored */ },
+//        }
+//      };
+//
+//   2. In template:
+//      <canvas dj-hook="MyChart" data-values="1,2,3"></canvas>
+//
+//   The hook instance has access to:
+//     this.el       — the DOM element
+//     this.viewName — the LiveView name
+//     this.pushEvent(event, payload) — send event to server
+//     this.handleEvent(event, callback) — listen for server push_events
+//
+// ============================================================================
+
+/**
+ * Registry of hook definitions provided by the user.
+ * Users set this via:
+ *   window.djust.hooks = { HookName: { mounted(){}, ... } }
+ * or (Phoenix LiveView-compatible):
+ *   window.DjustHooks = { HookName: { mounted(){}, ... } }
+ */
+
+/**
+ * Get the merged hook registry (window.djust.hooks + window.DjustHooks).
+ */
+function _getHookDefs() {
+    return Object.assign({}, window.DjustHooks || {}, window.djust.hooks || {});
+}
+
+/**
+ * Map of active hook instances keyed by element id.
+ * Each entry: { hookName, instance, el }
+ */
+const _activeHooks = new Map();
+
+/**
+ * Counter for generating unique IDs for hooked elements.
+ */
+let _hookIdCounter = 0;
+
+/**
+ * Get a stable ID for an element, creating one if needed.
+ */
+function _getHookElId(el) {
+    if (!el._djustHookId) {
+        el._djustHookId = `djust-hook-${++_hookIdCounter}`;
+    }
+    return el._djustHookId;
+}
+
+/**
+ * Create a hook instance with the standard API.
+ */
+function _createHookInstance(hookDef, el) {
+    const instance = Object.create(hookDef);
+
+    instance.el = el;
+    instance.viewName = el.closest('[data-djust-view]')?.getAttribute('data-djust-view') || '';
+
+    // pushEvent: send a custom event to the server
+    instance.pushEvent = function(event, payload = {}) {
+        if (window.djust.liveViewInstance && window.djust.liveViewInstance.ws) {
+            window.djust.liveViewInstance.ws.send(JSON.stringify({
+                type: 'event',
+                event: event,
+                data: payload,
+            }));
+        } else {
+            console.warn(`[dj-hook] Cannot pushEvent "${event}" — no WebSocket connection`);
+        }
+    };
+
+    // handleEvent: register a callback for server-pushed events
+    instance._eventHandlers = {};
+    instance.handleEvent = function(eventName, callback) {
+        if (!instance._eventHandlers[eventName]) {
+            instance._eventHandlers[eventName] = [];
+        }
+        instance._eventHandlers[eventName].push(callback);
+    };
+
+    return instance;
+}
+
+/**
+ * Scan the DOM for elements with dj-hook and mount their hooks.
+ * Called on init and after DOM patches.
+ */
+function mountHooks(root) {
+    root = root || document;
+    const hooks = _getHookDefs();
+    const elements = root.querySelectorAll('[dj-hook]');
+
+    elements.forEach(el => {
+        const hookName = el.getAttribute('dj-hook');
+        const elId = _getHookElId(el);
+
+        // Skip if already mounted
+        if (_activeHooks.has(elId)) {
+            return;
+        }
+
+        const hookDef = hooks[hookName];
+        if (!hookDef) {
+            console.warn(`[dj-hook] No hook registered for "${hookName}"`);
+            return;
+        }
+
+        const instance = _createHookInstance(hookDef, el);
+        _activeHooks.set(elId, { hookName, instance, el });
+
+        // Call mounted()
+        if (typeof instance.mounted === 'function') {
+            try {
+                instance.mounted();
+            } catch (e) {
+                console.error(`[dj-hook] Error in ${hookName}.mounted():`, e);
+            }
+        }
+    });
+}
+
+/**
+ * Notify active hooks that a DOM update is about to happen.
+ * Call this BEFORE applying patches.
+ */
+function beforeUpdateHooks(root) {
+    root = root || document;
+    for (const [, entry] of _activeHooks) {
+        // Only call if element is still in the DOM
+        if (root.contains(entry.el) && typeof entry.instance.beforeUpdate === 'function') {
+            try {
+                entry.instance.beforeUpdate();
+            } catch (e) {
+                console.error(`[dj-hook] Error in ${entry.hookName}.beforeUpdate():`, e);
+            }
+        }
+    }
+}
+
+/**
+ * Called after a DOM patch to update/mount/destroy hooks as needed.
+ */
+function updateHooks(root) {
+    root = root || document;
+    const hooks = _getHookDefs();
+
+    // 1. Find all currently hooked elements in the DOM
+    const currentElements = new Set();
+    root.querySelectorAll('[dj-hook]').forEach(el => {
+        const elId = _getHookElId(el);
+        currentElements.add(elId);
+
+        const hookName = el.getAttribute('dj-hook');
+        const existing = _activeHooks.get(elId);
+
+        if (existing) {
+            // Element still exists — call updated()
+            existing.el = el; // Update reference in case DOM was replaced
+            existing.instance.el = el;
+            if (typeof existing.instance.updated === 'function') {
+                try {
+                    existing.instance.updated();
+                } catch (e) {
+                    console.error(`[dj-hook] Error in ${hookName}.updated():`, e);
+                }
+            }
+        } else {
+            // New element — mount it
+            const hookDef = hooks[hookName];
+            if (!hookDef) {
+                console.warn(`[dj-hook] No hook registered for "${hookName}"`);
+                return;
+            }
+            const instance = _createHookInstance(hookDef, el);
+            _activeHooks.set(elId, { hookName, instance, el });
+            if (typeof instance.mounted === 'function') {
+                try {
+                    instance.mounted();
+                } catch (e) {
+                    console.error(`[dj-hook] Error in ${hookName}.mounted():`, e);
+                }
+            }
+        }
+    });
+
+    // 2. Destroy hooks whose elements were removed
+    for (const [elId, entry] of _activeHooks) {
+        if (!currentElements.has(elId)) {
+            if (typeof entry.instance.destroyed === 'function') {
+                try {
+                    entry.instance.destroyed();
+                } catch (e) {
+                    console.error(`[dj-hook] Error in ${entry.hookName}.destroyed():`, e);
+                }
+            }
+            _activeHooks.delete(elId);
+        }
+    }
+}
+
+/**
+ * Notify all hooks of WebSocket disconnect.
+ */
+function notifyHooksDisconnected() {
+    for (const [, entry] of _activeHooks) {
+        if (typeof entry.instance.disconnected === 'function') {
+            try {
+                entry.instance.disconnected();
+            } catch (e) {
+                console.error(`[dj-hook] Error in ${entry.hookName}.disconnected():`, e);
+            }
+        }
+    }
+}
+
+/**
+ * Notify all hooks of WebSocket reconnect.
+ */
+function notifyHooksReconnected() {
+    for (const [, entry] of _activeHooks) {
+        if (typeof entry.instance.reconnected === 'function') {
+            try {
+                entry.instance.reconnected();
+            } catch (e) {
+                console.error(`[dj-hook] Error in ${entry.hookName}.reconnected():`, e);
+            }
+        }
+    }
+}
+
+/**
+ * Dispatch a push_event to hooks that registered handleEvent listeners.
+ */
+function dispatchPushEventToHooks(eventName, payload) {
+    for (const [, entry] of _activeHooks) {
+        const handlers = entry.instance._eventHandlers[eventName];
+        if (handlers) {
+            handlers.forEach(cb => {
+                try {
+                    cb(payload);
+                } catch (e) {
+                    console.error(`[dj-hook] Error in ${entry.hookName}.handleEvent("${eventName}"):`, e);
+                }
+            });
+        }
+    }
+}
+
+/**
+ * Destroy all hooks (cleanup).
+ */
+function destroyAllHooks() {
+    for (const [elId, entry] of _activeHooks) {
+        if (typeof entry.instance.destroyed === 'function') {
+            try {
+                entry.instance.destroyed();
+            } catch (e) {
+                console.error(`[dj-hook] Error in ${entry.hookName}.destroyed():`, e);
+            }
+        }
+    }
+    _activeHooks.clear();
+}
+
+// Export to namespace
+window.djust.mountHooks = mountHooks;
+window.djust.beforeUpdateHooks = beforeUpdateHooks;
+window.djust.updateHooks = updateHooks;
+window.djust.notifyHooksDisconnected = notifyHooksDisconnected;
+window.djust.notifyHooksReconnected = notifyHooksReconnected;
+window.djust.dispatchPushEventToHooks = dispatchPushEventToHooks;
+window.djust.destroyAllHooks = destroyAllHooks;
+window.djust._activeHooks = _activeHooks;
+// ============================================================================
+// dj-model — Two-Way Data Binding
+// ============================================================================
+//
+// Automatically syncs form input values with server-side view attributes.
+//
+// Usage in template:
+//   <input type="text" dj-model="search_query" />
+//   <textarea dj-model="description"></textarea>
+//   <select dj-model="category">...</select>
+//   <input type="checkbox" dj-model="is_active" />
+//
+// Options:
+//   dj-model="field_name"              — sync on 'input' event (default)
+//   dj-model.lazy="field_name"         — sync on 'change' event (blur)
+//   dj-model.debounce-300="field_name" — debounce by 300ms
+//
+// The server-side ModelBindingMixin handles the 'update_model' event
+// and sets the attribute on the view instance.
+//
+// ============================================================================
+
+const _modelDebounceTimers = new Map();
+
+/**
+ * Parse dj-model attribute value and modifiers.
+ * "field_name" → { field: "field_name", lazy: false, debounce: 0 }
+ * With attribute dj-model.lazy="field_name" → { field: "field_name", lazy: true }
+ */
+function _parseModelAttr(el) {
+    // Check for dj-model.lazy and dj-model.debounce-N
+    const attrs = el.attributes;
+    let field = null;
+    let lazy = false;
+    let debounce = 0;
+
+    for (let i = 0; i < attrs.length; i++) {
+        const name = attrs[i].name;
+        if (name === 'dj-model') {
+            field = attrs[i].value;
+        } else if (name === 'dj-model.lazy') {
+            field = attrs[i].value;
+            lazy = true;
+        } else if (name.startsWith('dj-model.debounce')) {
+            field = attrs[i].value;
+            const match = name.match(/debounce-?(\d+)/);
+            debounce = match ? parseInt(match[1], 10) : 300;
+        }
+    }
+
+    return { field, lazy, debounce };
+}
+
+/**
+ * Get the current value from a form element.
+ */
+function _getElementValue(el) {
+    if (el.type === 'checkbox') {
+        return el.checked;
+    }
+    if (el.type === 'radio') {
+        // For radio buttons, find the checked one in the same group
+        const form = el.closest('form') || document;
+        const checked = form.querySelector(`input[name="${el.name}"]:checked`);
+        return checked ? checked.value : null;
+    }
+    if (el.tagName === 'SELECT' && el.multiple) {
+        return Array.from(el.selectedOptions).map(o => o.value);
+    }
+    return el.value;
+}
+
+/**
+ * Send update_model event to server.
+ */
+function _sendModelUpdate(field, value) {
+    // Prefer the high-level handleEvent path (HTTP fallback, loading states, caching)
+    if (typeof handleEvent === 'function') {
+        handleEvent('update_model', { field, value });
+        return;
+    }
+    // Fallback: send directly via WebSocket
+    const inst = window.djust.liveViewInstance;
+    if (inst && inst.sendEvent) {
+        inst.sendEvent('update_model', { field, value });
+    } else if (inst && inst.ws && inst.ws.readyState === WebSocket.OPEN) {
+        inst.sendMessage({
+            type: 'event',
+            event: 'update_model',
+            params: { field, value },
+        });
+    }
+}
+
+/**
+ * Bind dj-model to a single element.
+ */
+function _bindModel(el) {
+    if (el._djustModelBound) return;
+    el._djustModelBound = true;
+
+    const { field, lazy, debounce } = _parseModelAttr(el);
+    if (!field) return;
+
+    const eventType = lazy ? 'change' : 'input';
+
+    const handler = () => {
+        const value = _getElementValue(el);
+
+        if (debounce > 0) {
+            const timerKey = `model:${field}`;
+            if (_modelDebounceTimers.has(timerKey)) {
+                clearTimeout(_modelDebounceTimers.get(timerKey));
+            }
+            _modelDebounceTimers.set(timerKey, setTimeout(() => {
+                _sendModelUpdate(field, value);
+                _modelDebounceTimers.delete(timerKey);
+            }, debounce));
+        } else {
+            _sendModelUpdate(field, value);
+        }
+    };
+
+    el.addEventListener(eventType, handler);
+
+    // For checkboxes and radios, also listen on change
+    if (el.type === 'checkbox' || el.type === 'radio') {
+        el.addEventListener('change', handler);
+    }
+}
+
+/**
+ * Scan and bind all dj-model elements.
+ */
+function bindModelElements(root) {
+    root = root || document;
+    const elements = root.querySelectorAll('[dj-model], [dj-model\\.lazy], [dj-model\\.debounce]');
+    elements.forEach(_bindModel);
+
+    // Also check for dj-model with modifiers via attribute prefix
+    root.querySelectorAll('input, textarea, select').forEach(el => {
+        for (let i = 0; i < el.attributes.length; i++) {
+            if (el.attributes[i].name.startsWith('dj-model')) {
+                _bindModel(el);
+                break;
+            }
+        }
+    });
+}
+
+// Export
+window.djust.bindModelElements = bindModelElements;

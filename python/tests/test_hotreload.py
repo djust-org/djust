@@ -17,6 +17,12 @@ def mock_view_instance():
     view = Mock()
     view.get_template = Mock(return_value=Mock())
     view.render_with_diff = Mock(return_value=("<html>test</html>", [], 1))
+    # Configure drain methods to return empty iterables so flush methods work
+    view._drain_push_events = Mock(return_value=[])
+    view._drain_navigation = Mock(return_value=[])
+    view._drain_announcements = Mock(return_value=[])
+    view._drain_focus = Mock(return_value=None)
+    view._drain_i18n_commands = Mock(return_value=[])
     return view
 
 
