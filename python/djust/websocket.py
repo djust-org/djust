@@ -177,6 +177,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         hotreload: bool = False,
         file_path: Optional[str] = None,
         event_name: Optional[str] = None,
+        broadcast: bool = False,
     ) -> None:
         """
         Send a patch or full HTML update to the client.
@@ -220,6 +221,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     response["hotreload"] = True
                     if file_path:
                         response["file"] = file_path
+                if broadcast:
+                    response["broadcast"] = True
                 self._attach_debug_payload(response, event_name, performance)
                 await self.send_json(response)
                 await self._flush_push_events()
@@ -1653,7 +1656,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if patches is not None:
                 if isinstance(patches, str):
                     patches = json.loads(patches)
-                await self._send_update(patches=patches, version=version)
+                await self._send_update(patches=patches, version=version, broadcast=True)
             else:
                 # Even if no patches, flush any push_events
                 await self._flush_push_events()

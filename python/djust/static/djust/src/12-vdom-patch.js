@@ -454,6 +454,13 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
  * @param {HTMLElement} newRoot - The new content from server
  */
 /**
+ * Flag set by handleServerResponse when applying broadcast patches.
+ * When true, preserveFormValues skips saving/restoring the focused
+ * element so remote content (from other users) takes effect.
+ */
+let _isBroadcastUpdate = false;
+
+/**
  * Preserve form values across innerHTML replacement.
  *
  * innerHTML destroys the DOM, creating new elements. For the focused
@@ -466,6 +473,16 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
 function preserveFormValues(container, updateFn) {
     const active = document.activeElement;
     let saved = null;
+
+    // Skip saving focused element for broadcast (remote) updates —
+    // the server content from another user should take effect.
+    if (_isBroadcastUpdate) {
+        updateFn();
+        container.querySelectorAll('textarea').forEach(el => {
+            el.value = el.textContent || '';
+        });
+        return;
+    }
 
     // Only save the focused form element (user is actively editing)
     if (active && container.contains(active) &&

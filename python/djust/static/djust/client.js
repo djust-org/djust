@@ -228,7 +228,26 @@ function handleServerResponse(data, eventName, triggerElement) {
             // Store comprehensive performance data if available
             window._lastPerformanceData = data.performance;
 
+            // For broadcast patches (from other users via push_to_view),
+            // tell preserveFormValues to accept remote content instead of
+            // restoring the focused element's stale local value.
+            _isBroadcastUpdate = !!data.broadcast;
             const success = applyPatches(data.patches);
+            _isBroadcastUpdate = false;
+
+            // For broadcast patches, sync textarea .value from .textContent.
+            // VDOM patches update textContent directly (not via innerHTML),
+            // so preserveFormValues never runs. Textarea .value is separate
+            // from .textContent after initial render — must sync explicitly.
+            if (data.broadcast) {
+                const root = getLiveViewRoot();
+                if (root) {
+                    root.querySelectorAll('textarea').forEach(el => {
+                        el.value = el.textContent || '';
+                    });
+                }
+            }
+
             if (success === false) {
                 console.error('[LiveView] Patches failed, reloading page...');
                 globalLoadingManager.stopLoading(eventName, triggerElement);
@@ -250,6 +269,7 @@ function handleServerResponse(data, eventName, triggerElement) {
         // Apply full HTML update (fallback)
         else if (data.html) {
             console.log('[LiveView] Applying full HTML update');
+            _isBroadcastUpdate = !!data.broadcast;
             const parser = new DOMParser();
             const doc = parser.parseFromString(data.html, 'text/html');
             const liveviewRoot = getLiveViewRoot();
@@ -263,6 +283,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 el.classList.remove('optimistic-pending');
             });
 
+            _isBroadcastUpdate = false;
             initReactCounters();
             initTodoItems();
             bindLiveViewEvents();
@@ -2745,6 +2766,13 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
  * @param {HTMLElement} newRoot - The new content from server
  */
 /**
+ * Flag set by handleServerResponse when applying broadcast patches.
+ * When true, preserveFormValues skips saving/restoring the focused
+ * element so remote content (from other users) takes effect.
+ */
+let _isBroadcastUpdate = false;
+
+/**
  * Preserve form values across innerHTML replacement.
  *
  * innerHTML destroys the DOM, creating new elements. For the focused
@@ -2757,6 +2785,16 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
 function preserveFormValues(container, updateFn) {
     const active = document.activeElement;
     let saved = null;
+
+    // Skip saving focused element for broadcast (remote) updates —
+    // the server content from another user should take effect.
+    if (_isBroadcastUpdate) {
+        updateFn();
+        container.querySelectorAll('textarea').forEach(el => {
+            el.value = el.textContent || '';
+        });
+        return;
+    }
 
     // Only save the focused form element (user is actively editing)
     if (active && container.contains(active) &&
