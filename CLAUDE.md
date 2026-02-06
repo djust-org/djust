@@ -48,9 +48,14 @@ djust/
 │   ├── websocket.py        # LiveViewConsumer (Channels)
 │   ├── decorators.py       # @event_handler, @cache, @debounce, etc.
 │   ├── config.py           # Configuration system
+│   ├── presence.py         # Presence tracking (PresenceMixin, CursorTracker)
+│   ├── streaming.py        # StreamingMixin (real-time partial DOM updates)
+│   ├── uploads.py          # File uploads (binary WebSocket frames)
+│   ├── routing.py          # live_session() URL routing helper
+│   ├── mixins/             # LiveView mixins (navigation, model binding, etc.)
 │   ├── templatetags/       # Django template tags
 │   ├── tenants/            # Multi-tenant support
-│   ├── backends/           # State backends (memory, redis)
+│   ├── backends/           # Presence backends (memory, redis)
 │   └── static/djust/       # Client JS (~5KB)
 ├── crates/
 │   ├── djust/              # PyO3 bindings (entry point for Python)
@@ -81,6 +86,8 @@ djust/
 
 ### JavaScript
 - Client JS must stay minimal (~5KB). No new dependencies without discussion.
+- **No `console.log`** without `if (globalThis.djustDebug)` guard — unguarded logging is auto-rejected
+- New JS feature files in `static/djust/src/` must have corresponding test files in `tests/js/`
 
 ## Security Rules
 
@@ -92,6 +99,7 @@ These are **hard requirements** — violations are auto-rejected in PR review:
 4. **Logging**: `%s`-style formatting only — never `logger.error(f"...")`
 5. **No bare `except: pass`** — always log or re-raise
 6. **No `print()` in production code** — use the logging module
+7. **No `console.log`** in JS without `if (globalThis.djustDebug)` guard
 
 ## Workflow Expectations
 
@@ -105,10 +113,12 @@ These are **hard requirements** — violations are auto-rejected in PR review:
 ## Testing Expectations
 
 - All new code needs tests (unit and/or integration)
+- New JS feature files in `static/djust/src/` need corresponding tests in `tests/js/`
 - Bug fixes require regression tests
 - Run the full suite before push; let pre-push hooks run
 - Tests must be deterministic — no flaky tests
 - Test imports must match actual module paths (a common rejection reason)
+- `feat:` and `fix:` PRs must update CHANGELOG.md
 
 ## Key Patterns
 

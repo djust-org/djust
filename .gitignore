@@ -66,3 +66,4 @@ wheels/
 
 # Claude Code
 .claude/
+pr/

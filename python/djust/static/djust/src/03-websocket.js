@@ -37,24 +37,35 @@ class LiveViewWebSocket {
         if (this.heartbeatInterval) {
             clearInterval(this.heartbeatInterval);
             this.heartbeatInterval = null;
+            if (globalThis.djustDebug) console.log('[LiveView] Heartbeat stopped');
         }
 
         // Clear reconnect attempts so we don't auto-reconnect
         this.reconnectAttempts = this.maxReconnectAttempts;
 
-        // Close WebSocket if open
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.close();
+        // Close WebSocket if open or connecting
+        if (this.ws) {
+            if (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN) {
+                this.ws.close();
+                if (globalThis.djustDebug) console.log('[LiveView] WebSocket closed');
+            }
         }
 
         this.ws = null;
         this.sessionId = null;
         this.viewMounted = false;
         this.vdomVersion = null;
+        this.stats.connectedAt = null; // Reset connection timestamp
     }
 
     connect(url = null) {
         if (!this.enabled) return;
+
+        // Guard: prevent duplicate connections
+        if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
+            if (globalThis.djustDebug) console.log('[LiveView] WebSocket already connected or connecting, skipping');
+            return;
+        }
 
         if (!url) {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -72,6 +83,8 @@ class LiveViewWebSocket {
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
                 this.stats.reconnections++;
+                // Notify hooks of reconnection
+                if (typeof notifyHooksReconnected === 'function') notifyHooksReconnected();
             }
             this.stats.connectedAt = Date.now();
         };
@@ -79,6 +92,9 @@ class LiveViewWebSocket {
         this.ws.onclose = (_event) => {
             console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
+
+            // Notify hooks of disconnection
+            if (typeof notifyHooksDisconnected === 'function') notifyHooksDisconnected();
 
             // Clear all decorator state on disconnect
             // Phase 2: Debounce timers
@@ -114,6 +130,7 @@ class LiveViewWebSocket {
             } else {
                 console.warn('[LiveView] Max reconnection attempts reached. Falling back to HTTP mode.');
                 this.enabled = false;
+                this._showConnectionErrorOverlay();
             }
         };
 
@@ -169,6 +186,11 @@ class LiveViewWebSocket {
                 // Initialize cache configuration from mount response
                 if (data.cache_config) {
                     setCacheConfig(data.cache_config);
+                }
+
+                // Initialize upload configurations from mount response
+                if (data.upload_configs && window.djust.uploads) {
+                    window.djust.uploads.setConfigs(data.upload_configs);
                 }
 
                 // OPTIMIZATION: Skip HTML replacement if content was pre-rendered via HTTP GET
@@ -244,6 +266,80 @@ class LiveViewWebSocket {
                 // Heartbeat response
                 break;
 
+            case 'upload_progress':
+                // File upload progress update
+                if (window.djust.uploads) {
+                    window.djust.uploads.handleProgress(data);
+                }
+                break;
+
+            case 'upload_registered':
+                // Upload registration acknowledged
+                if (globalThis.djustDebug) console.log('[Upload] Registered:', data.ref, 'for', data.upload_name);
+                break;
+
+            case 'stream':
+                // Streaming partial DOM updates (LLM chat, live feeds)
+                if (window.djust.handleStreamMessage) {
+                    window.djust.handleStreamMessage(data);
+                }
+                break;
+
+            case 'push_event':
+                // Server-pushed event for JS hooks
+                window.dispatchEvent(new CustomEvent('djust:push_event', {
+                    detail: { event: data.event, payload: data.payload }
+                }));
+                // Dispatch to dj-hook instances that registered via handleEvent
+                if (typeof dispatchPushEventToHooks === 'function') {
+                    dispatchPushEventToHooks(data.event, data.payload);
+                }
+                break;
+
+            case 'embedded_update':
+                // Scoped HTML update for an embedded child LiveView
+                this.handleEmbeddedUpdate(data);
+                // Stop loading state
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
+            case 'rate_limit_exceeded':
+                // Server is dropping events due to rate limiting — show brief warning, do NOT retry
+                console.warn('[LiveView] Rate limited:', data.message || 'Too many events');
+                this._showRateLimitWarning();
+                // Stop loading state if applicable
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
+            case 'navigation':
+                // Server-side live_patch or live_redirect
+                if (window.djust.navigation) {
+                    window.djust.navigation.handleNavigation(data);
+                }
+                break;
+
+            case 'accessibility':
+                // Screen reader announcements from server
+                if (window.djust.accessibility) {
+                    window.djust.accessibility.processAnnouncements(data.announcements);
+                }
+                break;
+
+            case 'focus':
+                // Focus command from server
+                if (window.djust.accessibility) {
+                    window.djust.accessibility.processFocus([data.selector, data.options]);
+                }
+                break;
+
             case 'reload':
                 // Hot reload: file changed, refresh the page
                 window.location.reload();
@@ -257,12 +353,21 @@ class LiveViewWebSocket {
         }
 
         console.log('[LiveView] Mounting view:', viewPath);
+        // Detect browser timezone for server-side local time rendering
+        let clientTimezone = null;
+        try {
+            clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        } catch (e) {
+            console.warn('[LiveView] Could not detect browser timezone:', e);
+        }
+
         this.sendMessage({
             type: 'mount',
             view: viewPath,
             params: params,
             url: window.location.pathname,
-            has_prerendered: this.skipMountHtml || false  // Tell server we have pre-rendered content
+            has_prerendered: this.skipMountHtml || false,  // Tell server we have pre-rendered content
+            client_timezone: clientTimezone  // IANA timezone string (e.g. "America/New_York")
         });
         return true;
     }
@@ -362,12 +467,109 @@ class LiveViewWebSocket {
     // Removed duplicate applyPatches and patch helper methods
     // Now using centralized handleServerResponse() -> applyPatches()
 
+    /**
+     * Handle scoped HTML update for an embedded child LiveView.
+     * Replaces only the innerHTML of the embedded view's container div.
+     */
+    handleEmbeddedUpdate(data) {
+        const viewId = data.view_id;
+        const html = data.html;
+        if (!viewId || html === undefined) {
+            console.warn('[LiveView] Invalid embedded_update message:', data);
+            return;
+        }
+
+        const container = document.querySelector(`[data-djust-embedded="${CSS.escape(viewId)}"]`);
+        if (!container) {
+            console.warn(`[LiveView] Embedded view container not found: ${viewId}`);
+            return;
+        }
+
+        container.innerHTML = html;
+        if (globalThis.djustDebug) console.log(`[LiveView] Updated embedded view: ${viewId}`);
+
+        // Re-bind events within the updated container
+        bindLiveViewEvents();
+    }
+
+    _showConnectionErrorOverlay() {
+        // Only show in DEBUG mode
+        if (!window.DEBUG_MODE) return;
+
+        // Don't duplicate
+        if (document.getElementById('djust-connection-error-overlay')) return;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'djust-connection-error-overlay';
+        overlay.style.cssText = `
+            position: fixed; bottom: 0; left: 0; right: 0; z-index: 99999;
+            background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+            border-top: 3px solid #ef4444; padding: 20px 24px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            color: #e2e8f0; font-size: 14px; box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+        `;
+        overlay.innerHTML = `
+            <div style="display:flex; align-items:flex-start; gap:16px; max-width:900px; margin:0 auto;">
+                <span style="font-size:24px; line-height:1;">❌</span>
+                <div style="flex:1;">
+                    <div style="font-weight:700; font-size:16px; margin-bottom:8px; color:#fca5a5;">
+                        WebSocket Connection Failed
+                    </div>
+                    <div style="margin-bottom:10px; color:#cbd5e1; line-height:1.6;">
+                        djust could not establish a WebSocket connection. Common causes:
+                    </div>
+                    <ul style="margin:0 0 12px 18px; padding:0; color:#94a3b8; line-height:1.8;">
+                        <li>ASGI server not running (need <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">daphne</code> or <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">uvicorn</code>, not <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">manage.py runserver</code>)</li>
+                        <li>If using daphne, wrap HTTP handler with <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">ASGIStaticFilesHandler</code> or use <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">djust.asgi.get_application()</code></li>
+                        <li>WebSocket route not configured (need <code style="background:#1e293b;padding:2px 6px;border-radius:3px;color:#a5f3fc;">/ws/live/</code> path)</li>
+                    </ul>
+                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+                        <code style="background:#1e293b; padding:6px 12px; border-radius:4px; color:#86efac; font-size:13px;">
+                            python manage.py djust_check
+                        </code>
+                        <span style="color:#64748b; font-size:12px;">← Run this to diagnose configuration issues</span>
+                    </div>
+                </div>
+                <button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:20px;padding:4px;">✕</button>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+    }
+
+    _showRateLimitWarning() {
+        // Show a brief non-intrusive toast; debounce so rapid limits don't spam
+        if (this._rateLimitToast) return;
+        const toast = document.createElement('div');
+        toast.textContent = 'Slow down — some actions were dropped';
+        toast.style.cssText = `
+            position: fixed; bottom: 20px; right: 20px; z-index: 99999;
+            background: #f59e0b; color: #1c1917; padding: 10px 18px;
+            border-radius: 8px; font-size: 13px; font-weight: 600;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2); opacity: 0;
+            transition: opacity 0.3s; pointer-events: none;
+        `;
+        document.body.appendChild(toast);
+        this._rateLimitToast = toast;
+        requestAnimationFrame(() => { toast.style.opacity = '1'; });
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => { toast.remove(); this._rateLimitToast = null; }, 300);
+        }, 2500);
+    }
+
     startHeartbeat(interval = 30000) {
-        setInterval(() => {
+        // Guard: prevent multiple heartbeat intervals
+        if (this.heartbeatInterval) {
+            if (globalThis.djustDebug) console.log('[LiveView] Heartbeat already running, skipping duplicate');
+            return;
+        }
+
+        this.heartbeatInterval = setInterval(() => {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 this.sendMessage({ type: 'ping' });
             }
         }, interval);
+        if (globalThis.djustDebug) console.log('[LiveView] Heartbeat started (interval:', interval, 'ms)');
     }
 }
 
