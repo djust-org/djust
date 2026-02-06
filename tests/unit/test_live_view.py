@@ -89,8 +89,16 @@ class TestTemplateInheritance:
         templates_dir = tmp_path / "templates"
         templates_dir.mkdir()
 
-        # Update Django settings to use temp directory
-        settings.TEMPLATES[0]["DIRS"] = [str(templates_dir)]
+        # Update Django settings to use temp directory.
+        # Use override_settings to properly reset the template engine cache;
+        # mutating settings.TEMPLATES in-place doesn't invalidate cached loaders.
+        import copy
+        from django.test import override_settings
+
+        new_templates = copy.deepcopy(settings.TEMPLATES)
+        new_templates[0]["DIRS"] = [str(templates_dir)]
+        ctx = override_settings(TEMPLATES=new_templates)
+        ctx.enable()
 
         # Create base template with liveview-root in block
         base_template = templates_dir / "base.html"

@@ -1,12 +1,17 @@
 
         renderHandlersTab() {
-            if (!this.handlers || this.handlers.length === 0) {
+            // Normalize handlers: accept both array and object/dict formats
+            let handlers = this.handlers;
+            if (handlers && !Array.isArray(handlers) && typeof handlers === 'object') {
+                handlers = Object.values(handlers);
+            }
+            if (!handlers || handlers.length === 0) {
                 return '<div class="empty-state">No event handlers detected. Handlers will appear after the view is mounted.</div>';
             }
 
             return `
                 <div class="handlers-list">
-                    ${this.handlers.map(handler => `
+                    ${handlers.map(handler => `
                         <div class="handler-item">
                             <div class="handler-header">
                                 <div class="handler-name">${handler.name}</div>

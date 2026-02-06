@@ -21,6 +21,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Diff engine keyed+unkeyed interleaving** — The diff engine now emits `MoveChild` patches for unkeyed element children (with `djust_id`) when their absolute position changes due to keyed sibling moves, fixing incorrect patch targeting in mixed keyed/unkeyed child lists. ([#219](https://github.com/djust-org/djust/issues/219))
 - **Text node targeting after keyed moves** — `SetText` patches now carry `djust_id` when available (for test infrastructure), and `sync_ids` propagates IDs to text nodes. Test `assign_ids` gives synthetic IDs to text nodes so `apply_patches` resolves them by ID after structural changes shift path indices. ([#221](https://github.com/djust-org/djust/issues/221))
 
+## [0.3.0] - 2026-02-05
+
+### Added
+
+- **Progressive Web App (PWA) Support** — Complete offline-first PWA implementation with service worker integration, IndexedDB/LocalStorage abstraction, optimistic UI updates, and offline-aware template directives. Includes comprehensive template tags (`{% djust_pwa_head %}`, `{% djust_pwa_manifest %}`), PWA mixins (`PWAMixin`, `OfflineMixin`, `SyncMixin`), and automatic synchronization when online. ([#235](https://github.com/djust-org/djust/pull/235))
+- **Multi-Tenant SaaS Support** — Production-ready multi-tenant architecture with flexible tenant resolution strategies (subdomain, path, header, session, custom, chained), automatic data isolation, tenant-aware state backends, and comprehensive template context injection. Includes `TenantMixin` and `TenantScopedMixin` for views. ([#235](https://github.com/djust-org/djust/pull/235))
+- **PWA Template Tags** — 8 new template tags for PWA functionality: `djust_pwa_head`, `djust_pwa_manifest`, `djust_sw_register`, `djust_offline_indicator`, plus offline directives `dj-offline-hide`, `dj-offline-show`, `dj-offline-disable`, `dj-offline-queued`.
+- **PWA Management Command** — `generate_sw` command for automatic service worker generation with customizable caching strategies, static file collection, and version management.
+- **Comprehensive Test Coverage** — 114 new tests (53 PWA tests, 61 multi-tenant tests) covering template tags, service worker generation, tenant resolution, isolation, and security.
+
+### Changed
+
+- **State Backends** — Enhanced with tenant-aware isolation support (`TenantAwareRedisBackend`, `TenantAwareMemoryBackend`).
+- **Template Context** — Automatic tenant information injection in multi-tenant mode.
+
+### Security
+
+- **Template tag XSS prevention** — All PWA template tags (`pwa_tags.py`, `djust_pwa.py`) now use `format_html()` and `escape()` instead of `mark_safe()` with f-string interpolation. Prevents script injection via manipulated URLs, class names, or CSS selectors.
+- **Sync endpoint hardening** — Removed `@csrf_exempt` from `sync_endpoint_view`. Added authentication requirement, payload validation (type checking, field whitelist, action count limit of 100), and safe field extraction to prevent arbitrary kwargs injection.
+- **Silent exception elimination** — All `except: pass` patterns replaced with appropriate `logger.warning()` or `logger.debug()` calls across PWA and tenant modules.
+- **f-string logging conversion** — Converted 75+ `logger.*(f"...")` calls to `%s`-style formatting across all PWA, tenant, and template tag files.
+- **Production JS hardened** — Replaced all `console.log`/`console.error` calls in `pwa.js` with `_log()` helper that routes through `window.djust.reportError` / `window.djust.debug`.
+
 ## [0.2.2] - 2026-02-01
 
 ### Fixed

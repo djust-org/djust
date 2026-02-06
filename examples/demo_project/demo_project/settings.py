@@ -168,6 +168,11 @@ DJUST_CONFIG = {
     # How long inactive sessions are kept before cleanup
     # Default: 3600 seconds (1 hour)
     'SESSION_TTL': 3600,
+
+    # Tenant configuration (for multi-tenant demo)
+    'TENANT_RESOLVER': 'header',  # Demo uses query param override in view
+    'TENANT_REQUIRED': False,     # Don't 404 without tenant
+    'TENANT_DEFAULT': 'acme',     # Default tenant for demo
 }
 
 # Production Redis Configuration Example:

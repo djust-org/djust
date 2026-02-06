@@ -33,6 +33,8 @@ from .components_only_demo import ComponentsOnlyDemo
 from .no_template_demo import NoTemplateDemo
 from .components_demo import ComponentsDemoView
 from .kitchen_sink import KitchenSinkView
+from .pwa_demo import PWADemoView
+from .tenant_demo import TenantDemoView
 
 __all__ = [
     'CounterView',
@@ -64,4 +66,6 @@ __all__ = [
     'ComponentsOnlyDemo',
     'NoTemplateDemo',
     'KitchenSinkView',
+    'PWADemoView',
+    'TenantDemoView',
 ]

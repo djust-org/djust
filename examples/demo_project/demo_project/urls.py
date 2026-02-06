@@ -5,8 +5,14 @@ URL configuration for demo_project.
 from django.contrib import admin
 from django.urls import path, include
 
+from djust.pwa import service_worker_view, manifest_view
+
 urlpatterns = [
     path('admin/', admin.site.urls),
+
+    # PWA — service worker must be at root scope for full-site coverage
+    path('sw.js', service_worker_view, name='service-worker'),
+    path('manifest.json', manifest_view, name='pwa-manifest'),
 
     # New organized apps
     path('', include('djust_homepage.urls')),       # Homepage and embedded demos

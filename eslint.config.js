@@ -130,6 +130,17 @@ export default [
     },
   },
 
+  // Built files are concatenated scripts, not ES modules — strict is inside IIFEs
+  {
+    files: ["python/djust/static/djust/client.js", "python/djust/static/djust/debug-panel.js"],
+    languageOptions: {
+      sourceType: "script",
+    },
+    rules: {
+      "strict": "off",
+    },
+  },
+
   // Test files can have relaxed rules
   {
     files: ["**/*.test.js", "**/*.spec.js", "tests/**/*.js"],

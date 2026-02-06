@@ -66,6 +66,29 @@
 
             // Initialize pending events tracker for matching sent events to responses
             this._pendingEvents = {};
+
+            // Also hook into any existing WebSocket instance
+            this._hookExistingWebSocket();
+        }
+
+        _hookExistingWebSocket() {
+            const lv = window.djust && window.djust.liveViewInstance;
+            const ws = lv && lv.ws;
+            if (!ws || ws._djustDebugHooked) return;
+
+            const self = this;
+            const originalSend = ws.send.bind(ws);
+            ws.send = function(data) {
+                const payload = self.parsePayload(data);
+                self.captureNetworkMessage({
+                    direction: 'sent',
+                    type: self.detectMessageType(data),
+                    size: typeof data === 'string' ? data.length : 0,
+                    payload: payload
+                });
+                return originalSend(data);
+            };
+            ws._djustDebugHooked = true;
         }
 
         _handleReceivedMessage(event) {
@@ -137,6 +160,21 @@
 
                 this.variables = debugInfo.variables;
                 if (this.state.activeTab === 'variables') {
+                    this.renderTabContent();
+                }
+            }
+
+            // Update patch history
+            if (debugInfo.patches && debugInfo.patches.length > 0) {
+                this.patchHistory.unshift({
+                    patches: debugInfo.patches,
+                    timestamp: Date.now(),
+                    performance: debugInfo.performance || null,
+                });
+                if (this.patchHistory.length > (this.config.maxPatchHistory || 50)) {
+                    this.patchHistory.pop();
+                }
+                if (this.state.activeTab === 'patches') {
                     this.renderTabContent();
                 }
             }

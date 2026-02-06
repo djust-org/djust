@@ -1,5 +1,14 @@
 # djust Roadmap
 
+## ✅ v0.3.0 "Phoenix Rising" - Complete
+
+Major feature release introducing PWA and multi-tenant capabilities:
+
+- **Progressive Web App Support** — Complete offline-first implementation with service worker integration, IndexedDB/LocalStorage abstraction, optimistic UI updates, and offline-aware template directives. Includes 8 PWA template tags, PWA mixins, and automatic sync.
+- **Multi-Tenant Architecture** — Production-ready SaaS support with flexible tenant resolution (subdomain, path, header, session, custom), automatic data isolation, tenant-aware state backends, and comprehensive template integration.
+- **114 New Tests** — Comprehensive test coverage (53 PWA, 61 multi-tenant) with full CI integration.
+- **Complete Documentation** — New guides for PWA and multi-tenant development, updated API references.
+
 ## 1. Profile & Improve Performance
 
 Identify bottlenecks in the render cycle and optimize.
@@ -119,3 +128,22 @@ Ongoing effort to harden the VDOM diff and patch pipeline.
 **Remaining:**
 - Investigate edge cases surfaced by proptest fuzzing
 - Performance optimization for large list diffs (>1000 items)
+
+## 9. Service Worker Enhancements
+
+Leverage the service worker beyond offline support to improve perceived performance, resilience, and navigation speed for djust LiveView applications.
+
+See [docs/guides/sw-enhancements.md](docs/guides/sw-enhancements.md) for full architecture and implementation details.
+
+**Phase 1 — Quick Wins (v0.4.0):**
+- **Prefetch on Hover** — Prefetch internal pages on `pointerenter`, serving them from cache on click for near-instant navigation
+- **Smart Static Asset Caching** — Pre-cache djust JS/CSS/icons at SW install; extend `generate_sw` to auto-populate asset lists from `collectstatic`
+
+**Phase 2 — Core Improvements (v0.4.x):**
+- **Instant Page Shell** — Cache the page shell (head, nav, footer) and serve instantly on navigation; swap `<main>` content when server responds
+- **WebSocket Reconnection Bridge** — Buffer LiveView events in the SW during WebSocket disconnection; replay in order on reconnect
+
+**Phase 3 — Advanced Features (v0.5.0):**
+- **VDOM Patch Caching** — Cache last rendered DOM state per page; on back-navigation, serve cached state and diff against fresh server response
+- **LiveView State Snapshots** — Serialize LiveView state on unmount; restore on back-navigation for instant state recovery
+- **Request Batching** — Batch parallel HTTP requests from multiple components into a single server round-trip

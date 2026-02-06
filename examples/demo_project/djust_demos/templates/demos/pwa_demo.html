@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% load djust_pwa %}
+
+{% block title %}PWA Demo - djust{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block extra_head %}
+{{ pwa_head_html|safe }}
+{% endblock %}
+
+{% block content %}
+<div data-djust-root>
+    <!-- Hero Section -->
+    {{ hero_html|safe }}
+
+    <section class="section-modern" style="padding: 2rem 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 1200px;">
+
+            <!-- PWA Status Bar -->
+            <div class="demo-card-modern mb-4">
+                <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(99, 102, 241, 0.03);">
+                    <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">PWA Status</h3>
+                    <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                        Connection status and PWA configuration
+                    </p>
+                </div>
+                <div class="p-4" style="background: var(--color-bg-elevated);">
+                    <div class="flex items-center gap-4 flex-wrap">
+                        <!-- Offline Indicator -->
+                        <div>
+                            <span style="font-size: 0.875rem; font-weight: 600; color: var(--color-text-muted); margin-right: 0.5rem;">Status:</span>
+                            {% djust_offline_indicator online_text="Online" offline_text="Offline" show_when="always" %}
+                        </div>
+
+                        <!-- PWA Config Summary -->
+                        <div style="display: flex; gap: 1.5rem; flex-wrap: wrap;">
+                            <div>
+                                <span style="font-size: 0.75rem; color: var(--color-text-muted); text-transform: uppercase;">App Name</span>
+                                <div style="font-weight: 600; color: var(--color-text);">{{ pwa_config.name }}</div>
+                            </div>
+                            <div>
+                                <span style="font-size: 0.75rem; color: var(--color-text-muted); text-transform: uppercase;">Display</span>
+                                <div style="font-weight: 600; color: var(--color-text);">{{ pwa_config.display }}</div>
+                            </div>
+                            <div>
+                                <span style="font-size: 0.75rem; color: var(--color-text-muted); text-transform: uppercase;">Theme</span>
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <span style="width: 16px; height: 16px; border-radius: 4px; background: {{ pwa_config.theme_color }}; display: inline-block; border: 1px solid rgba(0,0,0,0.1);"></span>
+                                    <span style="font-weight: 600; color: var(--color-text);">{{ pwa_config.theme_color }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-4">
+                <!-- Interactive Notes Demo -->
+                <div class="col-12 col-lg-6">
+                    <div class="demo-card-modern" style="height: 100%;">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(99, 102, 241, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Interactive Notes</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                LiveView + PWA working together — {{ notes_count }} note{{ notes_count|pluralize:"s" }}
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            <!-- Add Note Form -->
+                            <form dj-submit="add_note" style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                                <input type="text"
+                                       name="text"
+                                       placeholder="Type a note..."
+                                       autocomplete="off"
+                                       style="flex: 1; padding: 0.5rem 0.75rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg); color: var(--color-text);">
+                                <button type="submit" class="btn-primary-modern" style="white-space: nowrap;">
+                                    Add Note
+                                </button>
+                            </form>
+
+                            <!-- Notes List -->
+                            <div style="min-height: 200px; max-height: 300px; overflow-y: auto;">
+                                {% if notes %}
+                                    {% for note in notes %}
+                                    <div style="padding: 0.75rem; margin-bottom: 0.5rem; background: var(--color-bg); border-radius: var(--radius-md); border: 1px solid var(--color-border);">
+                                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                                            <span style="color: var(--color-text);">{{ note.text }}</span>
+                                            <span style="font-size: 0.75rem; color: var(--color-text-muted);">{{ note.time }}</span>
+                                        </div>
+                                    </div>
+                                    {% endfor %}
+                                {% else %}
+                                    <div style="text-align: center; padding: 2rem; color: var(--color-text-muted);">
+                                        No notes yet. Add one above!
+                                    </div>
+                                {% endif %}
+                            </div>
+
+                            {% if notes %}
+                            <div style="margin-top: 0.75rem; text-align: right;">
+                                <button dj-click="clear_notes" class="btn-secondary-modern" style="font-size: 0.875rem;">
+                                    Clear All
+                                </button>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Manifest Preview -->
+                <div class="col-12 col-lg-6">
+                    <div class="demo-card-modern" style="height: 100%;">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(16, 185, 129, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Manifest Config</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                PWA manifest generated by PWAMixin
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            <pre style="background: var(--color-bg); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--color-border); overflow-x: auto; font-size: 0.8125rem; line-height: 1.6; color: var(--color-text); margin: 0;"><code>{{ manifest_preview }}</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Template Tags Reference -->
+            <div class="row g-4 mt-0">
+                <div class="col-12">
+                    <div class="demo-card-modern">
+                        <div class="p-4 border-b" style="border-color: var(--color-border); background: rgba(245, 158, 11, 0.03);">
+                            <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">Template Tags Used</h3>
+                            <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
+                                PWA template tags rendered on this page
+                            </p>
+                        </div>
+                        <div class="p-4" style="background: var(--color-bg-elevated);">
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;">
+                                <div style="padding: 1rem; background: var(--color-bg); border-radius: var(--radius-md); border: 1px solid var(--color-border);">
+                                    <code style="font-size: 0.875rem; color: #6366f1;">{% templatetag openblock %} djust_pwa_head {% templatetag closeblock %}</code>
+                                    <p style="margin: 0.5rem 0 0; font-size: 0.8125rem; color: var(--color-text-muted);">
+                                        Inclusion tag — adds manifest link, meta tags, offline styles, and SW registration in one call.
+                                    </p>
+                                </div>
+                                <div style="padding: 1rem; background: var(--color-bg); border-radius: var(--radius-md); border: 1px solid var(--color-border);">
+                                    <code style="font-size: 0.875rem; color: #6366f1;">{% templatetag openblock %} djust_offline_indicator {% templatetag closeblock %}</code>
+                                    <p style="margin: 0.5rem 0 0; font-size: 0.8125rem; color: var(--color-text-muted);">
+                                        Renders a status badge that shows online/offline state with auto-switching CSS.
+                                    </p>
+                                </div>
+                                <div style="padding: 1rem; background: var(--color-bg); border-radius: var(--radius-md); border: 1px solid var(--color-border);">
+                                    <code style="font-size: 0.875rem; color: #6366f1;">{% templatetag openblock %} djust_pwa_manifest {% templatetag closeblock %}</code>
+                                    <p style="margin: 0.5rem 0 0; font-size: 0.8125rem; color: var(--color-text-muted);">
+                                        Generates an inline manifest as a data URI link tag — no separate manifest.json file needed.
+                                    </p>
+                                </div>
+                                <div style="padding: 1rem; background: var(--color-bg); border-radius: var(--radius-md); border: 1px solid var(--color-border);">
+                                    <code style="font-size: 0.875rem; color: #6366f1;">{% templatetag openblock %} djust_sw_register {% templatetag closeblock %}</code>
+                                    <p style="margin: 0.5rem 0 0; font-size: 0.8125rem; color: var(--color-text-muted);">
+                                        Outputs JS that registers the service worker with update checking and error reporting.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Back Button -->
+            {{ back_btn_html|safe }}
+        </div>
+    </section>
+</div>
+{% endblock %}

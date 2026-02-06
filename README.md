@@ -24,6 +24,8 @@ djust brings Phoenix LiveView-style reactive components to Django, with performa
 - 🐞 **Developer Debug Panel** - Interactive debugging with event history and VDOM inspection
 - 💤 **Lazy Hydration** - Defer WebSocket connections for below-fold content (20-40% memory savings)
 - 🚀 **TurboNav Compatible** - Works seamlessly with Turbo-style client-side navigation
+- 📱 **PWA Support** - Offline-first Progressive Web Apps with automatic sync
+- 🏢 **Multi-Tenant Ready** - Production SaaS architecture with tenant isolation
 
 ## 🎯 Quick Example
 
