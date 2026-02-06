@@ -61,22 +61,22 @@ class ModelBindingMixin:
 
         # Security checks
         if field.startswith("_"):
-            logger.warning(f"[dj-model] Blocked attempt to set private field: {field}")
+            logger.warning("[dj-model] Blocked attempt to set private field: %s", field)
             return
 
         if field in FORBIDDEN_MODEL_FIELDS:
-            logger.warning(f"[dj-model] Blocked attempt to set forbidden field: {field}")
+            logger.warning("[dj-model] Blocked attempt to set forbidden field: %s", field)
             return
 
         if self.allowed_model_fields is not None:
             if field not in self.allowed_model_fields:
-                logger.warning(f"[dj-model] Field '{field}' not in allowed_model_fields")
+                logger.warning("[dj-model] Field '%s' not in allowed_model_fields", field)
                 return
 
         # Only update existing attributes (don't create new ones)
         if not hasattr(self, field):
             logger.warning(
-                f"[dj-model] Field '{field}' does not exist on " f"{self.__class__.__name__}"
+                "[dj-model] Field '%s' does not exist on %s", field, self.__class__.__name__
             )
             return
 
@@ -97,10 +97,12 @@ class ModelBindingMixin:
                     value = float(value)
             except (ValueError, TypeError):
                 logger.warning(
-                    f"[dj-model] Could not coerce '{value}' to "
-                    f"{type(current).__name__} for field '{field}'"
+                    "[dj-model] Could not coerce '%s' to %s for field '%s'",
+                    value,
+                    type(current).__name__,
+                    field,
                 )
                 return
 
         setattr(self, field, value)
-        logger.debug(f"[dj-model] Set {self.__class__.__name__}.{field} = {value!r}")
+        logger.debug("[dj-model] Set %s.%s = %r", self.__class__.__name__, field, value)

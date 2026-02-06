@@ -41,7 +41,7 @@ class StreamingMixin:
     during async handler execution (not just after handler returns).
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._ws_consumer = None  # Set by LiveViewConsumer
         self._stream_batch: Dict[str, List[dict]] = {}  # Pending ops by stream name

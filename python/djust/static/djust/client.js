@@ -324,7 +324,7 @@ class LiveViewWebSocket {
         if (this.heartbeatInterval) {
             clearInterval(this.heartbeatInterval);
             this.heartbeatInterval = null;
-            console.log('[LiveView] Heartbeat stopped');
+            if (globalThis.djustDebug) console.log('[LiveView] Heartbeat stopped');
         }
 
         // Clear reconnect attempts so we don't auto-reconnect
@@ -334,7 +334,7 @@ class LiveViewWebSocket {
         if (this.ws) {
             if (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN) {
                 this.ws.close();
-                console.log('[LiveView] WebSocket closed');
+                if (globalThis.djustDebug) console.log('[LiveView] WebSocket closed');
             }
         }
 
@@ -350,7 +350,7 @@ class LiveViewWebSocket {
 
         // Guard: prevent duplicate connections
         if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
-            console.log('[LiveView] WebSocket already connected or connecting, skipping');
+            if (globalThis.djustDebug) console.log('[LiveView] WebSocket already connected or connecting, skipping');
             return;
         }
 
@@ -562,7 +562,7 @@ class LiveViewWebSocket {
 
             case 'upload_registered':
                 // Upload registration acknowledged
-                console.log('[Upload] Registered:', data.ref, 'for', data.upload_name);
+                if (globalThis.djustDebug) console.log('[Upload] Registered:', data.ref, 'for', data.upload_name);
                 break;
 
             case 'stream':
@@ -773,7 +773,7 @@ class LiveViewWebSocket {
         }
 
         container.innerHTML = html;
-        console.log(`[LiveView] Updated embedded view: ${viewId}`);
+        if (globalThis.djustDebug) console.log(`[LiveView] Updated embedded view: ${viewId}`);
 
         // Re-bind events within the updated container
         bindLiveViewEvents();
@@ -847,7 +847,7 @@ class LiveViewWebSocket {
     startHeartbeat(interval = 30000) {
         // Guard: prevent multiple heartbeat intervals
         if (this.heartbeatInterval) {
-            console.log('[LiveView] Heartbeat already running, skipping duplicate');
+            if (globalThis.djustDebug) console.log('[LiveView] Heartbeat already running, skipping duplicate');
             return;
         }
 
@@ -856,7 +856,7 @@ class LiveViewWebSocket {
                 this.sendMessage({ type: 'ping' });
             }
         }, interval);
-        console.log('[LiveView] Heartbeat started (interval:', interval, 'ms)');
+        if (globalThis.djustDebug) console.log('[LiveView] Heartbeat started (interval:', interval, 'ms)');
     }
 }
 
@@ -3621,7 +3621,7 @@ if (document.readyState === 'loading') {
      */
     function setUploadConfigs(configs) {
         uploadConfigs = configs || {};
-        console.log('[Upload] Configs loaded:', Object.keys(uploadConfigs));
+        if (globalThis.djustDebug) console.log('[Upload] Configs loaded:', Object.keys(uploadConfigs));
     }
 
     /**
@@ -3926,7 +3926,7 @@ if (document.readyState === 'loading') {
 
                 try {
                     const result = await uploadFile(liveViewWS, uploadName, file, config);
-                    console.log(`[Upload] Complete: ${file.name}`, result);
+                    if (globalThis.djustDebug) console.log(`[Upload] Complete: ${file.name}`, result);
                 } catch (err) {
                     console.error(`[Upload] Failed: ${file.name}`, err);
                 }
@@ -4305,7 +4305,7 @@ window.djust.getActiveStreams = getActiveStreams;
         const method = data.replace ? 'replaceState' : 'pushState';
         window.history[method]({ djust: true }, '', newUrl.toString());
 
-        console.log(`[LiveView] live_patch: ${method} → ${newUrl.toString()}`);
+        if (globalThis.djustDebug) console.log(`[LiveView] live_patch: ${method} → ${newUrl.toString()}`);
     }
 
     /**
@@ -4326,7 +4326,7 @@ window.djust.getActiveStreams = getActiveStreams;
         const method = data.replace ? 'replaceState' : 'pushState';
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
 
-        console.log(`[LiveView] live_redirect: ${method} → ${newUrl.toString()}`);
+        if (globalThis.djustDebug) console.log(`[LiveView] live_redirect: ${method} → ${newUrl.toString()}`);
 
         // Send a mount request for the new view path over the existing WebSocket
         // The server will unmount the old view and mount the new one

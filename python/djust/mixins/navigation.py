@@ -28,7 +28,7 @@ class NavigationMixin:
     after each handler execution, similar to push_event.
     """
 
-    def _init_navigation(self):
+    def _init_navigation(self) -> None:
         """Initialize navigation state. Called from __init__."""
         self._pending_navigation: List[Dict[str, Any]] = []
 

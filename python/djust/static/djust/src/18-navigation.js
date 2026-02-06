@@ -48,7 +48,7 @@
         const method = data.replace ? 'replaceState' : 'pushState';
         window.history[method]({ djust: true }, '', newUrl.toString());
 
-        console.log(`[LiveView] live_patch: ${method} → ${newUrl.toString()}`);
+        if (globalThis.djustDebug) console.log(`[LiveView] live_patch: ${method} → ${newUrl.toString()}`);
     }
 
     /**
@@ -69,7 +69,7 @@
         const method = data.replace ? 'replaceState' : 'pushState';
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
 
-        console.log(`[LiveView] live_redirect: ${method} → ${newUrl.toString()}`);
+        if (globalThis.djustDebug) console.log(`[LiveView] live_redirect: ${method} → ${newUrl.toString()}`);
 
         // Send a mount request for the new view path over the existing WebSocket
         // The server will unmount the old view and mount the new one

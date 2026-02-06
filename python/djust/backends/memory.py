@@ -37,7 +37,7 @@ class InMemoryPresenceBackend(PresenceBackend):
         - Data lost on restart.
     """
 
-    def __init__(self, timeout: int = PRESENCE_TIMEOUT):
+    def __init__(self, timeout: int = PRESENCE_TIMEOUT) -> None:
         self._groups: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self._heartbeats: Dict[tuple, float] = {}
         self._timeout = timeout

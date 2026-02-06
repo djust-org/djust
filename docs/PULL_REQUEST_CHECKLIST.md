@@ -56,8 +56,9 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 
 ### JavaScript Code Standards
 - [ ] **ESLint rules** pass - Code follows project style guide
-- [ ] **No console.log** in production code - Use proper logging/debug tools
+- [ ] **No console.log** in production code without debug guard - All `console.log` calls must be wrapped in `if (globalThis.djustDebug)` guards. Unguarded logging is auto-rejected
 - [ ] **Generated JS follows same rules** - Python code that generates JavaScript strings (e.g., service worker generators, template tags) must also avoid `console.log` and use proper escaping
+- [ ] **New JS feature files have tests** - Each new file in `static/djust/src/` must have a corresponding test file in `tests/js/`
 - [ ] **Browser compatibility** maintained for supported versions
 - [ ] **Security considerations** - No XSS vulnerabilities, proper sanitization
 
@@ -124,7 +125,7 @@ console.error(error); // ❌ Won't be captured in production
 ### User Documentation
 - [ ] **New features documented** - User-facing changes have guide updates
 - [ ] **Breaking changes documented** - Migration path provided
-- [ ] **CHANGELOG.md updated** - All changes properly categorized
+- [ ] **CHANGELOG.md updated** - All changes properly categorized (mandatory for `feat:` and `fix:` PRs)
 - [ ] **API references updated** - If public API changes
 - [ ] **No internal tracking documents** - Completion checklists, internal status docs (e.g., `*_COMPLETE.md`), and private planning docs must not be committed to the public repo
 
@@ -221,20 +222,24 @@ console.error(error); // ❌ Won't be captured in production
 - [ ] **Squash commits** if needed - Clean commit history for main branch
 - [ ] **Update branch** - Latest main branch merged if needed
 - [ ] **Final CI check** - All automated tests pass one final time
+- [ ] **CLAUDE.md updates suggested** - If the PR introduces new patterns, modules, security rules, or conventions that should be reflected in `CLAUDE.md`, suggest specific changes in the review feedback
 
 ## 🚫 Common Rejection Reasons
 
 **Auto-reject if:**
 - Uses `print()` statements instead of logging system
 - Uses f-string formatting in logger calls instead of `%s` style
+- `console.log` in production JS without `if (globalThis.djustDebug)` guard
 - Introduces silent exception handling (`except: pass`)
-- No tests for new functionality
+- No tests for new functionality (Python or JavaScript)
+- New JS feature files in `static/djust/src/` without corresponding test files in `tests/js/`
 - Tests reference modules/APIs that don't exist in the PR
 - Breaks existing functionality
 - Security vulnerabilities identified (XSS, CSRF bypass, injection)
 - `mark_safe()` used with unescaped interpolated values
 - `@csrf_exempt` on endpoints without documented justification
 - No documentation for user-facing changes
+- CHANGELOG.md not updated for `feat:` or `fix:` PRs
 - Internal tracking documents (e.g., `*_COMPLETE.md`) included in public repo
 - Placeholder/stub implementations shipped as production code (e.g., `return True`, hardcoded fake data)
 - Untracked files that tests depend on are missing from the PR
@@ -263,7 +268,7 @@ Escalate to project maintainers when:
 All PR review feedback must be saved to `pr/feedback/` for traceability:
 
 - **File naming**: `pr-{number}-{short-description}.md` (e.g., `pr-235-v0.3.0-phoenix-rising.md`)
-- **Contents**: Checklist evaluation, issues found, verdict (APPROVED / CHANGES REQUESTED), and any checklist improvement suggestions
+- **Contents**: Checklist evaluation, issues found, verdict (APPROVED / CHANGES REQUESTED), any checklist improvement suggestions, and any suggested updates to `CLAUDE.md` (e.g., new rules, project structure changes, updated patterns)
 - **When**: After completing a review, before or alongside posting comments on the PR itself
 
 This ensures review decisions are durable, searchable, and not lost in GitHub comment threads.

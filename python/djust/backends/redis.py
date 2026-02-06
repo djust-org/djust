@@ -44,7 +44,7 @@ class RedisPresenceBackend(PresenceBackend):
         redis_url: str = "redis://localhost:6379/0",
         key_prefix: str = "djust:presence",
         timeout: int = PRESENCE_TIMEOUT,
-    ):
+    ) -> None:
         try:
             import redis as redis_lib
         except ImportError:

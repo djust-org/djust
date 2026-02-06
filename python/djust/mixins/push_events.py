@@ -21,7 +21,7 @@ class PushEventMixin:
     consumer after the response is sent.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._pending_push_events: List[Tuple[str, Dict[str, Any]]] = []
 

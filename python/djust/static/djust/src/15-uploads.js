@@ -32,7 +32,7 @@
      */
     function setUploadConfigs(configs) {
         uploadConfigs = configs || {};
-        console.log('[Upload] Configs loaded:', Object.keys(uploadConfigs));
+        if (globalThis.djustDebug) console.log('[Upload] Configs loaded:', Object.keys(uploadConfigs));
     }
 
     /**
@@ -337,7 +337,7 @@
 
                 try {
                     const result = await uploadFile(liveViewWS, uploadName, file, config);
-                    console.log(`[Upload] Complete: ${file.name}`, result);
+                    if (globalThis.djustDebug) console.log(`[Upload] Complete: ${file.name}`, result);
                 } catch (err) {
                     console.error(`[Upload] Failed: ${file.name}`, err);
                 }

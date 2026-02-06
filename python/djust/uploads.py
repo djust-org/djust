@@ -379,7 +379,7 @@ class UploadManager:
         """
         config = self._configs.get(upload_name)
         if not config:
-            logger.warning(f"No upload config for '{upload_name}'")
+            logger.warning("No upload config for '%s'", upload_name)
             return None
 
         # Check max entries
@@ -388,22 +388,22 @@ class UploadManager:
             r for r in current_refs if r in self._entries and not self._entries[r].complete
         ]
         if len(active_refs) >= config.max_entries:
-            logger.warning(f"Max entries ({config.max_entries}) reached for '{upload_name}'")
+            logger.warning("Max entries (%d) reached for '%s'", config.max_entries, upload_name)
             return None
 
         # Check file size
         if client_size > config.max_file_size:
-            logger.warning(f"File too large: {client_size} > {config.max_file_size}")
+            logger.warning("File too large: %d > %d", client_size, config.max_file_size)
             return None
 
         # Check extension
         if not config.validate_extension(client_name):
-            logger.warning(f"Extension not accepted: {client_name}")
+            logger.warning("Extension not accepted: %s", client_name)
             return None
 
         # Check MIME
         if client_type and not config.validate_mime(client_type):
-            logger.warning(f"MIME type not accepted: {client_type}")
+            logger.warning("MIME type not accepted: %s", client_type)
             return None
 
         entry = UploadEntry(
@@ -448,7 +448,7 @@ class UploadManager:
         if entry.finalize(self._temp_dir):
             return entry
         else:
-            logger.warning(f"Upload validation failed for {ref}: {entry.error}")
+            logger.warning("Upload validation failed for %s: %s", ref, entry.error)
             return None
 
     def cancel_upload(self, ref: str) -> None:

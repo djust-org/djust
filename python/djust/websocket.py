@@ -350,7 +350,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 await sync_to_async(self.view_instance.untrack_presence)()
             except Exception as e:
-                logger.warning(f"Error cleaning up presence: {e}")
+                logger.warning("Error cleaning up presence: %s", e)
 
         # Cancel tick task and wait for it to finish
         if self._tick_task:
@@ -373,7 +373,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 self.view_instance._cleanup_uploads()
             except Exception as e:
-                logger.warning(f"Error cleaning up uploads: {e}")
+                logger.warning("Error cleaning up uploads: %s", e)
 
         # Clean up embedded child views
         if self.view_instance and hasattr(self.view_instance, "_child_views"):
@@ -381,7 +381,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 for child_id in list(self.view_instance._child_views.keys()):
                     self.view_instance._unregister_child(child_id)
             except Exception as e:
-                logger.warning(f"Error cleaning up embedded children: {e}")
+                logger.warning("Error cleaning up embedded children: %s", e)
 
         # Clean up session state
         self.view_instance = None
@@ -580,7 +580,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     self._presence_group = PresenceManager.presence_group_name(presence_key)
                     await self.channel_layer.group_add(self._presence_group, self.channel_name)
                 except Exception as e:
-                    logger.warning(f"Error setting up presence group: {e}")
+                    logger.warning("Error setting up presence group: %s", e)
 
             # Start periodic tick if subclass overrides handle_tick
             tick_interval = getattr(view_class, "tick_interval", None)
@@ -1563,7 +1563,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         try:
             await sync_to_async(self.view_instance.update_presence_heartbeat)()
         except Exception as e:
-            logger.error(f"Error updating presence heartbeat: {e}")
+            logger.error("Error updating presence heartbeat: %s", e)
 
     async def handle_cursor_move(self, data: Dict[str, Any]):
         """Handle cursor movement for live cursors."""
@@ -1575,7 +1575,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             y = data.get("y", 0)
             await sync_to_async(self.view_instance.handle_cursor_move)(x, y)
         except Exception as e:
-            logger.error(f"Error handling cursor move: {e}")
+            logger.error("Error handling cursor move: %s", e)
 
     async def presence_event(self, event):
         """

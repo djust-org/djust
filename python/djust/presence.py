@@ -123,7 +123,7 @@ class PresenceManager:
         return cls._backend().count(presence_key)
 
     @classmethod
-    def update_heartbeat(cls, presence_key: str, user_id: str):
+    def update_heartbeat(cls, presence_key: str, user_id: str) -> None:
         """Update the heartbeat timestamp for a user."""
         cls._backend().heartbeat(presence_key, user_id)
 
@@ -142,7 +142,7 @@ class PresenceMixin:
 
     presence_key: Optional[str] = None
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._presence_tracked = False
         self._presence_user_id = None
@@ -171,7 +171,7 @@ class PresenceMixin:
         try:
             return self.presence_key.format(**self.__dict__)
         except KeyError as e:
-            logger.warning(f"Presence key format error: {e}. Using unformatted key.")
+            logger.warning("Presence key format error: %s. Using unformatted key.", e)
             return self.presence_key
 
     def get_presence_user_id(self) -> str:
@@ -227,7 +227,7 @@ class PresenceMixin:
             try:
                 self.handle_presence_join(presence_data)
             except Exception as e:
-                logger.exception(f"Error in handle_presence_join: {e}")
+                logger.exception("Error in handle_presence_join: %s", e)
 
     def untrack_presence(self):
         """Stop tracking this user's presence."""
@@ -245,7 +245,7 @@ class PresenceMixin:
                 try:
                     self.handle_presence_leave(presence_data)
                 except Exception as e:
-                    logger.exception(f"Error in handle_presence_leave: {e}")
+                    logger.exception("Error in handle_presence_leave: %s", e)
 
         self._presence_tracked = False
         self._presence_user_id = None
@@ -329,8 +329,8 @@ class CursorTracker:
 
     @classmethod
     def update_cursor(
-        cls, presence_key: str, user_id: str, x: int, y: int, meta: Dict[str, Any] = None
-    ):
+        cls, presence_key: str, user_id: str, x: int, y: int, meta: Optional[Dict[str, Any]] = None
+    ) -> None:
         """Update cursor position for a user."""
         cache_key = cls.cursor_cache_key(presence_key)
         cursors = cache.get(cache_key, {})
@@ -365,7 +365,7 @@ class CursorTracker:
         return active_cursors
 
     @classmethod
-    def remove_cursor(cls, presence_key: str, user_id: str):
+    def remove_cursor(cls, presence_key: str, user_id: str) -> None:
         """Remove cursor for a user."""
         cache_key = cls.cursor_cache_key(presence_key)
         cursors = cache.get(cache_key, {})
