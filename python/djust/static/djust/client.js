@@ -196,7 +196,9 @@ function handleServerResponse(data, eventName, triggerElement) {
                     const doc = parser.parseFromString(data.html, 'text/html');
                     const liveviewRoot = getLiveViewRoot();
                     const newRoot = doc.querySelector('[data-djust-root]') || doc.body;
-                    liveviewRoot.innerHTML = newRoot.innerHTML;
+                    preserveFormValues(liveviewRoot, () => {
+                        liveviewRoot.innerHTML = newRoot.innerHTML;
+                    });
                     clientVdomVersion = data.version;
                     initReactCounters();
                     initTodoItems();
@@ -2743,21 +2745,30 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
  * @param {HTMLElement} newRoot - The new content from server
  */
 /**
- * Preserve form values (textarea, input, select) across innerHTML replacement.
- * innerHTML destroys the DOM property .value; this saves and restores it.
+ * Preserve form values across innerHTML replacement.
+ *
+ * innerHTML destroys the DOM, creating new elements. For textareas the
+ * new element's .value is set from textContent, but for focused elements
+ * we must save and restore the user's in-progress value to avoid clobbering.
+ *
+ * After the replacement, all textareas get their .value synced from
+ * textContent (innerHTML only sets the attribute, not the property).
  */
 function preserveFormValues(container, updateFn) {
+    // Save values for focused form elements only (user is actively editing)
     const saved = [];
+    const active = document.activeElement;
     container.querySelectorAll('textarea, input, select').forEach(el => {
+        if (el !== active) return;
         const key = el.id || el.name;
         if (!key) return;
         const entry = { key, tag: el.tagName.toLowerCase() };
         if (el.tagName === 'TEXTAREA') {
             entry.value = el.value;
+            entry.selStart = el.selectionStart;
+            entry.selEnd = el.selectionEnd;
         } else if (el.type === 'checkbox' || el.type === 'radio') {
             entry.checked = el.checked;
-        } else if (el.tagName === 'SELECT') {
-            entry.value = el.value;
         } else {
             entry.value = el.value;
         }
@@ -2766,14 +2777,22 @@ function preserveFormValues(container, updateFn) {
 
     updateFn();
 
+    // Sync textarea .value from textContent (innerHTML doesn't set .value)
+    container.querySelectorAll('textarea').forEach(el => {
+        el.value = el.textContent || '';
+    });
+
+    // Restore focused element values
     for (const entry of saved) {
         const selector = entry.key.match(/^[a-zA-Z]/)
             ? `#${CSS.escape(entry.key)}, [name="${CSS.escape(entry.key)}"]`
             : `[name="${CSS.escape(entry.key)}"]`;
         const el = container.querySelector(selector);
         if (!el) continue;
-        if (entry.tag === 'textarea' || entry.tag === 'select') {
+        if (entry.tag === 'textarea') {
             el.value = entry.value;
+            try { el.setSelectionRange(entry.selStart, entry.selEnd); } catch (e) { /* */ }
+            el.focus();
         } else if (el.type === 'checkbox' || el.type === 'radio') {
             el.checked = entry.checked;
         } else if (entry.value !== undefined) {
