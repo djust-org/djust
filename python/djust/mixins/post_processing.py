@@ -84,7 +84,7 @@ class PostProcessingMixin:
                         "size_bytes": size_bytes,
                     }
                 except Exception:
-                    pass
+                    logger.debug("Failed to collect debug panel variable '%s'", name)
 
         from ..config import config
 

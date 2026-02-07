@@ -102,7 +102,7 @@ class InMemoryStateBackend(StateBackend):
                 # Fallback: serialize to get size (more expensive)
                 state_size = len(view.serialize_msgpack())
         except Exception:
-            pass  # Ignore errors in size estimation
+            logger.debug("Failed to estimate state size for key '%s'", key)
 
         # Warn about large states
         if warn_on_large_state and state_size > self._state_size_warning_kb * 1024:

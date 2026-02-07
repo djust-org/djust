@@ -4,7 +4,6 @@ RequestMixin - HTTP GET/POST request handling for LiveView.
 
 import json
 import logging
-import sys
 import time
 
 from django.http import HttpResponse, JsonResponse
@@ -105,39 +104,38 @@ class RequestMixin:
         if hasattr(self, "wrapper_template") and self.wrapper_template:
             from django.template import loader
 
-            wrapper = loader.get_template(self.wrapper_template)
-            html = wrapper.render({"liveview_content": liveview_content}, request)
-            html = html.replace("<div data-djust-root></div>", liveview_content)
+            try:
+                wrapper = loader.get_template(self.wrapper_template)
+                html = wrapper.render({"liveview_content": liveview_content}, request)
+                html = html.replace("<div data-djust-root></div>", liveview_content)
+            except Exception as e:
+                logger.error(
+                    "Failed to render wrapper_template '%s': %s",
+                    self.wrapper_template,
+                    e,
+                )
+                html = liveview_content
         else:
             html = liveview_content
 
         t_total = (time.perf_counter() - t_start) * 1000
-        print("\n[LIVEVIEW GET TIMING]", file=sys.stderr)
-        print(f"  mount(): {t_mount:.2f}ms", file=sys.stderr)
-        print(f"  assign_component_ids(): {t_assign:.2f}ms", file=sys.stderr)
-        print(f"  get_context_data(): {t_get_context:.2f}ms", file=sys.stderr)
-        print(f"  JSON serialize/deserialize: {t_json:.2f}ms", file=sys.stderr)
-        print(f"  save_components_to_session(): {t_save_components:.2f}ms", file=sys.stderr)
-        print(f"  initialize_rust_view(): {t_init_rust:.2f}ms", file=sys.stderr)
-        print(f"  sync_state_to_rust(): {t_sync:.2f}ms", file=sys.stderr)
-        print(f"  get_template(): {t_get_template:.2f}ms", file=sys.stderr)
-        print(f"  render_with_diff(): {t_render_diff:.2f}ms", file=sys.stderr)
-        print(f"  render_full_template(): {t_render_full:.2f}ms", file=sys.stderr)
-        print(f"  TOTAL get(): {t_total:.2f}ms\n", file=sys.stderr)
-
-        # Debug: Save the rendered HTML to a file for inspection
-        if "registration" in request.path:
-            form_start = html.find("<form")
-            if form_start != -1:
-                form_end = html.find("</form>", form_start) + 7
-                form_html = html[form_start:form_end]
-                import tempfile
-
-                with tempfile.NamedTemporaryFile(
-                    mode="w", delete=False, suffix=".html", prefix="registration_form_"
-                ) as f:
-                    f.write(form_html)
-                    print(f"[LiveView] Saved form HTML to {f.name}", file=sys.stderr)
+        logger.debug(
+            "[LIVEVIEW GET TIMING] mount=%.2fms assign_ids=%.2fms "
+            "get_context=%.2fms json=%.2fms save_components=%.2fms "
+            "init_rust=%.2fms sync_state=%.2fms get_template=%.2fms "
+            "render_diff=%.2fms render_full=%.2fms TOTAL=%.2fms",
+            t_mount,
+            t_assign,
+            t_get_context,
+            t_json,
+            t_save_components,
+            t_init_rust,
+            t_sync,
+            t_get_template,
+            t_render_diff,
+            t_render_full,
+            t_total,
+        )
 
         # Inject view path into data-djust-root for WebSocket mounting
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"

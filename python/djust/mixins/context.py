@@ -90,7 +90,9 @@ class ContextMixin:
                         try:
                             variable_paths_map = extract_template_variables(template_content)
                         except Exception:
-                            pass  # Rust extractor unavailable or failed; fall back to non-optimized path
+                            logger.debug(
+                                "Rust template variable extractor unavailable, using fallback"
+                            )
 
                     # Compute template hash once for codegen cache keys
                     import hashlib
@@ -162,7 +164,7 @@ class ContextMixin:
                                 ]
                             jit_serialized_keys.add(key)
             except Exception as e:
-                logger.debug(f"JIT auto-serialization failed: {e}", exc_info=True)
+                logger.warning("JIT auto-serialization failed: %s", e, exc_info=True)
 
         # Auto-add count for plain lists
         for key, value in list(context.items()):

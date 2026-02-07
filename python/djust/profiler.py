@@ -436,11 +436,11 @@ def auto_configure():
                 profiler.enable()
                 logger.info("[Profiler] Auto-enabled in DEBUG mode")
     except Exception:
-        pass  # Not in Django context or settings not configured
+        logger.debug("Profiler auto-configure skipped (not in Django context)")
 
 
 # Try to auto-configure when module is imported
 try:
     auto_configure()
 except Exception:
-    pass
+    logger.debug("Profiler auto-configure failed at import time")

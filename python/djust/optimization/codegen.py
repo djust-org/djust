@@ -6,7 +6,10 @@ Generates optimized Python serializer functions for specific variable access pat
 
 import hashlib
 import inspect
+import logging
 from typing import List, Dict, Callable
+
+logger = logging.getLogger(__name__)
 
 
 def generate_serializer_code(
@@ -179,7 +182,9 @@ def _generate_nested_access(
                 lines.append(f"{ind}    try:")
                 lines.append(f"{ind}        {result_var}['{root_attr}'] = {obj_access}()")
                 lines.append(f"{ind}    except Exception:")
-                lines.append(f"{ind}        pass  # Method call failed")
+                lines.append(
+                    f"{ind}        _logger.debug('Method %s() failed during serialization', '{root_attr}')"
+                )
             else:
                 # Direct attribute
                 lines.append(f"{ind}    {result_var}['{root_attr}'] = {obj_access}")
@@ -294,7 +299,9 @@ def _generate_nested_access(
                 lines.append(f"{ind}    try:")
                 lines.append(f"{ind}        {dict_path_full}['{attr_name}'] = {obj_access}()")
                 lines.append(f"{ind}    except Exception:")
-                lines.append(f"{ind}        pass  # Method call failed")
+                lines.append(
+                    f"{ind}        _logger.debug('Method %s() failed during serialization', '{attr_name}')"
+                )
             else:
                 # Direct attribute
                 lines.append(f"{ind}    {dict_path_full}['{attr_name}'] = {obj_access}")
@@ -336,7 +343,7 @@ def compile_serializer(code: str, func_name: str) -> Callable:
         >>> print(serialized)
         {"property": {"name": "123 Main St"}}
     """
-    namespace = {}
+    namespace = {"_logger": logging.getLogger("djust.codegen.generated")}
 
     try:
         # Compile to bytecode

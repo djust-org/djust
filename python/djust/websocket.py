@@ -134,7 +134,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         }
                     )
             except Exception:
-                pass  # Gracefully handle mocks or missing mixin
+                logger.warning("Failed to flush accessibility announcements", exc_info=True)
 
         # Flush focus command
         if hasattr(self.view_instance, "_drain_focus"):
@@ -150,7 +150,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         }
                     )
             except Exception:
-                pass  # Gracefully handle mocks or missing mixin
+                logger.warning("Failed to flush focus command", exc_info=True)
 
     async def send_error(self, error: str, **context) -> None:
         """
@@ -1560,7 +1560,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 try:
                     old_view._cleanup_uploads()
                 except Exception:
-                    pass
+                    logger.warning("Failed to clean up uploads for old view", exc_info=True)
 
         self.view_instance = None
 
