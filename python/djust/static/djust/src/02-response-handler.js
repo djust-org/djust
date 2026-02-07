@@ -49,9 +49,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                     const doc = parser.parseFromString(data.html, 'text/html');
                     const liveviewRoot = getLiveViewRoot();
                     const newRoot = doc.querySelector('[data-djust-root]') || doc.body;
-                    preserveFormValues(liveviewRoot, () => {
-                        liveviewRoot.innerHTML = newRoot.innerHTML;
-                    });
+                    morphChildren(liveviewRoot, newRoot);
                     clientVdomVersion = data.version;
                     initReactCounters();
                     initTodoItems();
