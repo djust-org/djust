@@ -656,6 +656,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # Initialize temporary assigns before mount
             await sync_to_async(self.view_instance._initialize_temporary_assigns)()
 
+            # Store request on the view so self.request works in handlers
+            # (Django's View.dispatch() does this for HTTP, but WS skips dispatch)
+            self.view_instance.request = request
+
             # Run synchronous view operations in a thread pool
             await sync_to_async(self.view_instance.mount)(request, **params)
         except Exception as e:
