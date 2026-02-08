@@ -46,22 +46,29 @@ def search(self, query: str = "", **kwargs):
 
 ### Custom event parameters
 
-For custom events (not form inputs), you can use any parameter names:
+For custom events (not form inputs), pass parameters via `data-dj-*` attributes.
+The `data-dj-` prefix is stripped automatically, so `data-dj-property-id` maps to
+the `property_id` Python parameter:
 
 ```python
 @event_handler()
 def delete_property(self, property_id: int, **kwargs):
-    """Custom parameter from data-property-id attribute"""
+    """property_id comes from data-dj-property-id attribute"""
     property = Property.objects.get(id=property_id)
     property.delete()
 ```
 
 Template usage:
 ```html
-<button dj-click="delete_property" data-property-id="{{ property.id }}">
+<button dj-click="delete_property" data-dj-property-id="{{ property.id }}">
     Delete
 </button>
 ```
+
+> **Note:** Plain `data-*` attributes (without the `dj-` prefix) also work —
+> `data-property-id` maps to `property_id` too. The `data-dj-*` convention is
+> recommended for consistency with `dj-click`, `dj-change`, and other djust
+> attributes, and to avoid collisions with non-djust libraries.
 
 ## Inline Handler Arguments
 
@@ -124,14 +131,14 @@ def filter(self, field: str, value: str, page: int = 1, **kwargs):
     self.current_page = page
 ```
 
-### Combining with data-* Attributes
+### Combining with data-dj-* Attributes
 
-You can combine inline arguments with `data-*` attributes. Inline arguments map to parameters by position, while `data-*` attributes map by name:
+You can combine inline arguments with `data-dj-*` attributes. Inline arguments map to parameters by position, while `data-dj-*` attributes map by name:
 
 ```html
 <button dj-click="update_item('delete')"
-        data-item-id="{{ item.id }}"
-        data-confirm="true">
+        data-dj-item-id="{{ item.id }}"
+        data-dj-confirm="true">
     Delete Item
 </button>
 ```
@@ -141,8 +148,8 @@ You can combine inline arguments with `data-*` attributes. Inline arguments map 
 def update_item(self, action: str, item_id: int = 0, confirm: bool = False, **kwargs):
     """
     action comes from inline arg ('delete')
-    item_id comes from data-item-id
-    confirm comes from data-confirm
+    item_id comes from data-dj-item-id
+    confirm comes from data-dj-confirm
     """
     if action == 'delete' and confirm:
         Item.objects.filter(id=item_id).delete()
@@ -184,8 +191,8 @@ def update_item(self, action: str, item_id: int = 0, confirm: bool = False, **kw
 {% for item in items %}
 <div class="item-row">
     <span>{{ item.name }}</span>
-    <button dj-click="item_action('edit')" data-item-id="{{ item.id }}">Edit</button>
-    <button dj-click="item_action('delete')" data-item-id="{{ item.id }}">Delete</button>
+    <button dj-click="item_action('edit')" data-dj-item-id="{{ item.id }}">Edit</button>
+    <button dj-click="item_action('delete')" data-dj-item-id="{{ item.id }}">Delete</button>
 </div>
 {% endfor %}
 ```
@@ -285,14 +292,14 @@ class MyView(LiveView):
 
 ### Automatic Type Coercion
 
-Template `data-*` attributes always send values as strings. djust **automatically coerces** these strings to the expected types based on your type hints:
+Template `data-dj-*` attributes always send values as strings. djust **automatically coerces** these strings to the expected types based on your type hints:
 
 ```python
 @event_handler()
 def update_quantity(self, item_id: int, quantity: int = 1):
     """
     item_id and quantity are automatically coerced from strings.
-    Template sends: data-item-id="123" data-quantity="5"
+    Template sends: data-dj-item-id="123" data-dj-quantity="5"
     Handler receives: item_id=123, quantity=5 (as integers)
     """
     self.items[item_id].quantity = quantity
@@ -661,7 +668,7 @@ def handler(self, value: str = "", **kwargs):
 
 ```python
 # Template sends invalid string for int
-<button dj-click="delete_item" data-item-id="not_a_number">Delete</button>
+<button dj-click="delete_item" data-dj-item-id="not_a_number">Delete</button>
 
 # ❌ This will fail - "not_a_number" can't be coerced to int
 @event_handler()
@@ -669,7 +676,7 @@ def delete_item(self, item_id: int):
     pass
 
 # ✅ Correct - template sends valid integer string
-<button dj-click="delete_item" data-item-id="{{ item.id }}">Delete</button>
+<button dj-click="delete_item" data-dj-item-id="{{ item.id }}">Delete</button>
 
 # Handler receives item_id as int (automatically coerced)
 @event_handler()
