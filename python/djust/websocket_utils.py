@@ -31,6 +31,78 @@ def _safe_error(detailed_msg: str, generic_msg: str = "Event rejected") -> str:
     return generic_msg
 
 
+def _format_handler_not_found_error(event_name: str, owner_instance) -> str:
+    """
+    Format helpful error message when event handler is not found.
+
+    Provides actionable suggestions for common mistakes:
+    1. Missing dj- prefix (e.g., 'click' instead of 'dj-click')
+    2. Missing @event_handler decorator
+    3. Missing mount() method for state variables
+
+    Args:
+        event_name: The event name that was not found
+        owner_instance: The LiveView instance
+
+    Returns:
+        Formatted error message with suggestions
+    """
+    error_msg = f"No handler found for event: '{event_name}'"
+
+    # Check if user forgot the 'dj-' prefix
+    if not event_name.startswith("dj-"):
+        suggested_name = f"dj-{event_name}"
+        # Check if the prefixed name exists
+        prefixed_handler = getattr(owner_instance, suggested_name, None)
+        if prefixed_handler and callable(prefixed_handler):
+            error_msg += (
+                f"\n\n💡 Did you forget the 'dj-' prefix?"
+                f"\n   Template uses: {event_name}"
+                f"\n   Handler found: {suggested_name}"
+                f"\n   Fix: Change @click=\"{event_name}\" to @click=\"{suggested_name}\""
+            )
+            return error_msg
+
+    # Check if handler exists but is not decorated with @event_handler
+    # Look for similar method names
+    class_name = type(owner_instance).__name__
+    similar_methods = [
+        name for name in dir(owner_instance)
+        if not name.startswith("_") and callable(getattr(owner_instance, name, None))
+    ]
+
+    # Try to find methods that might match (case-insensitive partial match)
+    lowercase_event = event_name.lower().replace("dj-", "")
+    similar = [
+        name for name in similar_methods
+        if name.lower().replace("dj-", "") == lowercase_event
+        or name.lower().replace("dj-", "") in lowercase_event
+        or lowercase_event.replace("dj-", "") in name.lower()
+    ]
+
+    if similar:
+        error_msg += (
+            f"\n\n💡 Found similar method(s): {similar}"
+            f"\n   If one of these is your handler, make sure it's decorated with @event_handler."
+            f"\n   Example:\n"
+            f"       @event_handler\n"
+            f"       def {similar[0]}(self):\n"
+            f"           # Your code here\n"
+            f"           pass"
+        )
+
+    # Check if this is a state variable access (common mount() mistake)
+    if "_" not in event_name and len(event_name) < 20:
+        error_msg += (
+            f"\n\n⚠️  If you're trying to update state like 'self.{event_name}', "
+            f"make sure it's initialized in mount():\n"
+            f"   def mount(self, request, **kwargs):\n"
+            f"       self.{event_name} = 0  # Initialize state here"
+        )
+
+    return error_msg
+
+
 def get_handler_coerce_setting(handler: Callable) -> bool:
     """
     Get the coerce_types setting from a handler's @event_handler decorator.
@@ -111,7 +183,8 @@ async def _validate_event_security(
 
     handler = getattr(owner_instance, event_name, None)
     if not handler or not callable(handler):
-        error_msg = f"No handler found for event: {event_name}"
+        # Provide helpful error messages for common mistakes
+        error_msg = _format_handler_not_found_error(event_name, owner_instance)
         logger.warning(error_msg)
         await ws.send_error(_safe_error(error_msg))
         return None
