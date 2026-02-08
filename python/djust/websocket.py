@@ -909,7 +909,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 else:
                     # No patches - send full HTML update
                     logger.info(
-                        "No patches from actor, sending full HTML update (length: %d)",
+                        "No patches from actor, sending full HTML update (length: %d). "
+                        "Run with DJUST_VDOM_TRACE=1 for detailed diff output.",
                         len(html) if html else 0,
                     )
 
@@ -1174,9 +1175,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # VDOM root is in the child template).
                         if len(patch_list) == 0 and version > 1:
                             logger.warning(
-                                "[djust] Event '%s' on %s produced no DOM changes. "
+                                "[djust] Event '%s' on %s produced no DOM changes (DJE-053). "
                                 "The modified state may be outside <div data-djust-root>. "
-                                "Consider using push_event for client-side-only state changes.",
+                                "Consider using push_event for client-side-only state changes. "
+                                "Run with DJUST_VDOM_TRACE=1 for detailed diff output. "
+                                "See: https://djust.org/errors/DJE-053",
                                 event_name,
                                 self.view_instance.__class__.__name__,
                             )
@@ -1215,7 +1218,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             self.view_instance._extract_liveview_content
                         )(html)
 
-                        logger.debug("[WebSocket] No patches generated, sending full HTML update")
+                        logger.debug(
+                            "[WebSocket] No patches generated, sending full HTML update. "
+                            "Run with DJUST_VDOM_TRACE=1 for detailed diff output."
+                        )
                         logger.debug(
                             "[WebSocket] html_content length: %d, starts with: %s...",
                             len(html_content),

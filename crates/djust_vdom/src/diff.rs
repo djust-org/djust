@@ -296,7 +296,9 @@ fn diff_children(
             vdom_trace!(
                 "  WARNING: Mixed keyed/unkeyed children ({}/{} keyed). \
                  For optimal diffing, add keys to all siblings or none. \
-                 Parent tag=<{}> id={:?}",
+                 Parent tag=<{}> id={:?}. \
+                 Run with DJUST_VDOM_TRACE=1 for detailed diff output. \
+                 See: https://djust.org/errors/DJE-050",
                 keyed_count,
                 total,
                 new.tag,
@@ -339,7 +341,8 @@ fn diff_keyed_children(
             if let Some(&prev_idx) = old_keys.get(k) {
                 vdom_trace!(
                     "WARNING: Duplicate key '{}' in old children at indices {} and {}. \
-                     Earlier element will be invisible to the keyed diff.",
+                     Earlier element will be invisible to the keyed diff. \
+                     See: https://djust.org/errors/DJE-051",
                     k,
                     prev_idx,
                     i
@@ -355,7 +358,8 @@ fn diff_keyed_children(
             if let Some(&prev_idx) = new_keys.get(k) {
                 vdom_trace!(
                     "WARNING: Duplicate key '{}' in new children at indices {} and {}. \
-                     Earlier element will be invisible to the keyed diff.",
+                     Earlier element will be invisible to the keyed diff. \
+                     See: https://djust.org/errors/DJE-051",
                     k,
                     prev_idx,
                     i
@@ -554,8 +558,9 @@ fn diff_indexed_children(
         vdom_trace!(
             "  PERFORMANCE WARNING: Unkeyed list with {} children produced {} patches. \
              This often means the list was reordered. Add `data-key` attributes to \
-             enable keyed diffing and reduce patch count. See: \
-             docs/guides/LIST_REORDERING_PERFORMANCE.md",
+             enable keyed diffing and reduce patch count. \
+             Run with DJUST_VDOM_TRACE=1 for detailed diff output. \
+             See: https://djust.org/errors/DJE-052",
             common,
             child_patches
         );
