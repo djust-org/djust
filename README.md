@@ -8,9 +8,12 @@ djust brings Phoenix LiveView-style reactive components to Django, with performa
 
 🌐 **[djust.org](https://djust.org)** | 🚀 **[Quick Start](https://djust.org/quickstart/)** | 📝 **[Examples](https://djust.org/examples/)**
 
+[![PyPI version](https://img.shields.io/pypi/v/djust.svg)](https://pypi.org/project/djust/)
+[![CI](https://github.com/djust-org/djust/actions/workflows/test.yml/badge.svg)](https://github.com/djust-org/djust/actions/workflows/test.yml)
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Django 3.2+](https://img.shields.io/badge/django-3.2+-green.svg)](https://www.djangoproject.com/)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/djust.svg)](https://pypi.org/project/djust/)
 
 ## ✨ Features
 

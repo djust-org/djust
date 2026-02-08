@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "djust"
 version = "0.3.0rc1"
-description = "Blazing fast reactive server-side rendering for Django, powered by Rust"
+description = "Phoenix LiveView-style reactive components for Django with Rust-powered performance. Real-time UI updates over WebSocket, no JavaScript build step required."
 authors = [{name = "djust contributors"}]
 readme = "README.md"
 requires-python = ">=3.8"
