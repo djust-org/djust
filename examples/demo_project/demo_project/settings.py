@@ -123,6 +123,10 @@ STORAGES = {
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# Unique cookie names to avoid collisions with other Django projects on localhost
+SESSION_COOKIE_NAME = "djust_demo_sessionid"
+CSRF_COOKIE_NAME = "djust_demo_csrftoken"
+
 # Channels configuration
 CHANNEL_LAYERS = {
     'default': {
