@@ -660,8 +660,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # (Django's View.dispatch() does this for HTTP, but WS skips dispatch)
             self.view_instance.request = request
 
+            # Resolve URL kwargs from the page path (e.g., slug, pk)
+            # Django's URL resolver extracts these during HTTP dispatch, but
+            # the WebSocket consumer doesn't go through URL routing, so we
+            # resolve them here and merge into mount() kwargs.
+            mount_kwargs = dict(params)
+            try:
+                from django.urls import resolve
+
+                match = resolve(page_url)
+                if match.kwargs:
+                    mount_kwargs.update(match.kwargs)
+            except Exception:
+                pass  # URL may not resolve (e.g., root "/") — that's fine
+
             # Run synchronous view operations in a thread pool
-            await sync_to_async(self.view_instance.mount)(request, **params)
+            await sync_to_async(self.view_instance.mount)(request, **mount_kwargs)
         except Exception as e:
             response = handle_exception(
                 e,
