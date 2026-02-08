@@ -992,6 +992,11 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                         Ok(false)
                     }
                 }
+                Value::Object(map) => {
+                    // Django: "x in dict" checks dict keys
+                    let key = needle.to_string();
+                    Ok(map.contains_key(&key))
+                }
                 _ => Ok(false),
             };
         }
@@ -1022,6 +1027,38 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
 }
 
 fn get_value(expr: &str, context: &Context) -> Result<Value> {
+    // Handle pipe filters in expressions (e.g., "project.id|stringformat:\"s\"")
+    if expr.contains('|') {
+        let parts: Vec<&str> = expr.splitn(2, '|').collect();
+        let var_name = parts[0].trim();
+        let filter_expr = parts[1].trim();
+
+        // Resolve the base variable
+        let mut value = get_value(var_name, context)?;
+
+        // Parse and apply filters (handles chained filters too)
+        for filter_part in filter_expr.split('|') {
+            let filter_part = filter_part.trim();
+            let (filter_name, arg) = if let Some(colon_pos) = filter_part.find(':') {
+                let name = &filter_part[..colon_pos];
+                let mut arg_str = filter_part[colon_pos + 1..].trim().to_string();
+                // Remove surrounding quotes from argument
+                if (arg_str.starts_with('"') && arg_str.ends_with('"'))
+                    || (arg_str.starts_with('\'') && arg_str.ends_with('\''))
+                {
+                    arg_str = arg_str[1..arg_str.len() - 1].to_string();
+                }
+                (name, Some(arg_str))
+            } else {
+                (filter_part, None)
+            };
+
+            value = filters::apply_filter(filter_name, &value, arg.as_deref())?;
+        }
+
+        return Ok(value);
+    }
+
     // Try to get from context
     if let Some(value) = context.get(expr) {
         return Ok(value.clone());
@@ -1482,5 +1519,52 @@ mod tests {
 
         context.set("sub".to_string(), Value::String("xyz".to_string()));
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+    }
+
+    #[test]
+    fn test_if_in_dict() {
+        // Django: "x in dict" checks dict keys
+        let tokens = tokenize("{% if key in mydict %}found{% endif %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+
+        let mut map = std::collections::HashMap::new();
+        map.insert("2".to_string(), Value::Bool(true));
+        map.insert("5".to_string(), Value::String("hello".to_string()));
+        context.set("mydict".to_string(), Value::Object(map));
+
+        // Key exists → found
+        context.set("key".to_string(), Value::String("2".to_string()));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "found");
+
+        // Key does not exist → empty
+        context.set("key".to_string(), Value::String("99".to_string()));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+
+        // Integer key converted to string for lookup
+        context.set("key".to_string(), Value::Integer(5));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "found");
+    }
+
+    #[test]
+    fn test_if_filter_in_dict() {
+        // Tests: {% if val|stringformat:"s" in mydict %}
+        let tokens =
+            tokenize(r#"{% if val|stringformat:"s" in mydict %}found{% else %}nope{% endif %}"#)
+                .unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+
+        let mut map = std::collections::HashMap::new();
+        map.insert("42".to_string(), Value::Bool(true));
+        context.set("mydict".to_string(), Value::Object(map));
+
+        // Integer value, filter converts to string "42", should match dict key
+        context.set("val".to_string(), Value::Integer(42));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "found");
+
+        // Non-matching value
+        context.set("val".to_string(), Value::Integer(99));
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "nope");
     }
 }
