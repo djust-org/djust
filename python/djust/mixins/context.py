@@ -227,7 +227,11 @@ class ContextMixin:
 
     def _get_context_processors(self) -> list:
         """
-        Get context processors from DjustTemplateBackend settings.
+        Get context processors from template backend settings.
+
+        Checks DjustTemplateBackend first, then falls back to the standard
+        Django template backend so that apps using the default backend still
+        get context processors (user, request, messages, etc.) applied.
         """
         from django.conf import settings
 
@@ -236,11 +240,17 @@ class ContextMixin:
         if cache_key in _context_processors_cache:
             return _context_processors_cache[cache_key]
 
+        # Prefer DjustTemplateBackend, fall back to DjangoTemplates
+        _BACKENDS = (
+            "djust.template_backend.DjustTemplateBackend",
+            "django.template.backends.django.DjangoTemplates",
+        )
         for template_config in getattr(settings, "TEMPLATES", []):
-            if template_config.get("BACKEND") == "djust.template_backend.DjustTemplateBackend":
+            if template_config.get("BACKEND") in _BACKENDS:
                 processors = template_config.get("OPTIONS", {}).get("context_processors", [])
-                _context_processors_cache[cache_key] = processors
-                return processors
+                if processors:
+                    _context_processors_cache[cache_key] = processors
+                    return processors
 
         _context_processors_cache[cache_key] = []
         return []
