@@ -71,6 +71,25 @@ Each issue should lead to either: a better error message, a `djust_checks` syste
 
 ---
 
+## DX-005: `data-dj-*` event parameters silently map to wrong handler params
+
+**Severity**: High — handler receives default values, not user input. Completely silent.
+**Status**: Fixed in djust-theming
+
+**What happens**: Developer uses `data-dj-mode="dark"` on a button with `dj-click="set_theme_mode"`. The JS extracts this as `{dj_mode: "dark"}` (stripping `data-`, converting kebab to snake_case). But the handler expects `mode`, not `dj_mode`. The value ends up in `**kwargs` while `mode` gets its default value.
+
+**How developer encounters it**: Natural to prefix data attributes with `dj-` to namespace them (e.g. `data-dj-preset`, `data-dj-mode`). There's no error — the handler runs with defaults, and the `dj_*` values are silently absorbed by `**kwargs`.
+
+**Root cause**: The JS `extractTypedParams()` strips only the `data-` prefix (per HTML spec), not the `dj-` namespace prefix. So `data-dj-foo` → `dj_foo`, not `foo`.
+
+**Resolution**:
+- **Convention**: Event parameters should use `data-preset`, `data-mode` (no `dj-` prefix). Reserve `data-dj-*` for djust internals (`data-dj-id`, etc.)
+- **Framework fix**: Updated ThemeMixin templates and handlers to use correct attribute names
+- **System check**: Could add a Q0xx check that warns when `data-dj-*` attributes are used alongside `dj-click`/`dj-change` (since they likely indicate parameter naming bugs)
+- **Docs**: Document the data attribute naming convention clearly
+
+---
+
 ## Template for new issues
 
 ```
