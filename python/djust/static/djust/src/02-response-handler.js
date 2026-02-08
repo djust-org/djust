@@ -71,7 +71,11 @@ function handleServerResponse(data, eventName, triggerElement) {
         });
 
         // Apply patches (efficient incremental updates)
-        if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
+        // Empty patches array = server confirmed no DOM changes needed (no-op success)
+        if (data.patches && Array.isArray(data.patches) && data.patches.length === 0) {
+            if (globalThis.djustDebug) console.log('[LiveView] No DOM changes needed (0 patches)');
+        }
+        else if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
             console.log('[LiveView] Applying', data.patches.length, 'patches');
 
             // Store timing info globally for debug panel access
@@ -119,7 +123,7 @@ function handleServerResponse(data, eventName, triggerElement) {
         }
         // Apply full HTML update (fallback)
         else if (data.html) {
-            console.log('[LiveView] Applying full HTML update');
+            if (globalThis.djustDebug) console.log('[LiveView] Applying full HTML update');
             _isBroadcastUpdate = !!data.broadcast;
             const parser = new DOMParser();
             const doc = parser.parseFromString(data.html, 'text/html');

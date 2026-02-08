@@ -1,0 +1,90 @@
+# DX Issues Log
+
+Tracking developer experience issues encountered in real-world djust usage.
+Each issue should lead to either: a better error message, a `djust_checks` system check, or a framework fix.
+
+---
+
+## DX-001: `document.addEventListener` for djust custom events (silent failure)
+
+**Severity**: High — completely silent, no errors anywhere
+**Status**: Mitigated (T004 check added)
+
+**What happens**: Developer writes `document.addEventListener('djust:push_event', ...)` in a template's `<script>` block. The event never fires because `djust:push_event` (and all `djust:*` custom events) are dispatched on `window`, not `document`.
+
+**How developer encounters it**: Copy-paste from generic DOM event examples, or habit of using `document.addEventListener` for custom events. No error in console, no warning — the handler just silently never fires.
+
+**Resolution**:
+- **Framework fix**: N/A (dispatching on `window` is correct — it's the global event bus)
+- **System check**: `djust.T004` — scans templates for `document.addEventListener('djust:` and warns to use `window.addEventListener`
+- **Docs**: Should document that all `djust:*` events use `window` as the target
+
+---
+
+## DX-002: Loading state stuck when using `_skip_render` with `push_event`
+
+**Severity**: Medium — button visually stuck in loading state
+**Status**: Fixed in framework
+
+**What happens**: Developer creates an event handler that uses `push_event()` with `_skip_render = True`. The client button enters loading state (spinner/disabled), but since `_skip_render` means no patch/html response is sent, the loading state is never cleared.
+
+**How developer encounters it**: Following the `push_event` pattern for client-side-only state (e.g., opening a panel, toggling UI). Button click triggers loading indicator that never resolves.
+
+**Resolution**:
+- **Framework fix**: `03-websocket.js` now calls `globalLoadingManager.stopLoading()` in the `push_event` case of the WebSocket message handler
+- **System check**: Not feasible as a static check (runtime behavior)
+- **Future**: Consider making `_skip_render` automatically imply "this will be a push_event-only response" and document the pattern
+
+---
+
+## DX-003: 0-patch VDOM diff indistinguishable from first render
+
+**Severity**: High — causes page mangle (full HTML replacement)
+**Status**: Fixed in framework
+
+**What happens**: When an event handler modifies state that's rendered outside `<div data-djust-root>` (e.g., in `base.html` while VDOM root is in `content.html`), the Rust VDOM diff returns 0 patches. Previously, both "first render" and "0 changes" returned `None`, so Python fell through to sending full HTML — which mangled the page.
+
+**How developer encounters it**: Template inheritance with state split between base template and child template. Event handler updates state used in the base template (outside the VDOM root). Page visually breaks on interaction.
+
+**Resolution**:
+- **Framework fix**: Rust now returns `Some("[]")` for 0-change diffs, `None` only for first render
+- **Runtime warning**: Python logs `[djust] Event 'X' on Y produced no DOM changes` when this occurs
+- **djust-monitor**: `no_change` reason added to `_on_full_html_update` signal for monitoring
+- **System check**: Not feasible as a static check (depends on runtime state)
+
+---
+
+## DX-004: State outside `data-djust-root` causes silent DOM mangle
+
+**Severity**: High — page breaks with no clear error
+**Status**: Mitigated (runtime warning added)
+
+**What happens**: Developer puts a `{% if show_panel %}` block in `base.html` (outside the VDOM root) and an event handler that sets `self.show_panel = True`. The VDOM diff can't see changes outside its root, so it either returns 0 patches (now handled) or the full HTML fallback overwrites the entire page.
+
+**How developer encounters it**: Natural Django pattern of putting UI chrome (sidebars, modals, panels) in the base template. Works fine with traditional Django, breaks with LiveView because the VDOM root is only the child template's content.
+
+**Resolution**:
+- **Runtime warning**: Python now logs a warning when 0-patch diff is detected (DX-003 fix)
+- **Recommended pattern**: Use `push_event` for UI state that's outside the VDOM root
+- **Future**: Consider a V0xx check that inspects `get_context_data()` keys vs variables inside `data-djust-root`
+- **Docs**: Should prominently document the "VDOM root boundary" concept
+
+---
+
+## Template for new issues
+
+```
+## DX-NNN: Short description
+
+**Severity**: Low/Medium/High
+**Status**: Open / Mitigated / Fixed
+
+**What happens**: ...
+
+**How developer encounters it**: ...
+
+**Resolution**:
+- **Framework fix**: ...
+- **System check**: ...
+- **Docs**: ...
+```

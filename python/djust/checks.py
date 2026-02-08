@@ -456,6 +456,7 @@ _DEPRECATED_ATTR_RE = re.compile(
 _DJ_ROOT_RE = re.compile(r"data-djust-root")
 _INCLUDE_RE = re.compile(r"\{%\s*include\s+")
 _LIVEVIEW_CONTENT_RE = re.compile(r"\{\{\s*liveview_content\s*\|\s*safe\s*\}\}")
+_DOC_DJUST_EVENT_RE = re.compile(r"""document\s*\.\s*addEventListener\s*\(\s*['"]djust:""")
 
 
 @register("djust")
@@ -518,6 +519,21 @@ def check_templates(app_configs, **kwargs):
                             id="djust.T003",
                         )
                     )
+
+        # T004 -- document.addEventListener('djust:...') should be window
+        for match in _DOC_DJUST_EVENT_RE.finditer(content):
+            lineno = content[: match.start()].count("\n") + 1
+            errors.append(
+                Warning(
+                    "%s:%d -- document.addEventListener for djust: event." % (relpath, lineno),
+                    hint=(
+                        "djust custom events (djust:push_event, djust:navigate, etc.) "
+                        "are dispatched on window, not document. "
+                        "Change to: window.addEventListener('djust:...')"
+                    ),
+                    id="djust.T004",
+                )
+            )
 
     return errors
 

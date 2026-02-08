@@ -24,6 +24,7 @@ from .websocket_utils import (
     get_handler_coerce_setting,
 )
 from .presence import PresenceManager
+from .signals import full_html_update
 
 logger = logging.getLogger(__name__)
 hotreload_logger = logging.getLogger("djust.hotreload")
@@ -33,6 +34,24 @@ try:
 except ImportError:
     create_session_actor = None
     SessionActorHandle = None
+
+
+def _emit_full_html_update(view_instance, reason, event_name, html, version, patch_count=None):
+    """Emit the full_html_update signal with context about why patches weren't used."""
+    view_cls = view_instance.__class__
+    view_name = f"{view_cls.__module__}.{view_cls.__qualname__}"
+    html_size = len(html.encode("utf-8")) if html else 0
+    previous_html_size = getattr(view_instance, "_previous_html_size", None)
+    full_html_update.send(
+        sender=view_cls,
+        reason=reason,
+        event_name=event_name,
+        view_name=view_name,
+        html_size=html_size,
+        previous_html_size=previous_html_size,
+        patch_count=patch_count,
+        version=version,
+    )
 
 
 class LiveViewConsumer(AsyncWebsocketConsumer):
@@ -1044,6 +1063,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     )
                                     patches = None  # Send full HTML for the child subtree
                                     version = 0
+                                    _emit_full_html_update(
+                                        target_view,
+                                        "embedded_child",
+                                        event_name,
+                                        html,
+                                        version,
+                                    )
                             else:
                                 # Get context with tracking
                                 with tracker.track("Context Preparation"):
@@ -1093,6 +1119,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # TODO Phase 4.1: Implement per-component VDOM tracking
                     if component_id:
                         patches = None
+                        _emit_full_html_update(
+                            self.view_instance,
+                            "component_event",
+                            event_name,
+                            html,
+                            version,
+                        )
 
                     # For views with dynamic templates (template as property),
                     # patches may be empty because VDOM state is lost on recreation.
@@ -1124,10 +1157,38 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     self.view_instance._rust_view.reset()
                                 patches = None
                                 patch_list = None
+                                _emit_full_html_update(
+                                    self.view_instance,
+                                    "patch_compression",
+                                    event_name,
+                                    html,
+                                    version,
+                                    patch_count=patch_count,
+                                )
 
                     # Note: patch_list can be [] (empty list) which is valid - means no changes needed
                     # Only send full HTML if patches is None (not just falsy)
                     if patches is not None and patch_list is not None:
+                        # Detect 0-change diffs: event handler modified state outside
+                        # the <div data-djust-root> boundary (e.g. in base.html while
+                        # VDOM root is in the child template).
+                        if len(patch_list) == 0 and version > 1:
+                            logger.warning(
+                                "[djust] Event '%s' on %s produced no DOM changes. "
+                                "The modified state may be outside <div data-djust-root>. "
+                                "Consider using push_event for client-side-only state changes.",
+                                event_name,
+                                self.view_instance.__class__.__name__,
+                            )
+                            if not component_id:
+                                _emit_full_html_update(
+                                    self.view_instance,
+                                    "no_change",
+                                    event_name,
+                                    "",
+                                    version,
+                                )
+
                         # Calculate timing for JSON mode
                         timing["total"] = (
                             time.perf_counter() - start_time
@@ -1160,6 +1221,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             len(html_content),
                             html_content[:150],
                         )
+
+                        # Emit signal — distinguish first render from diff failure
+                        if not component_id:
+                            reason = "first_render" if version <= 1 else "no_patches"
+                            _emit_full_html_update(
+                                self.view_instance,
+                                reason,
+                                event_name,
+                                html_content,
+                                version,
+                            )
 
                         await self._send_update(
                             html=html_content,

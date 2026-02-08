@@ -200,9 +200,12 @@ impl RustLiveViewBackend {
                         PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
                     })?)
                 } else {
-                    None
+                    // 0-change diff: return explicit empty array so Python can
+                    // distinguish "no changes" from "first render" (which is None).
+                    Some("[]".to_string())
                 }
             } else {
+                // First render — no previous VDOM to diff against
                 None
             };
 
@@ -250,9 +253,15 @@ impl RustLiveViewBackend {
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
                 Some(PyBytes::new(py, &bytes).into())
             } else {
-                None
+                // 0-change diff: return empty msgpack array so Python can
+                // distinguish "no changes" from "first render" (which is None).
+                let empty: Vec<djust_vdom::Patch> = Vec::new();
+                let bytes = rmp_serde::to_vec(&empty)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+                Some(PyBytes::new(py, &bytes).into())
             }
         } else {
+            // First render — no previous VDOM to diff against
             None
         };
 

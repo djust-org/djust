@@ -294,6 +294,9 @@ class LiveViewWebSocket {
                 if (typeof dispatchPushEventToHooks === 'function') {
                     dispatchPushEventToHooks(data.event, data.payload);
                 }
+                // Clear loading state — when _skip_render is used, this is the
+                // only response the client gets (no patch/html_update follows).
+                globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                 break;
 
             case 'embedded_update':

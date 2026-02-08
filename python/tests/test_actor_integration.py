@@ -231,10 +231,11 @@ class TestActorIntegration:
         # Calling non-existent handler returns empty response (not exception)
         result = await handle.event("nonexistent_handler", {})
 
-        # Should return response without patches on error
+        # Should return response with empty patches on error (no state changed)
+        # "[]" means "0-change diff" vs None which means "first render"
         # (html may contain data-dj attributes from to_html())
         assert isinstance(result, dict)
-        assert result.get("patches") is None
+        assert result.get("patches") is None or result.get("patches") == "[]"
 
         await handle.shutdown()
 
@@ -278,10 +279,11 @@ class TestActorIntegration:
         # Python exception should be caught and return empty response
         result = await handle.event("broken_handler", {})
 
-        # Should return response without patches on error
+        # Should return response with empty patches on error (no state changed)
+        # "[]" means "0-change diff" vs None which means "first render"
         # (html may contain data-dj attributes from to_html())
         assert isinstance(result, dict)
-        assert result.get("patches") is None
+        assert result.get("patches") is None or result.get("patches") == "[]"
 
         await handle.shutdown()
 
@@ -306,10 +308,11 @@ class TestActorIntegration:
         # Should handle invalid context_data gracefully (return empty response)
         result = await handle.event("some_event", {})
 
-        # Should return response without patches on error
+        # Should return response with empty patches on error (no state changed)
+        # "[]" means "0-change diff" vs None which means "first render"
         # (html may contain data-dj attributes from to_html())
         assert isinstance(result, dict)
-        assert result.get("patches") is None
+        assert result.get("patches") is None or result.get("patches") == "[]"
 
         await handle.shutdown()
 
