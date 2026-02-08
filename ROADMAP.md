@@ -147,3 +147,27 @@ See [docs/guides/sw-enhancements.md](docs/guides/sw-enhancements.md) for full ar
 - **VDOM Patch Caching** — Cache last rendered DOM state per page; on back-navigation, serve cached state and diff against fresh server response
 - **LiveView State Snapshots** — Serialize LiveView state on unmount; restore on back-navigation for instant state recovery
 - **Request Batching** — Batch parallel HTTP requests from multiple components into a single server round-trip
+
+## 10. Framework Portability (Flask/FastAPI Support)
+
+Explore making djust's core available beyond Django.
+
+**Already framework-agnostic (Rust crates):**
+- `djust_vdom` — VDOM diffing, HTML parsing, patch generation (zero Django coupling)
+- `djust_templates` — Template rendering with abstract `TemplateLoader` trait
+- `djust_core` — Value types, context management, serialization
+
+**Django-coupled (Python layer):**
+- `websocket.py` — inherits `channels.AsyncWebsocketConsumer`
+- `routing.py` — uses `django.urls.path`
+- `live_view.py` — inherits `django.views.View`
+- `mixins/template.py` — uses `django.template.loader`
+
+**What a per-framework adapter would need (~800-1500 lines each):**
+- WebSocket handler (Starlette `WebSocket` for FastAPI, Quart for Flask)
+- Route registration adapter
+- View base class (plain Python, no Django inheritance)
+- Template loader (Jinja2 via `TemplateLoader` trait, or use Rust engine directly)
+- Session/state bridge (the `StateBackend` ABC is already framework-agnostic)
+
+**Status**: Not started. Gauging community interest via [GitHub Discussions](https://github.com/johnrtipton/djust/discussions). The Rust crates are architecturally ready to be published as standalone PyPI packages.
