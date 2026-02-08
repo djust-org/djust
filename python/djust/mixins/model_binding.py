@@ -114,3 +114,9 @@ class ModelBindingMixin:
 
         setattr(self, field, value)
         logger.debug("[dj-model] Set %s.%s = %r", self.__class__.__name__, field, value)
+
+        # Skip re-render: update_model only stores a value on the view
+        # instance — no DOM change is needed. Re-rendering would cause a
+        # wasteful server round-trip that replaces the DOM and loses focus
+        # on the input the user is actively typing in.
+        self._skip_render = True

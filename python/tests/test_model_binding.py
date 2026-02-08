@@ -100,3 +100,18 @@ class TestModelBindingMixin:
                 original = getattr(view, field)
                 view.update_model(field=field, value="hacked")
                 assert getattr(view, field) == original
+
+    def test_skip_render_set_on_success(self):
+        """update_model sets _skip_render to avoid wasteful re-renders."""
+        self.view.update_model(field="search_query", value="hello")
+        assert self.view._skip_render is True
+
+    def test_skip_render_not_set_on_blocked(self):
+        """_skip_render should NOT be set when the update is blocked."""
+        self.view.update_model(field="_private", value="hacked")
+        assert not getattr(self.view, "_skip_render", False)
+
+    def test_skip_render_not_set_on_nonexistent(self):
+        """_skip_render should NOT be set for nonexistent fields."""
+        self.view.update_model(field="nonexistent", value="x")
+        assert not getattr(self.view, "_skip_render", False)
