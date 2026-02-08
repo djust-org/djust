@@ -177,6 +177,47 @@ def check_configuration(app_configs, **kwargs):
             )
         )
 
+    # C005 -- WebSocket routes missing AuthMiddlewareStack
+    asgi_path = getattr(settings, "ASGI_APPLICATION", None)
+    if asgi_path:
+        try:
+            from importlib import import_module
+
+            module_path, attr = asgi_path.rsplit(".", 1)
+            asgi_app = getattr(import_module(module_path), attr)
+            # ProtocolTypeRouter stores routes in .application_mapping
+            app_map = getattr(asgi_app, "application_mapping", None)
+            if app_map and "websocket" in app_map:
+                ws_app = app_map["websocket"]
+                # Walk the middleware chain looking for AuthMiddlewareStack
+                has_auth = False
+                current = ws_app
+                for _ in range(10):  # bounded walk
+                    cls_name = type(current).__name__
+                    mod_name = type(current).__module__ or ""
+                    if "auth" in cls_name.lower() or "auth" in mod_name.lower():
+                        has_auth = True
+                        break
+                    # Follow common wrapper patterns
+                    inner = getattr(current, "inner", None) or getattr(current, "application", None)
+                    if inner is None or inner is current:
+                        break
+                    current = inner
+                if not has_auth:
+                    errors.append(
+                        Warning(
+                            "WebSocket routes are not wrapped with AuthMiddlewareStack.",
+                            hint=(
+                                "Without AuthMiddlewareStack, request.user is unavailable in "
+                                "LiveView mount() over WebSocket. Wrap your URLRouter: "
+                                "AuthMiddlewareStack(URLRouter(websocket_urlpatterns))"
+                            ),
+                            id="djust.C005",
+                        )
+                    )
+        except Exception:
+            pass  # Don't fail the check if ASGI app can't be introspected
+
     # S004 -- DEBUG=True with non-localhost ALLOWED_HOSTS
     if getattr(settings, "DEBUG", False):
         allowed = getattr(settings, "ALLOWED_HOSTS", [])
