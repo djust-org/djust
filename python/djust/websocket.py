@@ -1218,10 +1218,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             self.view_instance._extract_liveview_content
                         )(html)
 
-                        logger.debug(
-                            "[WebSocket] No patches generated, sending full HTML update. "
-                            "Run with DJUST_VDOM_TRACE=1 for detailed diff output."
-                        )
+                        if version > 1:
+                            logger.warning(
+                                "[djust] Event '%s' on %s fell back to full HTML update "
+                                "(DJE-053). VDOM diff returned no patches — this may "
+                                "cause event listeners and DOM state to be lost. "
+                                "If this event only updates client-side state, use "
+                                "push_event + _skip_render = True instead. "
+                                "Run with DJUST_VDOM_TRACE=1 for detailed diff output. "
+                                "See: https://djust.org/errors/DJE-053",
+                                event_name,
+                                self.view_instance.__class__.__name__,
+                            )
+                        else:
+                            logger.debug("[WebSocket] First render, sending full HTML update.")
                         logger.debug(
                             "[WebSocket] html_content length: %d, starts with: %s...",
                             len(html_content),
