@@ -71,22 +71,21 @@ Each issue should lead to either: a better error message, a `djust_checks` syste
 
 ---
 
-## DX-005: `data-dj-*` event parameters silently map to wrong handler params
+## DX-005: `data-dj-*` event parameters silently mapped to wrong handler params
 
 **Severity**: High — handler receives default values, not user input. Completely silent.
-**Status**: Fixed in djust-theming
+**Status**: Fixed in framework
 
-**What happens**: Developer uses `data-dj-mode="dark"` on a button with `dj-click="set_theme_mode"`. The JS extracts this as `{dj_mode: "dark"}` (stripping `data-`, converting kebab to snake_case). But the handler expects `mode`, not `dj_mode`. The value ends up in `**kwargs` while `mode` gets its default value.
+**What happens**: Developer uses `data-dj-mode="dark"` on a button with `dj-click="set_theme_mode"`. The JS extracted this as `{dj_mode: "dark"}` (stripping `data-`, converting kebab to snake_case). But the handler expected `mode`, not `dj_mode`. The value ended up in `**kwargs` while `mode` got its default value.
 
-**How developer encounters it**: Natural to prefix data attributes with `dj-` to namespace them (e.g. `data-dj-preset`, `data-dj-mode`). There's no error — the handler runs with defaults, and the `dj_*` values are silently absorbed by `**kwargs`.
+**How developer encounters it**: Natural to prefix data attributes with `dj-` to namespace them (e.g. `data-dj-preset`, `data-dj-mode`). There was no error — the handler ran with defaults, and the `dj_*` values were silently absorbed by `**kwargs`.
 
-**Root cause**: The JS `extractTypedParams()` strips only the `data-` prefix (per HTML spec), not the `dj-` namespace prefix. So `data-dj-foo` → `dj_foo`, not `foo`.
+**Root cause**: The JS `extractTypedParams()` stripped only the `data-` prefix (per HTML spec), not the `dj-` namespace prefix. So `data-dj-foo` → `dj_foo`, not `foo`.
 
 **Resolution**:
-- **Convention**: Event parameters should use `data-preset`, `data-mode` (no `dj-` prefix). Reserve `data-dj-*` for djust internals (`data-dj-id`, etc.)
-- **Framework fix**: Updated ThemeMixin templates and handlers to use correct attribute names
-- **System check**: Could add a Q0xx check that warns when `data-dj-*` attributes are used alongside `dj-click`/`dj-change` (since they likely indicate parameter naming bugs)
-- **Docs**: Document the data attribute naming convention clearly
+- **Framework fix**: JS `extractTypedParams()` now strips the `dj_` prefix after kebab→snake conversion, so `data-dj-preset` → `preset` (not `dj_preset`)
+- **Convention**: `data-dj-*` is the correct namespace for event params. Consistent with `dj-click`, `dj-change`, `data-dj-id`, etc.
+- **Both work**: `data-dj-preset` → `preset`, `data-preset` → `preset` (plain attrs still work)
 
 ---
 
