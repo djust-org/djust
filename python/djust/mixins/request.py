@@ -137,6 +137,14 @@ class RequestMixin:
             t_total,
         )
 
+        # Expose timing breakdown for metrics middleware
+        request._djust_timing = {
+            "mount_ms": round(t_mount, 2),
+            "context_ms": round(t_get_context + t_json, 2),
+            "render_ms": round(t_render_full, 2),
+            "vdom_ms": round(t_init_rust + t_sync + t_render_diff, 2),
+        }
+
         # Inject view path into data-djust-root for WebSocket mounting
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
         html = html.replace(
