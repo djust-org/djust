@@ -93,10 +93,23 @@ def _build_path_tree(paths: List[str]) -> Dict:
     Note: Numeric indices (e.g., "leases.0.property") are converted to "__list_item__"
     to indicate the serializer should iterate over the list.
     """
+    # Dict iteration methods used in Django templates (e.g., {% for k, v in dict.items %}).
+    # These are template-level operations handled by the template engine, not data
+    # attributes to serialize. Stripping them ensures the parent dict is serialized
+    # whole, rather than storing a builtin_function_or_method reference.
+    _DICT_METHODS = {"items", "keys", "values"}
+
     tree = {}
 
     for path in paths:
         parts = path.split(".")
+
+        # Strip terminal dict iteration methods
+        while parts and parts[-1] in _DICT_METHODS:
+            parts.pop()
+        if not parts:
+            continue
+
         current = tree
 
         # Skip paths starting with numeric index (e.g., "0.url" from "posts.0.url")
@@ -164,8 +177,13 @@ def _generate_nested_access(
         lines.append(f"{ind}if hasattr({obj_var}, '{root_attr}') and {obj_access} is not None:")
 
         if tree:
-            # Has nested attributes - create dict and recurse
-            lines.append(f"{ind}    {result_var}['{root_attr}'] = {{}}")
+            # If the value is a dict (e.g., JSONField), serialize it whole —
+            # dict keys aren't Python attributes, so nested attribute access
+            # would fail. Otherwise, create empty dict and recurse for models.
+            lines.append(f"{ind}    if isinstance({obj_access}, dict):")
+            lines.append(f"{ind}        {result_var}['{root_attr}'] = {obj_access}")
+            lines.append(f"{ind}    else:")
+            lines.append(f"{ind}        {result_var}['{root_attr}'] = {{}}")
             _generate_nested_access(
                 lines,
                 current_path,
@@ -173,7 +191,7 @@ def _generate_nested_access(
                 obj_access,
                 result_var,
                 None,
-                indent + 1,
+                indent + 2,
             )
         else:
             # Leaf node - direct assignment

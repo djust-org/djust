@@ -113,6 +113,17 @@ class DjangoJSONEncoder(json.JSONEncoder):
             # This is likely a QuerySet
             return list(obj)
 
+        # Safety net: skip callable objects (e.g., dict.items method references
+        # that leaked through JIT codegen). These should never be in serialized
+        # context but can appear when template variable extraction picks up
+        # dict method names like .items/.keys/.values.
+        if callable(obj):
+            logger.debug(
+                "Skipping callable %s during JSON serialization",
+                type(obj).__name__,
+            )
+            return None
+
         return super().default(obj)
 
     def _serialize_model_safely(self, obj):
