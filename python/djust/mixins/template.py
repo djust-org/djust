@@ -527,6 +527,10 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     else:
                         print(f"[LiveView]   Patch {i}: {patch}", file=sys.stderr)
 
+        # Track HTML sizes for diagnostics (used by full_html_update signal)
+        self._previous_html_size = getattr(self, "_current_html_size", None)
+        self._current_html_size = len(html)
+
         # Reset temporary assigns and streams to free memory after rendering
         self._reset_temporary_assigns()
 
