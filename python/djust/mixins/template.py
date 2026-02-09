@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import re
-import sys
 from typing import Optional
 
 from ..utils import get_template_dirs
@@ -92,12 +91,12 @@ class TemplateMixin:
                             rust_would_find
                             and os.path.abspath(django_resolved_path) != rust_would_find
                         ):
-                            print(
-                                f"[WARNING] Template resolution mismatch!\n"
-                                f"  Django found: {django_resolved_path}\n"
-                                f"  Rust found:   {rust_would_find}\n"
-                                f"  Template dirs order: {template_dirs_str[:3]}...",
-                                file=sys.stderr,
+                            logger.warning(
+                                "Template resolution mismatch! Django found: %s, "
+                                "Rust found: %s, Template dirs order: %s...",
+                                django_resolved_path,
+                                rust_would_find,
+                                template_dirs_str[:3],
                             )
 
                     # Store full template for initial GET rendering
@@ -109,23 +108,27 @@ class TemplateMixin:
                     # CRITICAL: Strip comments and whitespace from template BEFORE Rust VDOM sees it
                     vdom_template = self._strip_comments_and_whitespace(vdom_template)
 
-                    print(
-                        f"[LiveView] Template inheritance resolved ({len(resolved)} chars), extracted liveview-root for VDOM ({len(vdom_template)} chars)",
-                        file=sys.stderr,
+                    logger.debug(
+                        "[LiveView] Template inheritance resolved (%d chars), "
+                        "extracted liveview-root for VDOM (%d chars)",
+                        len(resolved),
+                        len(vdom_template),
                     )
                     return vdom_template
 
                 except Exception as e:
                     # Fallback to raw template if Rust resolution fails
-                    print(f"[LiveView] Template inheritance resolution failed: {e}")
-                    print("[LiveView] Falling back to raw template source")
+                    logger.debug("[LiveView] Template inheritance resolution failed: %s", e)
+                    logger.debug("[LiveView] Falling back to raw template source")
                     self._full_template = template_source
                     extracted = self._extract_liveview_root_with_wrapper(template_source)
                     extracted = self._strip_comments_and_whitespace(extracted)
 
-                    print(
-                        f"[LiveView] Extracted and stripped liveview-root: {len(extracted)} chars (from {len(template_source)} chars)",
-                        file=sys.stderr,
+                    logger.debug(
+                        "[LiveView] Extracted and stripped liveview-root: %d chars "
+                        "(from %d chars)",
+                        len(extracted),
+                        len(template_source),
                     )
                     return extracted
 
@@ -134,9 +137,11 @@ class TemplateMixin:
             extracted = self._extract_liveview_root_with_wrapper(template_source)
             extracted = self._strip_comments_and_whitespace(extracted)
 
-            print(
-                f"[LiveView] No inheritance - extracted and stripped liveview-root: {len(extracted)} chars (from {len(template_source)} chars)",
-                file=sys.stderr,
+            logger.debug(
+                "[LiveView] No inheritance - extracted and stripped liveview-root: "
+                "%d chars (from %d chars)",
+                len(extracted),
+                len(template_source),
             )
             return extracted
         else:
@@ -467,11 +472,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         Returns:
             Tuple of (html, patches_json, version)
         """
-        print(
-            f"[LiveView] render_with_diff() called (extract_liveview_root={extract_liveview_root})",
-            file=sys.stderr,
+        logger.debug(
+            "[LiveView] render_with_diff() called (extract_liveview_root=%s)",
+            extract_liveview_root,
         )
-        print(f"[LiveView] _rust_view before init: {self._rust_view}", file=sys.stderr)
+        logger.debug("[LiveView] _rust_view before init: %s", self._rust_view)
 
         self._initialize_rust_view(request)
 
@@ -479,35 +484,34 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         if hasattr(self.__class__, "template") and isinstance(
             getattr(self.__class__, "template"), property
         ):
-            print("[LiveView] template is a property - updating template", file=sys.stderr)
+            logger.debug("[LiveView] template is a property - updating template")
             new_template = self.get_template()
             self._rust_view.update_template(new_template)
 
-        print(f"[LiveView] _rust_view after init: {self._rust_view}", file=sys.stderr)
+        logger.debug("[LiveView] _rust_view after init: %s", self._rust_view)
 
         self._sync_state_to_rust()
 
         result = self._rust_view.render_with_diff()
         html, patches_json, version = result
 
-        print(
-            f"[LiveView] Rendered HTML length: {len(html)} chars, starts with: {html[:100]}...",
-            file=sys.stderr,
+        logger.debug(
+            "[LiveView] Rendered HTML length: %d chars, starts with: %s...",
+            len(html),
+            html[:100],
         )
 
         if extract_liveview_root:
             html = self._extract_liveview_content(html)
-            print(
-                f"[LiveView] Extracted [data-djust-root] content ({len(html)} chars)",
-                file=sys.stderr,
-            )
+            logger.debug("[LiveView] Extracted [data-djust-root] content (%d chars)", len(html))
 
-        print(
-            f"[LiveView] Rust returned: version={version}, patches={'YES' if patches_json else 'NO'}",
-            file=sys.stderr,
+        logger.debug(
+            "[LiveView] Rust returned: version=%d, patches=%s",
+            version,
+            "YES" if patches_json else "NO",
         )
         if not patches_json:
-            print("[LiveView] NO PATCHES GENERATED!", file=sys.stderr)
+            logger.debug("[LiveView] NO PATCHES GENERATED!")
         else:
             from djust.config import config
 
@@ -515,29 +519,39 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 import json as json_module
 
                 patches_list = json_module.loads(patches_json) if patches_json else []
-                print(f"[LiveView] Generated {len(patches_list)} patches:", file=sys.stderr)
+                logger.debug("[LiveView] Generated %d patches:", len(patches_list))
                 for i, patch in enumerate(patches_list[:5]):
                     patch_type = patch.get("type", "Unknown")
                     path = patch.get("path", [])
 
                     if patch_type == "SetAttr":
-                        print(
-                            f"[LiveView]   Patch {i}: {patch_type} '{patch.get('key')}' = '{patch.get('value')}' at path {path}",
-                            file=sys.stderr,
+                        logger.debug(
+                            "[LiveView]   Patch %d: %s '%s' = '%s' at path %s",
+                            i,
+                            patch_type,
+                            patch.get("key"),
+                            patch.get("value"),
+                            path,
                         )
                     elif patch_type == "RemoveAttr":
-                        print(
-                            f"[LiveView]   Patch {i}: {patch_type} '{patch.get('key')}' at path {path}",
-                            file=sys.stderr,
+                        logger.debug(
+                            "[LiveView]   Patch %d: %s '%s' at path %s",
+                            i,
+                            patch_type,
+                            patch.get("key"),
+                            path,
                         )
                     elif patch_type == "SetText":
                         text_preview = patch.get("text", "")[:50]
-                        print(
-                            f"[LiveView]   Patch {i}: {patch_type} to '{text_preview}' at path {path}",
-                            file=sys.stderr,
+                        logger.debug(
+                            "[LiveView]   Patch %d: %s to '%s' at path %s",
+                            i,
+                            patch_type,
+                            text_preview,
+                            path,
                         )
                     else:
-                        print(f"[LiveView]   Patch {i}: {patch}", file=sys.stderr)
+                        logger.debug("[LiveView]   Patch %d: %s", i, patch)
 
         # Track HTML sizes for diagnostics (used by full_html_update signal)
         self._previous_html_size = getattr(self, "_current_html_size", None)
