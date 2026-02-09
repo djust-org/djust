@@ -36,6 +36,20 @@ except ImportError:
     SessionActorHandle = None
 
 
+def _snapshot_assigns(view_instance):
+    """Snapshot public assigns (non-underscore attributes) by identity.
+
+    Returns a dict of {attr_name: id(value)} for all public attributes.
+    Used to detect whether a handler changed any state — if the snapshot
+    is identical before and after, the render cycle can be skipped.
+
+    Note: in-place mutations (list.append, dict[k]=v) are NOT detected
+    because the object identity stays the same. This is intentional —
+    mutated state should still trigger a render (safe default).
+    """
+    return {k: id(v) for k, v in view_instance.__dict__.items() if not k.startswith("_")}
+
+
 def _build_context_snapshot(context, max_value_len=100):
     """Build a JSON-safe snapshot of template context for diagnostics.
 
@@ -131,6 +145,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     "payload": payload,
                 }
             )
+
+    async def _send_noop(self) -> None:
+        """
+        Send a lightweight noop acknowledgment to the client.
+
+        Tells the client the event was processed but no DOM update is needed.
+        The client clears loading state (spinners, disabled buttons) without
+        touching the DOM.
+        """
+        await self.send_json({"type": "noop"})
 
     async def _flush_navigation(self) -> None:
         """
@@ -1080,6 +1104,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                     # Wrap everything in a root "Event Processing" tracker
                     with tracker.track("Event Processing"):
+                        # Snapshot public assigns before the handler to detect
+                        # unchanged state and auto-skip the render cycle.
+                        pre_assigns = _snapshot_assigns(self.view_instance)
+
                         # Call handler with tracking (supports both sync and async handlers)
                         handler_start = time.perf_counter()
                         with tracker.track(
@@ -1093,12 +1121,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             time.perf_counter() - handler_start
                         ) * 1000  # Convert to ms
 
-                        # Views can set _skip_render = True in a handler to
-                        # suppress the re-render cycle (e.g. no-op heartbeats,
-                        # sender ignoring its own broadcast).
-                        if getattr(self.view_instance, "_skip_render", False):
+                        # Auto-detect unchanged state: if no public assigns were
+                        # reassigned, auto-skip the render (eliminates DJE-053).
+                        # In-place mutations (list.append) are NOT detected and
+                        # will still trigger a render — this is the safe default.
+                        skip_render = getattr(self.view_instance, "_skip_render", False)
+                        if not skip_render:
+                            post_assigns = _snapshot_assigns(self.view_instance)
+                            if pre_assigns == post_assigns:
+                                skip_render = True
+                                logger.debug(
+                                    "[djust] Auto-skipping render for '%s' — no assigns changed",
+                                    event_name,
+                                )
+
+                        if skip_render:
                             self.view_instance._skip_render = False
                             await self._flush_push_events()
+                            await self._send_noop()
                             return
 
                         # Get updated HTML and patches with tracking
@@ -1820,6 +1860,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if getattr(self.view_instance, "_skip_render", False):
                 self.view_instance._skip_render = False
                 await self._flush_push_events()
+                await self._send_noop()
                 return
 
             # Sync state and re-render

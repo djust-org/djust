@@ -231,3 +231,73 @@ class TestSkipRender:
 
         assert should_render is False
         assert view._skip_render is True
+
+
+class TestSnapshotAssigns:
+    """Tests for _snapshot_assigns auto-detection of unchanged state."""
+
+    def test_unchanged_assigns_match(self):
+        """Snapshot before/after should match if no assigns changed."""
+        from djust.live_view import LiveView
+        from djust.websocket import _snapshot_assigns
+
+        view = LiveView()
+        view.count = 0
+        view.name = "test"
+
+        snap1 = _snapshot_assigns(view)
+        # No changes
+        snap2 = _snapshot_assigns(view)
+        assert snap1 == snap2
+
+    def test_reassignment_detected(self):
+        """Reassigning an attribute should change the snapshot."""
+        from djust.live_view import LiveView
+        from djust.websocket import _snapshot_assigns
+
+        view = LiveView()
+        view.count = 0
+
+        snap1 = _snapshot_assigns(view)
+        view.count = 1
+        snap2 = _snapshot_assigns(view)
+        assert snap1 != snap2
+
+    def test_new_attribute_detected(self):
+        """Adding a new attribute should change the snapshot."""
+        from djust.live_view import LiveView
+        from djust.websocket import _snapshot_assigns
+
+        view = LiveView()
+        view.count = 0
+
+        snap1 = _snapshot_assigns(view)
+        view.name = "new"
+        snap2 = _snapshot_assigns(view)
+        assert snap1 != snap2
+
+    def test_private_attrs_excluded(self):
+        """Underscore-prefixed attrs should not appear in snapshot."""
+        from djust.live_view import LiveView
+        from djust.websocket import _snapshot_assigns
+
+        view = LiveView()
+        view.count = 0
+        view._private = "hidden"
+
+        snap = _snapshot_assigns(view)
+        assert "count" in snap
+        assert "_private" not in snap
+
+    def test_list_reassignment_detected(self):
+        """Assigning a new list should change the snapshot."""
+        from djust.live_view import LiveView
+        from djust.websocket import _snapshot_assigns
+
+        view = LiveView()
+        view.items = [1, 2, 3]
+
+        snap1 = _snapshot_assigns(view)
+        view.items = [1, 2, 3]  # New list object, same content
+        snap2 = _snapshot_assigns(view)
+        assert snap1 != snap2  # Different id() even though equal content

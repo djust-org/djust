@@ -285,6 +285,16 @@ class LiveViewWebSocket {
                 }
                 break;
 
+            case 'noop':
+                // Server acknowledged event but no DOM changes needed (auto-detected
+                // or explicit _skip_render). Just clear loading state.
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
             case 'push_event':
                 // Server-pushed event for JS hooks
                 window.dispatchEvent(new CustomEvent('djust:push_event', {
