@@ -28,27 +28,19 @@ def template_dir(tmp_path):
 @pytest.fixture
 def patch_template_dirs(template_dir, settings):
     """Patch Django settings to use our temp template directory."""
+    import copy
+    from django.test.utils import override_settings
     from djust.utils import _get_template_dirs_cached
-    from django.template import engines
 
-    original_dirs = settings.TEMPLATES[0]["DIRS"]
-    settings.TEMPLATES[0]["DIRS"] = [str(template_dir)]
+    # Build a full TEMPLATES override so Django's signal-based cache reset fires
+    new_templates = copy.deepcopy(settings.TEMPLATES)
+    new_templates[0]["DIRS"] = [str(template_dir)]
 
-    # Clear djust's template dirs cache
+    with override_settings(TEMPLATES=new_templates):
+        _get_template_dirs_cached.cache_clear()
+        yield template_dir
+
     _get_template_dirs_cached.cache_clear()
-
-    # Clear Django's template engine cache so it picks up the new settings
-    # This is necessary because Django caches template engines on first use
-    engines._engines = {}
-    # Also clear the cached_property 'templates' which caches settings.TEMPLATES
-    engines.__dict__.pop("templates", None)
-
-    yield template_dir
-
-    settings.TEMPLATES[0]["DIRS"] = original_dirs
-    _get_template_dirs_cached.cache_clear()  # Reset cache after test
-    engines._engines = {}  # Reset Django engines after test
-    engines.__dict__.pop("templates", None)  # Clear cached_property after test
 
 
 class TestLiveViewInclude:
