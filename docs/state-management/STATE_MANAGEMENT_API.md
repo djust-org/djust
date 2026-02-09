@@ -65,6 +65,7 @@ djust's State Management API provides Python-only abstractions for common client
 | `@optimistic` | Need instant feedback | N/A | +0.5 KB |
 | `@cache(ttl)` | Same query repeated | 60-300s | +0.7 KB |
 | `@client_state(keys)` | Multi-component coordination | N/A | +0.6 KB |
+| `@permission_required(perm)` | Restrict handler to permitted users | Delete, admin | +0 KB |
 | `DraftModeMixin` | Long forms, text editors | Auto-save | +0.9 KB |
 
 **Total bundle size: 7.1 KB** (vs Phoenix ~30 KB, Livewire ~50 KB)
@@ -89,6 +90,9 @@ djust's State Management API provides Python-only abstractions for common client
 
 ❓ Auto-save form drafts to localStorage?
    → DraftModeMixin
+
+❓ Restrict handler to users with a Django permission?
+   → @permission_required("myapp.delete_item")
 
 ❓ Show loading spinner/disable button?
    → dj-loading.disable, dj-loading.show HTML attributes
@@ -182,6 +186,7 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
 | **Loading Text** | Button text replacement | - | `@loading-text="Saving..."` (deprecated) |
 | **Client State** | Multi-component coordination | `@client_state(keys=["temp"])` | - |
 | **Caching** | Autocomplete, API calls | `@cache(ttl=300)` | - |
+| **Permission Guard** | Handler access control | `@permission_required("perm")` | - |
 | **Draft Mode** | Forms, text editors | `DraftModeMixin` | - |
 
 ---

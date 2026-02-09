@@ -5,12 +5,13 @@ This document outlines security best practices for contributing to djust. Follow
 ## Table of Contents
 
 1. [Required Security Utilities](#required-security-utilities)
-2. [Banned Patterns](#banned-patterns)
-3. [Code Review Checklist](#code-review-checklist)
-4. [Common Vulnerabilities](#common-vulnerabilities)
-5. [Multi-Tenant Security](#multi-tenant-security)
-6. [PWA / Offline Sync Security](#pwa--offline-sync-security)
-7. [Security Testing](#security-testing)
+2. [Authentication & Authorization](#authentication--authorization)
+3. [Banned Patterns](#banned-patterns)
+4. [Code Review Checklist](#code-review-checklist)
+5. [Common Vulnerabilities](#common-vulnerabilities)
+6. [Multi-Tenant Security](#multi-tenant-security)
+7. [PWA / Offline Sync Security](#pwa--offline-sync-security)
+8. [Security Testing](#security-testing)
 
 ---
 
@@ -197,6 +198,73 @@ djustSecurity.sanitizeForLog(value);                  // Safe logging
 
 ---
 
+## Authentication & Authorization
+
+djust provides framework-enforced authentication and authorization for LiveViews. Auth checks run server-side before `mount()` and before individual event handlers — no client-side bypass is possible.
+
+### View-Level Auth
+
+Use class attributes to enforce auth on the entire view:
+
+```python
+from djust import LiveView
+
+class DashboardView(LiveView):
+    template_name = "dashboard.html"
+    login_required = True                              # Must be authenticated
+    permission_required = "analytics.view_dashboard"   # Django permission string
+    login_url = "/login/"                              # Override settings.LOGIN_URL
+```
+
+Or use Django-familiar mixins:
+
+```python
+from djust.auth import LoginRequiredMixin, PermissionRequiredMixin
+
+class DashboardView(LoginRequiredMixin, PermissionRequiredMixin, LiveView):
+    template_name = "dashboard.html"
+    permission_required = "analytics.view_dashboard"
+```
+
+### Handler-Level Permissions
+
+Protect individual event handlers with `@permission_required`:
+
+```python
+from djust.decorators import event_handler, permission_required
+
+class ProjectView(LiveView):
+    login_required = True
+
+    @permission_required("projects.delete_project")
+    @event_handler()
+    def delete_project(self, project_id: int, **kwargs):
+        Project.objects.get(pk=project_id).delete()
+```
+
+### Custom Auth Logic
+
+Override `check_permissions()` for object-level authorization:
+
+```python
+class ProjectView(LiveView):
+    login_required = True
+
+    def check_permissions(self, request):
+        project = Project.objects.get(pk=self.kwargs.get("pk"))
+        return project.team.members.filter(user=request.user).exists()
+```
+
+### Auth Audit & System Checks
+
+- **`djust_audit` command** shows auth configuration for every view
+- **`djust.S005` system check** warns when views expose state without authentication
+- Set `login_required = False` to explicitly mark public views and suppress warnings
+
+For the full guide, see **[Authentication & Authorization Guide](guides/authentication.md)**.
+
+---
+
 ## Banned Patterns
 
 The following patterns are **prohibited** in djust code:
@@ -237,6 +305,12 @@ When reviewing PRs, check for these security issues:
 - [ ] No direct attribute access like `obj.__class__` from user input
 - [ ] URL parameters are validated before use
 - [ ] Form inputs are sanitized server-side
+
+### Authentication & Authorization
+- [ ] Views with exposed state have `login_required = True` or `login_required = False` (explicit)
+- [ ] Destructive handlers use `@permission_required` for defense-in-depth
+- [ ] `check_permissions()` overrides validate object-level access
+- [ ] `djust_audit` shows no unprotected views with exposed state
 
 ### WebSocket Event Security
 - [ ] All event handlers decorated with `@event_handler`
