@@ -453,13 +453,287 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
  * @param {HTMLElement} existingRoot - The current DOM root
  * @param {HTMLElement} newRoot - The new content from server
  */
+/**
+ * Flag set by handleServerResponse when applying broadcast patches.
+ * When true, preserveFormValues skips saving/restoring the focused
+ * element so remote content (from other users) takes effect.
+ */
+let _isBroadcastUpdate = false;
+
+/**
+ * Preserve form values across innerHTML replacement.
+ *
+ * innerHTML destroys the DOM, creating new elements. For the focused
+ * element we save and restore the user's in-progress value + cursor.
+ * For all textareas, we sync .value from textContent after replacement
+ * (innerHTML only sets the DOM attribute, not the JS property).
+ *
+ * Matching strategy: id → name → positional index within container.
+ */
+function preserveFormValues(container, updateFn) {
+    const active = document.activeElement;
+    let saved = null;
+
+    // Skip saving focused element for broadcast (remote) updates —
+    // the server content from another user should take effect.
+    if (_isBroadcastUpdate) {
+        updateFn();
+        container.querySelectorAll('textarea').forEach(el => {
+            el.value = el.textContent || '';
+        });
+        return;
+    }
+
+    // Only save the focused form element (user is actively editing)
+    if (active && container.contains(active) &&
+        (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.tagName === 'SELECT')) {
+        saved = { tag: active.tagName.toLowerCase() };
+        // Build a matching key: prefer id, then name, then positional index
+        if (active.id) {
+            saved.findBy = 'id';
+            saved.key = active.id;
+        } else if (active.name) {
+            saved.findBy = 'name';
+            saved.key = active.name;
+        } else {
+            // Positional: find index among same-tag siblings in container
+            saved.findBy = 'index';
+            const siblings = container.querySelectorAll(active.tagName.toLowerCase());
+            saved.key = Array.from(siblings).indexOf(active);
+        }
+        if (active.tagName === 'TEXTAREA') {
+            saved.value = active.value;
+            saved.selStart = active.selectionStart;
+            saved.selEnd = active.selectionEnd;
+        } else if (active.type === 'checkbox' || active.type === 'radio') {
+            saved.checked = active.checked;
+        } else {
+            saved.value = active.value;
+        }
+    }
+
+    updateFn();
+
+    // Sync all textarea .value from textContent (innerHTML doesn't set .value)
+    container.querySelectorAll('textarea').forEach(el => {
+        el.value = el.textContent || '';
+    });
+
+    // Restore the focused element's value
+    if (saved) {
+        let el = null;
+        if (saved.findBy === 'id') {
+            el = container.querySelector(`#${CSS.escape(saved.key)}`);
+        } else if (saved.findBy === 'name') {
+            el = container.querySelector(`[name="${CSS.escape(saved.key)}"]`);
+        } else {
+            // Positional fallback
+            const candidates = container.querySelectorAll(saved.tag);
+            el = candidates[saved.key] || null;
+        }
+        if (el) {
+            if (saved.tag === 'textarea') {
+                el.value = saved.value;
+                try { el.setSelectionRange(saved.selStart, saved.selEnd); } catch (e) { /* */ }
+                el.focus();
+            } else if (el.type === 'checkbox' || el.type === 'radio') {
+                el.checked = saved.checked;
+            } else if (saved.value !== undefined) {
+                el.value = saved.value;
+            }
+        }
+    }
+}
+
+/**
+ * Morph existing DOM children to match desired DOM children.
+ * Preserves existing elements (and their event listeners) where possible.
+ *
+ * Matching per child:
+ *   1. If desired child has an id → find existing child with same id (keyed)
+ *   2. If current existing child has same tag and neither has an id → reuse
+ *   3. Otherwise → clone desired child and insert
+ *
+ * Unmatched existing children are removed after the walk.
+ *
+ * @param {Element} existing - Current live DOM parent
+ * @param {Element} desired  - Target DOM parent (parsed from server HTML)
+ */
+function morphChildren(existing, desired) {
+    const existingNodes = Array.from(existing.childNodes);
+    const desiredNodes = Array.from(desired.childNodes);
+
+    // Index existing elements by id for O(1) keyed lookup
+    const existingById = new Map();
+    for (const node of existingNodes) {
+        if (node.nodeType === Node.ELEMENT_NODE && node.id) {
+            existingById.set(node.id, node);
+        }
+    }
+
+    const matched = new Set();
+    let eIdx = 0;
+
+    for (const dNode of desiredNodes) {
+        // Advance past already-matched existing nodes
+        while (eIdx < existingNodes.length && matched.has(existingNodes[eIdx])) {
+            eIdx++;
+        }
+        const eNode = eIdx < existingNodes.length ? existingNodes[eIdx] : null;
+
+        // --- Text node ---
+        if (dNode.nodeType === Node.TEXT_NODE) {
+            if (eNode && eNode.nodeType === Node.TEXT_NODE && !matched.has(eNode)) {
+                if (eNode.textContent !== dNode.textContent) {
+                    eNode.textContent = dNode.textContent;
+                }
+                matched.add(eNode);
+                eIdx++;
+            } else {
+                existing.insertBefore(document.createTextNode(dNode.textContent), eNode);
+            }
+            continue;
+        }
+
+        // --- Comment node ---
+        if (dNode.nodeType === Node.COMMENT_NODE) {
+            if (eNode && eNode.nodeType === Node.COMMENT_NODE && !matched.has(eNode)) {
+                if (eNode.textContent !== dNode.textContent) {
+                    eNode.textContent = dNode.textContent;
+                }
+                matched.add(eNode);
+                eIdx++;
+            } else {
+                existing.insertBefore(document.createComment(dNode.textContent), eNode);
+            }
+            continue;
+        }
+
+        // --- Element node ---
+        if (dNode.nodeType !== Node.ELEMENT_NODE) {
+            continue;
+        }
+
+        const dId = dNode.id || null;
+
+        // Strategy 1: Match by id (keyed element)
+        if (dId && existingById.has(dId)) {
+            const match = existingById.get(dId);
+            existingById.delete(dId);
+            matched.add(match);
+            if (match !== eNode) {
+                // Move keyed element into correct position
+                existing.insertBefore(match, eNode);
+            } else {
+                eIdx++;
+            }
+            morphElement(match, dNode);
+            continue;
+        }
+
+        // Strategy 2: Same tag, no ids on either side — reuse in place
+        if (eNode && eNode.nodeType === Node.ELEMENT_NODE &&
+            eNode.tagName === dNode.tagName &&
+            !dId && !eNode.id && !matched.has(eNode)) {
+            matched.add(eNode);
+            morphElement(eNode, dNode);
+            eIdx++;
+            continue;
+        }
+
+        // Strategy 3: No match — clone desired child and insert
+        existing.insertBefore(dNode.cloneNode(true), eNode);
+    }
+
+    // Remove unmatched existing children
+    for (const node of existingNodes) {
+        if (!matched.has(node) && node.parentNode === existing) {
+            existing.removeChild(node);
+        }
+    }
+}
+
+/**
+ * Morph a single element to match a desired element.
+ * Updates attributes and recurses into children.
+ * Preserves event listeners on the existing element.
+ *
+ * @param {Element} existing - Current live DOM element
+ * @param {Element} desired  - Target element to match
+ */
+function morphElement(existing, desired) {
+    // Tag mismatch — replace entirely
+    if (existing.tagName !== desired.tagName) {
+        existing.parentNode.replaceChild(desired.cloneNode(true), existing);
+        return;
+    }
+
+    // dj-update="ignore" — skip entirely
+    if (existing.getAttribute('dj-update') === 'ignore') {
+        return;
+    }
+
+    // --- Sync attributes ---
+    // Remove attributes not present in desired
+    for (let i = existing.attributes.length - 1; i >= 0; i--) {
+        const name = existing.attributes[i].name;
+        if (!desired.hasAttribute(name)) {
+            // Preserve djust internal event-binding flags to prevent duplicate listeners
+            if (name.startsWith('data-liveview')) continue;
+            existing.removeAttribute(name);
+        }
+    }
+    // Set/update attributes from desired
+    for (const attr of desired.attributes) {
+        if (existing.getAttribute(attr.name) !== attr.value) {
+            existing.setAttribute(attr.name, attr.value);
+        }
+    }
+
+    // --- Form element value sync ---
+    const isFocused = document.activeElement === existing;
+    const skipValue = isFocused && !_isBroadcastUpdate;
+
+    if (existing.tagName === 'INPUT' && !skipValue) {
+        if (existing.type === 'checkbox' || existing.type === 'radio') {
+            existing.checked = desired.checked;
+        } else {
+            const newVal = desired.value || desired.getAttribute('value') || '';
+            if (existing.value !== newVal) {
+                existing.value = newVal;
+            }
+        }
+    } else if (existing.tagName === 'SELECT' && !skipValue) {
+        const newVal = desired.value;
+        if (existing.value !== newVal) {
+            existing.value = newVal;
+        }
+    }
+
+    // --- Recurse into children ---
+    // dj-update="append"/"prepend" accumulate children server-side;
+    // morphing would remove them, so skip child recursion
+    const updateMode = existing.getAttribute('dj-update');
+    if (updateMode === 'append' || updateMode === 'prepend') {
+        return;
+    }
+
+    morphChildren(existing, desired);
+
+    // Sync textarea .value from textContent after children are morphed
+    // (.value and .textContent diverge after initial render)
+    if (existing.tagName === 'TEXTAREA' && !skipValue) {
+        existing.value = existing.textContent || '';
+    }
+}
+
 function applyDjUpdateElements(existingRoot, newRoot) {
     // Find all elements with dj-update attribute in the new content
     const djUpdateElements = newRoot.querySelectorAll('[dj-update]');
 
     if (djUpdateElements.length === 0) {
-        // No dj-update elements, do a full replacement
-        existingRoot.innerHTML = newRoot.innerHTML;
+        // No dj-update elements — morph to preserve event listeners
+        morphChildren(existingRoot, newRoot);
         return;
     }
 
@@ -529,14 +803,8 @@ function applyDjUpdateElements(existingRoot, newRoot) {
 
             case 'replace':
             default:
-                // Standard replacement
-                existingElement.innerHTML = newElement.innerHTML;
-                // Copy attributes except dj-update
-                for (const attr of newElement.attributes) {
-                    if (attr.name !== 'dj-update') {
-                        existingElement.setAttribute(attr.name, attr.value);
-                    }
-                }
+                // Morph to preserve event listeners
+                morphElement(existingElement, newElement);
                 break;
         }
     }
@@ -571,11 +839,8 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                     // Recursively process
                     applyDjUpdateElements(existing, newChild);
                 } else {
-                    // Replace content
-                    existing.innerHTML = newChild.innerHTML;
-                    for (const attr of newChild.attributes) {
-                        existing.setAttribute(attr.name, attr.value);
-                    }
+                    // Morph to preserve event listeners
+                    morphElement(existing, newChild);
                 }
             } else {
                 // New element, append it
@@ -686,6 +951,9 @@ window.djust._applySinglePatch = applySinglePatch;
 window.djust._stampDjIds = _stampDjIds;
 window.djust._getNodeByPath = getNodeByPath;
 window.djust.createNodeFromVNode = createNodeFromVNode;
+window.djust.preserveFormValues = preserveFormValues;
+window.djust.morphChildren = morphChildren;
+window.djust.morphElement = morphElement;
 
 /**
  * Group patches by their parent path for batching.

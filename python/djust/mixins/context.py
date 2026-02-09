@@ -12,8 +12,8 @@ from ..serialization import DjangoJSONEncoder
 
 logger = logging.getLogger(__name__)
 
-# Module-level cache for context processors, keyed by settings object id
-_context_processors_cache: Dict[int, list] = {}
+# Module-level cache for context processors, keyed by TEMPLATES config tuple
+_context_processors_cache: Dict[Any, list] = {}
 
 try:
     import djust.optimization.query_optimizer  # noqa: F401
@@ -90,7 +90,9 @@ class ContextMixin:
                         try:
                             variable_paths_map = extract_template_variables(template_content)
                         except Exception:
-                            pass  # Rust extractor unavailable or failed; fall back to non-optimized path
+                            logger.debug(
+                                "Rust template variable extractor unavailable, using fallback"
+                            )
 
                     # Compute template hash once for codegen cache keys
                     import hashlib
@@ -162,7 +164,7 @@ class ContextMixin:
                                 ]
                             jit_serialized_keys.add(key)
             except Exception as e:
-                logger.debug(f"JIT auto-serialization failed: {e}", exc_info=True)
+                logger.warning("JIT auto-serialization failed: %s", e, exc_info=True)
 
         # Auto-add count for plain lists
         for key, value in list(context.items()):
@@ -225,20 +227,33 @@ class ContextMixin:
 
     def _get_context_processors(self) -> list:
         """
-        Get context processors from DjustTemplateBackend settings.
+        Get context processors from template backend settings.
+
+        Checks DjustTemplateBackend first, then falls back to the standard
+        Django template backend so that apps using the default backend still
+        get context processors (user, request, messages, etc.) applied.
         """
         from django.conf import settings
 
-        cache_key = id(getattr(settings, "_wrapped", settings))
+        # Use a stable cache key based on actual TEMPLATES config, not id()
+        # which can be reused by Python for different objects
+        templates = getattr(settings, "TEMPLATES", [])
+        cache_key = tuple(t.get("BACKEND", "") for t in templates) if templates else ()
 
         if cache_key in _context_processors_cache:
             return _context_processors_cache[cache_key]
 
+        # Prefer DjustTemplateBackend, fall back to DjangoTemplates
+        _BACKENDS = (
+            "djust.template_backend.DjustTemplateBackend",
+            "django.template.backends.django.DjangoTemplates",
+        )
         for template_config in getattr(settings, "TEMPLATES", []):
-            if template_config.get("BACKEND") == "djust.template_backend.DjustTemplateBackend":
+            if template_config.get("BACKEND") in _BACKENDS:
                 processors = template_config.get("OPTIONS", {}).get("context_processors", [])
-                _context_processors_cache[cache_key] = processors
-                return processors
+                if processors:
+                    _context_processors_cache[cache_key] = processors
+                    return processors
 
         _context_processors_cache[cache_key] = []
         return []

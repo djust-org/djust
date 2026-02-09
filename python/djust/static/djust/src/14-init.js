@@ -66,5 +66,3 @@ if (document.readyState === 'loading') {
 } else {
     djustInit();
 }
-
-} // End of double-load guard

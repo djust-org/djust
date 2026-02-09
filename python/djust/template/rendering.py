@@ -671,6 +671,8 @@ class DjustTemplate:
             # csrf_token_lazy returns a SimpleLazyObject which must be converted to string
             context_dict["csrf_input"] = str(csrf_input_lazy(request))
             context_dict["csrf_token"] = str(csrf_token_lazy(request))
+            # csrf_input contains raw HTML — mark it safe to skip auto-escaping
+            self._safe_keys = ["csrf_input"]
 
         # Apply context processors
         if request is not None:
@@ -710,6 +712,13 @@ class DjustTemplate:
         # This replaces {% url 'name' args %} with the actual resolved URL
         resolved_template = self._resolve_url_tags(resolved_template, context_dict)
 
+        # Detect SafeString values (Django's mark_safe) before serialization
+        # loses the type info. These keys should skip auto-escaping in Rust.
+        safe_keys = list(getattr(self, "_safe_keys", None) or [])
+        for key, value in context_dict.items():
+            if isinstance(value, SafeString) and key not in safe_keys:
+                safe_keys.append(key)
+
         # Serialize remaining context values (datetime, Decimal, UUID, FieldFile, etc.)
         # This ensures all values are JSON-compatible for the Rust engine
         context_dict = serialize_context(context_dict)
@@ -718,7 +727,12 @@ class DjustTemplate:
         # Pass template directories to support {% include %} tags
         try:
             template_dirs = [str(d) for d in self.backend.template_dirs]
-            html = self.backend._render_fn_with_dirs(resolved_template, context_dict, template_dirs)
+            html = self.backend._render_fn_with_dirs(
+                resolved_template,
+                context_dict,
+                template_dirs,
+                safe_keys or None,
+            )
             return SafeString(html)
         except Exception as e:
             # Provide helpful error message with template location

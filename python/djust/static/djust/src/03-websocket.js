@@ -285,6 +285,16 @@ class LiveViewWebSocket {
                 }
                 break;
 
+            case 'noop':
+                // Server acknowledged event but no DOM changes needed (auto-detected
+                // or explicit _skip_render). Just clear loading state.
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
             case 'push_event':
                 // Server-pushed event for JS hooks
                 window.dispatchEvent(new CustomEvent('djust:push_event', {
@@ -294,6 +304,9 @@ class LiveViewWebSocket {
                 if (typeof dispatchPushEventToHooks === 'function') {
                     dispatchPushEventToHooks(data.event, data.payload);
                 }
+                // Clear loading state — when _skip_render is used, this is the
+                // only response the client gets (no patch/html_update follows).
+                globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                 break;
 
             case 'embedded_update':
@@ -485,7 +498,9 @@ class LiveViewWebSocket {
             return;
         }
 
-        container.innerHTML = html;
+        const _morphTemp = document.createElement('div');
+        _morphTemp.innerHTML = html;
+        morphChildren(container, _morphTemp);
         if (globalThis.djustDebug) console.log(`[LiveView] Updated embedded view: ${viewId}`);
 
         // Re-bind events within the updated container

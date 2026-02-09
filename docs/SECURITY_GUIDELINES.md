@@ -5,12 +5,14 @@ This document outlines security best practices for contributing to djust. Follow
 ## Table of Contents
 
 1. [Required Security Utilities](#required-security-utilities)
-2. [Banned Patterns](#banned-patterns)
-3. [Code Review Checklist](#code-review-checklist)
-4. [Common Vulnerabilities](#common-vulnerabilities)
-5. [Multi-Tenant Security](#multi-tenant-security)
-6. [PWA / Offline Sync Security](#pwa--offline-sync-security)
-7. [Security Testing](#security-testing)
+2. [Template Auto-Escaping](#template-auto-escaping)
+3. [Authentication & Authorization](#authentication--authorization)
+4. [Banned Patterns](#banned-patterns)
+5. [Code Review Checklist](#code-review-checklist)
+6. [Common Vulnerabilities](#common-vulnerabilities)
+7. [Multi-Tenant Security](#multi-tenant-security)
+8. [PWA / Offline Sync Security](#pwa--offline-sync-security)
+9. [Security Testing](#security-testing)
 
 ---
 
@@ -197,6 +199,123 @@ djustSecurity.sanitizeForLog(value);                  // Safe logging
 
 ---
 
+## Template Auto-Escaping
+
+djust's Rust template engine **auto-escapes all variables by default**, matching Django's behavior. This is the primary defense against XSS.
+
+### How It Works
+
+Every `{{ variable }}` expression is HTML-escaped before rendering:
+
+| Input | Output |
+|-------|--------|
+| `<script>alert(1)</script>` | `&lt;script&gt;alert(1)&lt;/script&gt;` |
+| `<img onerror=alert(1)>` | `&lt;img onerror=alert(1)&gt;` |
+| `"onclick=evil()"` | `&quot;onclick=evil()&quot;` |
+
+### SafeString Propagation
+
+Django's `mark_safe()` values are automatically detected and skip escaping:
+
+- **Component HTML**: `Component.render()` returns `SafeString` — auto-detected in `_sync_state_to_rust()` and `render_full_template()`
+- **CSRF input**: `csrf_input` is marked safe so the hidden form field renders correctly
+- **Custom safe values**: Any context value that is a `SafeString` instance is auto-detected before serialization
+
+The detection happens in three places:
+1. `DjustTemplate.render()` — the template backend path (in `rendering.py`)
+2. `_sync_state_to_rust()` — the WebSocket render path (in `rust_bridge.py`)
+3. `render_full_template()` — the initial GET render path (in `template.py`)
+
+### The `|safe` Filter
+
+Use `{{ variable|safe }}` to skip escaping for a specific variable in a template:
+
+```html
+{# Escaped (default — safe) #}
+<p>{{ user_input }}</p>
+
+{# Unescaped (explicit opt-in — use with caution) #}
+<div>{{ pre_rendered_html|safe }}</div>
+```
+
+**Rule**: Never use `|safe` on user-controlled values. Only use it for HTML you've generated server-side (e.g., pre-rendered components, markdown-to-HTML output).
+
+### What's NOT Escaped
+
+- Values marked with `mark_safe()` in Python
+- Values using the `|safe` filter in templates
+- `csrf_input` (contains raw `<input>` HTML)
+- Component `.render()` output (pre-rendered HTML)
+
+---
+
+## Authentication & Authorization
+
+djust provides framework-enforced authentication and authorization for LiveViews. Auth checks run server-side before `mount()` and before individual event handlers — no client-side bypass is possible.
+
+### View-Level Auth
+
+Use class attributes to enforce auth on the entire view:
+
+```python
+from djust import LiveView
+
+class DashboardView(LiveView):
+    template_name = "dashboard.html"
+    login_required = True                              # Must be authenticated
+    permission_required = "analytics.view_dashboard"   # Django permission string
+    login_url = "/login/"                              # Override settings.LOGIN_URL
+```
+
+Or use Django-familiar mixins:
+
+```python
+from djust.auth import LoginRequiredMixin, PermissionRequiredMixin
+
+class DashboardView(LoginRequiredMixin, PermissionRequiredMixin, LiveView):
+    template_name = "dashboard.html"
+    permission_required = "analytics.view_dashboard"
+```
+
+### Handler-Level Permissions
+
+Protect individual event handlers with `@permission_required`:
+
+```python
+from djust.decorators import event_handler, permission_required
+
+class ProjectView(LiveView):
+    login_required = True
+
+    @permission_required("projects.delete_project")
+    @event_handler()
+    def delete_project(self, project_id: int, **kwargs):
+        Project.objects.get(pk=project_id).delete()
+```
+
+### Custom Auth Logic
+
+Override `check_permissions()` for object-level authorization:
+
+```python
+class ProjectView(LiveView):
+    login_required = True
+
+    def check_permissions(self, request):
+        project = Project.objects.get(pk=self.kwargs.get("pk"))
+        return project.team.members.filter(user=request.user).exists()
+```
+
+### Auth Audit & System Checks
+
+- **`djust_audit` command** shows auth configuration for every view
+- **`djust.S005` system check** warns when views expose state without authentication
+- Set `login_required = False` to explicitly mark public views and suppress warnings
+
+For the full guide, see **[Authentication & Authorization Guide](guides/authentication.md)**.
+
+---
+
 ## Banned Patterns
 
 The following patterns are **prohibited** in djust code:
@@ -238,6 +357,12 @@ When reviewing PRs, check for these security issues:
 - [ ] URL parameters are validated before use
 - [ ] Form inputs are sanitized server-side
 
+### Authentication & Authorization
+- [ ] Views with exposed state have `login_required = True` or `login_required = False` (explicit)
+- [ ] Destructive handlers use `@permission_required` for defense-in-depth
+- [ ] `check_permissions()` overrides validate object-level access
+- [ ] `djust_audit` shows no unprotected views with exposed state
+
 ### WebSocket Event Security
 - [ ] All event handlers decorated with `@event_handler`
 - [ ] No `getattr()` on user-controlled names without `is_safe_event_name()` guard
@@ -259,6 +384,8 @@ When reviewing PRs, check for these security issues:
 ### Template Tags
 - [ ] Template tags use `format_html()` or `escape()`, never `mark_safe(f'...')`
 - [ ] New endpoints have CSRF protection (no unjustified `@csrf_exempt`)
+- [ ] No `|safe` filter used on user-controlled template variables
+- [ ] Components pass through SafeString detection (pre-rendered HTML not double-escaped)
 
 ### JavaScript
 - [ ] innerHTML assignments reviewed for XSS
@@ -324,7 +451,9 @@ logger.info(f"Query: {sanitize_for_log(user_query)}")
 **Impact:** Session hijacking, data theft, defacement.
 
 **Prevention:**
-- Server: Use Django's auto-escaping in templates
+- Server: djust's Rust template engine auto-escapes all `{{ variable }}` output by default (HTML entities)
+- Server: `SafeString` values (from `mark_safe()`, component `.render()`) are auto-detected and skip escaping
+- Server: Template tags use `format_html()` or `escape()`, never `mark_safe(f'...')`
 - Client: Use `djustSecurity.safeSetInnerHTML()` for dynamic content
 - CSP headers for defense in depth
 
@@ -537,6 +666,44 @@ For security-sensitive changes:
    assert "\x1b" not in result
    assert "\n" not in result
    ```
+
+### Automated Fuzz Testing
+
+djust provides `LiveViewSmokeTest`, a test mixin that auto-discovers LiveView subclasses and fuzzes their event handlers with XSS payloads and type-confusion values:
+
+```python
+from django.test import TestCase
+from djust.testing import LiveViewSmokeTest
+
+class TestAllViews(TestCase, LiveViewSmokeTest):
+    app_label = "myapp"     # only test views in this app (optional)
+    max_queries = 20        # fail if render exceeds this many queries
+    fuzz = True             # fuzz event handlers (default: True)
+```
+
+**What it tests:**
+- `test_smoke_render` — every view mounts and renders without exceptions
+- `test_smoke_queries` — every render stays within the query count threshold
+- `test_fuzz_xss` — XSS payloads in handler params don't appear unescaped in rendered HTML
+- `test_fuzz_no_unhandled_crash` — wrong-type params don't cause unhandled exceptions
+
+**XSS payloads tested include:**
+- `<script>alert("xss")</script>`
+- `<img src=x onerror=alert(1)>`
+- `"><svg onload=alert(1)>`
+- SQL injection strings
+- Template injection strings
+
+**Type-confusion payloads include:**
+- `None`, wrong types (`str` for `int`, `int` for `bool`, etc.)
+- Boundary values (`2^31`, `float("inf")`, empty strings)
+- Oversized strings (`"x" * 10000`)
+
+Run fuzz tests alongside your regular test suite:
+
+```bash
+pytest -k "TestAllViews" -v
+```
 
 ---
 

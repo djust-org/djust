@@ -1,19 +1,22 @@
 //! Template context management
 
 use crate::Value;
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 use std::collections::HashMap;
 
 /// A context for template rendering, similar to Django's Context
 #[derive(Debug, Clone, Default)]
 pub struct Context {
     stack: Vec<AHashMap<String, Value>>,
+    /// Keys marked as safe (skip auto-escaping), like Django's SafeData
+    safe_keys: AHashSet<String>,
 }
 
 impl Context {
     pub fn new() -> Self {
         Self {
             stack: vec![AHashMap::new()],
+            safe_keys: AHashSet::new(),
         }
     }
 
@@ -22,7 +25,20 @@ impl Context {
         for (k, v) in dict {
             map.insert(k, v);
         }
-        Self { stack: vec![map] }
+        Self {
+            stack: vec![map],
+            safe_keys: AHashSet::new(),
+        }
+    }
+
+    /// Mark a variable name as safe (skip auto-escaping on render).
+    pub fn mark_safe(&mut self, key: String) {
+        self.safe_keys.insert(key);
+    }
+
+    /// Check if a variable name is marked safe.
+    pub fn is_safe(&self, key: &str) -> bool {
+        self.safe_keys.contains(key)
     }
 
     pub fn get(&self, key: &str) -> Option<&Value> {

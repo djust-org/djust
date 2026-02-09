@@ -5,7 +5,6 @@ RustBridgeMixin - Rust backend integration for LiveView.
 import hashlib
 import json
 import logging
-import sys
 from urllib.parse import parse_qs, urlencode
 
 from ..serialization import DjangoJSONEncoder
@@ -25,10 +24,7 @@ class RustBridgeMixin:
     def _initialize_rust_view(self, request=None):
         """Initialize the Rust LiveView backend"""
 
-        print(
-            f"[LiveView] _initialize_rust_view() called, _rust_view={self._rust_view}",
-            file=sys.stderr,
-        )
+        logger.debug("[LiveView] _initialize_rust_view() called, _rust_view=%s", self._rust_view)
 
         if self._rust_view is None:
             # Try to get from cache if we have a session
@@ -51,10 +47,7 @@ class RustBridgeMixin:
 
                 backend = get_backend()
                 self._cache_key = f"{session_key}_{view_key}"
-                print(
-                    f"[LiveView] Cache lookup (WebSocket): cache_key={self._cache_key}",
-                    file=sys.stderr,
-                )
+                logger.debug("[LiveView] Cache lookup (WebSocket): cache_key=%s", self._cache_key)
 
                 cached = backend.get(self._cache_key)
                 if cached:
@@ -62,11 +55,11 @@ class RustBridgeMixin:
                     self._rust_view = cached_view
                     # template_dirs are not serialized; restore them after cache hit
                     self._rust_view.set_template_dirs(get_template_dirs())
-                    print("[LiveView] Cache HIT! Using cached RustLiveView", file=sys.stderr)
+                    logger.debug("[LiveView] Cache HIT! Using cached RustLiveView")
                     backend.set(self._cache_key, cached_view)
                     return
                 else:
-                    print("[LiveView] Cache MISS! Will create new RustLiveView", file=sys.stderr)
+                    logger.debug("[LiveView] Cache MISS! Will create new RustLiveView")
             elif request and hasattr(request, "session"):
                 view_key = f"liveview_{request.path}"
                 if request.GET:
@@ -81,9 +74,7 @@ class RustBridgeMixin:
 
                 backend = get_backend()
                 self._cache_key = f"{session_key}_{view_key}"
-                print(
-                    f"[LiveView] Cache lookup (HTTP): cache_key={self._cache_key}", file=sys.stderr
-                )
+                logger.debug("[LiveView] Cache lookup (HTTP): cache_key=%s", self._cache_key)
 
                 cached = backend.get(self._cache_key)
                 if cached:
@@ -91,20 +82,17 @@ class RustBridgeMixin:
                     self._rust_view = cached_view
                     # template_dirs are not serialized; restore them after cache hit
                     self._rust_view.set_template_dirs(get_template_dirs())
-                    print("[LiveView] Cache HIT! Using cached RustLiveView", file=sys.stderr)
+                    logger.debug("[LiveView] Cache HIT! Using cached RustLiveView")
                     backend.set(self._cache_key, cached_view)
                     return
                 else:
-                    print("[LiveView] Cache MISS! Will create new RustLiveView", file=sys.stderr)
+                    logger.debug("[LiveView] Cache MISS! Will create new RustLiveView")
 
             template_source = self.get_template()
 
-            print(
-                f"[LiveView] Creating NEW RustLiveView for cache_key={self._cache_key}",
-                file=sys.stderr,
-            )
-            print(f"[LiveView] Template length: {len(template_source)} chars", file=sys.stderr)
-            print(f"[LiveView] Template preview: {template_source[:200]}...", file=sys.stderr)
+            logger.debug("[LiveView] Creating NEW RustLiveView for cache_key=%s", self._cache_key)
+            logger.debug("[LiveView] Template length: %d chars", len(template_source))
+            logger.debug("[LiveView] Template preview: %s...", template_source[:200])
 
             template_dirs = get_template_dirs()
             self._rust_view = RustLiveView(template_source, template_dirs)
@@ -120,20 +108,29 @@ class RustBridgeMixin:
         if self._rust_view:
             from ..components.base import Component, LiveComponent
             from django import forms
+            from django.utils.safestring import SafeString
 
             context = self.get_context_data()
 
+            # Detect SafeString values before serialization loses the type info
+            safe_keys = []
             rendered_context = {}
             for key, value in context.items():
                 if isinstance(value, (Component, LiveComponent)):
-                    rendered_html = str(value.render())
-                    rendered_context[key] = {"render": rendered_html}
+                    rendered_html = value.render()
+                    rendered_context[key] = {"render": str(rendered_html)}
+                    # Component.render() returns SafeString — mark as safe
+                    safe_keys.append(key)
                 elif isinstance(value, forms.Form):
                     continue
                 else:
+                    if isinstance(value, SafeString):
+                        safe_keys.append(key)
                     rendered_context[key] = value
 
             json_str = json.dumps(rendered_context, cls=DjangoJSONEncoder)
             json_compatible_context = json.loads(json_str)
 
             self._rust_view.update_state(json_compatible_context)
+            if safe_keys:
+                self._rust_view.mark_safe_keys(safe_keys)

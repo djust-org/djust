@@ -77,6 +77,22 @@ function bindLiveViewEvents() {
             element.addEventListener('click', wrappedHandler);
         }
 
+        // Handle dj-copy — client-side clipboard copy (no server round-trip)
+        if (element.getAttribute('dj-copy') && !element.dataset.liveviewCopyBound) {
+            element.dataset.liveviewCopyBound = 'true';
+            element.addEventListener('click', function(e) {
+                e.preventDefault();
+                // Read attribute at click time (not bind time) so morph updates take effect
+                var currentValue = element.getAttribute('dj-copy');
+                if (!currentValue) return;
+                navigator.clipboard.writeText(currentValue).then(function() {
+                    var original = element.textContent;
+                    element.textContent = 'Copied!';
+                    setTimeout(function() { element.textContent = original; }, 1500);
+                });
+            });
+        }
+
         // Handle dj-submit events on forms
         const submitHandler = element.getAttribute('dj-submit');
         if (submitHandler && !element.dataset.liveviewSubmitBound) {

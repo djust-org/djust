@@ -5,6 +5,7 @@ Provides tools for testing LiveViews without requiring a browser or WebSocket:
 - LiveViewTestClient: Send events and assert state without WebSocket
 - SnapshotTestMixin: Compare rendered output against stored snapshots
 - @performance_test: Ensure handlers meet performance thresholds
+- LiveViewSmokeTest: Auto-discover views and run smoke + fuzz tests
 
 Example usage:
     from djust.testing import LiveViewTestClient, SnapshotTestMixin, performance_test
@@ -31,6 +32,15 @@ Example usage:
             client = LiveViewTestClient(ItemListView)
             client.mount()
             client.send_event('search', query='test')
+
+Automated smoke + fuzz testing:
+    from django.test import TestCase
+    from djust.testing import LiveViewSmokeTest
+
+    class TestAllViews(TestCase, LiveViewSmokeTest):
+        app_label = "crm"       # only test views in this app
+        max_queries = 20        # query count threshold per render
+        fuzz = True             # send XSS/type payloads to handlers
 """
 
 import functools
@@ -106,11 +116,19 @@ class LiveViewTestClient:
         request = self.request_factory.get("/")
         if self.user:
             request.user = self.user
+        else:
+            from django.contrib.auth.models import AnonymousUser
+
+            request.user = AnonymousUser()
 
         # Initialize session
         from django.contrib.sessions.backends.db import SessionStore
 
         request.session = SessionStore()
+
+        # Store request on the instance (Django's View.dispatch does this;
+        # many LiveViews access self.request in get_context_data etc.)
+        self.view_instance.request = request
 
         # Initialize temporary assigns if the method exists
         if hasattr(self.view_instance, "_initialize_temporary_assigns"):
@@ -260,9 +278,16 @@ class LiveViewTestClient:
 
         return state
 
-    def render(self) -> str:
+    def render(self, engine: str = "rust") -> str:
         """
         Get current rendered HTML.
+
+        Args:
+            engine: Which rendering engine to use:
+                - "rust" (default): Use the Rust template engine via the view's
+                  own render() path — same as production WebSocket rendering.
+                - "django": Use Django's template engine (useful for views that
+                  rely on Django-only template features).
 
         Returns:
             The rendered HTML string
@@ -273,10 +298,16 @@ class LiveViewTestClient:
         if not self._mounted or not self.view_instance:
             raise RuntimeError("View not mounted. Call client.mount() first.")
 
-        # Get context data
+        if engine == "rust":
+            # Use the view's own render() method — this goes through:
+            # _initialize_rust_view() → _sync_state_to_rust() → _rust_view.render()
+            # Same code path as production WebSocket rendering.
+            request = getattr(self.view_instance, "request", None)
+            return self.view_instance.render(request)
+
+        # Django fallback
         context = self.view_instance.get_context_data()
 
-        # Get template
         from django.template.loader import get_template
 
         template_name = getattr(self.view_instance, "template_name", None)
@@ -603,3 +634,424 @@ def create_test_view(view_class: Type, user: Optional[Any] = None, **mount_param
     client = LiveViewTestClient(view_class, user=user)
     client.mount(**mount_params)
     return client.view_instance
+
+
+# ============================================================================
+# Fuzz payloads
+# ============================================================================
+
+# XSS payloads — if any of these appear unescaped in rendered HTML,
+# the auto-escaping is broken.
+XSS_PAYLOADS = [
+    '<script>alert("xss")</script>',
+    "<img src=x onerror=alert(1)>",
+    '"><svg onload=alert(1)>',
+    "'; DROP TABLE users; --",
+    "${7*7}",
+    "{{constructor.constructor('return this')()}}",
+    '<a href="javascript:alert(1)">click</a>',
+]
+
+# Type-confusion payloads — wrong types for common parameter signatures
+TYPE_PAYLOADS = {
+    "str": [None, 0, True, [], {}, "", "x" * 10000],
+    "int": [None, "not_a_number", "", True, -1, 0, 2**31, 3.14],
+    "float": [None, "nan", "", True, float("inf")],
+    "bool": [None, "yes", 0, 1, "", "false"],
+}
+
+# Unique fragments from XSS_PAYLOADS that should never appear in safe HTML.
+# These check for UNESCAPED tags/attributes — if the `<` is escaped to `&lt;`,
+# the browser treats it as text (safe), even if `onerror=` appears in the text.
+_XSS_SENTINELS = [
+    '<script>alert("xss")',  # unescaped script tag with payload
+    "<img src=x onerror=",  # unescaped img tag with event handler
+    "<svg onload=",  # unescaped svg tag with event handler
+    '<a href="javascript:',  # unescaped anchor with javascript: URL
+    "DROP TABLE users",  # SQL injection (no HTML escaping relevant)
+]
+
+
+def _discover_views(app_label=None):
+    """Discover all LiveView subclasses, optionally filtered by app label.
+
+    Auto-imports views modules from installed Django apps so that
+    __subclasses__() can find them.
+    """
+    import importlib
+
+    from django.apps import apps
+    from djust.live_view import LiveView
+
+    # Auto-import views modules from installed apps so subclasses are registered
+    for app_config in apps.get_app_configs():
+        if app_label and app_config.label != app_label:
+            continue
+        for suffix in ("views", "admin_views", "djust_admin"):
+            module_name = f"{app_config.name}.{suffix}"
+            try:
+                importlib.import_module(module_name)
+            except ImportError:
+                pass  # Optional module — app may not have views/admin_views
+
+    def _walk(cls):
+        for sub in cls.__subclasses__():
+            yield sub
+            yield from _walk(sub)
+
+    for cls in _walk(LiveView):
+        module = getattr(cls, "__module__", "") or ""
+        # Skip internal framework classes
+        if module.startswith("djust.") and "test" not in module and "example" not in module:
+            continue
+        if app_label:
+            parts = module.split(".")
+            if parts[0] != app_label:
+                continue
+        # Skip abstract bases without a template
+        if not getattr(cls, "template_name", None) and not getattr(cls, "template", None):
+            continue
+        yield cls
+
+
+def _get_handlers(cls):
+    """Get event handler names and their parameter metadata from a view class.
+
+    Discovers both @event_handler decorated methods (with full param metadata)
+    and plain public methods defined on the user class (not inherited from
+    LiveView/LiveComponent base). Plain methods get basic param info from
+    inspect.signature.
+    """
+    from djust.live_view import LiveView
+
+    # Collect names defined on framework base classes
+    base_names = set()
+    for base in cls.__mro__:
+        if base.__name__ in ("LiveView", "LiveComponent", "object"):
+            break
+        continue
+    for name in dir(LiveView):
+        if not name.startswith("_"):
+            base_names.add(name)
+
+    handlers = {}
+    for name in dir(cls):
+        if name.startswith("_"):
+            continue
+        try:
+            attr = getattr(cls, name, None)
+        except Exception:
+            continue
+        if not callable(attr):
+            continue
+
+        # @event_handler decorated — has full metadata
+        if hasattr(attr, "_djust_decorators"):
+            meta = attr._djust_decorators
+            if "event_handler" in meta:
+                handlers[name] = meta.get("event_handler", {})
+                continue
+
+        # Plain method defined on user class (not inherited from framework)
+        if name in base_names:
+            continue
+        # Must be defined on the user class, not a mixin/base
+        if name not in cls.__dict__:
+            continue
+
+        # Build basic param info from inspect
+        try:
+            sig = inspect.signature(attr)
+        except (ValueError, TypeError):
+            handlers[name] = {"params": [], "accepts_kwargs": False}
+            continue
+
+        params = []
+        accepts_kwargs = False
+        for pname, param in sig.parameters.items():
+            if pname == "self":
+                continue
+            if param.kind == param.VAR_KEYWORD:
+                accepts_kwargs = True
+                continue
+            if param.kind == param.VAR_POSITIONAL:
+                continue
+            p = {"name": pname, "type": "str", "required": True}
+            if param.default is not param.empty:
+                p["required"] = False
+                p["default"] = param.default
+            if param.annotation is not param.empty:
+                type_name = getattr(param.annotation, "__name__", str(param.annotation))
+                p["type"] = type_name
+            params.append(p)
+        handlers[name] = {"params": params, "accepts_kwargs": accepts_kwargs}
+
+    return handlers
+
+
+def _make_fuzz_params(handler_meta):
+    """Generate fuzz parameter dicts for a handler based on its signature.
+
+    Yields (description, params_dict) tuples.
+    """
+    params = handler_meta.get("params", [])
+    accepts_kwargs = handler_meta.get("accepts_kwargs", False)
+
+    # 1. XSS payloads — inject into every string parameter
+    for payload in XSS_PAYLOADS:
+        fuzz_params = {}
+        for p in params:
+            ptype = p.get("type", "str")
+            if ptype in ("str", None):
+                fuzz_params[p["name"]] = payload
+            elif ptype == "int":
+                fuzz_params[p["name"]] = 0
+            elif ptype == "float":
+                fuzz_params[p["name"]] = 0.0
+            elif ptype == "bool":
+                fuzz_params[p["name"]] = False
+            else:
+                fuzz_params[p["name"]] = payload
+        if accepts_kwargs:
+            fuzz_params["_fuzz_extra"] = payload
+        if fuzz_params:
+            yield f"xss: {payload[:30]}", fuzz_params
+
+    # 2. Type confusion — send wrong types for each parameter
+    for p in params:
+        ptype = p.get("type", "str")
+        payloads = TYPE_PAYLOADS.get(ptype, TYPE_PAYLOADS["str"])
+        for bad_value in payloads:
+            fuzz_params = {}
+            for p2 in params:
+                if p2["name"] == p["name"]:
+                    fuzz_params[p2["name"]] = bad_value
+                elif not p2.get("required", True):
+                    continue  # skip optional params
+                else:
+                    # Provide a valid default for other required params
+                    pt = p2.get("type", "str")
+                    if pt == "int":
+                        fuzz_params[p2["name"]] = 0
+                    elif pt == "float":
+                        fuzz_params[p2["name"]] = 0.0
+                    elif pt == "bool":
+                        fuzz_params[p2["name"]] = False
+                    else:
+                        fuzz_params[p2["name"]] = ""
+            yield f"type({p['name']}={bad_value!r:.20})", fuzz_params
+
+    # 3. Empty call — no params at all
+    yield "empty_params", {}
+
+    # 4. Missing required params — one at a time
+    required = [p for p in params if p.get("required", True)]
+    for skip_param in required:
+        fuzz_params = {}
+        for p in params:
+            if p["name"] == skip_param["name"]:
+                continue
+            if not p.get("required", True):
+                continue
+            pt = p.get("type", "str")
+            if pt == "int":
+                fuzz_params[p["name"]] = 0
+            elif pt == "float":
+                fuzz_params[p["name"]] = 0.0
+            elif pt == "bool":
+                fuzz_params[p["name"]] = False
+            else:
+                fuzz_params[p["name"]] = ""
+        yield f"missing({skip_param['name']})", fuzz_params
+
+
+def _check_xss_in_html(html):
+    """Check if rendered HTML contains unescaped XSS sentinels.
+
+    Returns list of found sentinels (empty = safe).
+    """
+    html_lower = html.lower()
+    return [s for s in _XSS_SENTINELS if s in html_lower]
+
+
+class LiveViewSmokeTest:
+    """
+    Mixin for automated smoke testing and fuzz testing of LiveViews.
+
+    Auto-discovers all LiveView subclasses in your project (or a specific app),
+    mounts each one, renders with the Rust engine, and optionally fuzzes every
+    event handler with XSS payloads and type-confusion values.
+
+    Usage:
+        from django.test import TestCase
+        from djust.testing import LiveViewSmokeTest
+
+        class TestAllCRMViews(TestCase, LiveViewSmokeTest):
+            app_label = "crm"       # only test views in this app
+            max_queries = 20        # fail if render exceeds this many queries
+            fuzz = True             # fuzz event handlers (default: True)
+
+            # Optional: skip views that need special setup
+            skip_views = []
+
+            # Optional: provide mount params or user per view
+            view_config = {
+                # DealDetailView: {"mount_params": {"object_id": 1}, "user": staff_user},
+            }
+
+    What it tests:
+        - test_smoke_render: Each view mounts and renders without exceptions
+        - test_smoke_queries: Each render stays within max_queries
+        - test_fuzz_handlers: XSS payloads don't appear unescaped in output
+        - test_fuzz_type_confusion: Wrong-type params don't cause unhandled crashes
+    """
+
+    # Override in subclass
+    app_label: Optional[str] = None
+    max_queries: int = 50
+    fuzz: bool = True
+    skip_views: List[Type] = []
+    view_config: Dict[Type, Dict[str, Any]] = {}
+
+    def _get_views(self) -> List[Type]:
+        """Get views to test."""
+        views = list(_discover_views(self.app_label))
+        skip_set = set(self.skip_views)
+        return [v for v in views if v not in skip_set]
+
+    def _make_client(self, view_class) -> LiveViewTestClient:
+        """Create and mount a test client for a view."""
+        config = self.view_config.get(view_class, {})
+        user = config.get("user")
+        mount_params = config.get("mount_params", {})
+
+        client = LiveViewTestClient(view_class, user=user)
+        client.mount(**mount_params)
+        return client
+
+    def test_smoke_render(self):
+        """Every discovered view mounts and renders without exceptions."""
+        errors = []
+        views = self._get_views()
+
+        for view_class in views:
+            name = f"{view_class.__module__}.{view_class.__name__}"
+            try:
+                client = self._make_client(view_class)
+                html = client.render()
+                if not html or len(html) < 10:
+                    errors.append(f"{name}: render returned empty/tiny HTML ({len(html)} chars)")
+            except Exception as e:
+                errors.append(f"{name}: {type(e).__name__}: {e}")
+
+        if errors:
+            raise AssertionError(
+                f"Smoke render failed for {len(errors)}/{len(views)} views:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            )
+
+    def test_smoke_queries(self):
+        """Every discovered view renders within the query count threshold."""
+        from django.conf import settings
+        from django.db import connection, reset_queries
+
+        errors = []
+        views = self._get_views()
+
+        for view_class in views:
+            name = f"{view_class.__module__}.{view_class.__name__}"
+            old_debug = settings.DEBUG
+            try:
+                settings.DEBUG = True
+                reset_queries()
+
+                client = self._make_client(view_class)
+                client.render()
+
+                query_count = len(connection.queries)
+
+                if query_count > self.max_queries:
+                    errors.append(f"{name}: {query_count} queries (max {self.max_queries})")
+            except Exception as e:
+                errors.append(f"{name}: {type(e).__name__}: {e}")
+            finally:
+                settings.DEBUG = old_debug
+
+        if errors:
+            raise AssertionError(
+                f"Query threshold exceeded for {len(errors)}/{len(views)} views:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            )
+
+    def test_fuzz_xss(self):
+        """XSS payloads in handler params don't appear unescaped in rendered output."""
+        if not self.fuzz:
+            return
+
+        errors = []
+        views = self._get_views()
+
+        for view_class in views:
+            view_name = f"{view_class.__module__}.{view_class.__name__}"
+            handlers = _get_handlers(view_class)
+            if not handlers:
+                continue
+
+            for handler_name, handler_meta in handlers.items():
+                for desc, fuzz_params in _make_fuzz_params(handler_meta):
+                    if not desc.startswith("xss:"):
+                        continue
+
+                    try:
+                        client = self._make_client(view_class)
+                        client.send_event(handler_name, **fuzz_params)
+                        html = client.render()
+
+                        found = _check_xss_in_html(html)
+                        if found:
+                            errors.append(
+                                f"{view_name}.{handler_name} [{desc}]: "
+                                f"unescaped XSS sentinel(s): {found}"
+                            )
+                    except Exception:
+                        # Handler crashing on fuzz input is acceptable —
+                        # it's an unhandled crash test, not XSS test
+                        pass
+
+        if errors:
+            raise AssertionError(
+                f"XSS escaping failures ({len(errors)}):\n" + "\n".join(f"  - {e}" for e in errors)
+            )
+
+    def test_fuzz_no_unhandled_crash(self):
+        """Fuzz payloads don't cause unhandled exceptions (500s in production)."""
+        if not self.fuzz:
+            return
+
+        crashes = []
+        views = self._get_views()
+
+        for view_class in views:
+            view_name = f"{view_class.__module__}.{view_class.__name__}"
+            handlers = _get_handlers(view_class)
+            if not handlers:
+                continue
+
+            for handler_name, handler_meta in handlers.items():
+                for desc, fuzz_params in _make_fuzz_params(handler_meta):
+                    try:
+                        client = self._make_client(view_class)
+                        client.send_event(handler_name, **fuzz_params)
+                        # send_event catches exceptions and returns success=False,
+                        # which is fine. We only care about exceptions that
+                        # escape the handler boundary.
+                    except Exception as e:
+                        crashes.append(
+                            f"{view_name}.{handler_name} [{desc}]: " f"{type(e).__name__}: {e}"
+                        )
+
+        if crashes:
+            raise AssertionError(
+                f"Unhandled crashes from fuzz input ({len(crashes)}):\n"
+                + "\n".join(f"  - {e}" for e in crashes)
+            )

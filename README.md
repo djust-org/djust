@@ -29,6 +29,7 @@ djust brings Phoenix LiveView-style reactive components to Django, with performa
 - 🚀 **TurboNav Compatible** - Works seamlessly with Turbo-style client-side navigation
 - 📱 **PWA Support** - Offline-first Progressive Web Apps with automatic sync
 - 🏢 **Multi-Tenant Ready** - Production SaaS architecture with tenant isolation
+- 🔐 **Authentication & Authorization** - View-level and handler-level auth with Django permissions integration
 
 ## 🎯 Quick Example
 
@@ -685,6 +686,7 @@ Areas we'd love help with:
 - [x] Developer debug panel with event history and VDOM inspection
 - [x] Reusable component library (`djust_components` crate)
 - [x] JIT pipeline improvements and stale-closure fixes
+- [x] Authentication & authorization (view-level + handler-level)
 - [ ] File upload handling
 - [ ] Server-sent events (SSE) fallback
 - [ ] React/Vue component compatibility
@@ -700,6 +702,9 @@ Areas we'd love help with:
 - WebSocket origin validation and HMAC message signing (v0.2.1)
 - Per-view and global rate limiting support
 - Configurable allowed origins for WebSocket connections
+- View-level auth enforcement (`login_required`, `permission_required`) before `mount()`
+- Handler-level `@permission_required` for protecting individual event handlers
+- `djust_audit` command and `djust.S005` system check for auth posture visibility
 
 Report security issues to: security@djust.org
 

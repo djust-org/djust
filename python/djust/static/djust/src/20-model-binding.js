@@ -72,23 +72,18 @@ function _getElementValue(el) {
 
 /**
  * Send update_model event to server.
+ * Tries direct WebSocket first (synchronous, no loading states needed for model
+ * binding), then falls back to handleEvent for HTTP-only scenarios.
  */
 function _sendModelUpdate(field, value) {
-    // Prefer the high-level handleEvent path (HTTP fallback, loading states, caching)
-    if (typeof handleEvent === 'function') {
-        handleEvent('update_model', { field, value });
+    // Fast path: send directly via WebSocket (synchronous)
+    const inst = window.djust.liveViewInstance;
+    if (inst && inst.sendEvent && inst.sendEvent('update_model', { field, value })) {
         return;
     }
-    // Fallback: send directly via WebSocket
-    const inst = window.djust.liveViewInstance;
-    if (inst && inst.sendEvent) {
-        inst.sendEvent('update_model', { field, value });
-    } else if (inst && inst.ws && inst.ws.readyState === WebSocket.OPEN) {
-        inst.sendMessage({
-            type: 'event',
-            event: 'update_model',
-            params: { field, value },
-        });
+    // Fallback: handleEvent (includes HTTP fallback, loading states)
+    if (typeof handleEvent === 'function') {
+        handleEvent('update_model', { field, value });
     }
 }
 

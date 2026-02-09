@@ -6,7 +6,14 @@ view instance when the client sends dj-model changes.
 """
 
 import logging
-from typing import Any
+
+try:
+    from ..decorators import event_handler
+except (ImportError, SystemError):
+    # Fallback for direct-file imports (e.g. test_model_binding.py)
+    def event_handler(fn=None, **kw):  # type: ignore[misc]
+        return fn if fn is not None else (lambda f: f)
+
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +54,8 @@ class ModelBindingMixin:
     # Optional: subclasses can restrict which fields are bindable
     allowed_model_fields = None  # None = all non-forbidden fields allowed
 
-    def update_model(self, field: str = "", value: Any = None, **kwargs):
+    @event_handler
+    def update_model(self, field: str = "", value=None, **kwargs):
         """
         Default handler for dj-model changes from the client.
 
@@ -106,3 +114,9 @@ class ModelBindingMixin:
 
         setattr(self, field, value)
         logger.debug("[dj-model] Set %s.%s = %r", self.__class__.__name__, field, value)
+
+        # Skip re-render: update_model only stores a value on the view
+        # instance — no DOM change is needed. Re-rendering would cause a
+        # wasteful server round-trip that replaces the DOM and loses focus
+        # on the input the user is actively typing in.
+        self._skip_render = True

@@ -46,12 +46,16 @@ djust/
 │   ├── component.py        # LiveComponent base
 │   ├── forms.py            # FormMixin (real-time validation)
 │   ├── websocket.py        # LiveViewConsumer (Channels)
-│   ├── decorators.py       # @event_handler, @cache, @debounce, etc.
+│   ├── auth.py             # Authentication & authorization (check_view_auth, mixins)
+│   ├── decorators.py       # @event_handler, @cache, @debounce, @permission_required, etc.
 │   ├── config.py           # Configuration system
 │   ├── presence.py         # Presence tracking (PresenceMixin, CursorTracker)
 │   ├── streaming.py        # StreamingMixin (real-time partial DOM updates)
 │   ├── uploads.py          # File uploads (binary WebSocket frames)
 │   ├── routing.py          # live_session() URL routing helper
+│   ├── testing.py          # LiveViewTestClient, SnapshotTestMixin, LiveViewSmokeTest
+│   ├── checks.py           # Django system checks (C/V/S/T/Q categories)
+│   ├── management/commands/ # djust_audit (security audit), djust_check (system checks)
 │   ├── mixins/             # LiveView mixins (navigation, model binding, etc.)
 │   ├── templatetags/       # Django template tags
 │   ├── tenants/            # Multi-tenant support

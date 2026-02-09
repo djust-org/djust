@@ -183,11 +183,13 @@ function handleServerResponse(data, eventName, triggerElement) {
         if (data.version !== undefined) {
             if (clientVdomVersion === null) {
                 clientVdomVersion = data.version;
-                console.log('[LiveView] Initialized VDOM version:', clientVdomVersion);
+                if (globalThis.djustDebug) console.log('[LiveView] Initialized VDOM version:', clientVdomVersion);
             } else if (clientVdomVersion !== data.version - 1 && !data.hotreload) {
                 // Version mismatch - force full reload (skip check for hot reload)
-                console.warn('[LiveView] VDOM version mismatch!');
-                console.warn(`  Expected v${clientVdomVersion + 1}, got v${data.version}`);
+                if (globalThis.djustDebug) {
+                    console.warn('[LiveView] VDOM version mismatch!');
+                    console.warn(`  Expected v${clientVdomVersion + 1}, got v${data.version}`);
+                }
 
                 clearOptimisticState(eventName);
 
@@ -196,7 +198,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                     const doc = parser.parseFromString(data.html, 'text/html');
                     const liveviewRoot = getLiveViewRoot();
                     const newRoot = doc.querySelector('[data-djust-root]') || doc.body;
-                    liveviewRoot.innerHTML = newRoot.innerHTML;
+                    morphChildren(liveviewRoot, newRoot);
                     clientVdomVersion = data.version;
                     initReactCounters();
                     initTodoItems();
@@ -218,23 +220,46 @@ function handleServerResponse(data, eventName, triggerElement) {
         });
 
         // Apply patches (efficient incremental updates)
-        if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
-            console.log('[LiveView] Applying', data.patches.length, 'patches');
+        // Empty patches array = server confirmed no DOM changes needed (no-op success)
+        if (data.patches && Array.isArray(data.patches) && data.patches.length === 0) {
+            if (globalThis.djustDebug) console.log('[LiveView] No DOM changes needed (0 patches)');
+        }
+        else if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
+            if (globalThis.djustDebug) console.log('[LiveView] Applying', data.patches.length, 'patches');
 
             // Store timing info globally for debug panel access
             window._lastPatchTiming = data.timing;
             // Store comprehensive performance data if available
             window._lastPerformanceData = data.performance;
 
+            // For broadcast patches (from other users via push_to_view),
+            // tell preserveFormValues to accept remote content instead of
+            // restoring the focused element's stale local value.
+            _isBroadcastUpdate = !!data.broadcast;
             const success = applyPatches(data.patches);
+            _isBroadcastUpdate = false;
+
+            // For broadcast patches, sync textarea .value from .textContent.
+            // VDOM patches update textContent directly (not via innerHTML),
+            // so preserveFormValues never runs. Textarea .value is separate
+            // from .textContent after initial render — must sync explicitly.
+            if (data.broadcast) {
+                const root = getLiveViewRoot();
+                if (root) {
+                    root.querySelectorAll('textarea').forEach(el => {
+                        el.value = el.textContent || '';
+                    });
+                }
+            }
+
             if (success === false) {
-                console.error('[LiveView] Patches failed, reloading page...');
+                if (globalThis.djustDebug) console.error('[LiveView] Patches failed, reloading page...');
                 globalLoadingManager.stopLoading(eventName, triggerElement);
                 window.location.reload();
                 return false;
             }
 
-            console.log('[LiveView] Patches applied successfully');
+            if (globalThis.djustDebug) console.log('[LiveView] Patches applied successfully');
 
             // Final cleanup
             document.querySelectorAll('.optimistic-pending').forEach(el => {
@@ -247,7 +272,8 @@ function handleServerResponse(data, eventName, triggerElement) {
         }
         // Apply full HTML update (fallback)
         else if (data.html) {
-            console.log('[LiveView] Applying full HTML update');
+            if (globalThis.djustDebug) console.log('[LiveView] Applying full HTML update');
+            _isBroadcastUpdate = !!data.broadcast;
             const parser = new DOMParser();
             const doc = parser.parseFromString(data.html, 'text/html');
             const liveviewRoot = getLiveViewRoot();
@@ -261,16 +287,17 @@ function handleServerResponse(data, eventName, triggerElement) {
                 el.classList.remove('optimistic-pending');
             });
 
+            _isBroadcastUpdate = false;
             initReactCounters();
             initTodoItems();
             bindLiveViewEvents();
         } else {
-            console.warn('[LiveView] Response has neither patches nor html!', data);
+            if (globalThis.djustDebug) console.warn('[LiveView] Response has neither patches nor html!', data);
         }
 
         // Handle form reset
         if (data.reset_form) {
-            console.log('[LiveView] Resetting form');
+            if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
             const form = document.querySelector('[data-djust-root] form');
             if (form) form.reset();
         }
@@ -280,7 +307,7 @@ function handleServerResponse(data, eventName, triggerElement) {
         return true;
 
     } catch (error) {
-        console.error('[LiveView] Error in handleServerResponse:', error);
+        if (globalThis.djustDebug) console.error('[LiveView] Error in handleServerResponse:', error);
         globalLoadingManager.stopLoading(eventName, triggerElement);
         return false;
     }
@@ -572,6 +599,16 @@ class LiveViewWebSocket {
                 }
                 break;
 
+            case 'noop':
+                // Server acknowledged event but no DOM changes needed (auto-detected
+                // or explicit _skip_render). Just clear loading state.
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
             case 'push_event':
                 // Server-pushed event for JS hooks
                 window.dispatchEvent(new CustomEvent('djust:push_event', {
@@ -581,6 +618,9 @@ class LiveViewWebSocket {
                 if (typeof dispatchPushEventToHooks === 'function') {
                     dispatchPushEventToHooks(data.event, data.payload);
                 }
+                // Clear loading state — when _skip_render is used, this is the
+                // only response the client gets (no patch/html_update follows).
+                globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                 break;
 
             case 'embedded_update':
@@ -772,7 +812,9 @@ class LiveViewWebSocket {
             return;
         }
 
-        container.innerHTML = html;
+        const _morphTemp = document.createElement('div');
+        _morphTemp.innerHTML = html;
+        morphChildren(container, _morphTemp);
         if (globalThis.djustDebug) console.log(`[LiveView] Updated embedded view: ${viewId}`);
 
         // Re-bind events within the updated container
@@ -1590,7 +1632,12 @@ function extractTypedParams(element) {
             typeHint = null;
         }
 
-        const key = rawKey.replace(/-/g, '_'); // Convert kebab-case to snake_case
+        // Convert kebab-case to snake_case, then strip dj_ namespace prefix
+        // so data-dj-preset="x" becomes {preset: "x"}, not {dj_preset: "x"}
+        let key = rawKey.replace(/-/g, '_');
+        if (key.startsWith('dj_')) {
+            key = key.slice(3);
+        }
 
         // Prevent prototype pollution attacks
         if (UNSAFE_KEYS.includes(key)) {
@@ -1750,6 +1797,22 @@ function bindLiveViewEvents() {
                 : clickHandlerFn;
 
             element.addEventListener('click', wrappedHandler);
+        }
+
+        // Handle dj-copy — client-side clipboard copy (no server round-trip)
+        if (element.getAttribute('dj-copy') && !element.dataset.liveviewCopyBound) {
+            element.dataset.liveviewCopyBound = 'true';
+            element.addEventListener('click', function(e) {
+                e.preventDefault();
+                // Read attribute at click time (not bind time) so morph updates take effect
+                var currentValue = element.getAttribute('dj-copy');
+                if (!currentValue) return;
+                navigator.clipboard.writeText(currentValue).then(function() {
+                    var original = element.textContent;
+                    element.textContent = 'Copied!';
+                    setTimeout(function() { element.textContent = original; }, 1500);
+                });
+            });
         }
 
         // Handle dj-submit events on forms
@@ -2742,13 +2805,287 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
  * @param {HTMLElement} existingRoot - The current DOM root
  * @param {HTMLElement} newRoot - The new content from server
  */
+/**
+ * Flag set by handleServerResponse when applying broadcast patches.
+ * When true, preserveFormValues skips saving/restoring the focused
+ * element so remote content (from other users) takes effect.
+ */
+let _isBroadcastUpdate = false;
+
+/**
+ * Preserve form values across innerHTML replacement.
+ *
+ * innerHTML destroys the DOM, creating new elements. For the focused
+ * element we save and restore the user's in-progress value + cursor.
+ * For all textareas, we sync .value from textContent after replacement
+ * (innerHTML only sets the DOM attribute, not the JS property).
+ *
+ * Matching strategy: id → name → positional index within container.
+ */
+function preserveFormValues(container, updateFn) {
+    const active = document.activeElement;
+    let saved = null;
+
+    // Skip saving focused element for broadcast (remote) updates —
+    // the server content from another user should take effect.
+    if (_isBroadcastUpdate) {
+        updateFn();
+        container.querySelectorAll('textarea').forEach(el => {
+            el.value = el.textContent || '';
+        });
+        return;
+    }
+
+    // Only save the focused form element (user is actively editing)
+    if (active && container.contains(active) &&
+        (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.tagName === 'SELECT')) {
+        saved = { tag: active.tagName.toLowerCase() };
+        // Build a matching key: prefer id, then name, then positional index
+        if (active.id) {
+            saved.findBy = 'id';
+            saved.key = active.id;
+        } else if (active.name) {
+            saved.findBy = 'name';
+            saved.key = active.name;
+        } else {
+            // Positional: find index among same-tag siblings in container
+            saved.findBy = 'index';
+            const siblings = container.querySelectorAll(active.tagName.toLowerCase());
+            saved.key = Array.from(siblings).indexOf(active);
+        }
+        if (active.tagName === 'TEXTAREA') {
+            saved.value = active.value;
+            saved.selStart = active.selectionStart;
+            saved.selEnd = active.selectionEnd;
+        } else if (active.type === 'checkbox' || active.type === 'radio') {
+            saved.checked = active.checked;
+        } else {
+            saved.value = active.value;
+        }
+    }
+
+    updateFn();
+
+    // Sync all textarea .value from textContent (innerHTML doesn't set .value)
+    container.querySelectorAll('textarea').forEach(el => {
+        el.value = el.textContent || '';
+    });
+
+    // Restore the focused element's value
+    if (saved) {
+        let el = null;
+        if (saved.findBy === 'id') {
+            el = container.querySelector(`#${CSS.escape(saved.key)}`);
+        } else if (saved.findBy === 'name') {
+            el = container.querySelector(`[name="${CSS.escape(saved.key)}"]`);
+        } else {
+            // Positional fallback
+            const candidates = container.querySelectorAll(saved.tag);
+            el = candidates[saved.key] || null;
+        }
+        if (el) {
+            if (saved.tag === 'textarea') {
+                el.value = saved.value;
+                try { el.setSelectionRange(saved.selStart, saved.selEnd); } catch (e) { /* */ }
+                el.focus();
+            } else if (el.type === 'checkbox' || el.type === 'radio') {
+                el.checked = saved.checked;
+            } else if (saved.value !== undefined) {
+                el.value = saved.value;
+            }
+        }
+    }
+}
+
+/**
+ * Morph existing DOM children to match desired DOM children.
+ * Preserves existing elements (and their event listeners) where possible.
+ *
+ * Matching per child:
+ *   1. If desired child has an id → find existing child with same id (keyed)
+ *   2. If current existing child has same tag and neither has an id → reuse
+ *   3. Otherwise → clone desired child and insert
+ *
+ * Unmatched existing children are removed after the walk.
+ *
+ * @param {Element} existing - Current live DOM parent
+ * @param {Element} desired  - Target DOM parent (parsed from server HTML)
+ */
+function morphChildren(existing, desired) {
+    const existingNodes = Array.from(existing.childNodes);
+    const desiredNodes = Array.from(desired.childNodes);
+
+    // Index existing elements by id for O(1) keyed lookup
+    const existingById = new Map();
+    for (const node of existingNodes) {
+        if (node.nodeType === Node.ELEMENT_NODE && node.id) {
+            existingById.set(node.id, node);
+        }
+    }
+
+    const matched = new Set();
+    let eIdx = 0;
+
+    for (const dNode of desiredNodes) {
+        // Advance past already-matched existing nodes
+        while (eIdx < existingNodes.length && matched.has(existingNodes[eIdx])) {
+            eIdx++;
+        }
+        const eNode = eIdx < existingNodes.length ? existingNodes[eIdx] : null;
+
+        // --- Text node ---
+        if (dNode.nodeType === Node.TEXT_NODE) {
+            if (eNode && eNode.nodeType === Node.TEXT_NODE && !matched.has(eNode)) {
+                if (eNode.textContent !== dNode.textContent) {
+                    eNode.textContent = dNode.textContent;
+                }
+                matched.add(eNode);
+                eIdx++;
+            } else {
+                existing.insertBefore(document.createTextNode(dNode.textContent), eNode);
+            }
+            continue;
+        }
+
+        // --- Comment node ---
+        if (dNode.nodeType === Node.COMMENT_NODE) {
+            if (eNode && eNode.nodeType === Node.COMMENT_NODE && !matched.has(eNode)) {
+                if (eNode.textContent !== dNode.textContent) {
+                    eNode.textContent = dNode.textContent;
+                }
+                matched.add(eNode);
+                eIdx++;
+            } else {
+                existing.insertBefore(document.createComment(dNode.textContent), eNode);
+            }
+            continue;
+        }
+
+        // --- Element node ---
+        if (dNode.nodeType !== Node.ELEMENT_NODE) {
+            continue;
+        }
+
+        const dId = dNode.id || null;
+
+        // Strategy 1: Match by id (keyed element)
+        if (dId && existingById.has(dId)) {
+            const match = existingById.get(dId);
+            existingById.delete(dId);
+            matched.add(match);
+            if (match !== eNode) {
+                // Move keyed element into correct position
+                existing.insertBefore(match, eNode);
+            } else {
+                eIdx++;
+            }
+            morphElement(match, dNode);
+            continue;
+        }
+
+        // Strategy 2: Same tag, no ids on either side — reuse in place
+        if (eNode && eNode.nodeType === Node.ELEMENT_NODE &&
+            eNode.tagName === dNode.tagName &&
+            !dId && !eNode.id && !matched.has(eNode)) {
+            matched.add(eNode);
+            morphElement(eNode, dNode);
+            eIdx++;
+            continue;
+        }
+
+        // Strategy 3: No match — clone desired child and insert
+        existing.insertBefore(dNode.cloneNode(true), eNode);
+    }
+
+    // Remove unmatched existing children
+    for (const node of existingNodes) {
+        if (!matched.has(node) && node.parentNode === existing) {
+            existing.removeChild(node);
+        }
+    }
+}
+
+/**
+ * Morph a single element to match a desired element.
+ * Updates attributes and recurses into children.
+ * Preserves event listeners on the existing element.
+ *
+ * @param {Element} existing - Current live DOM element
+ * @param {Element} desired  - Target element to match
+ */
+function morphElement(existing, desired) {
+    // Tag mismatch — replace entirely
+    if (existing.tagName !== desired.tagName) {
+        existing.parentNode.replaceChild(desired.cloneNode(true), existing);
+        return;
+    }
+
+    // dj-update="ignore" — skip entirely
+    if (existing.getAttribute('dj-update') === 'ignore') {
+        return;
+    }
+
+    // --- Sync attributes ---
+    // Remove attributes not present in desired
+    for (let i = existing.attributes.length - 1; i >= 0; i--) {
+        const name = existing.attributes[i].name;
+        if (!desired.hasAttribute(name)) {
+            // Preserve djust internal event-binding flags to prevent duplicate listeners
+            if (name.startsWith('data-liveview')) continue;
+            existing.removeAttribute(name);
+        }
+    }
+    // Set/update attributes from desired
+    for (const attr of desired.attributes) {
+        if (existing.getAttribute(attr.name) !== attr.value) {
+            existing.setAttribute(attr.name, attr.value);
+        }
+    }
+
+    // --- Form element value sync ---
+    const isFocused = document.activeElement === existing;
+    const skipValue = isFocused && !_isBroadcastUpdate;
+
+    if (existing.tagName === 'INPUT' && !skipValue) {
+        if (existing.type === 'checkbox' || existing.type === 'radio') {
+            existing.checked = desired.checked;
+        } else {
+            const newVal = desired.value || desired.getAttribute('value') || '';
+            if (existing.value !== newVal) {
+                existing.value = newVal;
+            }
+        }
+    } else if (existing.tagName === 'SELECT' && !skipValue) {
+        const newVal = desired.value;
+        if (existing.value !== newVal) {
+            existing.value = newVal;
+        }
+    }
+
+    // --- Recurse into children ---
+    // dj-update="append"/"prepend" accumulate children server-side;
+    // morphing would remove them, so skip child recursion
+    const updateMode = existing.getAttribute('dj-update');
+    if (updateMode === 'append' || updateMode === 'prepend') {
+        return;
+    }
+
+    morphChildren(existing, desired);
+
+    // Sync textarea .value from textContent after children are morphed
+    // (.value and .textContent diverge after initial render)
+    if (existing.tagName === 'TEXTAREA' && !skipValue) {
+        existing.value = existing.textContent || '';
+    }
+}
+
 function applyDjUpdateElements(existingRoot, newRoot) {
     // Find all elements with dj-update attribute in the new content
     const djUpdateElements = newRoot.querySelectorAll('[dj-update]');
 
     if (djUpdateElements.length === 0) {
-        // No dj-update elements, do a full replacement
-        existingRoot.innerHTML = newRoot.innerHTML;
+        // No dj-update elements — morph to preserve event listeners
+        morphChildren(existingRoot, newRoot);
         return;
     }
 
@@ -2818,14 +3155,8 @@ function applyDjUpdateElements(existingRoot, newRoot) {
 
             case 'replace':
             default:
-                // Standard replacement
-                existingElement.innerHTML = newElement.innerHTML;
-                // Copy attributes except dj-update
-                for (const attr of newElement.attributes) {
-                    if (attr.name !== 'dj-update') {
-                        existingElement.setAttribute(attr.name, attr.value);
-                    }
-                }
+                // Morph to preserve event listeners
+                morphElement(existingElement, newElement);
                 break;
         }
     }
@@ -2860,11 +3191,8 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                     // Recursively process
                     applyDjUpdateElements(existing, newChild);
                 } else {
-                    // Replace content
-                    existing.innerHTML = newChild.innerHTML;
-                    for (const attr of newChild.attributes) {
-                        existing.setAttribute(attr.name, attr.value);
-                    }
+                    // Morph to preserve event listeners
+                    morphElement(existing, newChild);
                 }
             } else {
                 // New element, append it
@@ -2975,6 +3303,9 @@ window.djust._applySinglePatch = applySinglePatch;
 window.djust._stampDjIds = _stampDjIds;
 window.djust._getNodeByPath = getNodeByPath;
 window.djust.createNodeFromVNode = createNodeFromVNode;
+window.djust.preserveFormValues = preserveFormValues;
+window.djust.morphChildren = morphChildren;
+window.djust.morphElement = morphElement;
 
 /**
  * Group patches by their parent path for batching.
@@ -3585,8 +3916,6 @@ if (document.readyState === 'loading') {
 } else {
     djustInit();
 }
-
-} // End of double-load guard
 // ============================================================================
 // File Upload Support
 // ============================================================================
@@ -4023,6 +4352,211 @@ if (document.readyState === 'loading') {
     };
 
 })();
+// ============================================================================
+// CursorOverlay — Built-in Hook for Collaborative Cursor Display
+// ============================================================================
+//
+// Renders colored carets showing where remote users' cursors are positioned
+// in a textarea. Uses the mirror-div technique to map character index to
+// pixel coordinates.
+//
+// Usage:
+//   <div dj-hook="CursorOverlay">
+//     <textarea dj-input="update_content">{{ content }}</textarea>
+//   </div>
+//
+// The hook auto-discovers the first <textarea> child and dynamically creates
+// an overlay div (for rendering carets) and a hidden mirror div (for
+// measuring cursor positions). No extra markup is needed in the template.
+//
+// Server contract:
+//   - Hook sends: pushEvent("update_cursor", {position: <int>})
+//   - Hook listens: handleEvent("cursor_positions", {cursors: {uid: {position, color, name, emoji}, ...}})
+//
+// ============================================================================
+
+window.djust.hooks = window.djust.hooks || {};
+
+window.djust.hooks.CursorOverlay = {
+    mounted: function() {
+        var self = this;
+
+        // Discover textarea
+        this.textarea = this.el.querySelector('textarea');
+        if (!this.textarea) {
+            console.warn('[CursorOverlay] No <textarea> found inside hook element');
+            return;
+        }
+
+        // Create overlay div (visible, pointer-events:none)
+        this.overlay = document.createElement('div');
+        this.overlay.setAttribute('dj-update', 'ignore');
+        this.overlay.style.cssText = 'position:absolute; inset:0; pointer-events:none; overflow:hidden;';
+        // Copy textarea padding so carets align with text
+        var cs = window.getComputedStyle(this.textarea);
+        this.overlay.style.padding = cs.paddingTop + ' ' + cs.paddingRight + ' ' + cs.paddingBottom + ' ' + cs.paddingLeft;
+        this.overlay.style.fontFamily = cs.fontFamily;
+        this.overlay.style.fontSize = cs.fontSize;
+        this.overlay.style.lineHeight = cs.lineHeight;
+        this.el.appendChild(this.overlay);
+
+        // Create hidden mirror div (for measurement)
+        this.mirror = document.createElement('div');
+        this.mirror.setAttribute('aria-hidden', 'true');
+        this.mirror.style.cssText = 'position:absolute; visibility:hidden; white-space:pre-wrap; word-wrap:break-word; overflow-wrap:break-word;';
+        this.el.appendChild(this.mirror);
+
+        this._carets = {};       // {userId: caretElement}
+        this._lastCursors = {};  // cached cursor data for repositioning on updated()
+        this._debounceTimer = null;
+
+        // Copy computed styles from textarea to mirror for accurate measurement
+        this._syncMirrorStyles();
+
+        // Debounced cursor position reporter
+        this._sendCursorPosition = function() {
+            clearTimeout(self._debounceTimer);
+            self._debounceTimer = setTimeout(function() {
+                var pos = self.textarea.selectionStart;
+                self.pushEvent('update_cursor', { position: pos });
+            }, 100);
+        };
+
+        // Bind cursor movement listeners
+        this.textarea.addEventListener('keyup', this._sendCursorPosition);
+        this.textarea.addEventListener('click', this._sendCursorPosition);
+        this.textarea.addEventListener('select', this._sendCursorPosition);
+
+        // Scroll sync: reposition carets when textarea scrolls
+        this._onScroll = function() {
+            self._repositionAll();
+        };
+        this.textarea.addEventListener('scroll', this._onScroll);
+
+        // Listen for server push events with cursor positions
+        this.handleEvent('cursor_positions', function(payload) {
+            self._lastCursors = payload.cursors || {};
+            self._renderCursors(self._lastCursors);
+        });
+    },
+
+    updated: function() {
+        // Text content may have changed — reposition all active carets
+        if (this.textarea) {
+            this._repositionAll();
+        }
+    },
+
+    destroyed: function() {
+        clearTimeout(this._debounceTimer);
+        if (this.textarea) {
+            this.textarea.removeEventListener('keyup', this._sendCursorPosition);
+            this.textarea.removeEventListener('click', this._sendCursorPosition);
+            this.textarea.removeEventListener('select', this._sendCursorPosition);
+            this.textarea.removeEventListener('scroll', this._onScroll);
+        }
+        if (this.overlay && this.overlay.parentNode) {
+            this.overlay.parentNode.removeChild(this.overlay);
+        }
+        if (this.mirror && this.mirror.parentNode) {
+            this.mirror.parentNode.removeChild(this.mirror);
+        }
+    },
+
+    _syncMirrorStyles: function() {
+        var cs = window.getComputedStyle(this.textarea);
+        var props = [
+            'fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing',
+            'wordSpacing', 'textIndent', 'wordWrap', 'overflowWrap', 'whiteSpace',
+            'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+            'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth'
+        ];
+        for (var i = 0; i < props.length; i++) {
+            this.mirror.style[props[i]] = cs[props[i]];
+        }
+        // Use content-box width matching the textarea's actual text area
+        // (clientWidth excludes scrollbar and border; subtract padding for content)
+        var padL = parseFloat(cs.paddingLeft) || 0;
+        var padR = parseFloat(cs.paddingRight) || 0;
+        this.mirror.style.boxSizing = 'content-box';
+        this.mirror.style.width = (this.textarea.clientWidth - padL - padR) + 'px';
+    },
+
+    _measureCursorPosition: function(charIndex) {
+        // Mirror-div technique: fill mirror with text up to cursor, measure marker offset
+        var text = this.textarea.value.substring(0, charIndex);
+        this.mirror.textContent = '';
+        var textNode = document.createTextNode(text);
+        var marker = document.createElement('span');
+        marker.textContent = '\u200b';  // zero-width space
+        this.mirror.appendChild(textNode);
+        this.mirror.appendChild(marker);
+
+        var mirrorRect = this.mirror.getBoundingClientRect();
+        var markerRect = marker.getBoundingClientRect();
+
+        return {
+            left: markerRect.left - mirrorRect.left,
+            top: markerRect.top - mirrorRect.top - this.textarea.scrollTop
+        };
+    },
+
+    _renderCursors: function(cursors) {
+        var activeIds = {};
+
+        for (var uid in cursors) {
+            activeIds[uid] = true;
+            var data = cursors[uid];
+            var pos = this._measureCursorPosition(data.position);
+
+            var caret = this._carets[uid];
+            if (!caret) {
+                // Create new caret element
+                caret = document.createElement('div');
+                caret.className = 'remote-cursor';
+                caret.style.cssText = 'position:absolute; transition:left 0.15s ease, top 0.15s ease; pointer-events:none;';
+
+                var line = document.createElement('div');
+                line.style.cssText = 'width:2px; height:1.2em; border-radius:1px;';
+                line.style.backgroundColor = data.color;
+                caret.appendChild(line);
+
+                var label = document.createElement('div');
+                label.style.cssText = 'position:absolute; bottom:100%; left:0; color:#fff; font-size:10px; padding:1px 4px; border-radius:3px; white-space:nowrap; font-family:system-ui,sans-serif;';
+                label.style.backgroundColor = data.color;
+                label.textContent = (data.emoji || '') + ' ' + (data.name || '');
+                caret.appendChild(label);
+
+                this.overlay.appendChild(caret);
+                this._carets[uid] = caret;
+            }
+
+            caret.style.left = pos.left + 'px';
+            caret.style.top = pos.top + 'px';
+        }
+
+        // Remove carets for users who are no longer present
+        for (var id in this._carets) {
+            if (!activeIds[id]) {
+                this._carets[id].parentNode.removeChild(this._carets[id]);
+                delete this._carets[id];
+            }
+        }
+    },
+
+    _repositionAll: function() {
+        // Re-sync mirror width in case textarea resized or scrollbar appeared
+        var cs = window.getComputedStyle(this.textarea);
+        var padL = parseFloat(cs.paddingLeft) || 0;
+        var padR = parseFloat(cs.paddingRight) || 0;
+        this.mirror.style.width = (this.textarea.clientWidth - padL - padR) + 'px';
+
+        // Reposition using cached cursor data
+        if (Object.keys(this._lastCursors).length > 0) {
+            this._renderCursors(this._lastCursors);
+        }
+    }
+};
 
 // ============================================================================
 // Streaming — Real-time partial DOM updates (LLM chat, live feeds, etc.)
@@ -4536,17 +5070,29 @@ function _getHookDefs() {
  * Map of active hook instances keyed by element id.
  * Each entry: { hookName, instance, el }
  */
-const _activeHooks = new Map();
+// Use var so declarations hoist above the IIFE guard that calls
+// djustInit() → mountHooks() before this file executes.
+// Initializations are deferred to _ensureHooksInit() since var hoists
+// the name but not the `= new Map()` assignment.
+var _activeHooks;
+var _hookIdCounter;
 
 /**
- * Counter for generating unique IDs for hooked elements.
+ * Lazy-initialize hook state.  Called at the top of every public function
+ * so the Map/counter exist regardless of source-file concatenation order.
  */
-let _hookIdCounter = 0;
+function _ensureHooksInit() {
+    if (!_activeHooks) {
+        _activeHooks = new Map();
+        _hookIdCounter = 0;
+    }
+}
 
 /**
  * Get a stable ID for an element, creating one if needed.
  */
 function _getHookElId(el) {
+    _ensureHooksInit();
     if (!el._djustHookId) {
         el._djustHookId = `djust-hook-${++_hookIdCounter}`;
     }
@@ -4568,7 +5114,7 @@ function _createHookInstance(hookDef, el) {
             window.djust.liveViewInstance.ws.send(JSON.stringify({
                 type: 'event',
                 event: event,
-                data: payload,
+                params: payload,
             }));
         } else {
             console.warn(`[dj-hook] Cannot pushEvent "${event}" — no WebSocket connection`);
@@ -4592,6 +5138,7 @@ function _createHookInstance(hookDef, el) {
  * Called on init and after DOM patches.
  */
 function mountHooks(root) {
+    _ensureHooksInit();
     root = root || document;
     const hooks = _getHookDefs();
     const elements = root.querySelectorAll('[dj-hook]');
@@ -4630,6 +5177,7 @@ function mountHooks(root) {
  * Call this BEFORE applying patches.
  */
 function beforeUpdateHooks(root) {
+    _ensureHooksInit();
     root = root || document;
     for (const [, entry] of _activeHooks) {
         // Only call if element is still in the DOM
@@ -4647,6 +5195,7 @@ function beforeUpdateHooks(root) {
  * Called after a DOM patch to update/mount/destroy hooks as needed.
  */
 function updateHooks(root) {
+    _ensureHooksInit();
     root = root || document;
     const hooks = _getHookDefs();
 
@@ -4708,6 +5257,7 @@ function updateHooks(root) {
  * Notify all hooks of WebSocket disconnect.
  */
 function notifyHooksDisconnected() {
+    _ensureHooksInit();
     for (const [, entry] of _activeHooks) {
         if (typeof entry.instance.disconnected === 'function') {
             try {
@@ -4723,6 +5273,7 @@ function notifyHooksDisconnected() {
  * Notify all hooks of WebSocket reconnect.
  */
 function notifyHooksReconnected() {
+    _ensureHooksInit();
     for (const [, entry] of _activeHooks) {
         if (typeof entry.instance.reconnected === 'function') {
             try {
@@ -4738,6 +5289,7 @@ function notifyHooksReconnected() {
  * Dispatch a push_event to hooks that registered handleEvent listeners.
  */
 function dispatchPushEventToHooks(eventName, payload) {
+    _ensureHooksInit();
     for (const [, entry] of _activeHooks) {
         const handlers = entry.instance._eventHandlers[eventName];
         if (handlers) {
@@ -4756,6 +5308,7 @@ function dispatchPushEventToHooks(eventName, payload) {
  * Destroy all hooks (cleanup).
  */
 function destroyAllHooks() {
+    _ensureHooksInit();
     for (const [elId, entry] of _activeHooks) {
         if (typeof entry.instance.destroyed === 'function') {
             try {
@@ -4776,7 +5329,11 @@ window.djust.notifyHooksDisconnected = notifyHooksDisconnected;
 window.djust.notifyHooksReconnected = notifyHooksReconnected;
 window.djust.dispatchPushEventToHooks = dispatchPushEventToHooks;
 window.djust.destroyAllHooks = destroyAllHooks;
-window.djust._activeHooks = _activeHooks;
+// Use a getter so callers always see the live Map (initialized lazily)
+Object.defineProperty(window.djust, '_activeHooks', {
+    get() { _ensureHooksInit(); return _activeHooks; },
+    configurable: true,
+});
 // ============================================================================
 // dj-model — Two-Way Data Binding
 // ============================================================================
@@ -4851,23 +5408,18 @@ function _getElementValue(el) {
 
 /**
  * Send update_model event to server.
+ * Tries direct WebSocket first (synchronous, no loading states needed for model
+ * binding), then falls back to handleEvent for HTTP-only scenarios.
  */
 function _sendModelUpdate(field, value) {
-    // Prefer the high-level handleEvent path (HTTP fallback, loading states, caching)
-    if (typeof handleEvent === 'function') {
-        handleEvent('update_model', { field, value });
+    // Fast path: send directly via WebSocket (synchronous)
+    const inst = window.djust.liveViewInstance;
+    if (inst && inst.sendEvent && inst.sendEvent('update_model', { field, value })) {
         return;
     }
-    // Fallback: send directly via WebSocket
-    const inst = window.djust.liveViewInstance;
-    if (inst && inst.sendEvent) {
-        inst.sendEvent('update_model', { field, value });
-    } else if (inst && inst.ws && inst.ws.readyState === WebSocket.OPEN) {
-        inst.sendMessage({
-            type: 'event',
-            event: 'update_model',
-            params: { field, value },
-        });
+    // Fallback: handleEvent (includes HTTP fallback, loading states)
+    if (typeof handleEvent === 'function') {
+        handleEvent('update_model', { field, value });
     }
 }
 
@@ -4929,3 +5481,4 @@ function bindModelElements(root) {
 
 // Export
 window.djust.bindModelElements = bindModelElements;
+} // End of double-load guard

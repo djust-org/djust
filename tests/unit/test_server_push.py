@@ -98,6 +98,7 @@ class TestServerPushHandler:
 
         consumer = LiveViewConsumer()
         consumer.view_instance = MagicMock()
+        consumer.view_instance._skip_render = False
         consumer.view_instance._sync_state_to_rust = MagicMock()
         consumer.view_instance.render_with_diff = MagicMock(
             return_value=("<div>ok</div>", '[{"op":"replace"}]', 2)

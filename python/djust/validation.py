@@ -374,8 +374,8 @@ def validate_parameter_types(
 
         expected_type = type_hints[param_name]
 
-        # Skip complex types (Union, Optional, etc.) for now
-        if not isinstance(expected_type, type):
+        # Skip complex types (Union, Optional, etc.) and Any
+        if not isinstance(expected_type, type) or expected_type is Any:
             continue
 
         # Check type match

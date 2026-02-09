@@ -36,11 +36,13 @@ function handleServerResponse(data, eventName, triggerElement) {
         if (data.version !== undefined) {
             if (clientVdomVersion === null) {
                 clientVdomVersion = data.version;
-                console.log('[LiveView] Initialized VDOM version:', clientVdomVersion);
+                if (globalThis.djustDebug) console.log('[LiveView] Initialized VDOM version:', clientVdomVersion);
             } else if (clientVdomVersion !== data.version - 1 && !data.hotreload) {
                 // Version mismatch - force full reload (skip check for hot reload)
-                console.warn('[LiveView] VDOM version mismatch!');
-                console.warn(`  Expected v${clientVdomVersion + 1}, got v${data.version}`);
+                if (globalThis.djustDebug) {
+                    console.warn('[LiveView] VDOM version mismatch!');
+                    console.warn(`  Expected v${clientVdomVersion + 1}, got v${data.version}`);
+                }
 
                 clearOptimisticState(eventName);
 
@@ -49,7 +51,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                     const doc = parser.parseFromString(data.html, 'text/html');
                     const liveviewRoot = getLiveViewRoot();
                     const newRoot = doc.querySelector('[data-djust-root]') || doc.body;
-                    liveviewRoot.innerHTML = newRoot.innerHTML;
+                    morphChildren(liveviewRoot, newRoot);
                     clientVdomVersion = data.version;
                     initReactCounters();
                     initTodoItems();
@@ -71,23 +73,46 @@ function handleServerResponse(data, eventName, triggerElement) {
         });
 
         // Apply patches (efficient incremental updates)
-        if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
-            console.log('[LiveView] Applying', data.patches.length, 'patches');
+        // Empty patches array = server confirmed no DOM changes needed (no-op success)
+        if (data.patches && Array.isArray(data.patches) && data.patches.length === 0) {
+            if (globalThis.djustDebug) console.log('[LiveView] No DOM changes needed (0 patches)');
+        }
+        else if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
+            if (globalThis.djustDebug) console.log('[LiveView] Applying', data.patches.length, 'patches');
 
             // Store timing info globally for debug panel access
             window._lastPatchTiming = data.timing;
             // Store comprehensive performance data if available
             window._lastPerformanceData = data.performance;
 
+            // For broadcast patches (from other users via push_to_view),
+            // tell preserveFormValues to accept remote content instead of
+            // restoring the focused element's stale local value.
+            _isBroadcastUpdate = !!data.broadcast;
             const success = applyPatches(data.patches);
+            _isBroadcastUpdate = false;
+
+            // For broadcast patches, sync textarea .value from .textContent.
+            // VDOM patches update textContent directly (not via innerHTML),
+            // so preserveFormValues never runs. Textarea .value is separate
+            // from .textContent after initial render — must sync explicitly.
+            if (data.broadcast) {
+                const root = getLiveViewRoot();
+                if (root) {
+                    root.querySelectorAll('textarea').forEach(el => {
+                        el.value = el.textContent || '';
+                    });
+                }
+            }
+
             if (success === false) {
-                console.error('[LiveView] Patches failed, reloading page...');
+                if (globalThis.djustDebug) console.error('[LiveView] Patches failed, reloading page...');
                 globalLoadingManager.stopLoading(eventName, triggerElement);
                 window.location.reload();
                 return false;
             }
 
-            console.log('[LiveView] Patches applied successfully');
+            if (globalThis.djustDebug) console.log('[LiveView] Patches applied successfully');
 
             // Final cleanup
             document.querySelectorAll('.optimistic-pending').forEach(el => {
@@ -100,7 +125,8 @@ function handleServerResponse(data, eventName, triggerElement) {
         }
         // Apply full HTML update (fallback)
         else if (data.html) {
-            console.log('[LiveView] Applying full HTML update');
+            if (globalThis.djustDebug) console.log('[LiveView] Applying full HTML update');
+            _isBroadcastUpdate = !!data.broadcast;
             const parser = new DOMParser();
             const doc = parser.parseFromString(data.html, 'text/html');
             const liveviewRoot = getLiveViewRoot();
@@ -114,16 +140,17 @@ function handleServerResponse(data, eventName, triggerElement) {
                 el.classList.remove('optimistic-pending');
             });
 
+            _isBroadcastUpdate = false;
             initReactCounters();
             initTodoItems();
             bindLiveViewEvents();
         } else {
-            console.warn('[LiveView] Response has neither patches nor html!', data);
+            if (globalThis.djustDebug) console.warn('[LiveView] Response has neither patches nor html!', data);
         }
 
         // Handle form reset
         if (data.reset_form) {
-            console.log('[LiveView] Resetting form');
+            if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
             const form = document.querySelector('[data-djust-root] form');
             if (form) form.reset();
         }
@@ -133,7 +160,7 @@ function handleServerResponse(data, eventName, triggerElement) {
         return true;
 
     } catch (error) {
-        console.error('[LiveView] Error in handleServerResponse:', error);
+        if (globalThis.djustDebug) console.error('[LiveView] Error in handleServerResponse:', error);
         globalLoadingManager.stopLoading(eventName, triggerElement);
         return false;
     }

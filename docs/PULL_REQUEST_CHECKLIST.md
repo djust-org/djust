@@ -140,6 +140,8 @@ console.error(error); // ❌ Won't be captured in production
 - [ ] **User input validated** - All user data is properly sanitized/validated
 - [ ] **SQL injection prevention** - Proper use of parameterized queries
 - [ ] **XSS prevention** - Template output is properly escaped
+- [ ] **No `|safe` on user input** - The `|safe` filter must only be used on server-generated HTML, never on user-controlled values
+- [ ] **Fuzz tests pass** - `LiveViewSmokeTest` mixin covers XSS and crash testing for new views
 - [ ] **Template tags escape user input** - Any use of `mark_safe()` must escape interpolated values with `django.utils.html.escape()` or `django.utils.html.format_html()`. Never inject raw parameters into HTML or JavaScript strings
 - [ ] **JS string context uses `json.dumps()`** - Values embedded in JavaScript strings use `json.dumps()` for escaping, not HTML `escape()` which is insufficient for JS contexts
 - [ ] **CSRF protection** maintained - No bypass of Django's CSRF protection
@@ -237,6 +239,7 @@ console.error(error); // ❌ Won't be captured in production
 - Breaks existing functionality
 - Security vulnerabilities identified (XSS, CSRF bypass, injection)
 - `mark_safe()` used with unescaped interpolated values
+- `|safe` template filter used on user-controlled variables (bypasses Rust auto-escaping)
 - `@csrf_exempt` on endpoints without documented justification
 - No documentation for user-facing changes
 - CHANGELOG.md not updated for `feat:` or `fix:` PRs

@@ -250,7 +250,12 @@ function extractTypedParams(element) {
             typeHint = null;
         }
 
-        const key = rawKey.replace(/-/g, '_'); // Convert kebab-case to snake_case
+        // Convert kebab-case to snake_case, then strip dj_ namespace prefix
+        // so data-dj-preset="x" becomes {preset: "x"}, not {dj_preset: "x"}
+        let key = rawKey.replace(/-/g, '_');
+        if (key.startsWith('dj_')) {
+            key = key.slice(3);
+        }
 
         // Prevent prototype pollution attacks
         if (UNSAFE_KEYS.includes(key)) {

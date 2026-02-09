@@ -24,8 +24,8 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
                 Ok(Value::String(arg.unwrap_or("").to_string()))
             }
         }
-        "escape" => Ok(Value::String(html_escape(&value.to_string()))),
-        "safe" => Ok(value.clone()), // Mark as safe (no escaping)
+        "escape" => Ok(value.clone()), // No-op: auto-escaping at render time handles this
+        "safe" => Ok(value.clone()),   // No-op: renderer checks for |safe to skip auto-escaping
         "first" => match value {
             Value::List(l) => Ok(l.first().cloned().unwrap_or(Value::Null)),
             Value::String(s) => Ok(Value::String(
@@ -260,6 +260,13 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
             // Matches Django behavior: spaces become %20, safe chars are preserved
             Ok(Value::String(urlencode(&value.to_string())))
         }
+        "stringformat" => {
+            // stringformat filter: formats value using Python %-style format spec
+            // Usage: {{ value|stringformat:"s" }} → "%s" % value
+            // The argument is the format spec WITHOUT the leading %
+            let spec = arg.unwrap_or("s");
+            Ok(Value::String(apply_stringformat(value, spec)))
+        }
         _ => Err(DjangoRustError::TemplateError(format!(
             "Unknown filter: {filter_name}"
         ))),
@@ -281,7 +288,7 @@ fn titlecase(s: &str) -> String {
         .join(" ")
 }
 
-fn html_escape(s: &str) -> String {
+pub fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -663,6 +670,82 @@ fn urlencode(s: &str) -> String {
     result
 }
 
+fn apply_stringformat(value: &Value, spec: &str) -> String {
+    // Implements Django's stringformat filter.
+    // The spec is a Python printf-style format specifier WITHOUT the leading %.
+    // Common specifiers: "s" (string), "d" (integer), "f" (float),
+    // "05d" (zero-padded int), ".2f" (2 decimal places).
+
+    let last_char = spec.chars().last().unwrap_or('s');
+
+    match last_char {
+        's' => value.to_string(),
+        'd' | 'i' => {
+            let int_val = match value {
+                Value::Integer(n) => *n,
+                Value::Float(f) => *f as i64,
+                Value::Bool(b) => {
+                    if *b {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                _ => value.to_string().parse::<i64>().unwrap_or(0),
+            };
+
+            let prefix = &spec[..spec.len() - 1];
+            if prefix.is_empty() {
+                format!("{int_val}")
+            } else if let Some(stripped) = prefix.strip_prefix('0') {
+                let width = if stripped.is_empty() {
+                    prefix.parse::<usize>().unwrap_or(0)
+                } else {
+                    stripped.parse::<usize>().unwrap_or(0)
+                };
+                format!("{int_val:0>width$}")
+            } else {
+                let width = prefix.parse::<usize>().unwrap_or(0);
+                format!("{int_val:>width$}")
+            }
+        }
+        'f' | 'F' => {
+            let float_val = match value {
+                Value::Float(f) => *f,
+                Value::Integer(n) => *n as f64,
+                _ => value.to_string().parse::<f64>().unwrap_or(0.0),
+            };
+
+            let prefix = &spec[..spec.len() - 1];
+            if let Some(dot_pos) = prefix.find('.') {
+                let precision = prefix[dot_pos + 1..].parse::<usize>().unwrap_or(6);
+                format!("{float_val:.precision$}")
+            } else {
+                format!("{float_val:.6}")
+            }
+        }
+        'e' | 'E' => {
+            let float_val = match value {
+                Value::Float(f) => *f,
+                Value::Integer(n) => *n as f64,
+                _ => value.to_string().parse::<f64>().unwrap_or(0.0),
+            };
+            let prefix = &spec[..spec.len() - 1];
+            let precision = if let Some(dot_pos) = prefix.find('.') {
+                prefix[dot_pos + 1..].parse::<usize>().unwrap_or(6)
+            } else {
+                6
+            };
+            if last_char == 'E' {
+                format!("{float_val:.precision$E}")
+            } else {
+                format!("{float_val:.precision$e}")
+            }
+        }
+        _ => value.to_string(),
+    }
+}
+
 pub mod tags {
     // Placeholder for custom tags
 }
@@ -686,10 +769,22 @@ mod tests {
     }
 
     #[test]
-    fn test_escape_filter() {
+    fn test_escape_filter_is_noop() {
+        // |escape is a no-op at filter time; auto-escaping happens at render time
         let value = Value::String("<script>alert('xss')</script>".to_string());
         let result = apply_filter("escape", &value, None).unwrap();
-        assert!(result.to_string().contains("&lt;script&gt;"));
+        assert_eq!(result.to_string(), "<script>alert('xss')</script>");
+    }
+
+    #[test]
+    fn test_html_escape_function() {
+        assert_eq!(
+            html_escape("<b>\"hello\"</b>"),
+            "&lt;b&gt;&quot;hello&quot;&lt;/b&gt;"
+        );
+        assert_eq!(html_escape("safe text"), "safe text");
+        assert_eq!(html_escape("a&b"), "a&amp;b");
+        assert_eq!(html_escape("it's"), "it&#x27;s");
     }
 
     #[test]
@@ -1036,5 +1131,55 @@ mod tests {
         let value = Value::String("path/to/file?query=1".to_string());
         let result = apply_filter("urlencode", &value, None).unwrap();
         assert_eq!(result.to_string(), "path%2Fto%2Ffile%3Fquery%3D1");
+    }
+
+    #[test]
+    fn test_stringformat_filter_string() {
+        let value = Value::Integer(42);
+        let result = apply_filter("stringformat", &value, Some("s")).unwrap();
+        assert_eq!(result.to_string(), "42");
+
+        let value = Value::String("hello".to_string());
+        let result = apply_filter("stringformat", &value, Some("s")).unwrap();
+        assert_eq!(result.to_string(), "hello");
+    }
+
+    #[test]
+    fn test_stringformat_filter_integer() {
+        let value = Value::Integer(42);
+        let result = apply_filter("stringformat", &value, Some("d")).unwrap();
+        assert_eq!(result.to_string(), "42");
+
+        let value = Value::Integer(42);
+        let result = apply_filter("stringformat", &value, Some("05d")).unwrap();
+        assert_eq!(result.to_string(), "00042");
+    }
+
+    #[test]
+    fn test_stringformat_filter_float() {
+        let value = Value::Float(3.14259);
+        let result = apply_filter("stringformat", &value, Some(".2f")).unwrap();
+        assert_eq!(result.to_string(), "3.14");
+
+        let value = Value::Integer(42);
+        let result = apply_filter("stringformat", &value, Some(".1f")).unwrap();
+        assert_eq!(result.to_string(), "42.0");
+    }
+
+    #[test]
+    fn test_stringformat_filter_scientific() {
+        let value = Value::Float(1234.5);
+        let result = apply_filter("stringformat", &value, Some(".2e")).unwrap();
+        assert_eq!(result.to_string(), "1.23e3");
+
+        let result = apply_filter("stringformat", &value, Some(".2E")).unwrap();
+        assert_eq!(result.to_string(), "1.23E3");
+    }
+
+    #[test]
+    fn test_stringformat_filter_default() {
+        let value = Value::Integer(42);
+        let result = apply_filter("stringformat", &value, None).unwrap();
+        assert_eq!(result.to_string(), "42");
     }
 }

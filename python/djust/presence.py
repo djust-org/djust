@@ -210,7 +210,11 @@ class PresenceMixin:
             meta = {}
 
         # Add default metadata
-        if hasattr(self, "request") and self.request.user.is_authenticated:
+        if (
+            hasattr(self, "request")
+            and hasattr(self.request, "user")
+            and self.request.user.is_authenticated
+        ):
             meta.setdefault("name", self.request.user.username)
             meta.setdefault("user_id", user_id)
 

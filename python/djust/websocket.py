@@ -24,6 +24,7 @@ from .websocket_utils import (
     get_handler_coerce_setting,
 )
 from .presence import PresenceManager
+from .signals import full_html_update
 
 logger = logging.getLogger(__name__)
 hotreload_logger = logging.getLogger("djust.hotreload")
@@ -33,6 +34,73 @@ try:
 except ImportError:
     create_session_actor = None
     SessionActorHandle = None
+
+
+def _snapshot_assigns(view_instance):
+    """Snapshot public assigns (non-underscore attributes) by identity.
+
+    Returns a dict of {attr_name: id(value)} for all public attributes.
+    Used to detect whether a handler changed any state — if the snapshot
+    is identical before and after, the render cycle can be skipped.
+
+    Note: in-place mutations (list.append, dict[k]=v) are NOT detected
+    because the object identity stays the same. This is intentional —
+    mutated state should still trigger a render (safe default).
+    """
+    return {k: id(v) for k, v in view_instance.__dict__.items() if not k.startswith("_")}
+
+
+def _build_context_snapshot(context, max_value_len=100):
+    """Build a JSON-safe snapshot of template context for diagnostics.
+
+    Truncates long values, converts non-serializable types to repr strings,
+    and limits to 20 keys to keep the payload small.
+    """
+    snapshot = {}
+    for key, value in list(context.items())[:20]:
+        if isinstance(value, (str, int, float, bool, type(None))):
+            if isinstance(value, str) and len(value) > max_value_len:
+                snapshot[key] = value[:max_value_len] + "..."
+            else:
+                snapshot[key] = value
+        elif isinstance(value, (list, tuple)):
+            snapshot[key] = f"[{type(value).__name__}, len={len(value)}]"
+        elif isinstance(value, dict):
+            snapshot[key] = f"[dict, {len(value)} keys]"
+        else:
+            snapshot[key] = f"[{type(value).__name__}]"
+    return snapshot
+
+
+def _emit_full_html_update(
+    view_instance,
+    reason,
+    event_name,
+    html,
+    version,
+    patch_count=None,
+    context_snapshot=None,
+    html_snippet=None,
+    previous_html_snippet=None,
+):
+    """Emit the full_html_update signal with context about why patches weren't used."""
+    view_cls = view_instance.__class__
+    view_name = f"{view_cls.__module__}.{view_cls.__qualname__}"
+    html_size = len(html.encode("utf-8")) if html else 0
+    previous_html_size = getattr(view_instance, "_previous_html_size", None)
+    full_html_update.send(
+        sender=view_cls,
+        reason=reason,
+        event_name=event_name,
+        view_name=view_name,
+        html_size=html_size,
+        previous_html_size=previous_html_size,
+        patch_count=patch_count,
+        version=version,
+        context_snapshot=context_snapshot,
+        html_snippet=html_snippet,
+        previous_html_snippet=previous_html_snippet,
+    )
 
 
 class LiveViewConsumer(AsyncWebsocketConsumer):
@@ -77,6 +145,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     "payload": payload,
                 }
             )
+
+    async def _send_noop(self) -> None:
+        """
+        Send a lightweight noop acknowledgment to the client.
+
+        Tells the client the event was processed but no DOM update is needed.
+        The client clears loading state (spinners, disabled buttons) without
+        touching the DOM.
+        """
+        await self.send_json({"type": "noop"})
 
     async def _flush_navigation(self) -> None:
         """
@@ -134,7 +212,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         }
                     )
             except Exception:
-                pass  # Gracefully handle mocks or missing mixin
+                logger.warning("Failed to flush accessibility announcements", exc_info=True)
 
         # Flush focus command
         if hasattr(self.view_instance, "_drain_focus"):
@@ -150,7 +228,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         }
                     )
             except Exception:
-                pass  # Gracefully handle mocks or missing mixin
+                logger.warning("Failed to flush focus command", exc_info=True)
 
     async def send_error(self, error: str, **context) -> None:
         """
@@ -177,6 +255,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         hotreload: bool = False,
         file_path: Optional[str] = None,
         event_name: Optional[str] = None,
+        broadcast: bool = False,
     ) -> None:
         """
         Send a patch or full HTML update to the client.
@@ -220,6 +299,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     response["hotreload"] = True
                     if file_path:
                         response["file"] = file_path
+                if broadcast:
+                    response["broadcast"] = True
                 self._attach_debug_payload(response, event_name, performance)
                 await self.send_json(response)
                 await self._flush_push_events()
@@ -653,8 +734,50 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # Initialize temporary assigns before mount
             await sync_to_async(self.view_instance._initialize_temporary_assigns)()
 
+            # Store request on the view so self.request works in handlers
+            # (Django's View.dispatch() does this for HTTP, but WS skips dispatch)
+            self.view_instance.request = request
+
+            # --- Auth check (before mount) ---
+            from .auth import check_view_auth
+            from django.core.exceptions import PermissionDenied
+
+            try:
+                redirect_url = await sync_to_async(check_view_auth)(self.view_instance, request)
+            except PermissionDenied as exc:
+                # Authenticated user lacks permissions → 403 (not a redirect)
+                logger.info(
+                    "Permission denied for %s: %s", self.view_instance.__class__.__name__, exc
+                )
+                await self.send_json({"type": "error", "message": "Permission denied"})
+                await self.close(code=4403)
+                return
+            if redirect_url:
+                await self.send_json(
+                    {
+                        "type": "navigate",
+                        "to": redirect_url,
+                    }
+                )
+                return
+            # --- End auth check ---
+
+            # Resolve URL kwargs from the page path (e.g., slug, pk)
+            # Django's URL resolver extracts these during HTTP dispatch, but
+            # the WebSocket consumer doesn't go through URL routing, so we
+            # resolve them here and merge into mount() kwargs.
+            mount_kwargs = dict(params)
+            try:
+                from django.urls import resolve
+
+                match = resolve(page_url)
+                if match.kwargs:
+                    mount_kwargs.update(match.kwargs)
+            except Exception:
+                pass  # URL may not resolve (e.g., root "/") — that's fine
+
             # Run synchronous view operations in a thread pool
-            await sync_to_async(self.view_instance.mount)(request, **params)
+            await sync_to_async(self.view_instance.mount)(request, **mount_kwargs)
         except Exception as e:
             response = handle_exception(
                 e,
@@ -869,7 +992,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 else:
                     # No patches - send full HTML update
                     logger.info(
-                        "No patches from actor, sending full HTML update (length: %d)",
+                        "No patches from actor, sending full HTML update (length: %d). "
+                        "Run with DJUST_VDOM_TRACE=1 for detailed diff output.",
                         len(html) if html else 0,
                     )
 
@@ -990,6 +1114,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                     # Wrap everything in a root "Event Processing" tracker
                     with tracker.track("Event Processing"):
+                        # Snapshot public assigns before the handler to detect
+                        # unchanged state and auto-skip the render cycle.
+                        pre_assigns = _snapshot_assigns(self.view_instance)
+
                         # Call handler with tracking (supports both sync and async handlers)
                         handler_start = time.perf_counter()
                         with tracker.track(
@@ -1003,6 +1131,26 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             time.perf_counter() - handler_start
                         ) * 1000  # Convert to ms
 
+                        # Auto-detect unchanged state: if no public assigns were
+                        # reassigned, auto-skip the render (eliminates DJE-053).
+                        # In-place mutations (list.append) are NOT detected and
+                        # will still trigger a render — this is the safe default.
+                        skip_render = getattr(self.view_instance, "_skip_render", False)
+                        if not skip_render:
+                            post_assigns = _snapshot_assigns(self.view_instance)
+                            if pre_assigns == post_assigns:
+                                skip_render = True
+                                logger.debug(
+                                    "[djust] Auto-skipping render for '%s' — no assigns changed",
+                                    event_name,
+                                )
+
+                        if skip_render:
+                            self.view_instance._skip_render = False
+                            await self._flush_push_events()
+                            await self._send_noop()
+                            return
+
                         # Get updated HTML and patches with tracking
                         render_start = time.perf_counter()
                         with tracker.track("Template Render"):
@@ -1015,6 +1163,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     )
                                     patches = None  # Send full HTML for the child subtree
                                     version = 0
+                                    _emit_full_html_update(
+                                        target_view,
+                                        "embedded_child",
+                                        event_name,
+                                        html,
+                                        version,
+                                    )
                             else:
                                 # Get context with tracking
                                 with tracker.track("Context Preparation"):
@@ -1064,6 +1219,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # TODO Phase 4.1: Implement per-component VDOM tracking
                     if component_id:
                         patches = None
+                        _emit_full_html_update(
+                            self.view_instance,
+                            "component_event",
+                            event_name,
+                            html,
+                            version,
+                        )
 
                     # For views with dynamic templates (template as property),
                     # patches may be empty because VDOM state is lost on recreation.
@@ -1095,10 +1257,47 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     self.view_instance._rust_view.reset()
                                 patches = None
                                 patch_list = None
+                                _emit_full_html_update(
+                                    self.view_instance,
+                                    "patch_compression",
+                                    event_name,
+                                    html,
+                                    version,
+                                    patch_count=patch_count,
+                                )
 
                     # Note: patch_list can be [] (empty list) which is valid - means no changes needed
                     # Only send full HTML if patches is None (not just falsy)
                     if patches is not None and patch_list is not None:
+                        # Detect 0-change diffs: event handler modified state outside
+                        # the <div data-djust-root> boundary (e.g. in base.html while
+                        # VDOM root is in the child template).
+                        if len(patch_list) == 0 and version > 1:
+                            logger.warning(
+                                "[djust] Event '%s' on %s produced no DOM changes (DJE-053). "
+                                "The modified state may be outside <div data-djust-root>. "
+                                "Consider using push_event for client-side-only state changes. "
+                                "Run with DJUST_VDOM_TRACE=1 for detailed diff output. "
+                                "See: https://djust.org/errors/DJE-053",
+                                event_name,
+                                self.view_instance.__class__.__name__,
+                            )
+                            if not component_id:
+                                # Build diagnostic snapshot for debugging
+                                _ctx = context if context else {}
+                                _snapshot = _build_context_snapshot(_ctx)
+                                _prev_html = getattr(self.view_instance, "_previous_html", None)
+                                _emit_full_html_update(
+                                    self.view_instance,
+                                    "no_change",
+                                    event_name,
+                                    html,  # pass actual rendered HTML, not ""
+                                    version,
+                                    context_snapshot=_snapshot,
+                                    html_snippet=html[:500] if html else "",
+                                    previous_html_snippet=(_prev_html[:500] if _prev_html else ""),
+                                )
+
                         # Calculate timing for JSON mode
                         timing["total"] = (
                             time.perf_counter() - start_time
@@ -1125,12 +1324,50 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             self.view_instance._extract_liveview_content
                         )(html)
 
-                        logger.debug("[WebSocket] No patches generated, sending full HTML update")
+                        if version > 1:
+                            logger.warning(
+                                "[djust] Event '%s' on %s fell back to full HTML update "
+                                "(DJE-053). VDOM diff returned no patches — this may "
+                                "cause event listeners and DOM state to be lost. "
+                                "If this event only updates client-side state, use "
+                                "push_event + _skip_render = True instead. "
+                                "Run with DJUST_VDOM_TRACE=1 for detailed diff output. "
+                                "See: https://djust.org/errors/DJE-053",
+                                event_name,
+                                self.view_instance.__class__.__name__,
+                            )
+                        else:
+                            logger.debug("[WebSocket] First render, sending full HTML update.")
                         logger.debug(
                             "[WebSocket] html_content length: %d, starts with: %s...",
                             len(html_content),
                             html_content[:150],
                         )
+
+                        # Emit signal — distinguish first render from diff failure
+                        if not component_id:
+                            reason = "first_render" if version <= 1 else "no_patches"
+                            _ctx = context if context else {}
+                            _snapshot = (
+                                _build_context_snapshot(_ctx) if reason == "no_patches" else None
+                            )
+                            _prev_html = getattr(self.view_instance, "_previous_html", None)
+                            _emit_full_html_update(
+                                self.view_instance,
+                                reason,
+                                event_name,
+                                html_content,
+                                version,
+                                context_snapshot=_snapshot,
+                                html_snippet=(
+                                    html_content[:500] if reason == "no_patches" else None
+                                ),
+                                previous_html_snippet=(
+                                    _prev_html[:500]
+                                    if reason == "no_patches" and _prev_html
+                                    else None
+                                ),
+                            )
 
                         await self._send_update(
                             html=html_content,
@@ -1545,7 +1782,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 try:
                     old_view._cleanup_uploads()
                 except Exception:
-                    pass
+                    logger.warning("Failed to clean up uploads for old view", exc_info=True)
 
         self.view_instance = None
 
@@ -1628,6 +1865,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         payload = event.get("payload") or {}
                         await sync_to_async(handler_fn)(**payload)
 
+            # Views can set _skip_render = True in a handler to
+            # suppress the re-render cycle (e.g. sender ignoring its own broadcast).
+            if getattr(self.view_instance, "_skip_render", False):
+                self.view_instance._skip_render = False
+                await self._flush_push_events()
+                await self._send_noop()
+                return
+
             # Sync state and re-render
             # TODO: add patch compression (PATCH_COUNT_THRESHOLD) matching handle_event
             if hasattr(self.view_instance, "_sync_state_to_rust"):
@@ -1638,7 +1883,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if patches is not None:
                 if isinstance(patches, str):
                     patches = json.loads(patches)
-                await self._send_update(patches=patches, version=version)
+                await self._send_update(patches=patches, version=version, broadcast=True)
             else:
                 # Even if no patches, flush any push_events
                 await self._flush_push_events()
