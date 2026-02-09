@@ -174,5 +174,209 @@ class TestJoinFilter:
         assert result == "a, b, c"
 
 
+class TestDefaultIfNoneFilter:
+    """Tests for default_if_none filter."""
+
+    def test_default_if_none_with_none(self):
+        """Test default_if_none returns fallback for None/missing values."""
+        template = "{{ missing|default_if_none:'fallback' }}"
+        context = {}
+        result = render_template(template, context)
+        assert result == "fallback"
+
+    def test_default_if_none_with_empty_string(self):
+        """Test default_if_none does NOT replace empty strings."""
+        template = "{{ name|default_if_none:'fallback' }}"
+        context = {"name": ""}
+        result = render_template(template, context)
+        assert result == ""
+
+    def test_default_if_none_with_value(self):
+        """Test default_if_none passes through actual values."""
+        template = "{{ name|default_if_none:'fallback' }}"
+        context = {"name": "John"}
+        result = render_template(template, context)
+        assert result == "John"
+
+
+class TestWordcountFilter:
+    """Tests for wordcount filter."""
+
+    def test_wordcount_basic(self):
+        """Test wordcount counts words."""
+        template = "{{ text|wordcount }}"
+        context = {"text": "one two three four"}
+        result = render_template(template, context)
+        assert result == "4"
+
+    def test_wordcount_empty(self):
+        """Test wordcount with empty string."""
+        template = "{{ text|wordcount }}"
+        context = {"text": ""}
+        result = render_template(template, context)
+        assert result == "0"
+
+    def test_wordcount_extra_spaces(self):
+        """Test wordcount handles extra whitespace."""
+        template = "{{ text|wordcount }}"
+        context = {"text": "  one   two   three  "}
+        result = render_template(template, context)
+        assert result == "3"
+
+
+class TestWordwrapFilter:
+    """Tests for wordwrap filter."""
+
+    def test_wordwrap_basic(self):
+        """Test wordwrap inserts newlines at word boundaries."""
+        template = "{{ text|wordwrap:15 }}"
+        context = {"text": "this is a long string that wraps"}
+        result = render_template(template, context)
+        assert "\n" in result
+
+    def test_wordwrap_short_text(self):
+        """Test wordwrap with text shorter than width."""
+        template = "{{ text|wordwrap:50 }}"
+        context = {"text": "short text"}
+        result = render_template(template, context)
+        assert result == "short text"
+
+
+class TestStriptagsFilter:
+    """Tests for striptags filter."""
+
+    def test_striptags_basic(self):
+        """Test striptags strips HTML tags."""
+        template = "{{ html|striptags }}"
+        context = {"html": "<b>Hello</b> <i>world</i>"}
+        result = render_template(template, context)
+        assert result == "Hello world"
+
+    def test_striptags_nested(self):
+        """Test striptags with nested tags."""
+        template = "{{ html|striptags }}"
+        context = {"html": "<div><p>Inner text</p></div>"}
+        result = render_template(template, context)
+        assert result == "Inner text"
+
+    def test_striptags_no_tags(self):
+        """Test striptags with plain text."""
+        template = "{{ text|striptags }}"
+        context = {"text": "plain text"}
+        result = render_template(template, context)
+        assert result == "plain text"
+
+
+class TestAddslashesFilter:
+    """Tests for addslashes filter."""
+
+    def test_addslashes_basic(self):
+        """Test addslashes escapes quotes and backslash (using |safe to see raw output)."""
+        template = "{{ text|addslashes|safe }}"
+        context = {"text": 'it\'s a "test"'}
+        result = render_template(template, context)
+        assert "\\'" in result
+        assert '\\"' in result
+
+    def test_addslashes_backslash(self):
+        """Test addslashes escapes backslashes."""
+        template = "{{ text|addslashes|safe }}"
+        context = {"text": "path\\to\\file"}
+        result = render_template(template, context)
+        assert "\\\\" in result
+
+
+class TestLjustFilter:
+    """Tests for ljust filter."""
+
+    def test_ljust_basic(self):
+        """Test ljust pads with spaces on the right."""
+        template = "[{{ text|ljust:10 }}]"
+        context = {"text": "hi"}
+        result = render_template(template, context)
+        assert result == "[hi        ]"
+
+    def test_ljust_no_pad_needed(self):
+        """Test ljust when text is longer than width."""
+        template = "[{{ text|ljust:3 }}]"
+        context = {"text": "hello"}
+        result = render_template(template, context)
+        assert result == "[hello]"
+
+
+class TestRjustFilter:
+    """Tests for rjust filter."""
+
+    def test_rjust_basic(self):
+        """Test rjust pads with spaces on the left."""
+        template = "[{{ text|rjust:10 }}]"
+        context = {"text": "hi"}
+        result = render_template(template, context)
+        assert result == "[        hi]"
+
+
+class TestCenterFilter:
+    """Tests for center filter."""
+
+    def test_center_basic(self):
+        """Test center pads with spaces on both sides."""
+        template = "[{{ text|center:10 }}]"
+        context = {"text": "hi"}
+        result = render_template(template, context)
+        assert result == "[    hi    ]"
+
+
+class TestMakeListFilter:
+    """Tests for make_list filter."""
+
+    def test_make_list_with_join(self):
+        """Test make_list splits string into characters, verified via join."""
+        template = "{{ text|make_list|join:', ' }}"
+        context = {"text": "abc"}
+        result = render_template(template, context)
+        assert result == "a, b, c"
+
+
+class TestJsonScriptFilter:
+    """Tests for json_script filter."""
+
+    def test_json_script_basic(self):
+        """Test json_script wraps value in script tag."""
+        template = "{{ data|json_script:'my-data' }}"
+        context = {"data": "hello"}
+        result = render_template(template, context)
+        assert '<script id="my-data" type="application/json">' in result
+        assert "</script>" in result
+        assert '"hello"' in result
+
+    def test_json_script_escapes_dangerous_chars(self):
+        """Test json_script escapes < > & inside script tag."""
+        template = "{{ data|json_script:'xss-test' }}"
+        context = {"data": "</script><script>alert(1)"}
+        result = render_template(template, context)
+        # The literal </script> must NOT appear inside the JSON content
+        inner = result.split('type="application/json">')[1].split("</script>")[0]
+        assert "</script>" not in inner
+        assert "\\u003C" in inner
+
+
+class TestForceEscapeFilter:
+    """Tests for force_escape filter."""
+
+    def test_force_escape_html(self):
+        """Test force_escape escapes HTML entities."""
+        template = "{{ html|force_escape }}"
+        context = {"html": "<b>hello</b>"}
+        result = render_template(template, context)
+        assert result == "&lt;b&gt;hello&lt;/b&gt;"
+
+    def test_force_escape_quotes(self):
+        """Test force_escape escapes quotes."""
+        template = "{{ text|force_escape }}"
+        context = {"text": 'say "hello"'}
+        result = render_template(template, context)
+        assert "&quot;" in result
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

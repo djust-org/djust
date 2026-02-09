@@ -747,8 +747,22 @@ let result = apply_filter("upper", &value, None)?;
 | `truncatewords` | Truncate words | `{{ text\|truncatewords:3 }}` | First 3 words + `...` |
 | `safe` | Mark as safe HTML | `{{ html\|safe }}` | Unescaped HTML |
 | `escape` | Escape HTML | `{{ "<b>"\|escape }}` | `"&lt;b&gt;"` |
+| `force_escape` | Force HTML escape | `{{ html\|force_escape }}` | Always escapes (unlike `escape`) |
 | `default` | Default value | `{{ ""\|default:"N/A" }}` | `"N/A"` |
 | `join` | Join list | `{{ list\|join:", " }}` | `"a, b, c"` |
+| `slugify` | URL-safe slug | `{{ "Hello World!"\|slugify }}` | `"hello-world"` |
+| `cut` | Remove substring | `{{ text\|cut:" " }}` | Removes all spaces |
+| `addslashes` | Escape quotes | `{{ text\|addslashes }}` | `it\'s` |
+| `striptags` | Strip HTML tags | `{{ "<b>Hi</b>"\|striptags }}` | `"Hi"` |
+| `wordcount` | Count words | `{{ text\|wordcount }}` | `4` |
+| `wordwrap` | Wrap at width | `{{ text\|wordwrap:40 }}` | Newlines at word boundaries |
+| `ljust` | Left-align, pad | `{{ "hi"\|ljust:10 }}` | `"hi        "` |
+| `rjust` | Right-align, pad | `{{ "hi"\|rjust:10 }}` | `"        hi"` |
+| `center` | Center, pad | `{{ "hi"\|center:10 }}` | `"    hi    "` |
+| `linebreaks` | Newlines to HTML | `{{ text\|linebreaks }}` | `<p>` and `<br>` tags |
+| `linebreaksbr` | Newlines to `<br>` | `{{ text\|linebreaksbr }}` | `<br>` tags |
+| `truncatechars` | Truncate chars | `{{ text\|truncatechars:10 }}` | First 7 chars + `...` |
+| `make_list` | String to char list | `{{ "abc"\|make_list }}` | `["a", "b", "c"]` |
 
 #### Numeric Filters
 
@@ -756,6 +770,10 @@ let result = apply_filter("upper", &value, None)?;
 |--------|-------------|---------|--------|
 | `add` | Addition | `{{ 5\|add:3 }}` | `8` |
 | `floatformat` | Format decimal | `{{ 1.234\|floatformat:2 }}` | `"1.23"` |
+| `divisibleby` | Divisibility check | `{{ 10\|divisibleby:2 }}` | `true` |
+| `filesizeformat` | Human file size | `{{ 1048576\|filesizeformat }}` | `"1.0 MB"` |
+| `stringformat` | Printf format | `{{ 42\|stringformat:"05d" }}` | `"00042"` |
+| `pluralize` | Plural suffix | `{{ count\|pluralize }}` | `"s"` if count != 1 |
 
 #### Date/Time Filters
 
@@ -763,6 +781,8 @@ let result = apply_filter("upper", &value, None)?;
 |--------|-------------|---------|--------|
 | `date` | Format date | `{{ date\|date:"Y-m-d" }}` | `"2025-01-15"` |
 | `time` | Format time | `{{ time\|time:"H:i" }}` | `"14:30"` |
+| `timesince` | Time since date | `{{ past_date\|timesince }}` | `"3 days"` |
+| `timeuntil` | Time until date | `{{ future_date\|timeuntil }}` | `"2 hours"` |
 
 #### List Filters
 
@@ -772,6 +792,9 @@ let result = apply_filter("upper", &value, None)?;
 | `last` | Last item | `{{ list\|last }}` | Last element |
 | `length` | List length | `{{ list\|length }}` | Number of items |
 | `slice` | Slice list | `{{ list\|slice:":3" }}` | First 3 items |
+| `random` | Random item | `{{ list\|random }}` | Random element |
+| `dictsort` | Sort dicts by key | `{{ list\|dictsort:"name" }}` | Sorted by name |
+| `dictsortreversed` | Reverse sort dicts | `{{ list\|dictsortreversed:"name" }}` | Reverse sorted |
 
 #### URL Filters
 
@@ -786,6 +809,7 @@ let result = apply_filter("upper", &value, None)?;
 |--------|-------------|---------|--------|
 | `yesno` | Boolean to text | `{{ True\|yesno:"Yes,No" }}` | `"Yes"` |
 | `default_if_none` | Null default | `{{ None\|default_if_none:"N/A" }}` | `"N/A"` |
+| `json_script` | JSON in `<script>` | `{{ data\|json_script:"my-id" }}` | Safe `<script>` tag |
 
 ---
 
