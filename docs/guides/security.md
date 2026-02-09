@@ -203,17 +203,39 @@ self.push_event("debug", {"contact": model_to_dict(self.contact)})
 Use `djust_audit` to review what your application exposes:
 
 ```bash
-# See all views, handlers, and their decorators
+# See all views, handlers, exposed state, and decorators
 python manage.py djust_audit
 
 # Machine-readable output for CI
 python manage.py djust_audit --json
 
-# Include template variable analysis
+# Include template variable sub-paths (e.g. contacts → id, name, email)
 python manage.py djust_audit --verbose
 ```
 
-This reports every LiveView and LiveComponent, their event handlers, parameter signatures, decorator protections, and mixins — giving you a complete picture of your application's surface area.
+The audit reports every LiveView and LiveComponent with:
+
+- **Exposed state** — every public `self.xxx` attribute set in your methods, which `get_context_data()` will include in the template context. This is the data surface area of each view.
+- **Handlers** — event handler signatures, parameter types, and decorator protections
+- **Mixins** — optional mixins like `PresenceMixin`, `FormMixin`, etc.
+- **Config** — tick intervals, temporary assigns, actor mode
+
+With `--verbose`, exposed state entries show **template variable sub-paths** (e.g., `contacts → id, first_name, email`) so you can see exactly which model fields the template references. This requires the Rust extension.
+
+Example output:
+
+```
+  LiveView: crm.views.ContactListView
+    Template:   crm/contacts/list.html
+    Mixins:     (none)
+    Exposed state:
+      contacts                 (mount)  → id, first_name, last_name, email
+      page                     (mount)
+      search_query             (mount)
+      total_count              (_refresh_contacts)
+    Handlers:
+      * search(value: str = "")          @debounce(wait=0.3)
+```
 
 ## Further Reading
 

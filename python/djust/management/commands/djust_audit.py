@@ -8,11 +8,14 @@ Usage:
     python manage.py djust_audit                  # pretty terminal output
     python manage.py djust_audit --json           # machine-readable JSON
     python manage.py djust_audit --app myapp      # filter to one Django app
-    python manage.py djust_audit --verbose        # include template variables
+    python manage.py djust_audit --verbose        # include template variable sub-paths
 """
 
+import ast
+import inspect
 import json
 import logging
+import textwrap
 
 from django.core.management.base import BaseCommand
 
@@ -150,6 +153,60 @@ def _format_decorator_tags(handler_meta):
     return tags
 
 
+def _extract_exposed_state(cls):
+    """Extract public state attributes set via self.xxx = ... using AST inspection.
+
+    Walks the class MRO (stopping at LiveView/LiveComponent) and scans all
+    non-dunder methods for ``self.xxx = ...`` assignments where ``xxx`` does
+    not start with ``_``.  These are the attributes that get_context_data()
+    will expose to the template context.
+
+    Returns:
+        dict mapping attribute name to {"source": method_name, "defined_in": class_qualname}
+    """
+    assigns = {}  # name → {"source": method_name, "defined_in": qualname}
+
+    for klass in cls.__mro__:
+        # Stop at framework base classes — don't parse internals
+        if klass.__name__ in ("LiveView", "LiveComponent", "object"):
+            break
+
+        for method_name, method in klass.__dict__.items():
+            if method_name.startswith("__"):
+                continue
+            if not callable(method):
+                continue
+
+            try:
+                source = inspect.getsource(method)
+                source = textwrap.dedent(source)
+                tree = ast.parse(source)
+            except (OSError, TypeError, IndentationError, SyntaxError):
+                continue
+
+            for node in ast.walk(tree):
+                targets = []
+                if isinstance(node, ast.Assign):
+                    targets = node.targets
+                elif isinstance(node, ast.AugAssign):
+                    targets = [node.target]
+
+                for target in targets:
+                    if (
+                        isinstance(target, ast.Attribute)
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id == "self"
+                        and not target.attr.startswith("_")
+                    ):
+                        if target.attr not in assigns:
+                            assigns[target.attr] = {
+                                "source": method_name,
+                                "defined_in": klass.__qualname__,
+                            }
+
+    return assigns
+
+
 def _audit_class(cls, cls_type, verbose=False, base_classes=None):
     """Introspect a LiveView or LiveComponent class and return an audit dict."""
     template = getattr(cls, "template_name", None)
@@ -190,18 +247,26 @@ def _audit_class(cls, cls_type, verbose=False, base_classes=None):
     if getattr(cls, "use_actors", False):
         config["use_actors"] = True
 
+    # Exposed state (always included — core security info)
+    exposed_state = _extract_exposed_state(cls)
+
+    # Template variable sub-paths (optional, requires Rust extension)
+    template_vars = None
+    if verbose:
+        template_vars = _extract_vars(cls)
+
     result = {
         "class": "%s.%s" % (cls.__module__, cls.__qualname__),
         "type": cls_type,
         "template": template,
         "mixins": mixins,
+        "exposed_state": exposed_state,
         "handlers": handlers,
         "config": config,
     }
 
-    # Template variables (optional, requires Rust extension)
-    if verbose:
-        result["template_variables"] = _extract_vars(cls)
+    if template_vars is not None:
+        result["template_vars"] = template_vars
 
     return result
 
@@ -256,7 +321,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--verbose",
             action="store_true",
-            help="Include template variable analysis (requires Rust extension)",
+            help="Include template variable sub-paths for exposed state (requires Rust extension)",
         )
 
     def handle(self, *args, **options):
@@ -393,6 +458,30 @@ class Command(BaseCommand):
                 if config.get("use_actors"):
                     self.stdout.write("    Actors:     enabled")
 
+                # Exposed state
+                exposed = audit.get("exposed_state", {})
+                template_vars = audit.get("template_vars", {}) or {}
+                if exposed:
+                    self.stdout.write("    Exposed state:")
+                    for attr_name in sorted(exposed.keys()):
+                        info = exposed[attr_name]
+                        source = info["source"]
+                        sub_paths = template_vars.get(attr_name, [])
+                        if sub_paths:
+                            self.stdout.write(
+                                "      %-24s (%s)  %s %s"
+                                % (
+                                    attr_name,
+                                    source,
+                                    self.style.NOTICE("→"),
+                                    ", ".join(sub_paths),
+                                )
+                            )
+                        else:
+                            self.stdout.write("      %-24s (%s)" % (attr_name, source))
+                else:
+                    self.stdout.write("    Exposed state: (none)")
+
                 # Handlers
                 handlers = audit["handlers"]
                 if handlers:
@@ -418,15 +507,6 @@ class Command(BaseCommand):
                             self.stdout.write("        %s" % desc)
                 else:
                     self.stdout.write("    Handlers:   (none)")
-
-                # Template variables (verbose)
-                if "template_variables" in audit and audit["template_variables"]:
-                    self.stdout.write("    Template variables:")
-                    for var, paths in sorted(audit["template_variables"].items()):
-                        if paths:
-                            self.stdout.write("      %s → %s" % (var, ", ".join(paths)))
-                        else:
-                            self.stdout.write("      %s" % var)
 
         # Summary
         self.stdout.write("")

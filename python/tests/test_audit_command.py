@@ -8,6 +8,7 @@ from io import StringIO
 
 from djust.management.commands.djust_audit import (
     _audit_class,
+    _extract_exposed_state,
     _format_decorator_tags,
     _format_handler_params,
     _get_handler_metadata,
@@ -253,3 +254,188 @@ class TestCommandOutput:
         out = StringIO()
         call_command("djust_audit", verbose=True, stdout=out)
         # Should complete without exception
+
+
+# ---------------------------------------------------------------------------
+# Tests for exposed state extraction
+# ---------------------------------------------------------------------------
+
+
+class TestExtractExposedState:
+    def test_mount_assignments(self):
+        """Finds self.xxx = ... in mount()."""
+        from djust.live_view import LiveView
+
+        class MyView(LiveView):
+            template_name = "test.html"
+            __module__ = "myapp.views"
+
+            def mount(self, request, **kwargs):
+                self.count = 0
+                self.name = "hello"
+
+        state = _extract_exposed_state(MyView)
+        assert "count" in state
+        assert "name" in state
+        assert state["count"]["source"] == "mount"
+        assert state["name"]["source"] == "mount"
+
+    def test_private_attrs_excluded(self):
+        """Attributes starting with _ are excluded."""
+        from djust.live_view import LiveView
+
+        class MyView(LiveView):
+            template_name = "test.html"
+            __module__ = "myapp.views"
+
+            def mount(self, request, **kwargs):
+                self.public = "visible"
+                self._private = "hidden"
+                self._cache = {}
+
+        state = _extract_exposed_state(MyView)
+        assert "public" in state
+        assert "_private" not in state
+        assert "_cache" not in state
+
+    def test_augmented_assignment(self):
+        """Finds self.count += 1 style assignments."""
+        from djust.live_view import LiveView
+
+        class MyView(LiveView):
+            template_name = "test.html"
+            __module__ = "myapp.views"
+
+            def mount(self, request, **kwargs):
+                self.count = 0
+
+            def increment(self):
+                self.count += 1
+
+        state = _extract_exposed_state(MyView)
+        assert "count" in state
+        # First occurrence wins — should be from mount
+        assert state["count"]["source"] == "mount"
+
+    def test_handler_methods_included(self):
+        """Finds assignments in non-mount methods too."""
+        from djust.live_view import LiveView
+
+        class MyView(LiveView):
+            template_name = "test.html"
+            __module__ = "myapp.views"
+
+            def mount(self, request, **kwargs):
+                self.query = ""
+
+            def _refresh_results(self):
+                self.results = []
+                self.total_count = 0
+
+        state = _extract_exposed_state(MyView)
+        assert "query" in state
+        assert "results" in state
+        assert "total_count" in state
+        assert state["results"]["source"] == "_refresh_results"
+
+    def test_stops_at_liveview_base(self):
+        """Does not parse LiveView base class internals."""
+        from djust.live_view import LiveView
+
+        class MyView(LiveView):
+            template_name = "test.html"
+            __module__ = "myapp.views"
+
+            def mount(self, request, **kwargs):
+                self.data = []
+
+        state = _extract_exposed_state(MyView)
+        # Should only contain attributes from MyView, not LiveView internals
+        assert "data" in state
+        # LiveView base attributes like template_name should NOT appear
+        # (they're class-level, not set via self.xxx = in a method)
+
+    def test_inheritance_chain(self):
+        """Finds assignments across user class hierarchy."""
+        from djust.live_view import LiveView
+
+        class BaseView(LiveView):
+            template_name = "test.html"
+            __module__ = "myapp.views"
+
+            def mount(self, request, **kwargs):
+                self.shared = True
+
+        class ChildView(BaseView):
+            __module__ = "myapp.views"
+
+            def mount(self, request, **kwargs):
+                super().mount(request, **kwargs)
+                self.extra = "child"
+
+        state = _extract_exposed_state(ChildView)
+        assert "extra" in state
+        assert "shared" in state
+
+    def test_empty_view(self):
+        """View with no self assignments returns empty dict."""
+        from djust.live_view import LiveView
+
+        class EmptyView(LiveView):
+            template_name = "test.html"
+            __module__ = "myapp.views"
+
+        state = _extract_exposed_state(EmptyView)
+        assert state == {}
+
+
+class TestAuditClassExposedState:
+    def test_exposed_state_in_audit(self):
+        """_audit_class includes exposed_state."""
+        from djust.live_view import LiveView
+
+        class MyView(LiveView):
+            template_name = "test.html"
+            __module__ = "myapp.views"
+
+            def mount(self, request, **kwargs):
+                self.items = []
+                self.search = ""
+
+        result = _audit_class(MyView, "LiveView")
+        assert "exposed_state" in result
+        assert "items" in result["exposed_state"]
+        assert "search" in result["exposed_state"]
+
+    def test_exposed_state_in_json_output(self):
+        """JSON output includes exposed_state."""
+        from djust.live_view import LiveView
+
+        class JSONTestView(LiveView):
+            template_name = "test.html"
+            __module__ = "myapp.views"
+
+            def mount(self, request, **kwargs):
+                self.data = []
+
+        out = StringIO()
+        call_command("djust_audit", json_output=True, stdout=out)
+        data = json.loads(out.getvalue())
+        for audit in data["audits"]:
+            assert "exposed_state" in audit
+
+    def test_pretty_output_shows_exposed_state(self):
+        """Pretty output includes 'Exposed state:' section."""
+        from djust.live_view import LiveView
+
+        class PrettyTestView(LiveView):
+            template_name = "test.html"
+            __module__ = "myapp.views"
+
+            def mount(self, request, **kwargs):
+                self.items = []
+
+        out = StringIO()
+        call_command("djust_audit", stdout=out)
+        output = out.getvalue()
+        assert "Exposed state:" in output
