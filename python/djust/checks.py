@@ -264,6 +264,12 @@ def check_configuration(app_configs, **kwargs):
             if has_custom_check:
                 continue
 
+            # Check for dispatch-based auth mixins (e.g. LoginRequiredMixin)
+            from djust.management.commands.djust_audit import _has_auth_mixin
+
+            if _has_auth_mixin(cls):
+                continue
+
             exposed = _extract_exposed_state(cls)
             if exposed:
                 cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)

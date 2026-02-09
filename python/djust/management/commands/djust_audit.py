@@ -208,11 +208,33 @@ def _extract_exposed_state(cls):
     return assigns
 
 
+def _has_auth_mixin(cls):
+    """Check if any class in the MRO provides auth via dispatch() or naming.
+
+    Detects Django-style auth mixins (LoginRequiredMixin, etc.) and
+    dispatch()-based patterns like djust-auth's LoginRequiredLiveViewMixin.
+    """
+    _AUTH_MIXIN_PATTERNS = ("LoginRequired", "PermissionRequired")
+    _FRAMEWORK_BASES = frozenset(("LiveView", "LiveComponent", "View", "object"))
+    for klass in cls.__mro__:
+        if klass.__name__ in _FRAMEWORK_BASES:
+            continue
+        name = klass.__name__
+        if any(pat in name for pat in _AUTH_MIXIN_PATTERNS):
+            return True
+        # Check for dispatch() override that likely does auth
+        if "dispatch" in klass.__dict__ and klass.__name__ != cls.__name__:
+            # A mixin that overrides dispatch is likely doing auth
+            return True
+    return False
+
+
 def _extract_auth_info(cls):
     """Extract authentication/authorization configuration from a class.
 
     Returns:
-        dict with keys like 'login_required', 'permission_required', 'custom_check'.
+        dict with keys like 'login_required', 'permission_required',
+        'custom_check', 'dispatch_mixin'.
     """
     info = {}
     if getattr(cls, "login_required", None):
@@ -221,13 +243,15 @@ def _extract_auth_info(cls):
     if perm:
         info["permission_required"] = perm if isinstance(perm, list) else [perm]
     # Check if check_permissions is overridden by a user class
-
     for klass in cls.__mro__:
         if klass.__name__ in ("LiveView", "LiveComponent", "object"):
             break
         if "check_permissions" in klass.__dict__:
             info["custom_check"] = True
             break
+    # Check for dispatch-based auth mixins (e.g. LoginRequiredLiveViewMixin)
+    if not info and _has_auth_mixin(cls):
+        info["dispatch_mixin"] = True
     return info
 
 
@@ -483,6 +507,8 @@ class Command(BaseCommand):
                         parts.append("permission: %s" % ", ".join(perms))
                     if auth.get("custom_check"):
                         parts.append("custom check_permissions()")
+                    if auth.get("dispatch_mixin"):
+                        parts.append("dispatch-based mixin")
                     self.stdout.write("    Auth:       %s" % ", ".join(parts))
                 else:
                     # Warn if view exposes state without auth

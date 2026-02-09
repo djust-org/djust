@@ -524,6 +524,53 @@ class TestExtractAuthInfo:
         info = _extract_auth_info(PublicView)
         assert "login_required" not in info
 
+    def test_dispatch_mixin_detected(self):
+        """Dispatch-based auth mixin (e.g. LoginRequiredLiveViewMixin) is detected."""
+        from djust.live_view import LiveView
+
+        class LoginRequiredLiveViewMixin:
+            def dispatch(self, request, *args, **kwargs):
+                if not request.user.is_authenticated:
+                    return None
+                return super().dispatch(request, *args, **kwargs)
+
+        class BaseCRMView(LoginRequiredLiveViewMixin, LiveView):
+            template_name = "base.html"
+            __module__ = "crm.views"
+
+        class ContactListView(BaseCRMView):
+            template_name = "contacts.html"
+            __module__ = "crm.views"
+
+        info = _extract_auth_info(ContactListView)
+        assert info.get("dispatch_mixin") is True
+
+    def test_dispatch_mixin_not_false_positive(self):
+        """Plain views without auth mixins don't trigger dispatch_mixin."""
+        from djust.live_view import LiveView
+
+        class PlainView(LiveView):
+            template_name = "test.html"
+            __module__ = "myapp.views"
+
+        info = _extract_auth_info(PlainView)
+        assert "dispatch_mixin" not in info
+
+    def test_django_login_required_mixin_detected(self):
+        """Class named LoginRequiredMixin is detected even without dispatch."""
+        from djust.live_view import LiveView
+
+        class LoginRequiredMixin:
+            login_required = True
+
+        class ProtectedView(LoginRequiredMixin, LiveView):
+            template_name = "test.html"
+            __module__ = "myapp.views"
+
+        info = _extract_auth_info(ProtectedView)
+        # login_required attr takes priority, so dispatch_mixin won't be set
+        assert info.get("login_required") is True
+
 
 class TestAuditClassAuth:
     def test_auth_in_audit_result(self):
