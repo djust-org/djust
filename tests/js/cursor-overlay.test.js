@@ -2,7 +2,7 @@
  * Tests for CursorOverlay built-in hook (src/16-cursor-overlay.js)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
@@ -185,8 +185,6 @@ describe('CursorOverlay hook', () => {
             const hookEl = document.querySelector('[dj-hook="CursorOverlay"]');
             const overlay = hookEl.querySelector('[dj-update="ignore"]');
             const caret = overlay.querySelector('.remote-cursor');
-            const initialLeft = caret.style.left;
-
             // Move to a different position
             window.djust.dispatchPushEventToHooks('cursor_positions', {
                 cursors: {

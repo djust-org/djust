@@ -248,7 +248,7 @@ class TestCommandOutput:
         call_command("djust_audit", stdout=out)
         output = out.getvalue()
         assert "djust audit" in output
-        del _view_cls
+        del _view_cls  # Remove subclass from LiveView.__subclasses__() registry
 
     def test_verbose_flag(self):
         """--verbose flag doesn't crash even without Rust extension."""
@@ -412,7 +412,9 @@ class TestAuditClassExposedState:
         """JSON output includes exposed_state."""
         from djust.live_view import LiveView
 
-        class JSONTestView(LiveView):
+        # Class must exist as a LiveView subclass so djust_audit discovers it
+        # via __subclasses__() — not referenced directly but must stay alive.
+        class JSONTestView(LiveView):  # noqa: F841
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -429,7 +431,9 @@ class TestAuditClassExposedState:
         """Pretty output includes 'Exposed state:' section."""
         from djust.live_view import LiveView
 
-        class PrettyTestView(LiveView):
+        # Class must exist as a LiveView subclass so djust_audit discovers it
+        # via __subclasses__() — not referenced directly but must stay alive.
+        class PrettyTestView(LiveView):  # noqa: F841
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -616,7 +620,7 @@ class TestAuthInOutput:
         for audit in data["audits"]:
             assert "auth" in audit
         assert "unprotected_with_state" in data["summary"]
-        del AuthJSONView
+        del AuthJSONView  # Remove subclass from LiveView.__subclasses__() registry
 
     def test_pretty_output_shows_auth(self):
         """Pretty output shows Auth line for protected views."""
@@ -632,7 +636,7 @@ class TestAuthInOutput:
         call_command("djust_audit", stdout=out)
         output = out.getvalue()
         assert "Auth:" in output
-        del AuthPrettyView
+        del AuthPrettyView  # Remove subclass from LiveView.__subclasses__() registry
 
     def test_pretty_output_warns_unprotected(self):
         """Pretty output shows warning for views with state but no auth."""
@@ -650,7 +654,7 @@ class TestAuthInOutput:
         output = out.getvalue()
         # Should contain the warning symbol or text
         assert "exposes state without auth" in output or "\u26a0" in output
-        del UnprotectedAuditView
+        del UnprotectedAuditView  # Remove subclass from LiveView.__subclasses__() registry
 
     def test_handler_permission_in_audit(self):
         """Handler-level @permission_required shows in decorator tags."""

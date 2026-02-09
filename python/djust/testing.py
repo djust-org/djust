@@ -692,7 +692,7 @@ def _discover_views(app_label=None):
             try:
                 importlib.import_module(module_name)
             except ImportError:
-                pass
+                pass  # Optional module — app may not have views/admin_views
 
     def _walk(cls):
         for sub in cls.__subclasses__():

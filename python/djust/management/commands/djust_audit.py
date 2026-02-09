@@ -350,7 +350,7 @@ def _extract_vars(cls):
             with open(t.origin.name) as f:
                 return extract_template_variables(f.read())
     except Exception:
-        pass
+        pass  # Template resolution may fail (missing file, syntax error) — non-fatal
     return None
 
 
@@ -403,7 +403,7 @@ class Command(BaseCommand):
                     continue
                 audits.append(_audit_class(cls, "LiveView", verbose, base_classes=[LiveView]))
         except ImportError:
-            pass
+            pass  # LiveView not available (Rust extension not built)
 
         # Discover LiveComponents
         try:
@@ -418,7 +418,7 @@ class Command(BaseCommand):
                     _audit_class(cls, "LiveComponent", verbose, base_classes=[LiveComponent])
                 )
         except ImportError:
-            pass
+            pass  # LiveComponent not available (optional module)
 
         return audits
 

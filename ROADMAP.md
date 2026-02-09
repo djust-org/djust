@@ -25,12 +25,14 @@ Identify bottlenecks in the render cycle and optimize.
 Understand memory pressure and evaluate client-side or external storage.
 
 **Current architecture** (`state_backends/`):
+
 - Pluggable backends: memory (dev) or Redis (prod)
 - Server memory holds: RustLiveView instance, user context, cached decorator values, draft state
 - States >100KB trigger warnings; >10KB get zstd compressed
 - TTL-based expiration with `cleanup_liveview_sessions` management command
 
 **Questions to answer:**
+
 - Can template context be reconstructed from DB rather than stored in memory/Redis?
 - Can any state move client-side (signed cookies, JWT)?
 - What is the Redis serialization cost vs memory backend? Is there a hybrid approach?
@@ -41,11 +43,13 @@ Understand memory pressure and evaluate client-side or external storage.
 Make djust + TurboNav a first-class documented pattern.
 
 **Issues found and fixed:**
+
 - Injected scripts need `data-turbo-track="reload"` for `loadPageScripts` to pick them up
 - Inline `<script>` tags inside `<main>` require explicit execution after `innerHTML` swap
 - `DOMContentLoaded` doesn't fire on dynamically loaded scripts — must check `document.readyState`
 
 **Remaining work:**
+
 - Document the contract: TurboNav swaps `<main>` innerHTML, `loadPageScripts` handles tracked scripts
 - Fix triple-initialization on navigation (console shows 3 rounds of client.js init logs)
 - Guard against duplicate WebSocket connections on repeated navigation
@@ -68,20 +72,21 @@ Lower the barrier to getting started and debugging.
 
 All major files have been split into focused modules:
 
-| File | Status | PRs |
-|------|--------|-----|
-| `debug-panel.js` | ✅ Split into source modules | #125 |
-| `client.js` | ✅ Split into source modules | #124 |
-| `live_view.py` | ✅ Extracted serialization, session utils, mixins | #126, #127, #130 |
-| `websocket.py` | ✅ Extracted websocket_utils | #129 |
-| `state_backend.py` | ✅ Split into state_backends package | #123 |
-| `template_backend.py` | ✅ Split into template package | #128 |
+| File                  | Status                                           | PRs              |
+| --------------------- | ------------------------------------------------ | ---------------- |
+| `debug-panel.js`      | ✅ Split into source modules                      | #125             |
+| `client.js`           | ✅ Split into source modules                      | #124             |
+| `live_view.py`        | ✅ Extracted serialization, session utils, mixins | #126, #127, #130 |
+| `websocket.py`        | ✅ Extracted websocket_utils                      | #129             |
+| `state_backend.py`    | ✅ Split into state_backends package              | #123             |
+| `template_backend.py` | ✅ Split into template package                    | #128             |
 
 ## 6. Finish Debug Toolbar
 
 Complete the development tools suite.
 
 **Existing (working):**
+
 - Event handlers tab with parameter/decorator inspection
 - Event history (last 50 events) with timing and error details
 - VDOM patches tab with operation logging and timing
@@ -93,6 +98,7 @@ Complete the development tools suite.
 - Server error display in toolbar (#112)
 
 **Missing:**
+
 - Event filtering by handler name, success/error status, time range
 - Event replay — resend previous events with same parameters
 - Network tab — raw WebSocket message inspection, connection status monitoring
@@ -117,6 +123,7 @@ All critical and high-priority WebSocket security issues have been resolved:
 Ongoing effort to harden the VDOM diff and patch pipeline.
 
 **Resolved:**
+
 - ✅ Keyed diff insert ordering (#152, #154)
 - ✅ MoveChild resolution via djust_id (#150)
 - ✅ Duplicate key detection warning (#145, #149)
@@ -126,6 +133,7 @@ Ongoing effort to harden the VDOM diff and patch pipeline.
 - ✅ JIT serialization fixes for M2M, nested dicts, @property (#140)
 
 **Remaining:**
+
 - Investigate edge cases surfaced by proptest fuzzing
 - Performance optimization for large list diffs (>1000 items)
 
@@ -136,14 +144,17 @@ Leverage the service worker beyond offline support to improve perceived performa
 See [docs/guides/sw-enhancements.md](docs/guides/sw-enhancements.md) for full architecture and implementation details.
 
 **Phase 1 — Quick Wins (v0.4.0):**
+
 - **Prefetch on Hover** — Prefetch internal pages on `pointerenter`, serving them from cache on click for near-instant navigation
 - **Smart Static Asset Caching** — Pre-cache djust JS/CSS/icons at SW install; extend `generate_sw` to auto-populate asset lists from `collectstatic`
 
 **Phase 2 — Core Improvements (v0.4.x):**
+
 - **Instant Page Shell** — Cache the page shell (head, nav, footer) and serve instantly on navigation; swap `<main>` content when server responds
 - **WebSocket Reconnection Bridge** — Buffer LiveView events in the SW during WebSocket disconnection; replay in order on reconnect
 
 **Phase 3 — Advanced Features (v0.5.0):**
+
 - **VDOM Patch Caching** — Cache last rendered DOM state per page; on back-navigation, serve cached state and diff against fresh server response
 - **LiveView State Snapshots** — Serialize LiveView state on unmount; restore on back-navigation for instant state recovery
 - **Request Batching** — Batch parallel HTTP requests from multiple components into a single server round-trip
@@ -153,17 +164,20 @@ See [docs/guides/sw-enhancements.md](docs/guides/sw-enhancements.md) for full ar
 Explore making djust's core available beyond Django.
 
 **Already framework-agnostic (Rust crates):**
+
 - `djust_vdom` — VDOM diffing, HTML parsing, patch generation (zero Django coupling)
 - `djust_templates` — Template rendering with abstract `TemplateLoader` trait
 - `djust_core` — Value types, context management, serialization
 
 **Django-coupled (Python layer):**
+
 - `websocket.py` — inherits `channels.AsyncWebsocketConsumer`
 - `routing.py` — uses `django.urls.path`
 - `live_view.py` — inherits `django.views.View`
 - `mixins/template.py` — uses `django.template.loader`
 
 **What a per-framework adapter would need (~800-1500 lines each):**
+
 - WebSocket handler (Starlette `WebSocket` for FastAPI, Quart for Flask)
 - Route registration adapter
 - View base class (plain Python, no Django inheritance)

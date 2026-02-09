@@ -76,7 +76,7 @@ class Command(BaseCommand):
         try:
             import djust.checks  # noqa: F401
         except ImportError:
-            pass
+            pass  # checks module not installed — skip @register decorators
 
         # Run all checks tagged with "djust"
         all_checks = run_checks(tags=["djust"])

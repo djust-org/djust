@@ -285,7 +285,7 @@ def check_configuration(app_configs, **kwargs):
                     )
                 )
     except ImportError:
-        pass
+        pass  # LiveView not available (Rust extension not built)
 
     return errors
 
