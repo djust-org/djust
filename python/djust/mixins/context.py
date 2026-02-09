@@ -12,8 +12,8 @@ from ..serialization import DjangoJSONEncoder
 
 logger = logging.getLogger(__name__)
 
-# Module-level cache for context processors, keyed by settings object id
-_context_processors_cache: Dict[int, list] = {}
+# Module-level cache for context processors, keyed by TEMPLATES config tuple
+_context_processors_cache: Dict[Any, list] = {}
 
 try:
     import djust.optimization.query_optimizer  # noqa: F401
@@ -235,7 +235,10 @@ class ContextMixin:
         """
         from django.conf import settings
 
-        cache_key = id(getattr(settings, "_wrapped", settings))
+        # Use a stable cache key based on actual TEMPLATES config, not id()
+        # which can be reused by Python for different objects
+        templates = getattr(settings, "TEMPLATES", [])
+        cache_key = tuple(t.get("BACKEND", "") for t in templates) if templates else ()
 
         if cache_key in _context_processors_cache:
             return _context_processors_cache[cache_key]
