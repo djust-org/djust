@@ -5,6 +5,7 @@ Extracted from websocket.py to keep the consumer module focused on
 the LiveViewConsumer and LiveViewRouter classes.
 """
 
+import difflib
 import inspect
 import logging
 from typing import Callable, Dict, Any, Optional
@@ -29,6 +30,61 @@ def _safe_error(detailed_msg: str, generic_msg: str = "Event rejected") -> str:
     except Exception:
         pass  # Django not configured; fall back to generic (safe default)
     return generic_msg
+
+
+def _format_handler_not_found_error(owner_instance, event_name: str) -> str:
+    """Build an actionable error message when no handler is found for an event.
+
+    In DEBUG mode, suggests typo corrections, checks for private-method
+    collisions, and lists available @event_handler methods.
+    """
+    base_msg = f"No handler found for event: {event_name}"
+
+    try:
+        from django.conf import settings
+
+        if not settings.DEBUG:
+            return base_msg
+    except Exception:
+        return base_msg
+
+    cls = type(owner_instance)
+    hints = []
+
+    # 1. Typo detection — suggest similar public method names
+    public_methods = [
+        name
+        for name in dir(owner_instance)
+        if not name.startswith("_") and callable(getattr(owner_instance, name, None))
+    ]
+    close = difflib.get_close_matches(event_name, public_methods, n=3, cutoff=0.6)
+    if close:
+        hints.append(f"  Did you mean: {', '.join(close)}?")
+
+    # 2. Private-method collision — method exists with underscore prefix
+    if hasattr(owner_instance, f"_{event_name}"):
+        method = getattr(owner_instance, f"_{event_name}")
+        if callable(method):
+            hints.append(
+                f"  Found '_{event_name}' (private). "
+                "Rename it to remove the leading underscore so it can be called as an event."
+            )
+
+    # 3. List available @event_handler methods on the class
+    handlers = [
+        name
+        for name in dir(owner_instance)
+        if not name.startswith("_")
+        and callable(getattr(owner_instance, name, None))
+        and is_event_handler(getattr(owner_instance, name))
+    ]
+    if handlers:
+        hints.append(f"  Available handlers on {cls.__name__}: {', '.join(sorted(handlers))}")
+
+    if not hints:
+        return base_msg
+
+    return base_msg + "\n" + "\n".join(hints)
 
 
 def get_handler_coerce_setting(handler: Callable) -> bool:
@@ -65,7 +121,14 @@ def _check_event_security(handler, owner_instance, event_name: str) -> Optional[
         return None
 
     if mode == "strict":
-        return f"Event '{event_name}' is not decorated with @event_handler or listed in _allowed_events"
+        cls_name = type(owner_instance).__name__
+        return (
+            f"Event '{event_name}' on {cls_name} is not decorated with "
+            "@event_handler or listed in _allowed_events.\n"
+            f"  Fix: Add the decorator:\n"
+            f"    @event_handler\n"
+            f"    def {event_name}(self, **kwargs):"
+        )
 
     logger.warning(
         "Deprecation: handler '%s' on %s is not decorated with @event_handler. "
@@ -111,9 +174,9 @@ async def _validate_event_security(
 
     handler = getattr(owner_instance, event_name, None)
     if not handler or not callable(handler):
-        error_msg = f"No handler found for event: {event_name}"
+        error_msg = _format_handler_not_found_error(owner_instance, event_name)
         logger.warning(error_msg)
-        await ws.send_error(_safe_error(error_msg))
+        await ws.send_error(_safe_error(error_msg, "Event rejected"))
         return None
 
     security_error = _check_event_security(handler, owner_instance, event_name)
