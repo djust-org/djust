@@ -116,11 +116,19 @@ class LiveViewTestClient:
         request = self.request_factory.get("/")
         if self.user:
             request.user = self.user
+        else:
+            from django.contrib.auth.models import AnonymousUser
+
+            request.user = AnonymousUser()
 
         # Initialize session
         from django.contrib.sessions.backends.db import SessionStore
 
         request.session = SessionStore()
+
+        # Store request on the instance (Django's View.dispatch does this;
+        # many LiveViews access self.request in get_context_data etc.)
+        self.view_instance.request = request
 
         # Initialize temporary assigns if the method exists
         if hasattr(self.view_instance, "_initialize_temporary_assigns"):
@@ -653,13 +661,14 @@ TYPE_PAYLOADS = {
 }
 
 # Unique fragments from XSS_PAYLOADS that should never appear in safe HTML.
-# These are specific enough to avoid matching framework-generated <script> tags.
+# These check for UNESCAPED tags/attributes — if the `<` is escaped to `&lt;`,
+# the browser treats it as text (safe), even if `onerror=` appears in the text.
 _XSS_SENTINELS = [
-    'alert("xss")',
-    "onerror=alert(1)",
-    "onload=alert(1)",
-    "javascript:alert(1)",
-    "DROP TABLE users",
+    '<script>alert("xss")',  # unescaped script tag with payload
+    "<img src=x onerror=",  # unescaped img tag with event handler
+    "<svg onload=",  # unescaped svg tag with event handler
+    '<a href="javascript:',  # unescaped anchor with javascript: URL
+    "DROP TABLE users",  # SQL injection (no HTML escaping relevant)
 ]
 
 
@@ -699,6 +708,9 @@ def _discover_views(app_label=None):
             parts = module.split(".")
             if parts[0] != app_label:
                 continue
+        # Skip abstract bases without a template
+        if not getattr(cls, "template_name", None) and not getattr(cls, "template", None):
+            continue
         yield cls
 
 
