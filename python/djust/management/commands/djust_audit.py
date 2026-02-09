@@ -42,6 +42,7 @@ _DECORATOR_KEYS = {
     "cache",
     "optimistic",
     "client_state",
+    "permission_required",
 }
 
 
@@ -207,6 +208,29 @@ def _extract_exposed_state(cls):
     return assigns
 
 
+def _extract_auth_info(cls):
+    """Extract authentication/authorization configuration from a class.
+
+    Returns:
+        dict with keys like 'login_required', 'permission_required', 'custom_check'.
+    """
+    info = {}
+    if getattr(cls, "login_required", None):
+        info["login_required"] = True
+    perm = getattr(cls, "permission_required", None)
+    if perm:
+        info["permission_required"] = perm if isinstance(perm, list) else [perm]
+    # Check if check_permissions is overridden by a user class
+
+    for klass in cls.__mro__:
+        if klass.__name__ in ("LiveView", "LiveComponent", "object"):
+            break
+        if "check_permissions" in klass.__dict__:
+            info["custom_check"] = True
+            break
+    return info
+
+
 def _audit_class(cls, cls_type, verbose=False, base_classes=None):
     """Introspect a LiveView or LiveComponent class and return an audit dict."""
     template = getattr(cls, "template_name", None)
@@ -255,10 +279,14 @@ def _audit_class(cls, cls_type, verbose=False, base_classes=None):
     if verbose:
         template_vars = _extract_vars(cls)
 
+    # Auth info
+    auth = _extract_auth_info(cls)
+
     result = {
         "class": "%s.%s" % (cls.__module__, cls.__qualname__),
         "type": cls_type,
         "template": template,
+        "auth": auth,
         "mixins": mixins,
         "exposed_state": exposed_state,
         "handlers": handlers,
@@ -376,12 +404,15 @@ class Command(BaseCommand):
         component_count = sum(1 for a in audits if a["type"] == "LiveComponent")
         handler_count = sum(len(a["handlers"]) for a in audits)
 
+        unprotected = sum(1 for a in audits if not a.get("auth") and a.get("exposed_state"))
+
         output = {
             "audits": audits,
             "summary": {
                 "views": view_count,
                 "components": component_count,
                 "handlers": handler_count,
+                "unprotected_with_state": unprotected,
             },
         }
         self.stdout.write(json.dumps(output, indent=2))
@@ -440,6 +471,29 @@ class Command(BaseCommand):
                     )
                 )
                 self.stdout.write("    Template:   %s" % audit["template"])
+
+                # Auth info
+                auth = audit.get("auth", {})
+                if auth:
+                    parts = []
+                    if auth.get("login_required"):
+                        parts.append("login_required")
+                    if auth.get("permission_required"):
+                        perms = auth["permission_required"]
+                        parts.append("permission: %s" % ", ".join(perms))
+                    if auth.get("custom_check"):
+                        parts.append("custom check_permissions()")
+                    self.stdout.write("    Auth:       %s" % ", ".join(parts))
+                else:
+                    # Warn if view exposes state without auth
+                    exposed = audit.get("exposed_state", {})
+                    if exposed:
+                        self.stdout.write(
+                            "    Auth:       %s"
+                            % self.style.WARNING("(none)  \u26a0 exposes state without auth")
+                        )
+                    else:
+                        self.stdout.write("    Auth:       (none)")
 
                 if audit["mixins"]:
                     self.stdout.write("    Mixins:     %s" % ", ".join(audit["mixins"]))

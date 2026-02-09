@@ -3,7 +3,7 @@ LiveView base class and decorator for reactive Django views
 """
 
 import logging
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from django.views import View
 
@@ -138,6 +138,11 @@ class LiveView(
     # Format: {'assign_name': default_value, ...}
     # Example: {'messages': [], 'feed_items': [], 'notifications': []}
     temporary_assigns: Dict[str, Any] = {}
+
+    # Authentication & authorization
+    login_required: Optional[bool] = None  # True = must be authenticated
+    permission_required: Optional[Union[str, List[str]]] = None  # Django permission string(s)
+    login_url: Optional[str] = None  # Override settings.LOGIN_URL
 
     # ============================================================================
     # INITIALIZATION & SETUP

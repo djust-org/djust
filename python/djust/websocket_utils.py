@@ -135,6 +135,14 @@ async def _validate_event_security(
         await ws.send_error("Rate limit exceeded, event dropped")
         return None
 
+    # Handler-level permission check
+    from .auth import check_handler_permission
+
+    owner_request = getattr(owner_instance, "request", None)
+    if owner_request and not check_handler_permission(handler, owner_request):
+        await ws.send_error("Permission denied")
+        return None
+
     return handler
 
 

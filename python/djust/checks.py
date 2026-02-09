@@ -237,6 +237,50 @@ def check_configuration(app_configs, **kwargs):
                 )
             )
 
+    # S005 -- LiveView exposes state without authentication
+    try:
+        from djust.live_view import LiveView
+        from djust.management.commands.djust_audit import _extract_exposed_state
+
+        for cls in _walk_subclasses(LiveView):
+            module = getattr(cls, "__module__", "") or ""
+            if module.startswith("djust.") or module.startswith("djust_"):
+                if "test" not in module and "example" not in module:
+                    continue
+
+            login_req = getattr(cls, "login_required", None)
+            perm_req = getattr(cls, "permission_required", None)
+            if login_req or perm_req:
+                continue  # View has auth configured
+
+            # Check if check_permissions is overridden
+            has_custom_check = False
+            for klass in cls.__mro__:
+                if klass.__name__ in ("LiveView", "LiveComponent", "object"):
+                    break
+                if "check_permissions" in klass.__dict__:
+                    has_custom_check = True
+                    break
+            if has_custom_check:
+                continue
+
+            exposed = _extract_exposed_state(cls)
+            if exposed:
+                cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
+                errors.append(
+                    Warning(
+                        "%s exposes state without authentication." % cls_label,
+                        hint=(
+                            "Add login_required = True or permission_required to protect "
+                            "this view, or set login_required = False to acknowledge "
+                            "public access."
+                        ),
+                        id="djust.S005",
+                    )
+                )
+    except ImportError:
+        pass
+
     return errors
 
 

@@ -679,6 +679,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # (Django's View.dispatch() does this for HTTP, but WS skips dispatch)
             self.view_instance.request = request
 
+            # --- Auth check (before mount) ---
+            from .auth import check_view_auth
+
+            redirect_url = await sync_to_async(check_view_auth)(self.view_instance, request)
+            if redirect_url:
+                await self.send_json(
+                    {
+                        "type": "navigate",
+                        "to": redirect_url,
+                    }
+                )
+                return
+            # --- End auth check ---
+
             # Resolve URL kwargs from the page path (e.g., slug, pk)
             # Django's URL resolver extracts these during HTTP dispatch, but
             # the WebSocket consumer doesn't go through URL routing, so we

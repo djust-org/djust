@@ -8,6 +8,7 @@ from io import StringIO
 
 from djust.management.commands.djust_audit import (
     _audit_class,
+    _extract_auth_info,
     _extract_exposed_state,
     _format_decorator_tags,
     _format_handler_params,
@@ -439,3 +440,175 @@ class TestAuditClassExposedState:
         call_command("djust_audit", stdout=out)
         output = out.getvalue()
         assert "Exposed state:" in output
+
+
+# ---------------------------------------------------------------------------
+# Tests for auth info extraction and display
+# ---------------------------------------------------------------------------
+
+
+class TestExtractAuthInfo:
+    def test_no_auth(self):
+        """View without auth returns empty dict."""
+        from djust.live_view import LiveView
+
+        class PlainView(LiveView):
+            template_name = "test.html"
+            __module__ = "myapp.views"
+
+        info = _extract_auth_info(PlainView)
+        assert info == {}
+
+    def test_login_required(self):
+        """login_required = True is extracted."""
+        from djust.live_view import LiveView
+
+        class SecureView(LiveView):
+            template_name = "test.html"
+            login_required = True
+            __module__ = "myapp.views"
+
+        info = _extract_auth_info(SecureView)
+        assert info["login_required"] is True
+
+    def test_permission_required_string(self):
+        """Single permission string is wrapped in list."""
+        from djust.live_view import LiveView
+
+        class AdminView(LiveView):
+            template_name = "test.html"
+            login_required = True
+            permission_required = "myapp.view_dashboard"
+            __module__ = "myapp.views"
+
+        info = _extract_auth_info(AdminView)
+        assert info["permission_required"] == ["myapp.view_dashboard"]
+
+    def test_permission_required_list(self):
+        """Permission list is preserved."""
+        from djust.live_view import LiveView
+
+        class AdminView(LiveView):
+            template_name = "test.html"
+            login_required = True
+            permission_required = ["myapp.view", "myapp.edit"]
+            __module__ = "myapp.views"
+
+        info = _extract_auth_info(AdminView)
+        assert info["permission_required"] == ["myapp.view", "myapp.edit"]
+
+    def test_custom_check_permissions(self):
+        """Overridden check_permissions is detected."""
+        from djust.live_view import LiveView
+
+        class CustomView(LiveView):
+            template_name = "test.html"
+            login_required = True
+            __module__ = "myapp.views"
+
+            def check_permissions(self, request):
+                return True
+
+        info = _extract_auth_info(CustomView)
+        assert info.get("custom_check") is True
+
+    def test_login_required_false_not_extracted(self):
+        """login_required = False is not reported (falsy)."""
+        from djust.live_view import LiveView
+
+        class PublicView(LiveView):
+            template_name = "test.html"
+            login_required = False
+            __module__ = "myapp.views"
+
+        info = _extract_auth_info(PublicView)
+        assert "login_required" not in info
+
+
+class TestAuditClassAuth:
+    def test_auth_in_audit_result(self):
+        """_audit_class includes 'auth' key."""
+        from djust.live_view import LiveView
+
+        class SecureView(LiveView):
+            template_name = "test.html"
+            login_required = True
+            permission_required = "myapp.view_item"
+            __module__ = "myapp.views"
+
+        result = _audit_class(SecureView, "LiveView")
+        assert "auth" in result
+        assert result["auth"]["login_required"] is True
+        assert result["auth"]["permission_required"] == ["myapp.view_item"]
+
+    def test_auth_empty_for_public_view(self):
+        """Public view has empty auth dict."""
+        from djust.live_view import LiveView
+
+        class PublicView(LiveView):
+            template_name = "test.html"
+            __module__ = "myapp.views"
+
+        result = _audit_class(PublicView, "LiveView")
+        assert result["auth"] == {}
+
+
+class TestAuthInOutput:
+    def test_json_output_includes_auth(self):
+        """JSON output includes auth field and unprotected_with_state count."""
+        from djust.live_view import LiveView
+
+        class AuthJSONView(LiveView):
+            template_name = "test.html"
+            login_required = True
+            __module__ = "myapp.views"
+
+        out = StringIO()
+        call_command("djust_audit", json_output=True, stdout=out)
+        data = json.loads(out.getvalue())
+        for audit in data["audits"]:
+            assert "auth" in audit
+        assert "unprotected_with_state" in data["summary"]
+        del AuthJSONView
+
+    def test_pretty_output_shows_auth(self):
+        """Pretty output shows Auth line for protected views."""
+        from djust.live_view import LiveView
+
+        class AuthPrettyView(LiveView):
+            template_name = "test.html"
+            login_required = True
+            permission_required = "myapp.view_thing"
+            __module__ = "myapp.views"
+
+        out = StringIO()
+        call_command("djust_audit", stdout=out)
+        output = out.getvalue()
+        assert "Auth:" in output
+        del AuthPrettyView
+
+    def test_pretty_output_warns_unprotected(self):
+        """Pretty output shows warning for views with state but no auth."""
+        from djust.live_view import LiveView
+
+        class UnprotectedAuditView(LiveView):
+            template_name = "test.html"
+            __module__ = "myapp.views"
+
+            def mount(self, request, **kwargs):
+                self.items = []
+
+        out = StringIO()
+        call_command("djust_audit", stdout=out)
+        output = out.getvalue()
+        # Should contain the warning symbol or text
+        assert "exposes state without auth" in output or "\u26a0" in output
+        del UnprotectedAuditView
+
+    def test_handler_permission_in_audit(self):
+        """Handler-level @permission_required shows in decorator tags."""
+
+        meta = {"permission_required": "myapp.delete_item"}
+        tags = _format_decorator_tags(meta)
+        assert any("@permission_required" in t for t in tags)
+        assert any("myapp.delete_item" in t for t in tags)

@@ -73,6 +73,80 @@ The LiveView model does **not** eliminate all security concerns:
 
 Both architectures require proper access control. The difference is that LiveView eliminates the entire class of *data serialization* vulnerabilities.
 
+## Authentication & Authorization
+
+djust provides built-in auth enforcement at two levels: **view-level** (before `mount()`) and **handler-level** (before individual event handlers).
+
+### View-Level Auth (Class Attributes)
+
+```python
+class DashboardView(LiveView):
+    template_name = "dashboard.html"
+    login_required = True                              # Must be authenticated
+    permission_required = "analytics.view_dashboard"   # Django permission string
+    login_url = "/login/"                              # Override settings.LOGIN_URL
+
+    def mount(self, request, **kwargs):
+        self.metrics = get_metrics(request.user)
+```
+
+When an unauthenticated user connects, djust sends a `navigate` message redirecting them to the login URL. No `mount()` call happens — the view never initializes.
+
+### View-Level Auth (Mixins)
+
+```python
+from djust.auth import LoginRequiredMixin, PermissionRequiredMixin
+
+class DashboardView(LoginRequiredMixin, PermissionRequiredMixin, LiveView):
+    template_name = "dashboard.html"
+    permission_required = "analytics.view_dashboard"
+```
+
+### Custom Authorization Logic
+
+Override `check_permissions()` for complex authorization:
+
+```python
+class ProjectView(LiveView):
+    login_required = True
+
+    def check_permissions(self, request):
+        """Return True to allow, raise PermissionDenied or return False to deny."""
+        project = Project.objects.get(pk=self.kwargs.get("pk"))
+        return project.team.members.filter(user=request.user).exists()
+```
+
+### Handler-Level Permissions
+
+Protect individual event handlers with `@permission_required`:
+
+```python
+from djust.decorators import event_handler, permission_required
+
+class ProjectView(LiveView):
+    login_required = True
+
+    @permission_required("projects.delete_project")
+    @event_handler()
+    def delete_project(self, project_id: int, **kwargs):
+        Project.objects.get(pk=project_id).delete()
+```
+
+### Auth in djust_audit
+
+The `djust_audit` command shows auth configuration for each view:
+
+```
+  LiveView: crm.views.ContactListView
+    Template:   crm/contacts/list.html
+    Auth:       login_required, permission: crm.view_contacts
+    ...
+```
+
+Views that expose state without auth are flagged with a warning.
+
+See the [Authentication Guide](authentication.md) for complete documentation.
+
 ## What Reaches the Client
 
 ### Always sent (by design)

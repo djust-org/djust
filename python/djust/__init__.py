@@ -13,12 +13,14 @@ from .decorators import (
     event_handler,
     event,
     is_event_handler,
+    permission_required,
     rate_limit,
     state,
     computed,
     debounce,
     throttle,
 )
+from .auth import LoginRequiredMixin, PermissionRequiredMixin
 from .react import react_components, register_react_component, ReactMixin
 from .forms import FormMixin, LiveViewForm, form_field
 from .drafts import DraftModeMixin
@@ -189,6 +191,7 @@ __all__ = [
     "event_handler",
     "event",
     "is_event_handler",
+    "permission_required",
     "rate_limit",
     "state",
     "computed",
@@ -221,4 +224,7 @@ __all__ = [
     "StreamingMixin",
     # File uploads
     "UploadMixin",
+    # Authentication & authorization
+    "LoginRequiredMixin",
+    "PermissionRequiredMixin",
 ]

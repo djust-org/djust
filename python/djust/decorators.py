@@ -7,7 +7,7 @@ event handlers, reactive state, and computed properties.
 
 import functools
 import warnings
-from typing import Callable, Any, TypeVar, cast, List, Optional
+from typing import Callable, Any, TypeVar, Union, cast, List, Optional
 
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -491,10 +491,31 @@ def rate_limit(rate: float = 10, burst: int = 5) -> Callable[[F], F]:
     return _make_metadata_decorator("rate_limit", {"rate": rate, "burst": burst})
 
 
+def permission_required(perm: Union[str, List[str]]) -> Callable[[F], F]:
+    """
+    Require Django permission(s) to call this event handler.
+
+    Checked server-side before the handler executes. If the user lacks
+    the permission, the event is rejected with "Permission denied".
+
+    Args:
+        perm: Django permission string or list of strings.
+
+    Usage:
+        class MyView(LiveView):
+            @permission_required("myapp.delete_item")
+            @event_handler()
+            def delete_item(self, item_id: int, **kwargs):
+                ...
+    """
+    return _make_metadata_decorator("permission_required", perm)
+
+
 __all__ = [
     "event_handler",
     "event",
     "is_event_handler",
+    "permission_required",
     "rate_limit",
     "reactive",
     "state",
