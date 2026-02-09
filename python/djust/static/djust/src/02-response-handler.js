@@ -39,8 +39,10 @@ function handleServerResponse(data, eventName, triggerElement) {
                 if (globalThis.djustDebug) console.log('[LiveView] Initialized VDOM version:', clientVdomVersion);
             } else if (clientVdomVersion !== data.version - 1 && !data.hotreload) {
                 // Version mismatch - force full reload (skip check for hot reload)
-                console.warn('[LiveView] VDOM version mismatch!');
-                console.warn(`  Expected v${clientVdomVersion + 1}, got v${data.version}`);
+                if (globalThis.djustDebug) {
+                    console.warn('[LiveView] VDOM version mismatch!');
+                    console.warn(`  Expected v${clientVdomVersion + 1}, got v${data.version}`);
+                }
 
                 clearOptimisticState(eventName);
 
@@ -104,7 +106,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             }
 
             if (success === false) {
-                console.error('[LiveView] Patches failed, reloading page...');
+                if (globalThis.djustDebug) console.error('[LiveView] Patches failed, reloading page...');
                 globalLoadingManager.stopLoading(eventName, triggerElement);
                 window.location.reload();
                 return false;
@@ -143,7 +145,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             initTodoItems();
             bindLiveViewEvents();
         } else {
-            console.warn('[LiveView] Response has neither patches nor html!', data);
+            if (globalThis.djustDebug) console.warn('[LiveView] Response has neither patches nor html!', data);
         }
 
         // Handle form reset
@@ -158,7 +160,7 @@ function handleServerResponse(data, eventName, triggerElement) {
         return true;
 
     } catch (error) {
-        console.error('[LiveView] Error in handleServerResponse:', error);
+        if (globalThis.djustDebug) console.error('[LiveView] Error in handleServerResponse:', error);
         globalLoadingManager.stopLoading(eventName, triggerElement);
         return false;
     }
