@@ -16,10 +16,16 @@ from django.dispatch import Signal
 #       "embedded_child"     – embedded child view always gets full HTML
 #       "patch_compression"  – too many patches, HTML was smaller
 #       "no_patches"         – Rust diff returned empty (template structure changed)
+#       "no_change"          – diff produced 0 patches (state change outside root)
 #   event_name  – str, the event that triggered the render (e.g. "increment")
 #   view_name   – str, fully qualified view class name
 #   html_size           – int, size of the full HTML in bytes
 #   previous_html_size  – int or None, size of the previous render (None on first)
 #   patch_count         – int or None, number of patches before compression
 #   version             – int, current VDOM version
+#
+#   Diagnostic fields (present for "no_change" and "no_patches" reasons):
+#   context_snapshot        – dict or None, template context keys + values (truncated)
+#   html_snippet            – str or None, first 500 chars of rendered HTML
+#   previous_html_snippet   – str or None, first 500 chars of previous render
 full_html_update = Signal()

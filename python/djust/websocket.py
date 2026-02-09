@@ -36,7 +36,39 @@ except ImportError:
     SessionActorHandle = None
 
 
-def _emit_full_html_update(view_instance, reason, event_name, html, version, patch_count=None):
+def _build_context_snapshot(context, max_value_len=100):
+    """Build a JSON-safe snapshot of template context for diagnostics.
+
+    Truncates long values, converts non-serializable types to repr strings,
+    and limits to 20 keys to keep the payload small.
+    """
+    snapshot = {}
+    for key, value in list(context.items())[:20]:
+        if isinstance(value, (str, int, float, bool, type(None))):
+            if isinstance(value, str) and len(value) > max_value_len:
+                snapshot[key] = value[:max_value_len] + "..."
+            else:
+                snapshot[key] = value
+        elif isinstance(value, (list, tuple)):
+            snapshot[key] = f"[{type(value).__name__}, len={len(value)}]"
+        elif isinstance(value, dict):
+            snapshot[key] = f"[dict, {len(value)} keys]"
+        else:
+            snapshot[key] = f"[{type(value).__name__}]"
+    return snapshot
+
+
+def _emit_full_html_update(
+    view_instance,
+    reason,
+    event_name,
+    html,
+    version,
+    patch_count=None,
+    context_snapshot=None,
+    html_snippet=None,
+    previous_html_snippet=None,
+):
     """Emit the full_html_update signal with context about why patches weren't used."""
     view_cls = view_instance.__class__
     view_name = f"{view_cls.__module__}.{view_cls.__qualname__}"
@@ -51,6 +83,9 @@ def _emit_full_html_update(view_instance, reason, event_name, html, version, pat
         previous_html_size=previous_html_size,
         patch_count=patch_count,
         version=version,
+        context_snapshot=context_snapshot,
+        html_snippet=html_snippet,
+        previous_html_snippet=previous_html_snippet,
     )
 
 
@@ -1198,12 +1233,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 self.view_instance.__class__.__name__,
                             )
                             if not component_id:
+                                # Build diagnostic snapshot for debugging
+                                _ctx = context if context else {}
+                                _snapshot = _build_context_snapshot(_ctx)
+                                _prev_html = getattr(self.view_instance, "_previous_html", None)
                                 _emit_full_html_update(
                                     self.view_instance,
                                     "no_change",
                                     event_name,
-                                    "",
+                                    html,  # pass actual rendered HTML, not ""
                                     version,
+                                    context_snapshot=_snapshot,
+                                    html_snippet=html[:500] if html else "",
+                                    previous_html_snippet=(_prev_html[:500] if _prev_html else ""),
                                 )
 
                         # Calculate timing for JSON mode
@@ -1255,12 +1297,26 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # Emit signal — distinguish first render from diff failure
                         if not component_id:
                             reason = "first_render" if version <= 1 else "no_patches"
+                            _ctx = context if context else {}
+                            _snapshot = (
+                                _build_context_snapshot(_ctx) if reason == "no_patches" else None
+                            )
+                            _prev_html = getattr(self.view_instance, "_previous_html", None)
                             _emit_full_html_update(
                                 self.view_instance,
                                 reason,
                                 event_name,
                                 html_content,
                                 version,
+                                context_snapshot=_snapshot,
+                                html_snippet=(
+                                    html_content[:500] if reason == "no_patches" else None
+                                ),
+                                previous_html_snippet=(
+                                    _prev_html[:500]
+                                    if reason == "no_patches" and _prev_html
+                                    else None
+                                ),
                             )
 
                         await self._send_update(
