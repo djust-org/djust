@@ -267,6 +267,74 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
             let spec = arg.unwrap_or("s");
             Ok(Value::String(apply_stringformat(value, spec)))
         }
+        "default_if_none" => {
+            // default_if_none filter: fallback only when value is None/Null (not empty string)
+            match value {
+                Value::Null => Ok(Value::String(arg.unwrap_or("").to_string())),
+                _ => Ok(value.clone()),
+            }
+        }
+        "wordcount" => {
+            // wordcount filter: count the number of words
+            let count = value.to_string().split_whitespace().count();
+            Ok(Value::Integer(count as i64))
+        }
+        "wordwrap" => {
+            // wordwrap filter: wrap text at N characters (word boundary)
+            let width = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(75);
+            Ok(Value::String(word_wrap(&value.to_string(), width)))
+        }
+        "striptags" => {
+            // striptags filter: strip HTML tags from string
+            Ok(Value::String(strip_tags(&value.to_string())))
+        }
+        "addslashes" => {
+            // addslashes filter: escape \, ', " with backslashes
+            let s = value.to_string();
+            let escaped = s
+                .replace('\\', "\\\\")
+                .replace('\'', "\\'")
+                .replace('"', "\\\"");
+            Ok(Value::String(escaped))
+        }
+        "ljust" => {
+            // ljust filter: left-align string, pad to width with spaces
+            let width = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            let s = value.to_string();
+            Ok(Value::String(format!("{s:<width$}")))
+        }
+        "rjust" => {
+            // rjust filter: right-align string, pad to width with spaces
+            let width = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            let s = value.to_string();
+            Ok(Value::String(format!("{s:>width$}")))
+        }
+        "center" => {
+            // center filter: center string, pad to width with spaces
+            let width = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            let s = value.to_string();
+            Ok(Value::String(format!("{s:^width$}")))
+        }
+        "make_list" => {
+            // make_list filter: split string into list of characters
+            let s = value.to_string();
+            let chars: Vec<Value> = s.chars().map(|c| Value::String(c.to_string())).collect();
+            Ok(Value::List(chars))
+        }
+        "json_script" => {
+            // json_script filter: wrap value as JSON inside <script id="..."> tag
+            let element_id = arg.unwrap_or("data");
+            let json_str = value_to_json(value);
+            let safe_json = json_escape_for_script(&json_str);
+            let safe_id = html_escape(element_id);
+            Ok(Value::String(format!(
+                "<script id=\"{safe_id}\" type=\"application/json\">{safe_json}</script>"
+            )))
+        }
+        "force_escape" => {
+            // force_escape filter: always HTML-escape (unlike escape which is a no-op)
+            Ok(Value::String(html_escape(&value.to_string())))
+        }
         _ => Err(DjangoRustError::TemplateError(format!(
             "Unknown filter: {filter_name}"
         ))),
@@ -746,6 +814,90 @@ fn apply_stringformat(value: &Value, spec: &str) -> String {
     }
 }
 
+fn word_wrap(text: &str, width: usize) -> String {
+    if width == 0 {
+        return text.to_string();
+    }
+    let mut result = String::new();
+    let mut line_len = 0;
+
+    for (i, word) in text.split_whitespace().enumerate() {
+        let word_len = word.len();
+        if i > 0 && line_len + 1 + word_len > width {
+            result.push('\n');
+            line_len = 0;
+        } else if i > 0 {
+            result.push(' ');
+            line_len += 1;
+        }
+        result.push_str(word);
+        line_len += word_len;
+    }
+    result
+}
+
+fn strip_tags(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => result.push(c),
+            _ => {}
+        }
+    }
+    result
+}
+
+fn json_escape_for_script(s: &str) -> String {
+    // Escape characters that could break out of <script> tags
+    // Matches Django's _json_script_escapes
+    s.replace('&', "\\u0026")
+        .replace('<', "\\u003C")
+        .replace('>', "\\u003E")
+}
+
+fn value_to_json(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => {
+            if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
+        Value::Integer(n) => n.to_string(),
+        Value::Float(f) => format!("{f}"),
+        Value::String(s) => {
+            // JSON string: escape special chars
+            let escaped = s
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+                .replace('\t', "\\t");
+            format!("\"{escaped}\"")
+        }
+        Value::List(items) => {
+            let parts: Vec<String> = items.iter().map(value_to_json).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        Value::Object(map) => {
+            let mut parts: Vec<String> = map
+                .iter()
+                .map(|(k, v)| {
+                    let key_json = format!("\"{}\"", k.replace('\\', "\\\\").replace('"', "\\\""));
+                    format!("{}: {}", key_json, value_to_json(v))
+                })
+                .collect();
+            parts.sort(); // Deterministic output
+            format!("{{{}}}", parts.join(", "))
+        }
+    }
+}
+
 pub mod tags {
     // Placeholder for custom tags
 }
@@ -1181,5 +1333,159 @@ mod tests {
         let value = Value::Integer(42);
         let result = apply_filter("stringformat", &value, None).unwrap();
         assert_eq!(result.to_string(), "42");
+    }
+
+    #[test]
+    fn test_default_if_none_with_null() {
+        let value = Value::Null;
+        let result = apply_filter("default_if_none", &value, Some("fallback")).unwrap();
+        assert_eq!(result.to_string(), "fallback");
+    }
+
+    #[test]
+    fn test_default_if_none_with_empty_string() {
+        let value = Value::String("".to_string());
+        let result = apply_filter("default_if_none", &value, Some("fallback")).unwrap();
+        assert_eq!(result.to_string(), "");
+    }
+
+    #[test]
+    fn test_default_if_none_with_value() {
+        let value = Value::String("hello".to_string());
+        let result = apply_filter("default_if_none", &value, Some("fallback")).unwrap();
+        assert_eq!(result.to_string(), "hello");
+    }
+
+    #[test]
+    fn test_wordcount_filter() {
+        let value = Value::String("one two three four".to_string());
+        let result = apply_filter("wordcount", &value, None).unwrap();
+        assert!(matches!(result, Value::Integer(4)));
+    }
+
+    #[test]
+    fn test_wordcount_filter_empty() {
+        let value = Value::String("".to_string());
+        let result = apply_filter("wordcount", &value, None).unwrap();
+        assert!(matches!(result, Value::Integer(0)));
+    }
+
+    #[test]
+    fn test_wordwrap_filter() {
+        let value = Value::String("this is a long string that should wrap".to_string());
+        let result = apply_filter("wordwrap", &value, Some("15")).unwrap();
+        assert!(result.to_string().contains('\n'));
+    }
+
+    #[test]
+    fn test_wordwrap_filter_default() {
+        let value = Value::String("short".to_string());
+        let result = apply_filter("wordwrap", &value, None).unwrap();
+        assert_eq!(result.to_string(), "short");
+    }
+
+    #[test]
+    fn test_striptags_filter() {
+        let value = Value::String("<b>Hello</b> <i>world</i>".to_string());
+        let result = apply_filter("striptags", &value, None).unwrap();
+        assert_eq!(result.to_string(), "Hello world");
+    }
+
+    #[test]
+    fn test_striptags_filter_nested() {
+        let value = Value::String("<div><p>Text</p></div>".to_string());
+        let result = apply_filter("striptags", &value, None).unwrap();
+        assert_eq!(result.to_string(), "Text");
+    }
+
+    #[test]
+    fn test_addslashes_filter() {
+        let value = Value::String("it's a \"test\" with \\ backslash".to_string());
+        let result = apply_filter("addslashes", &value, None).unwrap();
+        assert_eq!(
+            result.to_string(),
+            "it\\'s a \\\"test\\\" with \\\\ backslash"
+        );
+    }
+
+    #[test]
+    fn test_ljust_filter() {
+        let value = Value::String("hi".to_string());
+        let result = apply_filter("ljust", &value, Some("10")).unwrap();
+        assert_eq!(result.to_string(), "hi        ");
+        assert_eq!(result.to_string().len(), 10);
+    }
+
+    #[test]
+    fn test_ljust_filter_no_pad_needed() {
+        let value = Value::String("hello".to_string());
+        let result = apply_filter("ljust", &value, Some("3")).unwrap();
+        assert_eq!(result.to_string(), "hello");
+    }
+
+    #[test]
+    fn test_rjust_filter() {
+        let value = Value::String("hi".to_string());
+        let result = apply_filter("rjust", &value, Some("10")).unwrap();
+        assert_eq!(result.to_string(), "        hi");
+        assert_eq!(result.to_string().len(), 10);
+    }
+
+    #[test]
+    fn test_center_filter() {
+        let value = Value::String("hi".to_string());
+        let result = apply_filter("center", &value, Some("10")).unwrap();
+        assert_eq!(result.to_string(), "    hi    ");
+        assert_eq!(result.to_string().len(), 10);
+    }
+
+    #[test]
+    fn test_make_list_filter() {
+        let value = Value::String("abc".to_string());
+        let result = apply_filter("make_list", &value, None).unwrap();
+        match result {
+            Value::List(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0].to_string(), "a");
+                assert_eq!(items[1].to_string(), "b");
+                assert_eq!(items[2].to_string(), "c");
+            }
+            _ => panic!("Expected List value"),
+        }
+    }
+
+    #[test]
+    fn test_json_script_filter() {
+        let value = Value::String("hello".to_string());
+        let result = apply_filter("json_script", &value, Some("my-data")).unwrap();
+        let s = result.to_string();
+        assert!(s.starts_with("<script id=\"my-data\" type=\"application/json\">"));
+        assert!(s.ends_with("</script>"));
+        assert!(s.contains("\"hello\""));
+    }
+
+    #[test]
+    fn test_json_script_filter_escapes_script_tags() {
+        let value = Value::String("</script><script>alert(1)".to_string());
+        let result = apply_filter("json_script", &value, Some("data")).unwrap();
+        let s = result.to_string();
+        // Must not contain literal </script> inside the JSON
+        assert!(!s[..s.len() - 9].contains("</script>"));
+        assert!(s.contains("\\u003C"));
+    }
+
+    #[test]
+    fn test_force_escape_filter() {
+        let value = Value::String("<b>hello</b>".to_string());
+        let result = apply_filter("force_escape", &value, None).unwrap();
+        assert_eq!(result.to_string(), "&lt;b&gt;hello&lt;/b&gt;");
+    }
+
+    #[test]
+    fn test_force_escape_quotes() {
+        let value = Value::String("it's \"quoted\"".to_string());
+        let result = apply_filter("force_escape", &value, None).unwrap();
+        assert!(result.to_string().contains("&#x27;"));
+        assert!(result.to_string().contains("&quot;"));
     }
 }

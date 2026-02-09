@@ -76,7 +76,11 @@ fn render_node_with_loader<L: TemplateLoader>(
             // Auto-escape unless:
             // 1. |safe is the last filter (matches Django behavior)
             // 2. The variable is marked safe in the context (like Django's SafeData)
-            let is_safe = filter_specs.last().map(|(name, _)| name.as_str()) == Some("safe")
+            // 3. A filter that produces already-escaped/safe output is in the chain
+            let safe_output_filters = ["safe", "force_escape", "json_script"];
+            let is_safe = filter_specs
+                .iter()
+                .any(|(name, _)| safe_output_filters.contains(&name.as_str()))
                 || context.is_safe(var_name);
             if is_safe {
                 Ok(text)
