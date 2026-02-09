@@ -351,9 +351,7 @@ class TestGetHandlers:
                 "accepts_kwargs": False,
             }
         }
-        cls = type("SaveView", (), {"save": save, "template_name": "t.html"})
-
-        # We need to create a proper subclass of LiveView to test _get_handlers
+        # Create a proper subclass of LiveView to test _get_handlers
         from djust.live_view import LiveView
 
         cls = type("SaveView", (LiveView,), {"save": save, "template_name": "t.html"})

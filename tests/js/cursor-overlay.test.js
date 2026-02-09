@@ -184,7 +184,6 @@ describe('CursorOverlay hook', () => {
 
             const hookEl = document.querySelector('[dj-hook="CursorOverlay"]');
             const overlay = hookEl.querySelector('[dj-update="ignore"]');
-            const caret = overlay.querySelector('.remote-cursor');
             // Move to a different position
             window.djust.dispatchPushEventToHooks('cursor_positions', {
                 cursors: {
