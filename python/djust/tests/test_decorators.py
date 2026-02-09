@@ -461,7 +461,11 @@ class TestMetadataExtraction:
         assert "plain_handler" not in metadata
 
     def test_extract_empty_view(self):
-        """Test extraction from view with no handlers."""
+        """Test extraction from view with no user-defined handlers.
+
+        Note: update_model is inherited from ModelBindingMixin and is
+        decorated with @event_handler, so it always appears.
+        """
 
         class TestView(LiveView):
             template = "<div>Test</div>"
@@ -469,8 +473,9 @@ class TestMetadataExtraction:
         view = TestView()
         metadata = view._extract_handler_metadata()
 
-        # Should return empty dict
-        assert metadata == {}
+        # Only inherited framework handlers (update_model) should appear
+        user_handlers = {k: v for k, v in metadata.items() if k != "update_model"}
+        assert user_handlers == {}
 
     def test_metadata_caching(self):
         """Test that metadata extraction is cached."""
@@ -524,7 +529,12 @@ class TestMetadataInjection:
         assert injected.index("<script>") < injected.index("</body>")
 
     def test_inject_no_metadata(self):
-        """Test injection when no metadata exists."""
+        """Test injection when no user-defined decorator metadata exists.
+
+        Note: update_model (from ModelBindingMixin) is always present with
+        @event_handler, so there will always be some metadata. We verify
+        no user-defined decorator metadata (debounce, throttle) is injected.
+        """
 
         class TestView(LiveView):
             template = "<html><body><div>Test</div></body></html>"
@@ -536,9 +546,9 @@ class TestMetadataInjection:
         html = "<html><body><div>Test</div></body></html>"
         injected = view._inject_handler_metadata(html)
 
-        # Should not inject script if no metadata
-        assert "<script>" not in injected
-        assert injected == html
+        # update_model has no debounce/throttle metadata
+        assert "debounce" not in injected
+        assert "throttle" not in injected
 
     def test_inject_before_body(self):
         """Test injection before </body> tag."""
