@@ -895,6 +895,8 @@ Draft saving?          → DraftModeMixin
 - [ ] Use Django form validation
 - [ ] CSRF token in all forms
 - [ ] Never expose sensitive data to template
+- [ ] No `|safe` filter on user-controlled template variables
+- [ ] Fuzz tests pass (`LiveViewSmokeTest` mixin)
 
 ---
 
@@ -997,6 +999,8 @@ class PropertyListView(LiveView):
 6. **Call super().get_context_data()** to trigger Rust serialization
 7. **Check authorization** in mount() and event handlers
 8. **Use type hints** for automatic validation
+9. **Trust auto-escaping** — `{{ var }}` is HTML-escaped by default; use `|safe` only for server-generated HTML
+10. **Run fuzz tests** — `LiveViewSmokeTest` catches XSS and crash regressions automatically
 
 **Common pitfalls to avoid:**
 
@@ -1006,6 +1010,7 @@ class PropertyListView(LiveView):
 4. ❌ Forgetting @event_handler decorator
 5. ❌ Missing default parameter values
 6. ❌ Skipping authorization checks
+7. ❌ Using `|safe` filter on user input (bypasses auto-escaping)
 
 **Quick pattern matching:**
 - Search/filter → @debounce + private QuerySet + JIT

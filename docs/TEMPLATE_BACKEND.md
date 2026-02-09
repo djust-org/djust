@@ -149,6 +149,12 @@ def my_view(request):
 - `UUID` objects
 - `FieldFile` objects (file URLs)
 
+✅ **Auto-Escaping (XSS Protection)**
+- All `{{ variable }}` output is HTML-escaped by default
+- `mark_safe()` values auto-detected and rendered unescaped
+- `|safe` filter for explicit opt-out in templates
+- Component `.render()` output preserved (SafeString detection)
+
 ✅ **Context Processors**
 - Standard Django context processors
 - Custom context processors
@@ -456,6 +462,6 @@ MIT License - same as djust framework.
 
 ---
 
-**Last Updated:** 2026-01-24
+**Last Updated:** 2026-02-08
 **Status:** Production-ready
 **Minimum djust version:** 0.1.0 (with Rust extension compiled)
