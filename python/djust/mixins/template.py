@@ -409,12 +409,18 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # Check if we have a full template from template inheritance
         if hasattr(self, "_full_template") and self._full_template:
             from djust._rust import RustLiveView
+            from django.utils.safestring import SafeString
 
             template_dirs = get_template_dirs()
             temp_rust = RustLiveView(self._full_template, template_dirs)
 
+            safe_keys = []
             if serialized_context is not None:
                 json_compatible_context = serialized_context
+                # Detect SafeStrings in the pre-serialized context
+                for key, value in serialized_context.items():
+                    if isinstance(value, SafeString):
+                        safe_keys.append(key)
             else:
                 from ..components.base import Component, LiveComponent
 
@@ -425,6 +431,10 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 for key, value in context.items():
                     if isinstance(value, (Component, LiveComponent)):
                         rendered_context[key] = {"render": str(value.render())}
+                        safe_keys.append(key)
+                    elif isinstance(value, SafeString):
+                        rendered_context[key] = value
+                        safe_keys.append(key)
                     else:
                         rendered_context[key] = value
 
@@ -434,6 +444,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 json_compatible_context = json.loads(json_str)
 
             temp_rust.update_state(json_compatible_context)
+            if safe_keys:
+                temp_rust.mark_safe_keys(safe_keys)
             html = temp_rust.render()
 
             html = self._hydrate_react_components(html)

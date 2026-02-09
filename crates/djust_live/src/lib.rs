@@ -27,7 +27,7 @@ use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -84,6 +84,8 @@ pub struct RustLiveViewBackend {
     timestamp: f64,
     /// Template directories for {% include %} tag support
     template_dirs: Vec<PathBuf>,
+    /// Keys whose values should skip auto-escaping (SafeString from Python)
+    safe_keys: HashSet<String>,
 }
 
 #[pymethods]
@@ -102,6 +104,7 @@ impl RustLiveViewBackend {
                 .into_iter()
                 .map(PathBuf::from)
                 .collect(),
+            safe_keys: HashSet::new(),
         }
     }
 
@@ -118,6 +121,12 @@ impl RustLiveViewBackend {
     /// Update state with a dictionary
     fn update_state(&mut self, updates: HashMap<String, Value>) {
         self.state.extend(updates);
+    }
+
+    /// Mark context keys as safe (skip auto-escaping).
+    /// Called from Python when SafeString values are detected.
+    fn mark_safe_keys(&mut self, keys: Vec<String>) {
+        self.safe_keys.extend(keys);
     }
 
     /// Update the template source while preserving VDOM state
@@ -147,7 +156,10 @@ impl RustLiveViewBackend {
             arc
         };
 
-        let context = Context::from_dict(self.state.clone());
+        let mut context = Context::from_dict(self.state.clone());
+        for key in &self.safe_keys {
+            context.mark_safe(key.clone());
+        }
 
         // Use template loader for {% include %} support
         let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
@@ -168,7 +180,10 @@ impl RustLiveViewBackend {
             arc
         };
 
-        let context = Context::from_dict(self.state.clone());
+        let mut context = Context::from_dict(self.state.clone());
+        for key in &self.safe_keys {
+            context.mark_safe(key.clone());
+        }
 
         // Use template loader for {% include %} support
         let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
@@ -230,7 +245,10 @@ impl RustLiveViewBackend {
             arc
         };
 
-        let context = Context::from_dict(self.state.clone());
+        let mut context = Context::from_dict(self.state.clone());
+        for key in &self.safe_keys {
+            context.mark_safe(key.clone());
+        }
 
         // Use template loader for {% include %} support
         let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
@@ -340,6 +358,7 @@ impl RustLiveViewBackend {
             version: serializable.version,
             timestamp: serializable.timestamp,
             template_dirs: Vec::new(),
+            safe_keys: HashSet::new(),
         })
     }
 

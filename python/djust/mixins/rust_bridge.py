@@ -120,20 +120,29 @@ class RustBridgeMixin:
         if self._rust_view:
             from ..components.base import Component, LiveComponent
             from django import forms
+            from django.utils.safestring import SafeString
 
             context = self.get_context_data()
 
+            # Detect SafeString values before serialization loses the type info
+            safe_keys = []
             rendered_context = {}
             for key, value in context.items():
                 if isinstance(value, (Component, LiveComponent)):
-                    rendered_html = str(value.render())
-                    rendered_context[key] = {"render": rendered_html}
+                    rendered_html = value.render()
+                    rendered_context[key] = {"render": str(rendered_html)}
+                    # Component.render() returns SafeString — mark as safe
+                    safe_keys.append(key)
                 elif isinstance(value, forms.Form):
                     continue
                 else:
+                    if isinstance(value, SafeString):
+                        safe_keys.append(key)
                     rendered_context[key] = value
 
             json_str = json.dumps(rendered_context, cls=DjangoJSONEncoder)
             json_compatible_context = json.loads(json_str)
 
             self._rust_view.update_state(json_compatible_context)
+            if safe_keys:
+                self._rust_view.mark_safe_keys(safe_keys)
