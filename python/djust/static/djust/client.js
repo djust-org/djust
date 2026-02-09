@@ -183,7 +183,7 @@ function handleServerResponse(data, eventName, triggerElement) {
         if (data.version !== undefined) {
             if (clientVdomVersion === null) {
                 clientVdomVersion = data.version;
-                console.log('[LiveView] Initialized VDOM version:', clientVdomVersion);
+                if (globalThis.djustDebug) console.log('[LiveView] Initialized VDOM version:', clientVdomVersion);
             } else if (clientVdomVersion !== data.version - 1 && !data.hotreload) {
                 // Version mismatch - force full reload (skip check for hot reload)
                 console.warn('[LiveView] VDOM version mismatch!');
@@ -223,7 +223,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             if (globalThis.djustDebug) console.log('[LiveView] No DOM changes needed (0 patches)');
         }
         else if (data.patches && Array.isArray(data.patches) && data.patches.length > 0) {
-            console.log('[LiveView] Applying', data.patches.length, 'patches');
+            if (globalThis.djustDebug) console.log('[LiveView] Applying', data.patches.length, 'patches');
 
             // Store timing info globally for debug panel access
             window._lastPatchTiming = data.timing;
@@ -257,7 +257,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 return false;
             }
 
-            console.log('[LiveView] Patches applied successfully');
+            if (globalThis.djustDebug) console.log('[LiveView] Patches applied successfully');
 
             // Final cleanup
             document.querySelectorAll('.optimistic-pending').forEach(el => {
@@ -295,7 +295,7 @@ function handleServerResponse(data, eventName, triggerElement) {
 
         // Handle form reset
         if (data.reset_form) {
-            console.log('[LiveView] Resetting form');
+            if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
             const form = document.querySelector('[data-djust-root] form');
             if (form) form.reset();
         }
@@ -1798,12 +1798,14 @@ function bindLiveViewEvents() {
         }
 
         // Handle dj-copy — client-side clipboard copy (no server round-trip)
-        const copyValue = element.getAttribute('dj-copy');
-        if (copyValue && !element.dataset.liveviewCopyBound) {
+        if (element.getAttribute('dj-copy') && !element.dataset.liveviewCopyBound) {
             element.dataset.liveviewCopyBound = 'true';
             element.addEventListener('click', function(e) {
                 e.preventDefault();
-                navigator.clipboard.writeText(copyValue).then(function() {
+                // Read attribute at click time (not bind time) so morph updates take effect
+                var currentValue = element.getAttribute('dj-copy');
+                if (!currentValue) return;
+                navigator.clipboard.writeText(currentValue).then(function() {
                     var original = element.textContent;
                     element.textContent = 'Copied!';
                     setTimeout(function() { element.textContent = original; }, 1500);

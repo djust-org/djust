@@ -68,7 +68,8 @@ class TestMountAuthIntegration:
         assert check_view_auth(view, request) is None
 
     def test_permission_required_blocks_unpermitted(self):
-        """View with permission_required blocks users without that permission."""
+        """View with permission_required raises PermissionDenied for authenticated users."""
+        from django.core.exceptions import PermissionDenied
         from djust.live_view import LiveView
 
         class AdminView(LiveView):
@@ -78,8 +79,8 @@ class TestMountAuthIntegration:
 
         view = AdminView()
         request = _mock_request(authenticated=True, permissions=[])
-        result = check_view_auth(view, request)
-        assert result is not None
+        with pytest.raises(PermissionDenied):
+            check_view_auth(view, request)
 
     def test_check_order_login_before_perms(self):
         """Login check happens before permission check."""

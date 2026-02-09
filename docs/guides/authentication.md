@@ -124,7 +124,8 @@ Client sends "mount" message
         1. login_required? → check request.user.is_authenticated
         2. permission_required? → check request.user.has_perms()
         3. check_permissions()? → call custom hook (if overridden)
-    → If denied: send {"type": "navigate", "to": "/login/"} — no mount()
+    → If unauthenticated: send {"type": "navigate", "to": "/login/"}
+    → If authenticated but lacking perms: close with 4403 (PermissionDenied)
     → If passed: call view.mount(request, **kwargs)
 ```
 
@@ -190,3 +191,16 @@ JSON output includes an `"unprotected_with_state"` count in the summary.
 3. **Use `check_permissions()` for object-level access** — verify the user can access *this specific* resource
 4. **Use `@permission_required` on destructive handlers** — even if the view is already protected, adding handler-level permission for delete/update operations provides defense-in-depth
 5. **Run `djust_audit` in CI** — catch unprotected views before they ship
+
+## Known Limitations
+
+### Auth is checked at mount time only
+
+View-level auth (`login_required`, `permission_required`, `check_permissions()`) runs once during WebSocket mount. If a user's session expires or permissions are revoked while the WebSocket is open, subsequent events will continue to be processed until the next reconnect.
+
+This is a conscious trade-off shared by all LiveView-style frameworks (Phoenix, Laravel Livewire, etc.) — re-checking auth on every event would add a database query per interaction.
+
+**Mitigations:**
+- Use handler-level `@permission_required` for sensitive operations (checked per event)
+- WebSocket heartbeats will eventually detect stale sessions
+- Critical admin actions should use `check_permissions()` on the handler itself

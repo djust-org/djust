@@ -139,6 +139,14 @@ async def _validate_event_security(
     from .auth import check_handler_permission
 
     owner_request = getattr(owner_instance, "request", None)
+    # If handler has @permission_required but request is missing, deny by default
+    handler_meta = getattr(handler, "_djust_decorators", {})
+    if handler_meta.get("permission_required") and not owner_request:
+        logger.warning(
+            "Permission check skipped (no request) for handler with @permission_required"
+        )
+        await ws.send_error("Permission denied")
+        return None
     if owner_request and not check_handler_permission(handler, owner_request):
         await ws.send_error("Permission denied")
         return None

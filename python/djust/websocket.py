@@ -740,8 +740,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
             # --- Auth check (before mount) ---
             from .auth import check_view_auth
+            from django.core.exceptions import PermissionDenied
 
-            redirect_url = await sync_to_async(check_view_auth)(self.view_instance, request)
+            try:
+                redirect_url = await sync_to_async(check_view_auth)(self.view_instance, request)
+            except PermissionDenied as exc:
+                # Authenticated user lacks permissions → 403 (not a redirect)
+                logger.info(
+                    "Permission denied for %s: %s", self.view_instance.__class__.__name__, exc
+                )
+                await self.send_json({"type": "error", "message": "Permission denied"})
+                await self.close(code=4403)
+                return
             if redirect_url:
                 await self.send_json(
                     {

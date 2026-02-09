@@ -242,4 +242,42 @@ describe('preserveFormValues', () => {
             expect(container.querySelector('textarea')).toBeNull();
         });
     });
+
+    describe('select elements', () => {
+        it('preserves focused select value after innerHTML replacement', () => {
+            const container = document.createElement('div');
+            container.innerHTML = '<select id="color"><option value="red">Red</option><option value="blue">Blue</option><option value="green">Green</option></select>';
+            document.body.appendChild(container);
+
+            const select = container.querySelector('#color');
+            select.value = 'blue';
+            select.focus();
+
+            preserveFormValues(container, () => {
+                container.innerHTML = '<select id="color"><option value="red">Red</option><option value="blue">Blue</option><option value="green">Green</option></select>';
+            });
+
+            const restored = container.querySelector('#color');
+            expect(restored.value).toBe('blue');
+        });
+    });
+
+    describe('radio buttons', () => {
+        it('preserves focused radio checked state after innerHTML replacement', () => {
+            const container = document.createElement('div');
+            container.innerHTML = '<input type="radio" name="size" value="s" id="r1"><input type="radio" name="size" value="m" id="r2"><input type="radio" name="size" value="l" id="r3">';
+            document.body.appendChild(container);
+
+            const radio = container.querySelector('#r2');
+            radio.checked = true;
+            radio.focus();
+
+            preserveFormValues(container, () => {
+                container.innerHTML = '<input type="radio" name="size" value="s" id="r1"><input type="radio" name="size" value="m" id="r2"><input type="radio" name="size" value="l" id="r3">';
+            });
+
+            const restored = container.querySelector('#r2');
+            expect(restored.checked).toBe(true);
+        });
+    });
 });

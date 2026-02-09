@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: `data-dj-*` prefix stripping** — Client-side `extractTypedParams()` now strips the `dj_` prefix from `data-dj-*` attributes. `data-dj-preset="dark"` sends `{preset: "dark"}` instead of `{dj_preset: "dark"}`. Update handler parameter names accordingly: `dj_foo` → `foo`. See `docs/DX_ISSUES.md` DX-006 for migration details.
+
 ### Added
 
 - **Authentication & Authorization** — Opinionated, framework-enforced auth for LiveViews. View-level `login_required` and `permission_required` class attributes (plus `LoginRequiredMixin`/`PermissionRequiredMixin` for Django-familiar patterns). Custom auth logic via `check_permissions()` hook. Handler-level `@permission_required()` decorator for protecting individual event handlers. Auth checks run server-side before `mount()` and before handler dispatch — no client-side bypass possible. Integrates with `djust_audit` command (shows auth posture per view) and Django system checks (`djust.S005` warns on unprotected views with exposed state).

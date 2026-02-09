@@ -960,8 +960,8 @@ class LiveViewSmokeTest:
 
         for view_class in views:
             name = f"{view_class.__module__}.{view_class.__name__}"
+            old_debug = settings.DEBUG
             try:
-                old_debug = settings.DEBUG
                 settings.DEBUG = True
                 reset_queries()
 
@@ -969,12 +969,13 @@ class LiveViewSmokeTest:
                 client.render()
 
                 query_count = len(connection.queries)
-                settings.DEBUG = old_debug
 
                 if query_count > self.max_queries:
                     errors.append(f"{name}: {query_count} queries (max {self.max_queries})")
             except Exception as e:
                 errors.append(f"{name}: {type(e).__name__}: {e}")
+            finally:
+                settings.DEBUG = old_debug
 
         if errors:
             raise AssertionError(

@@ -259,6 +259,34 @@ describe('morphElement', () => {
         expect(container.firstChild.textContent).toBe('new');
     });
 
+    it('syncs select element selectedIndex', () => {
+        const existing = document.createElement('select');
+        existing.innerHTML = '<option value="a">A</option><option value="b">B</option><option value="c">C</option>';
+        existing.value = 'a';
+
+        const desired = document.createElement('select');
+        desired.innerHTML = '<option value="a">A</option><option value="b" selected>B</option><option value="c">C</option>';
+
+        morphElement(existing, desired);
+
+        expect(existing.children.length).toBe(3);
+        expect(existing.querySelector('option[value="b"]').hasAttribute('selected')).toBe(true);
+    });
+
+    it('syncs radio button checked state', () => {
+        const existing = document.createElement('div');
+        existing.innerHTML = '<input type="radio" name="color" value="red" checked><input type="radio" name="color" value="blue">';
+
+        const desired = document.createElement('div');
+        desired.innerHTML = '<input type="radio" name="color" value="red"><input type="radio" name="color" value="blue" checked>';
+
+        morphElement(existing, desired);
+
+        const radios = existing.querySelectorAll('input[type="radio"]');
+        expect(radios[0].hasAttribute('checked')).toBe(false);
+        expect(radios[1].hasAttribute('checked')).toBe(true);
+    });
+
     it('does not morph children of dj-update="append"', () => {
         const existing = document.createElement('ul');
         existing.setAttribute('dj-update', 'append');

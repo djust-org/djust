@@ -89,6 +89,36 @@ Each issue should lead to either: a better error message, a `djust_checks` syste
 
 ---
 
+## DX-006: `data-dj-*` prefix stripping — breaking change for handler params
+
+**Severity**: High — existing handler kwargs silently renamed
+**Status**: Fixed (intentional breaking change)
+
+**What happens**: Before this change, `data-dj-preset="dark"` was extracted as `{dj_preset: "dark"}` on the client side. Now, the `dj_` prefix is stripped so handlers receive `{preset: "dark"}`.
+
+**How developer encounters it**: Any existing event handler that accepts `dj_preset` (or any `dj_*` kwarg) as a parameter name will stop receiving that value. The value will end up in `**kwargs` instead, and the explicitly-named parameter gets its default value. No error is raised — completely silent.
+
+**Migration**: Rename handler parameters from `dj_foo` to `foo`:
+
+```python
+# Before (broken after this change)
+@event_handler()
+def set_theme(self, dj_mode: str = "light", **kwargs):
+    self.mode = dj_mode
+
+# After (correct)
+@event_handler()
+def set_theme(self, mode: str = "light", **kwargs):
+    self.mode = mode
+```
+
+**Resolution**:
+- **Framework fix**: `extractTypedParams()` in `08-event-parsing.js` now strips the `dj_` prefix after kebab→snake conversion
+- **Convention**: `data-dj-*` is the correct namespace for event params. Both `data-dj-preset` and `data-preset` now produce `preset`
+- **Docs**: This DX issue documents the breaking change
+
+---
+
 ## Template for new issues
 
 ```

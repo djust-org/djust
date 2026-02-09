@@ -1,5 +1,6 @@
 """Tests for djust.auth — view-level and handler-level auth enforcement."""
 
+import pytest
 from unittest.mock import MagicMock
 from django.core.exceptions import PermissionDenied
 
@@ -131,8 +132,8 @@ class TestCheckViewAuthPermissions:
         request = _make_request(authenticated=True, permissions=["myapp.view_dashboard"])
         assert check_view_auth(view, request) is None
 
-    def test_permission_required_denied(self):
-        """User without required permission gets redirected."""
+    def test_permission_required_denied_authenticated(self):
+        """Authenticated user without required permission gets 403."""
         from djust.live_view import LiveView
 
         class AdminView(LiveView):
@@ -141,8 +142,21 @@ class TestCheckViewAuthPermissions:
 
         view = AdminView()
         request = _make_request(authenticated=True, permissions=[])
+        with pytest.raises(PermissionDenied):
+            check_view_auth(view, request)
+
+    def test_permission_required_denied_anonymous(self):
+        """Anonymous user without required permission gets redirected to login."""
+        from djust.live_view import LiveView
+
+        class AdminView(LiveView):
+            permission_required = "myapp.view_dashboard"
+
+        view = AdminView()
+        request = _make_anon_request()
         result = check_view_auth(view, request)
         assert result is not None
+        assert "login" in result
 
     def test_multiple_permissions_all_granted(self):
         """User with all required permissions passes."""
@@ -160,7 +174,7 @@ class TestCheckViewAuthPermissions:
         assert check_view_auth(view, request) is None
 
     def test_multiple_permissions_partial(self):
-        """User missing one permission gets redirected."""
+        """Authenticated user missing one permission gets 403."""
         from djust.live_view import LiveView
 
         class AdminView(LiveView):
@@ -172,8 +186,8 @@ class TestCheckViewAuthPermissions:
             authenticated=True,
             permissions=["myapp.view_dashboard"],
         )
-        result = check_view_auth(view, request)
-        assert result is not None
+        with pytest.raises(PermissionDenied):
+            check_view_auth(view, request)
 
     def test_permission_without_login_check(self):
         """permission_required alone checks perms (user may still be anonymous)."""
@@ -372,8 +386,9 @@ class TestMixins:
         # Anonymous -> redirect
         assert check_view_auth(view, _make_anon_request()) is not None
 
-        # Authenticated without perm -> redirect
-        assert check_view_auth(view, _make_request(authenticated=True, permissions=[])) is not None
+        # Authenticated without perm -> 403
+        with pytest.raises(PermissionDenied):
+            check_view_auth(view, _make_request(authenticated=True, permissions=[]))
 
         # Authenticated with perm -> pass
         assert (

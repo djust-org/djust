@@ -48,6 +48,10 @@ def check_view_auth(view_instance, request) -> Optional[str]:
 
     Returns:
         None if auth passes, or a login URL string to redirect to.
+
+    Raises:
+        PermissionDenied: If user is authenticated but lacks required
+            permissions. Matches Django's PermissionRequiredMixin behavior.
     """
     login_required = getattr(view_instance, "login_required", None)
     permission_required = getattr(view_instance, "permission_required", None)
@@ -81,6 +85,10 @@ def check_view_auth(view_instance, request) -> Optional[str]:
                 view_instance.__class__.__name__,
                 perms,
             )
+            # Authenticated but lacking perms → 403 (matches Django's
+            # PermissionRequiredMixin). Unauthenticated → redirect to login.
+            if getattr(user, "is_authenticated", False):
+                raise PermissionDenied(f"User lacks required permission(s): {', '.join(perms)}")
             return login_url
 
     # 3. Custom hook (only if subclass overrides it)
