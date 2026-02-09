@@ -152,8 +152,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-python-
 
-      - name: Install Python dependencies
-        run: uv sync --extra dev
+      - name: Install Python dependencies (without building djust)
+        run: uv sync --extra dev --no-install-project
 
       - name: Download pre-built wheel
         uses: actions/download-artifact@v7
@@ -162,7 +162,7 @@ jobs:
           path: wheels/
 
       - name: Install pre-built Rust extension
-        run: uv pip install $(ls wheels/*.whl | head -1)
+        run: uv pip install --no-deps $(ls wheels/*.whl | head -1)
 
       - name: Install pytest-xdist for parallel execution
         run: uv pip install pytest-xdist
@@ -226,8 +226,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-python-
 
-      - name: Install Python dependencies
-        run: uv sync --extra dev
+      - name: Install Python dependencies (without building djust)
+        run: uv sync --extra dev --no-install-project
 
       - name: Download pre-built wheel
         uses: actions/download-artifact@v7
@@ -236,7 +236,7 @@ jobs:
           path: wheels/
 
       - name: Install pre-built Rust extension
-        run: uv pip install $(ls wheels/*.whl | head -1)
+        run: uv pip install --no-deps $(ls wheels/*.whl | head -1)
 
       - name: Install Playwright
         run: |
