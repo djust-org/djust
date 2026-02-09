@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0rc2] - 2026-02-09
+
 ### Changed
 
 - **BREAKING: `data-dj-*` prefix stripping** — Client-side `extractTypedParams()` now strips the `dj_` prefix from `data-dj-*` attributes. `data-dj-preset="dark"` sends `{preset: "dark"}` instead of `{dj_preset: "dark"}`. Update handler parameter names accordingly: `dj_foo` → `foo`. See `docs/DX_ISSUES.md` DX-006 for migration details.
@@ -25,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Server-Push API** — Background tasks (Celery, management commands, cron jobs) can now push state updates to connected LiveView clients via `push_to_view()`. Includes per-view channel groups (auto-joined on mount), a sync/async public API (`push_to_view` / `apush_to_view`), and periodic `handle_tick()` for self-updating views. ([#230](https://github.com/djust-org/djust/issues/230))
 - **Auto-build client.js from src/ modules** — Pre-commit hook runs `build-client.sh` when `src/` files change, eliminating manual concatenation drift between `src/` and built JS files. ([#211](https://github.com/djust-org/djust/issues/211))
 - **Keyed-mutation fuzz test generator** — New proptest generator produces tree B by mutating tree A (reorder, insert, remove keyed children), guaranteeing key overlap and exercising keyed diff paths far more effectively than independent random generation. Proptest cases bumped from 500 to 1000. ([#216](https://github.com/djust-org/djust/issues/216), [#217](https://github.com/djust-org/djust/issues/217))
+- **Better Error Messages** — Improved error messages for common LiveView event handler mistakes (missing `@event_handler`, wrong method signature). ([#248](https://github.com/djust-org/djust/issues/248))
 
 ### Fixed
 
@@ -33,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **apply_patches djust_id-based resolution** — Rewrote `apply_patches` to resolve parent nodes by `djust_id` instead of path-based traversal, preventing mis-targeting when structural patches at shallower levels invalidate deeper path indices. Fixed patch application order (removes → inserts → moves) and MoveChild index clamping. ([#216](https://github.com/djust-org/djust/issues/216))
 - **Diff engine keyed+unkeyed interleaving** — The diff engine now emits `MoveChild` patches for unkeyed element children (with `djust_id`) when their absolute position changes due to keyed sibling moves, fixing incorrect patch targeting in mixed keyed/unkeyed child lists. ([#219](https://github.com/djust-org/djust/issues/219))
 - **Text node targeting after keyed moves** — `SetText` patches now carry `djust_id` when available (for test infrastructure), and `sync_ids` propagates IDs to text nodes. Test `assign_ids` gives synthetic IDs to text nodes so `apply_patches` resolves them by ID after structural changes shift path indices. ([#221](https://github.com/djust-org/djust/issues/221))
+- **DOM morphing preserves event listeners** — `html_update` now uses morphdom-style DOM diffing instead of `innerHTML`, preserving user-bound event listeners. ([#236](https://github.com/djust-org/djust/pull/236))
+- **Textarea newlines preserved** — Template whitespace stripping no longer collapses newlines inside `<textarea>` elements. ([#236](https://github.com/djust-org/djust/pull/236))
+- **PresenceMixin crash without auth** — `track_presence()` now checks for `request.user` before accessing it, preventing crashes in apps without `AuthenticationMiddleware`. ([#236](https://github.com/djust-org/djust/pull/236))
+- **`_skip_render` support in server_push** — `server_push()` now checks `_skip_render`, preventing phantom renders and VDOM version mismatches. ([#236](https://github.com/djust-org/djust/pull/236))
+- **jsdom pinned to v26** — Fix vitest v4 compatibility. ([#252](https://github.com/djust-org/djust/pull/252))
 
 ## [0.3.0rc1] - 2026-02-05
 
