@@ -852,10 +852,12 @@ fn strip_tags(s: &str) -> String {
 
 fn json_escape_for_script(s: &str) -> String {
     // Escape characters that could break out of <script> tags
-    // Matches Django's _json_script_escapes
+    // Matches Django's _json_script_escapes (django/utils/html.py)
     s.replace('&', "\\u0026")
         .replace('<', "\\u003C")
         .replace('>', "\\u003E")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
 }
 
 fn value_to_json(value: &Value) -> String {
@@ -1472,6 +1474,17 @@ mod tests {
         // Must not contain literal </script> inside the JSON
         assert!(!s[..s.len() - 9].contains("</script>"));
         assert!(s.contains("\\u003C"));
+    }
+
+    #[test]
+    fn test_json_script_filter_escapes_line_separators() {
+        let value = Value::String("line\u{2028}sep\u{2029}end".to_string());
+        let result = apply_filter("json_script", &value, Some("data")).unwrap();
+        let s = result.to_string();
+        assert!(s.contains("\\u2028"));
+        assert!(s.contains("\\u2029"));
+        assert!(!s.contains('\u{2028}'));
+        assert!(!s.contains('\u{2029}'));
     }
 
     #[test]
