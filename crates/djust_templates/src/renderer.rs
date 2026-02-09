@@ -71,7 +71,18 @@ fn render_node_with_loader<L: TemplateLoader>(
                 value = filters::apply_filter(filter_name, &value, arg.as_deref())?;
             }
 
-            Ok(value.to_string())
+            let text = value.to_string();
+
+            // Auto-escape unless:
+            // 1. |safe is the last filter (matches Django behavior)
+            // 2. The variable is marked safe in the context (like Django's SafeData)
+            let is_safe = filter_specs.last().map(|(name, _)| name.as_str()) == Some("safe")
+                || context.is_safe(var_name);
+            if is_safe {
+                Ok(text)
+            } else {
+                Ok(filters::html_escape(&text))
+            }
         }
 
         Node::If {
@@ -1566,5 +1577,61 @@ mod tests {
         // Non-matching value
         context.set("val".to_string(), Value::Integer(99));
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "nope");
+    }
+
+    #[test]
+    fn test_auto_escape_variable() {
+        // {{ var }} should auto-escape HTML special characters
+        let tokens = tokenize("{{ content }}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "content".to_string(),
+            Value::String("<script>alert(\"xss\")</script>".to_string()),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(
+            result,
+            "&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;"
+        );
+    }
+
+    #[test]
+    fn test_safe_filter_skips_escape() {
+        // {{ var|safe }} should NOT auto-escape
+        let tokens = tokenize("{{ content|safe }}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "content".to_string(),
+            Value::String("<b>bold</b>".to_string()),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "<b>bold</b>");
+    }
+
+    #[test]
+    fn test_escape_filter_with_auto_escape() {
+        // {{ var|escape }} should produce same result as {{ var }}
+        let tokens = tokenize("{{ content|escape }}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "content".to_string(),
+            Value::String("<b>\"hi\"</b>".to_string()),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "&lt;b&gt;&quot;hi&quot;&lt;/b&gt;");
+    }
+
+    #[test]
+    fn test_auto_escape_preserves_plain_text() {
+        // Plain text without HTML chars should be unchanged
+        let tokens = tokenize("Hello {{ name }}!").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("name".to_string(), Value::String("World".to_string()));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "Hello World!");
     }
 }

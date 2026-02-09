@@ -431,10 +431,12 @@ fn render_template(template_source: String, context: HashMap<String, Value>) -> 
 /// # Returns
 /// The rendered HTML string
 #[pyfunction]
+#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None))]
 fn render_template_with_dirs(
     template_source: String,
     context: HashMap<String, Value>,
     template_dirs: Vec<String>,
+    safe_keys: Option<Vec<String>>,
 ) -> PyResult<String> {
     use djust_templates::inheritance::FilesystemTemplateLoader;
 
@@ -448,7 +450,14 @@ fn render_template_with_dirs(
         arc
     };
 
-    let ctx = Context::from_dict(context);
+    let mut ctx = Context::from_dict(context);
+
+    // Mark keys as safe (skip auto-escaping), like Django's SafeData
+    if let Some(keys) = safe_keys {
+        for key in keys {
+            ctx.mark_safe(key);
+        }
+    }
 
     // Create filesystem template loader with the provided directories
     let dirs: Vec<PathBuf> = template_dirs.iter().map(PathBuf::from).collect();

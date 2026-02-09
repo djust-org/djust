@@ -24,8 +24,8 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
                 Ok(Value::String(arg.unwrap_or("").to_string()))
             }
         }
-        "escape" => Ok(Value::String(html_escape(&value.to_string()))),
-        "safe" => Ok(value.clone()), // Mark as safe (no escaping)
+        "escape" => Ok(value.clone()), // No-op: auto-escaping at render time handles this
+        "safe" => Ok(value.clone()),   // No-op: renderer checks for |safe to skip auto-escaping
         "first" => match value {
             Value::List(l) => Ok(l.first().cloned().unwrap_or(Value::Null)),
             Value::String(s) => Ok(Value::String(
@@ -288,7 +288,7 @@ fn titlecase(s: &str) -> String {
         .join(" ")
 }
 
-fn html_escape(s: &str) -> String {
+pub fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -769,10 +769,22 @@ mod tests {
     }
 
     #[test]
-    fn test_escape_filter() {
+    fn test_escape_filter_is_noop() {
+        // |escape is a no-op at filter time; auto-escaping happens at render time
         let value = Value::String("<script>alert('xss')</script>".to_string());
         let result = apply_filter("escape", &value, None).unwrap();
-        assert!(result.to_string().contains("&lt;script&gt;"));
+        assert_eq!(result.to_string(), "<script>alert('xss')</script>");
+    }
+
+    #[test]
+    fn test_html_escape_function() {
+        assert_eq!(
+            html_escape("<b>\"hello\"</b>"),
+            "&lt;b&gt;&quot;hello&quot;&lt;/b&gt;"
+        );
+        assert_eq!(html_escape("safe text"), "safe text");
+        assert_eq!(html_escape("a&b"), "a&amp;b");
+        assert_eq!(html_escape("it's"), "it&#x27;s");
     }
 
     #[test]

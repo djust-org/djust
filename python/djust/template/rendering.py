@@ -671,6 +671,8 @@ class DjustTemplate:
             # csrf_token_lazy returns a SimpleLazyObject which must be converted to string
             context_dict["csrf_input"] = str(csrf_input_lazy(request))
             context_dict["csrf_token"] = str(csrf_token_lazy(request))
+            # csrf_input contains raw HTML — mark it safe to skip auto-escaping
+            self._safe_keys = ["csrf_input"]
 
         # Apply context processors
         if request is not None:
@@ -718,7 +720,10 @@ class DjustTemplate:
         # Pass template directories to support {% include %} tags
         try:
             template_dirs = [str(d) for d in self.backend.template_dirs]
-            html = self.backend._render_fn_with_dirs(resolved_template, context_dict, template_dirs)
+            safe_keys = getattr(self, "_safe_keys", None)
+            html = self.backend._render_fn_with_dirs(
+                resolved_template, context_dict, template_dirs, safe_keys
+            )
             return SafeString(html)
         except Exception as e:
             # Provide helpful error message with template location
