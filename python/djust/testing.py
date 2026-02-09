@@ -260,9 +260,16 @@ class LiveViewTestClient:
 
         return state
 
-    def render(self) -> str:
+    def render(self, engine: str = "rust") -> str:
         """
         Get current rendered HTML.
+
+        Args:
+            engine: Which rendering engine to use:
+                - "rust" (default): Use the Rust template engine via the view's
+                  own render() path — same as production WebSocket rendering.
+                - "django": Use Django's template engine (useful for views that
+                  rely on Django-only template features).
 
         Returns:
             The rendered HTML string
@@ -273,10 +280,16 @@ class LiveViewTestClient:
         if not self._mounted or not self.view_instance:
             raise RuntimeError("View not mounted. Call client.mount() first.")
 
-        # Get context data
+        if engine == "rust":
+            # Use the view's own render() method — this goes through:
+            # _initialize_rust_view() → _sync_state_to_rust() → _rust_view.render()
+            # Same code path as production WebSocket rendering.
+            request = getattr(self.view_instance, "request", None)
+            return self.view_instance.render(request)
+
+        # Django fallback
         context = self.view_instance.get_context_data()
 
-        # Get template
         from django.template.loader import get_template
 
         template_name = getattr(self.view_instance, "template_name", None)
