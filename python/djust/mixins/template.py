@@ -432,9 +432,13 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 context = self.get_context_data()
                 context = self._apply_context_processors(context, request)
 
+                from django.http import HttpRequest
+
                 rendered_context = {}
                 for key, value in context.items():
-                    if isinstance(value, (Component, LiveComponent)):
+                    if isinstance(value, HttpRequest):
+                        continue
+                    elif isinstance(value, (Component, LiveComponent)):
                         rendered_context[key] = {"render": str(value.render())}
                         safe_keys.append(key)
                     elif isinstance(value, SafeString):
@@ -445,7 +449,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
                 from ..serialization import DjangoJSONEncoder
 
-                json_str = json.dumps(rendered_context, cls=DjangoJSONEncoder)
+                json_str = json.dumps(rendered_context, cls=DjangoJSONEncoder, default=str)
                 json_compatible_context = json.loads(json_str)
 
             temp_rust.update_state(json_compatible_context)
