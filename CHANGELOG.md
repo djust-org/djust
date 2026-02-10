@@ -13,7 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **HTTP POST handler dispatch gating** — `post()` now enforces the same security model as the WebSocket path: only `@event_handler`-decorated or `_allowed_events` methods can be invoked. Previously any callable attribute on the view was reachable via POST. Also validates event names with `is_safe_event_name()` to block dunders and private methods.
+- **HTTP POST handler dispatch gating** — `post()` now enforces the same security model as the WebSocket path: only `@event_handler`-decorated methods can be invoked. Previously any callable attribute on the view was reachable via POST. Also validates event names with `is_safe_event_name()` to block dunders and private methods.
+
+### Removed
+
+- **`_allowed_events` class attribute** — The backwards-compatibility escape hatch that allowed undecorated methods to be called via WebSocket or HTTP POST has been removed. All event handlers must now use the `@event_handler` decorator.
 
 ## [0.3.0rc2] - 2026-02-09
 

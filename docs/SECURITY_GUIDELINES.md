@@ -138,16 +138,9 @@ class MyView(LiveView):
 ```
 
 **Modes:**
-- `"strict"` (default) — only `@event_handler` decorated methods or those in `_allowed_events`
+- `"strict"` (default) — only `@event_handler` decorated methods are callable
 - `"warn"` — allows undecorated methods but logs deprecation warnings
 - `"open"` — no decorator check (legacy behavior, not recommended)
-
-**Escape hatch** for bulk allowlisting without decorating each method:
-
-```python
-class MyView(LiveView):
-    _allowed_events = frozenset({"bulk_update", "refresh", "export"})
-```
 
 #### Layer 3: Server-Side Rate Limiting
 
@@ -368,7 +361,7 @@ When reviewing PRs, check for these security issues:
 - [ ] No `getattr()` on user-controlled names without `is_safe_event_name()` guard
 - [ ] `event_security` setting is `"strict"` (default) in production
 - [ ] Expensive handlers have `@rate_limit` decorator
-- [ ] `_allowed_events` uses `frozenset` (not mutable `set`)
+- [ ] All event handlers use `@event_handler` decorator
 
 ### Error Handling
 - [ ] No stack traces exposed in non-DEBUG responses

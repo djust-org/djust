@@ -455,9 +455,7 @@ class TestErrorDisclosure:
         settings.DEBUG = False
         blocked = _safe_error("Blocked unsafe event name: __class__")
         no_handler = _safe_error("No handler found for event: foo")
-        not_decorated = _safe_error(
-            "Event 'foo' is not decorated with @event_handler or listed in _allowed_events"
-        )
+        not_decorated = _safe_error("Event 'foo' is not decorated with @event_handler")
         component_no_handler = _safe_error("Component MyView has no handler: foo")
         # All should return the same generic message
         assert blocked == no_handler == not_decorated == component_no_handler == "Event rejected"
