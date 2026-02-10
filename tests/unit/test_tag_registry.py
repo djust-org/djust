@@ -203,7 +203,7 @@ class TestRegistryIntegration:
             for name, handler in _registered_handlers.items():
                 register_tag_handler(name, handler)
         except ImportError:
-            pass
+            pass  # Rust extension not available; nothing to restore
 
     def test_register_and_check(self):
         """Handler can be registered and checked."""
@@ -306,7 +306,7 @@ class TestRenderIntegration:
             for name, handler in _registered_handlers.items():
                 register_tag_handler(name, handler)
         except ImportError:
-            pass
+            pass  # Rust extension not available; nothing to restore
 
     def test_render_custom_tag(self):
         """Custom tag is rendered via Python handler."""

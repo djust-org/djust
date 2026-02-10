@@ -202,7 +202,7 @@ class TestRustPythonInterop:
             for name, handler in _registered_handlers.items():
                 register_tag_handler(name, handler)
         except ImportError:
-            pass
+            pass  # Rust extension not available; nothing to restore
 
     @pytest.mark.benchmark(group="rust_python_interop")
     def test_register_handler(self, benchmark):
