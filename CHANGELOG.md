@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **HTTP Fallback Protocol** — `post()` now accepts the HTTP fallback format where the event name is in the `X-Djust-Event` header and params are flat in the body JSON. Previously only the WebSocket-originated `{"event": "name", "params": {...}}` format worked. ([#255](https://github.com/djust-org/djust/issues/255))
 
+### Security
+
+- **HTTP POST handler dispatch gating** — `post()` now enforces the same security model as the WebSocket path: only `@event_handler`-decorated or `_allowed_events` methods can be invoked. Previously any callable attribute on the view was reachable via POST. Also validates event names with `is_safe_event_name()` to block dunders and private methods.
+
 ## [0.3.0rc2] - 2026-02-09
 
 ### Changed
