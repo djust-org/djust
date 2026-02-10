@@ -1,9 +1,11 @@
 """
 Tests for {% url %} tag support in djust templates.
 
-The {% url %} tag should resolve Django URLs using the reverse() function.
-This is implemented via Python-side preprocessing in the template backend
-before passing the template to the Rust rendering engine.
+The {% url %} tag resolves Django URLs using the reverse() function.
+Resolution happens in two stages:
+1. Python-side preprocessing resolves tags with context variables available at render time
+2. Remaining tags (e.g., those using loop variables) are resolved by the Rust engine
+   via the CustomTag handler, which supports dot-notation variable resolution
 """
 
 import pytest
@@ -336,17 +338,8 @@ class TestUrlTagInTemplateContext:
         assert 'href="/blog/"' in result, f"Expected blog URL but got: {result}"
 
     @override_settings(ROOT_URLCONF=__name__)
-    def test_url_in_for_loop(self):
-        """Test URL tag inside a for loop with static arguments.
-
-        NOTE: URL tags with dynamic loop variable arguments (e.g., {% url 'post_detail' post.slug %})
-        are not yet supported because URL resolution happens before the Rust rendering engine
-        processes the for loop. For dynamic URLs inside loops, use a workaround like passing
-        pre-resolved URLs in the context.
-
-        This test uses static URL arguments to verify URLs inside for loops work when
-        they don't reference loop variables.
-        """
+    def test_url_in_for_loop_static(self):
+        """Test URL tag inside a for loop with static arguments."""
         from djust.template_backend import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
@@ -377,6 +370,101 @@ class TestUrlTagInTemplateContext:
         assert result.count("/blog/") == 2, f"Expected 2 blog URLs but got: {result}"
         assert "First" in result
         assert "Second" in result
+
+    @override_settings(ROOT_URLCONF=__name__)
+    def test_url_in_for_loop_with_dynamic_arg(self):
+        """Test URL tag with dynamic loop variable as positional argument."""
+        from djust.template_backend import DjustTemplateBackend
+
+        backend = DjustTemplateBackend(
+            {
+                "NAME": "djust",
+                "DIRS": [],
+                "APP_DIRS": False,
+                "OPTIONS": {},
+            }
+        )
+
+        template = backend.from_string(
+            """{% for post in posts %}<a href="{% url 'post_detail' post.slug %}">{{ post.title }}</a>{% endfor %}"""
+        )
+        request = RequestFactory().get("/")
+        result = template.render(
+            {
+                "posts": [
+                    {"title": "First", "slug": "first-post"},
+                    {"title": "Second", "slug": "second-post"},
+                ]
+            },
+            request,
+        )
+
+        assert "/post/first-post/" in result, f"Expected first slug URL but got: {result}"
+        assert "/post/second-post/" in result, f"Expected second slug URL but got: {result}"
+        assert "First" in result
+        assert "Second" in result
+
+    @override_settings(ROOT_URLCONF=__name__)
+    def test_url_in_for_loop_with_dynamic_kwarg(self):
+        """Test URL tag with dynamic loop variable as keyword argument."""
+        from djust.template_backend import DjustTemplateBackend
+
+        backend = DjustTemplateBackend(
+            {
+                "NAME": "djust",
+                "DIRS": [],
+                "APP_DIRS": False,
+                "OPTIONS": {},
+            }
+        )
+
+        template = backend.from_string(
+            """{% for post in posts %}<a href="{% url 'post_detail' slug=post.slug %}">{{ post.title }}</a>{% endfor %}"""
+        )
+        request = RequestFactory().get("/")
+        result = template.render(
+            {
+                "posts": [
+                    {"title": "First", "slug": "first-post"},
+                    {"title": "Second", "slug": "second-post"},
+                ]
+            },
+            request,
+        )
+
+        assert "/post/first-post/" in result, f"Expected first slug URL but got: {result}"
+        assert "/post/second-post/" in result, f"Expected second slug URL but got: {result}"
+
+    @override_settings(ROOT_URLCONF=__name__)
+    def test_url_in_for_loop_with_integer_arg(self):
+        """Test URL tag with integer loop variable argument."""
+        from djust.template_backend import DjustTemplateBackend
+
+        backend = DjustTemplateBackend(
+            {
+                "NAME": "djust",
+                "DIRS": [],
+                "APP_DIRS": False,
+                "OPTIONS": {},
+            }
+        )
+
+        template = backend.from_string(
+            """{% for post in posts %}<a href="{% url 'post_by_id' post.id %}">{{ post.title }}</a>{% endfor %}"""
+        )
+        request = RequestFactory().get("/")
+        result = template.render(
+            {
+                "posts": [
+                    {"title": "First", "id": 1},
+                    {"title": "Second", "id": 2},
+                ]
+            },
+            request,
+        )
+
+        assert "/post/1/" in result, f"Expected first ID URL but got: {result}"
+        assert "/post/2/" in result, f"Expected second ID URL but got: {result}"
 
 
 class TestUrlTagErrorHandling:

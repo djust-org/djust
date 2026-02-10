@@ -191,6 +191,19 @@ class TestMultipleTagHandlers:
 class TestRustPythonInterop:
     """Benchmarks for Rust-Python interop (when available)."""
 
+    @pytest.fixture(autouse=True)
+    def restore_registry(self):
+        """Restore built-in handlers after each test to prevent test pollution."""
+        yield
+        try:
+            from djust._rust import register_tag_handler
+            from djust.template_tags import _registered_handlers
+
+            for name, handler in _registered_handlers.items():
+                register_tag_handler(name, handler)
+        except ImportError:
+            pass  # Rust extension not available; nothing to restore
+
     @pytest.mark.benchmark(group="rust_python_interop")
     def test_register_handler(self, benchmark):
         """Benchmark registering a handler with the Rust registry."""
