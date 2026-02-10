@@ -165,7 +165,7 @@ class TestGetDebugInfo:
         """Test that public methods without @event_handler are NOT shown (#193)
 
         The debug panel matches the runtime event_security policy: only
-        @event_handler-decorated methods and _allowed_events are displayed.
+        @event_handler-decorated methods are displayed.
         """
 
         class MyView(LiveView):
@@ -187,31 +187,6 @@ class TestGetDebugInfo:
         assert "plain_method" not in debug_info["handlers"]
         # Decorated method should appear
         assert "real_handler" in debug_info["handlers"]
-
-    def test_allowed_events_shown(self):
-        """Test that _allowed_events methods appear in handlers (#193)"""
-
-        class MyView(LiveView):
-            template_name = "test.html"
-            _allowed_events = frozenset({"increment", "decrement"})
-
-            def increment(self):
-                """Increment the counter"""
-                pass
-
-            def decrement(self):
-                pass
-
-            def not_allowed(self):
-                pass
-
-        view = MyView()
-        debug_info = view.get_debug_info()
-
-        assert "increment" in debug_info["handlers"]
-        assert "decrement" in debug_info["handlers"]
-        assert "not_allowed" not in debug_info["handlers"]
-        assert debug_info["handlers"]["increment"]["description"] == "Increment the counter"
 
     def test_base_view_methods_excluded(self):
         """Test that inherited Django View methods are not listed as handlers (#193)"""

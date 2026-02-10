@@ -276,28 +276,3 @@ class TestHTTPFallbackSecurity:
 
         response = view.post(post_request)
         assert response.status_code == 400
-
-    def test_allowed_events_bypass(self):
-        """Methods listed in _allowed_events can bypass @event_handler check."""
-
-        class AllowListView(LiveView):
-            template = "<div data-djust-root>{{ count }}</div>"
-            _allowed_events = frozenset({"legacy_handler"})
-
-            def mount(self, request, **kwargs):
-                self.count = 0
-
-            def legacy_handler(self, **kwargs):
-                self.count += 1
-
-        view, factory, get_request = self._setup_view(AllowListView)
-
-        post_request = factory.post(
-            "/test/",
-            data='{"event":"legacy_handler","params":{}}',
-            content_type="application/json",
-        )
-        post_request.session = get_request.session
-
-        response = view.post(post_request)
-        assert response.status_code == 200

@@ -211,14 +211,11 @@ class RequestMixin:
                 if component and isinstance(component, (Component, LiveComponent)):
                     self._restore_component_state(component, state)
 
-            # Call the event handler — only @event_handler-decorated or
-            # _allowed_events methods can be invoked via POST (matches WS security)
+            # Call the event handler — only @event_handler-decorated methods
+            # can be invoked via POST (matches WS security)
             handler = getattr(self, event_name, None)
             if handler and callable(handler):
-                allowed_events = getattr(self, "_allowed_events", None)
-                if not is_event_handler(handler) and not (
-                    isinstance(allowed_events, (set, frozenset)) and event_name in allowed_events
-                ):
+                if not is_event_handler(handler):
                     logger.warning(
                         "HTTP POST blocked undecorated handler '%s' on %s",
                         event_name,

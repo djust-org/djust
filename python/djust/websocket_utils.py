@@ -106,25 +106,21 @@ def _check_event_security(handler, owner_instance, event_name: str) -> Optional[
     """
     Check the event_security policy for a handler.
 
-    Returns None if allowed, or an error message string if blocked in strict mode.
-    Logs a deprecation warning in warn mode for undecorated handlers.
+    Returns None if allowed, or an error message string if blocked.
+    Only @event_handler-decorated methods are allowed.
     """
     mode = djust_config.get("event_security", "strict")
     if mode not in ("warn", "strict"):
         return None
 
-    allowed_events = getattr(owner_instance, "_allowed_events", None)
-    is_allowed = is_event_handler(handler) or (
-        isinstance(allowed_events, (set, frozenset)) and event_name in allowed_events
-    )
-    if is_allowed:
+    if is_event_handler(handler):
         return None
 
     if mode == "strict":
         cls_name = type(owner_instance).__name__
         return (
             f"Event '{event_name}' on {cls_name} is not decorated with "
-            "@event_handler or listed in _allowed_events.\n"
+            "@event_handler.\n"
             f"  Fix: Add the decorator:\n"
             f"    @event_handler\n"
             f"    def {event_name}(self, **kwargs):"
