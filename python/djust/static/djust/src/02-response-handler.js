@@ -46,16 +46,11 @@ function handleServerResponse(data, eventName, triggerElement) {
 
                 clearOptimisticState(eventName);
 
-                if (data.html) {
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(data.html, 'text/html');
-                    const liveviewRoot = getLiveViewRoot();
-                    const newRoot = doc.querySelector('[data-djust-root]') || doc.body;
-                    morphChildren(liveviewRoot, newRoot);
-                    clientVdomVersion = data.version;
-                    initReactCounters();
-                    initTodoItems();
-                    bindLiveViewEvents();
+                // Request full HTML for recovery morph
+                if (liveViewWS && liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) {
+                    liveViewWS.sendMessage({ type: 'request_html' });
+                } else {
+                    window.location.reload();
                 }
 
                 globalLoadingManager.stopLoading(eventName, triggerElement);
@@ -107,34 +102,28 @@ function handleServerResponse(data, eventName, triggerElement) {
 
             if (success === false) {
                 // Patches failed — likely due to {% if %} blocks shifting DOM structure.
-                // Fall back to morphing with full HTML instead of destructive page reload.
+                // Request full HTML from server for DOM morphing (on-demand, not sent
+                // with every response to avoid bandwidth regression).
                 console.warn(
                     '[LiveView] VDOM patches failed. This usually happens when {% if %} blocks ' +
                     'add/remove DOM elements, shifting sibling positions.\n' +
                     'Fix: Use style="display:none" toggling instead of {% if %} for elements:\n' +
                     '  <div style="{% if not show %}display:none{% endif %}">...</div>\n' +
-                    'Falling back to DOM morphing (state preserved).'
+                    'Requesting recovery HTML from server.'
                 );
 
-                if (data.html) {
-                    // Morph with server HTML — preserves event listeners and form state
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(data.html, 'text/html');
-                    const liveviewRoot = getLiveViewRoot();
-                    const newRoot = doc.querySelector('[data-djust-root]') || doc.body;
-                    morphChildren(liveviewRoot, newRoot);
-                    clientVdomVersion = data.version;
-                    initReactCounters();
-                    initTodoItems();
-                    bindLiveViewEvents();
-                    globalLoadingManager.stopLoading(eventName, triggerElement);
-                    return true;
+                // Revert VDOM version — recovery response will set the correct version
+                clientVdomVersion = data.version - 1;
+
+                if (liveViewWS && liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) {
+                    liveViewWS.sendMessage({ type: 'request_html' });
+                } else {
+                    // No WebSocket available — last resort page reload
+                    window.location.reload();
                 }
 
-                // No fallback HTML available — last resort page reload
                 globalLoadingManager.stopLoading(eventName, triggerElement);
-                window.location.reload();
-                return false;
+                return true;
             }
 
             if (globalThis.djustDebug) console.log('[LiveView] Patches applied successfully');
@@ -155,6 +144,11 @@ function handleServerResponse(data, eventName, triggerElement) {
             const parser = new DOMParser();
             const doc = parser.parseFromString(data.html, 'text/html');
             const liveviewRoot = getLiveViewRoot();
+            if (!liveviewRoot) {
+                globalLoadingManager.stopLoading(eventName, triggerElement);
+                window.location.reload();
+                return false;
+            }
             const newRoot = doc.querySelector('[data-djust-root]') || doc.body;
 
             // Handle dj-update="append|prepend|ignore" for efficient list updates
