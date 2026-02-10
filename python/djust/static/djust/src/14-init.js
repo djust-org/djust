@@ -1,7 +1,7 @@
 
 // Initialize on load (support both normal page load and dynamic script injection via TurboNav)
 function djustInit() {
-    console.log('[LiveView] Initializing...');
+    if (globalThis.djustDebug) console.log('[LiveView] Initializing...');
 
     // Initialize lazy hydration manager
     lazyHydrationManager.init();
@@ -36,7 +36,7 @@ function djustInit() {
         // Start heartbeat
         liveViewWS.startHeartbeat();
     } else if (lazyContainers.length > 0) {
-        console.log('[LiveView] Deferring WebSocket connection until lazy elements are needed');
+        if (globalThis.djustDebug) console.log('[LiveView] Deferring WebSocket connection until lazy elements are needed');
     }
 
     // Initialize React counters (if any)
@@ -59,11 +59,11 @@ function djustInit() {
 
     // Mark as initialized so turbo:load handler knows we're ready
     window.djustInitialized = true;
-    console.log('[LiveView] Initialization complete, window.djustInitialized = true');
+    if (globalThis.djustDebug) console.log('[LiveView] Initialization complete, window.djustInitialized = true');
 
     // Check if we have a pending turbo reinit (turbo:load fired before we finished init)
     if (pendingTurboReinit) {
-        console.log('[LiveView] Processing pending turbo:load reinit');
+        if (globalThis.djustDebug) console.log('[LiveView] Processing pending turbo:load reinit');
         pendingTurboReinit = false;
         reinitLiveViewForTurboNav();
     }

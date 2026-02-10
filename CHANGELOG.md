@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **HTTP Fallback Protocol** — `post()` now accepts the HTTP fallback format where the event name is in the `X-Djust-Event` header and params are flat in the body JSON. Previously only the WebSocket-originated `{"event": "name", "params": {...}}` format worked. ([#255](https://github.com/djust-org/djust/issues/255))
+- **Silent LiveView config failures** — Client JS now shows a helpful `console.error` with example markup when no LiveView containers are found. Added Django system check `V005` that warns when a LiveView's module is not in `LIVEVIEW_ALLOWED_MODULES`. All `console.log` calls in init and TurboNav guarded behind `djustDebug` flag. ([#257](https://github.com/djust-org/djust/issues/257))
 
 ### Security
 

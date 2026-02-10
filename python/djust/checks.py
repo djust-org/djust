@@ -312,6 +312,7 @@ def check_liveviews(app_configs, **kwargs):
     except ImportError:
         return errors
 
+    from django.conf import settings
     from djust.decorators import is_event_handler
 
     for cls in _walk_subclasses(LiveView):
@@ -403,8 +404,6 @@ def check_liveviews(app_configs, **kwargs):
                 )
 
         # V005 -- module not in LIVEVIEW_ALLOWED_MODULES
-        from django.conf import settings
-
         allowed = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", None)
         if allowed is not None and module not in allowed:
             errors.append(

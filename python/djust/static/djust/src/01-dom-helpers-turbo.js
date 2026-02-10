@@ -51,12 +51,12 @@ window.djustInitialized = false;
 let pendingTurboReinit = false;
 
 window.addEventListener('turbo:load', function(event) {
-    console.log('[LiveView:TurboNav] turbo:load event received!');
-    console.log('[LiveView:TurboNav] djustInitialized:', window.djustInitialized);
+    if (globalThis.djustDebug) console.log('[LiveView:TurboNav] turbo:load event received!');
+    if (globalThis.djustDebug) console.log('[LiveView:TurboNav] djustInitialized:', window.djustInitialized);
 
     if (!window.djustInitialized) {
         // client.js hasn't finished initializing yet, defer reinit
-        console.log('[LiveView:TurboNav] Deferring reinit until DOMContentLoaded completes');
+        if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Deferring reinit until DOMContentLoaded completes');
         pendingTurboReinit = true;
         return;
     }
@@ -70,11 +70,11 @@ window.addEventListener('turbo:load', function(event) {
 
 // Reinitialize LiveView after TurboNav navigation
 function reinitLiveViewForTurboNav() {
-    console.log('[LiveView:TurboNav] Reinitializing LiveView...');
+    if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Reinitializing LiveView...');
 
     // Disconnect existing WebSocket
     if (liveViewWS) {
-        console.log('[LiveView:TurboNav] Disconnecting existing WebSocket');
+        if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Disconnecting existing WebSocket');
         liveViewWS.disconnect();
         liveViewWS = null;
     }
@@ -99,7 +99,7 @@ function reinitLiveViewForTurboNav() {
 
     // Only initialize WebSocket if there are eager containers
     if (eagerContainers.length > 0) {
-        console.log('[LiveView:TurboNav] Initializing new WebSocket connection');
+        if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Initializing new WebSocket connection');
         // Initialize WebSocket
         liveViewWS = new LiveViewWebSocket();
         window.djust.liveViewInstance = liveViewWS;
@@ -108,9 +108,9 @@ function reinitLiveViewForTurboNav() {
         // Start heartbeat
         liveViewWS.startHeartbeat();
     } else if (lazyContainers.length > 0) {
-        console.log('[LiveView:TurboNav] Deferring WebSocket connection until lazy elements are needed');
+        if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Deferring WebSocket connection until lazy elements are needed');
     } else {
-        console.log('[LiveView:TurboNav] No LiveView containers found, skipping WebSocket');
+        if (globalThis.djustDebug) console.log('[LiveView:TurboNav] No LiveView containers found, skipping WebSocket');
     }
 
     // Re-bind events
@@ -119,5 +119,5 @@ function reinitLiveViewForTurboNav() {
     // Re-scan dj-loading attributes
     globalLoadingManager.scanAndRegister();
 
-    console.log('[LiveView:TurboNav] Reinitialization complete');
+    if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Reinitialization complete');
 }
