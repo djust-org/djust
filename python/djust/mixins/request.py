@@ -165,12 +165,17 @@ class RequestMixin:
             # Support both formats:
             # 1. Standard: {"event": "name", "params": {...}}
             # 2. HTTP fallback: X-Djust-Event header + flat params in body
-            event_name = data.get("event") or request.headers.get("X-Djust-Event", "")
-            params = (
-                data.get("params")
-                if "params" in data
-                else {k: v for k, v in data.items() if not k.startswith("_")}
-            )
+            if "event" in data:
+                # Standard format — event name in body, params nested
+                event_name = data["event"]
+                params = data.get("params", {})
+            else:
+                # HTTP fallback — event name in header, params flat in body
+                event_name = request.headers.get("X-Djust-Event", "")
+                params = {k: v for k, v in data.items() if not k.startswith("_")}
+                # Preserve _cacheRequestId for @cache decorator support
+                if "_cacheRequestId" in data:
+                    params["_cacheRequestId"] = data["_cacheRequestId"]
 
             if not event_name:
                 logger.warning("HTTP fallback POST with no event name from %s", request.path)
@@ -210,7 +215,7 @@ class RequestMixin:
 
                 validation = validate_handler_params(handler, params, event_name, coerce=coerce)
                 if not validation["valid"]:
-                    logger.error(f"Parameter validation failed: {validation['error']}")
+                    logger.error("Parameter validation failed: %s", validation["error"])
                     return JsonResponse(
                         {
                             "type": "error",

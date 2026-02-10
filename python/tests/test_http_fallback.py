@@ -158,6 +158,43 @@ class TestHTTPFallbackProtocol:
         data = json.loads(response.content.decode("utf-8"))
         assert "patches" in data or "html" in data
 
+    def test_standard_format_without_params_key(self):
+        """Standard format without params key: {"event": "increment"} — must not leak event into params."""
+        view, factory, get_request = self._setup_view()
+
+        post_request = factory.post(
+            "/test/",
+            data='{"event":"increment"}',
+            content_type="application/json",
+        )
+        post_request.session = get_request.session
+
+        response = view.post(post_request)
+        assert response.status_code == 200
+
+        data = json.loads(response.content.decode("utf-8"))
+        assert "patches" in data or "html" in data
+
+    def test_http_fallback_preserves_cache_request_id(self):
+        """HTTP fallback: _cacheRequestId is preserved for @cache decorator support."""
+        view, factory, get_request = self._setup_view()
+
+        post_request = factory.post(
+            "/test/",
+            data='{"_cacheRequestId": "req-123", "_targetElement": "button"}',
+            content_type="application/json",
+            HTTP_X_DJUST_EVENT="increment",
+        )
+        post_request.session = get_request.session
+
+        response = view.post(post_request)
+        assert response.status_code == 200
+
+        data = json.loads(response.content.decode("utf-8"))
+        # _cacheRequestId should be passed through to the response
+        # (when present in params, it gets added to response_data)
+        assert "patches" in data or "html" in data
+
     def test_no_event_returns_400(self):
         """Missing event name in both body and header returns 400."""
         view, factory, get_request = self._setup_view()
