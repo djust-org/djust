@@ -187,13 +187,23 @@ class TestRegistryIntegration:
 
     @pytest.fixture(autouse=True)
     def setup_registry(self):
-        """Clear registry before each test."""
+        """Clear registry before each test, restore built-in handlers after."""
         try:
             from djust._rust import clear_tag_handlers
 
             clear_tag_handlers()
         except ImportError:
             pytest.skip("Rust extension not available")
+        yield
+        # Restore built-in handlers to prevent test pollution
+        try:
+            from djust._rust import register_tag_handler
+            from djust.template_tags import _registered_handlers
+
+            for name, handler in _registered_handlers.items():
+                register_tag_handler(name, handler)
+        except ImportError:
+            pass
 
     def test_register_and_check(self):
         """Handler can be registered and checked."""
@@ -280,13 +290,23 @@ class TestRenderIntegration:
 
     @pytest.fixture(autouse=True)
     def setup_registry(self):
-        """Clear and setup registry before each test."""
+        """Clear registry before each test, restore built-in handlers after."""
         try:
             from djust._rust import clear_tag_handlers
 
             clear_tag_handlers()
         except ImportError:
             pytest.skip("Rust extension not available")
+        yield
+        # Restore built-in handlers to prevent test pollution
+        try:
+            from djust._rust import register_tag_handler
+            from djust.template_tags import _registered_handlers
+
+            for name, handler in _registered_handlers.items():
+                register_tag_handler(name, handler)
+        except ImportError:
+            pass
 
     def test_render_custom_tag(self):
         """Custom tag is rendered via Python handler."""
