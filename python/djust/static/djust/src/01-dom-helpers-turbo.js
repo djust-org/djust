@@ -90,7 +90,7 @@ function reinitLiveViewForTurboNav() {
     const lazyContainers = document.querySelectorAll('[data-djust-view][data-djust-lazy]');
     const eagerContainers = document.querySelectorAll('[data-djust-view]:not([data-djust-lazy])');
 
-    console.log(`[LiveView:TurboNav] Found ${allContainers.length} containers (${lazyContainers.length} lazy, ${eagerContainers.length} eager)`);
+    if (globalThis.djustDebug) console.log(`[LiveView:TurboNav] Found ${allContainers.length} containers (${lazyContainers.length} lazy, ${eagerContainers.length} eager)`);
 
     // Register lazy containers with the lazy hydration manager
     lazyContainers.forEach(container => {

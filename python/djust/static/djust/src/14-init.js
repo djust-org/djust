@@ -11,7 +11,15 @@ function djustInit() {
     const lazyContainers = document.querySelectorAll('[data-djust-view][data-djust-lazy]');
     const eagerContainers = document.querySelectorAll('[data-djust-view]:not([data-djust-lazy])');
 
-    console.log(`[LiveView] Found ${allContainers.length} containers (${lazyContainers.length} lazy, ${eagerContainers.length} eager)`);
+    if (allContainers.length === 0) {
+        console.error(
+            '[LiveView] No containers found! Your template root element needs:\n' +
+            '  data-djust-root data-liveview-root data-djust-view="app.views.MyView"\n' +
+            'Example: <div data-djust-root data-liveview-root data-djust-view="myapp.views.DashboardView">'
+        );
+    } else {
+        if (globalThis.djustDebug) console.log(`[LiveView] Found ${allContainers.length} containers (${lazyContainers.length} lazy, ${eagerContainers.length} eager)`);
+    }
 
     // Register lazy containers with the lazy hydration manager
     lazyContainers.forEach(container => {

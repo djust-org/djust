@@ -402,6 +402,20 @@ def check_liveviews(app_configs, **kwargs):
                     )
                 )
 
+        # V005 -- module not in LIVEVIEW_ALLOWED_MODULES
+        from django.conf import settings
+
+        allowed = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", None)
+        if allowed is not None and module not in allowed:
+            errors.append(
+                Warning(
+                    "%s is not in LIVEVIEW_ALLOWED_MODULES. "
+                    "WebSocket mount will silently fail." % cls_label,
+                    hint="Add '%s' to LIVEVIEW_ALLOWED_MODULES in settings." % module,
+                    id="djust.V005",
+                )
+            )
+
     return errors
 
 
