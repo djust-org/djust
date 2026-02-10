@@ -287,6 +287,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     "patches": patches,
                     "version": version,
                 }
+                # Include fallback HTML for client-side morph recovery
+                # when VDOM patches fail (e.g., {% if %} blocks shifting DOM)
+                if html:
+                    response["html"] = html
                 if timing:
                     response["timing"] = timing
                 if performance:
@@ -1304,8 +1308,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         ) * 1000  # Total server time
                         perf_summary = tracker.get_summary()
 
+                        # Include fallback HTML for client-side morph recovery
+                        # when VDOM patches fail (e.g., {% if %} blocks shifting DOM)
+                        fallback_html = await sync_to_async(
+                            self.view_instance._strip_comments_and_whitespace
+                        )(html)
+                        fallback_html = await sync_to_async(
+                            self.view_instance._extract_liveview_content
+                        )(fallback_html)
+
                         await self._send_update(
                             patches=patch_list,
+                            html=fallback_html,
                             version=version,
                             cache_request_id=cache_request_id,
                             reset_form=should_reset_form,

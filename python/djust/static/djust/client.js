@@ -253,7 +253,32 @@ function handleServerResponse(data, eventName, triggerElement) {
             }
 
             if (success === false) {
-                if (globalThis.djustDebug) console.error('[LiveView] Patches failed, reloading page...');
+                // Patches failed — likely due to {% if %} blocks shifting DOM structure.
+                // Fall back to morphing with full HTML instead of destructive page reload.
+                console.warn(
+                    '[LiveView] VDOM patches failed. This usually happens when {% if %} blocks ' +
+                    'add/remove DOM elements, shifting sibling positions.\n' +
+                    'Fix: Use style="display:none" toggling instead of {% if %} for elements:\n' +
+                    '  <div style="{% if not show %}display:none{% endif %}">...</div>\n' +
+                    'Falling back to DOM morphing (state preserved).'
+                );
+
+                if (data.html) {
+                    // Morph with server HTML — preserves event listeners and form state
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(data.html, 'text/html');
+                    const liveviewRoot = getLiveViewRoot();
+                    const newRoot = doc.querySelector('[data-djust-root]') || doc.body;
+                    morphChildren(liveviewRoot, newRoot);
+                    clientVdomVersion = data.version;
+                    initReactCounters();
+                    initTodoItems();
+                    bindLiveViewEvents();
+                    globalLoadingManager.stopLoading(eventName, triggerElement);
+                    return true;
+                }
+
+                // No fallback HTML available — last resort page reload
                 globalLoadingManager.stopLoading(eventName, triggerElement);
                 window.location.reload();
                 return false;
