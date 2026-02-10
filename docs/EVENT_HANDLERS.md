@@ -688,7 +688,7 @@ def delete_item(self, item_id: int):
 
 ### Best Practices Checklist
 
-- [ ] All event handlers have `@event_handler` decorator (or are listed in `_allowed_events`)
+- [ ] All event handlers have `@event_handler` decorator
 - [ ] Form input handlers use `value` parameter
 - [ ] Type hints specified for all parameters
 - [ ] Required vs optional parameters clearly distinguished
@@ -728,26 +728,6 @@ class MyView(LiveView):
         """NOT callable — underscore prefix blocked by pattern guard"""
         pass
 ```
-
-### Bulk Allowlisting with `_allowed_events`
-
-For views with many handlers, use `_allowed_events` instead of decorating each method:
-
-```python
-class MyView(LiveView):
-    _allowed_events = frozenset({"bulk_update", "refresh", "export"})
-
-    def bulk_update(self, **kwargs):
-        ...
-
-    def refresh(self, **kwargs):
-        ...
-
-    def export(self, **kwargs):
-        ...
-```
-
-Use `frozenset` (not `set`) to prevent accidental mutation.
 
 ### Rate Limiting Expensive Handlers
 

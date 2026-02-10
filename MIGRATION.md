@@ -4,7 +4,7 @@ This guide helps you upgrade between major versions of djust.
 
 ## Upgrading to 0.2.1 — Event Handler Security
 
-Version 0.2.1 defaults `event_security` to `"strict"`: only methods decorated with `@event_handler` (or listed in `_allowed_events`) are callable via WebSocket. Undecorated handler methods will be silently blocked.
+Version 0.2.1 defaults `event_security` to `"strict"`: only methods decorated with `@event_handler` are callable via WebSocket or HTTP POST. Undecorated handler methods will be silently blocked.
 
 ### Step 1: Enable warn mode (optional)
 
@@ -70,16 +70,7 @@ def search(self, value: str = "", **kwargs):
     ...
 ```
 
-### Step 3: Alternative — bulk allowlisting
-
-For views with many handlers, use `_allowed_events` instead of decorating each method:
-
-```python
-class MyView(LiveView):
-    _allowed_events = frozenset({"handler_a", "handler_b", "handler_c"})
-```
-
-### Step 4: Switch to strict mode
+### Step 3: Switch to strict mode
 
 Remove the `"warn"` override (or set `"strict"` explicitly). This is the default, so you can simply delete the `event_security` key.
 

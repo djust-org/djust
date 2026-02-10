@@ -27,10 +27,8 @@ class PostProcessingMixin:
         handlers = {}
         variables = {}
 
-        # Match the runtime event_security policy: in strict mode (default),
-        # only @event_handler-decorated methods and _allowed_events are callable.
-        allowed_events = getattr(self, "_allowed_events", None)
-        allowed_set = allowed_events if isinstance(allowed_events, (set, frozenset)) else set()
+        # Match the runtime event_security policy: only @event_handler-decorated
+        # methods are callable.
 
         for name in dir(self):
             if name.startswith("_"):
@@ -43,7 +41,7 @@ class PostProcessingMixin:
 
             if callable(attr) and hasattr(attr, "__func__"):
                 # Show only handlers that would pass _check_event_security at runtime
-                if is_event_handler(attr) or name in allowed_set:
+                if is_event_handler(attr):
                     sig_info = get_handler_signature_info(attr)
 
                     handlers[name] = {

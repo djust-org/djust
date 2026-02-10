@@ -14,6 +14,8 @@ from django.db import models
 from ..serialization import DjangoJSONEncoder
 from ..validation import validate_handler_params
 from ..security import safe_setattr
+from ..security.event_guard import is_safe_event_name
+from ..decorators import is_event_handler
 
 logger = logging.getLogger(__name__)
 
@@ -162,12 +164,28 @@ class RequestMixin:
 
         try:
             data = json.loads(request.body)
-            event_name = data.get("event")
-            params = data.get("params", {})
+            # Support both formats:
+            # 1. Standard: {"event": "name", "params": {...}}
+            # 2. HTTP fallback: X-Djust-Event header + flat params in body
+            if "event" in data:
+                # Standard format — event name in body, params nested
+                event_name = data["event"]
+                params = data.get("params", {})
+            else:
+                # HTTP fallback — event name in header, params flat in body
+                event_name = request.headers.get("X-Djust-Event", "")
+                params = {k: v for k, v in data.items() if not k.startswith("_")}
+                # Preserve _cacheRequestId for @cache decorator support
+                if "_cacheRequestId" in data:
+                    params["_cacheRequestId"] = data["_cacheRequestId"]
 
             if not event_name:
                 logger.warning("HTTP fallback POST with no event name from %s", request.path)
                 return JsonResponse({"error": "No event name provided"}, status=400)
+
+            # Security: validate event name format (blocks dunders, private methods)
+            if not is_safe_event_name(event_name):
+                return JsonResponse({"error": "Invalid event name"}, status=400)
 
             # Restore state from session
             view_key = f"liveview_{request.path}"
@@ -193,9 +211,20 @@ class RequestMixin:
                 if component and isinstance(component, (Component, LiveComponent)):
                     self._restore_component_state(component, state)
 
-            # Call the event handler
+            # Call the event handler — only @event_handler-decorated methods
+            # can be invoked via POST (matches WS security)
             handler = getattr(self, event_name, None)
             if handler and callable(handler):
+                if not is_event_handler(handler):
+                    logger.warning(
+                        "HTTP POST blocked undecorated handler '%s' on %s",
+                        event_name,
+                        type(self).__name__,
+                    )
+                    return JsonResponse(
+                        {"error": "Event handler not found"},
+                        status=400,
+                    )
                 coerce = True
                 if hasattr(handler, "_djust_decorators"):
                     event_meta = handler._djust_decorators.get("event_handler", {})
@@ -203,7 +232,7 @@ class RequestMixin:
 
                 validation = validate_handler_params(handler, params, event_name, coerce=coerce)
                 if not validation["valid"]:
-                    logger.error(f"Parameter validation failed: {validation['error']}")
+                    logger.error("Parameter validation failed: %s", validation["error"])
                     return JsonResponse(
                         {
                             "type": "error",

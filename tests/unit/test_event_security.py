@@ -229,7 +229,7 @@ class TestEventSecurityHelper:
             result = _check_event_security(my_handler, view, "my_handler")
             assert result is None
 
-    def test_strict_mode_allows_via_allowed_events(self):
+    def test_strict_mode_blocks_undecorated_even_with_allowed_events(self):
         from unittest.mock import patch
 
         from djust.websocket import _check_event_security
@@ -245,7 +245,7 @@ class TestEventSecurityHelper:
         with patch("djust.websocket_utils.djust_config") as mock_config:
             mock_config.get.return_value = "strict"
             result = _check_event_security(bulk_update, view, "bulk_update")
-            assert result is None
+            assert result is not None  # Blocked — _allowed_events no longer bypasses
 
     def test_open_mode_allows_everything(self):
         from unittest.mock import patch
@@ -455,9 +455,7 @@ class TestErrorDisclosure:
         settings.DEBUG = False
         blocked = _safe_error("Blocked unsafe event name: __class__")
         no_handler = _safe_error("No handler found for event: foo")
-        not_decorated = _safe_error(
-            "Event 'foo' is not decorated with @event_handler or listed in _allowed_events"
-        )
+        not_decorated = _safe_error("Event 'foo' is not decorated with @event_handler")
         component_no_handler = _safe_error("Component MyView has no handler: foo")
         # All should return the same generic message
         assert blocked == no_handler == not_decorated == component_no_handler == "Event rejected"

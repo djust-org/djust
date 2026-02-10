@@ -7,6 +7,7 @@ the wrapper template pattern (Rust content + Django layout).
 
 import pytest
 from djust import LiveView
+from djust.decorators import event_handler
 from django.test import RequestFactory
 from django.contrib.sessions.middleware import SessionMiddleware
 
@@ -25,7 +26,8 @@ class SimpleCounterView(LiveView):
     def mount(self, request):
         self.count = 0
 
-    def increment(self):
+    @event_handler()
+    def increment(self, **kwargs):
         self.count += 1
 
 
