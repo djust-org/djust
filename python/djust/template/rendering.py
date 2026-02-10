@@ -602,8 +602,10 @@ class DjustTemplate:
 
             if has_unresolved:
                 # Leave the original tag in place - it references variables
-                # that don't exist in the context yet (e.g., loop variables)
-                # The Rust engine will treat this as an unknown tag (empty output)
+                # that don't exist in the context yet (e.g., loop variables).
+                # The Rust engine's CustomTag handler will resolve these via
+                # dot-notation context lookup during rendering (e.g., inside
+                # {% for %} loops where the variable becomes available).
                 logger.debug(
                     "URL tag with unresolved variables (likely loop variable): %s",
                     match.group(0),
