@@ -619,6 +619,100 @@ class TestV004MissingEventHandlerDecorator:
             _force_gc()
 
 
+class TestV005AllowedModules:
+    """V005 -- LiveView module not in LIVEVIEW_ALLOWED_MODULES."""
+
+    def test_v005_module_not_allowed(self, settings):
+        """V005 fires when module is not in LIVEVIEW_ALLOWED_MODULES."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.checks import check_liveviews
+
+        settings.LIVEVIEW_ALLOWED_MODULES = ["other_app.views"]
+
+        cls = type(
+            "V005NotAllowedView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "test.html",
+            },
+        )
+
+        try:
+            errors = check_liveviews(None)
+            v005 = [e for e in errors if e.id == "djust.V005"]
+            assert any("V005NotAllowedView" in e.msg for e in v005)
+            assert any("LIVEVIEW_ALLOWED_MODULES" in e.msg for e in v005)
+        finally:
+            del cls
+            _force_gc()
+
+    def test_v005_module_allowed(self, settings):
+        """V005 should not fire when module is in LIVEVIEW_ALLOWED_MODULES."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.checks import check_liveviews
+
+        settings.LIVEVIEW_ALLOWED_MODULES = ["myapp.views"]
+
+        cls = type(
+            "V005AllowedView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "test.html",
+            },
+        )
+
+        try:
+            errors = check_liveviews(None)
+            v005 = [e for e in errors if e.id == "djust.V005"]
+            assert not any("V005AllowedView" in e.msg for e in v005)
+        finally:
+            del cls
+            _force_gc()
+
+    def test_v005_no_setting_configured(self, settings):
+        """V005 should not fire when LIVEVIEW_ALLOWED_MODULES is not set."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.checks import check_liveviews
+
+        # Remove the setting if it exists
+        if hasattr(settings, "LIVEVIEW_ALLOWED_MODULES"):
+            delattr(settings, "LIVEVIEW_ALLOWED_MODULES")
+
+        cls = type(
+            "V005NoSettingView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "test.html",
+            },
+        )
+
+        try:
+            errors = check_liveviews(None)
+            v005 = [e for e in errors if e.id == "djust.V005"]
+            assert not any("V005NoSettingView" in e.msg for e in v005)
+        finally:
+            del cls
+            _force_gc()
+
+
 # ---------------------------------------------------------------------------
 # Security checks (S001-S003) -- AST-based
 # ---------------------------------------------------------------------------

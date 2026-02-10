@@ -47,16 +47,27 @@ export function loadPanel(opts = {}) {
         window.navigator.clipboard = { writeText: () => Promise.resolve() };
     }
 
-    // Provide minimal localStorage if not present
-    if (!window.localStorage) {
-        const store = {};
-        window.localStorage = {
-            getItem: (k) => store[k] ?? null,
-            setItem: (k, v) => { store[k] = String(v); },
-            removeItem: (k) => { delete store[k]; },
-            clear: () => { Object.keys(store).forEach(k => delete store[k]); },
-        };
+    // Provide minimal localStorage if not present or broken
+    // (Node v22 with --localstorage-file and invalid path creates a non-functional localStorage)
+    const store = {};
+    const localStorageFallback = {
+        getItem: (k) => store[k] ?? null,
+        setItem: (k, v) => { store[k] = String(v); },
+        removeItem: (k) => { delete store[k]; },
+        clear: () => { Object.keys(store).forEach(k => delete store[k]); },
+    };
+    try {
+        if (!window.localStorage || typeof window.localStorage.getItem !== 'function') {
+            window.localStorage = localStorageFallback;
+        } else {
+            // Test that localStorage actually works
+            window.localStorage.getItem('__test__');
+        }
+    } catch {
+        window.localStorage = localStorageFallback;
     }
+    // Also set on globalThis for new Function() scope
+    globalThis.localStorage = window.localStorage;
 
     // Apply any extra globals
     if (opts.globals) {
