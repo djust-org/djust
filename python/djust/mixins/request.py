@@ -14,6 +14,8 @@ from django.db import models
 from ..serialization import DjangoJSONEncoder
 from ..validation import validate_handler_params
 from ..security import safe_setattr
+from ..security.event_guard import is_safe_event_name
+from ..decorators import is_event_handler
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +183,10 @@ class RequestMixin:
                 logger.warning("HTTP fallback POST with no event name from %s", request.path)
                 return JsonResponse({"error": "No event name provided"}, status=400)
 
+            # Security: validate event name format (blocks dunders, private methods)
+            if not is_safe_event_name(event_name):
+                return JsonResponse({"error": "Invalid event name"}, status=400)
+
             # Restore state from session
             view_key = f"liveview_{request.path}"
             saved_state = request.session.get(view_key, {})
@@ -205,9 +211,23 @@ class RequestMixin:
                 if component and isinstance(component, (Component, LiveComponent)):
                     self._restore_component_state(component, state)
 
-            # Call the event handler
+            # Call the event handler — only @event_handler-decorated or
+            # _allowed_events methods can be invoked via POST (matches WS security)
             handler = getattr(self, event_name, None)
             if handler and callable(handler):
+                allowed_events = getattr(self, "_allowed_events", None)
+                if not is_event_handler(handler) and not (
+                    isinstance(allowed_events, (set, frozenset)) and event_name in allowed_events
+                ):
+                    logger.warning(
+                        "HTTP POST blocked undecorated handler '%s' on %s",
+                        event_name,
+                        type(self).__name__,
+                    )
+                    return JsonResponse(
+                        {"error": "Event handler not found"},
+                        status=400,
+                    )
                 coerce = True
                 if hasattr(handler, "_djust_decorators"):
                     event_meta = handler._djust_decorators.get("event_handler", {})

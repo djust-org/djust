@@ -8,6 +8,7 @@ removes old children before inserting new ones. Regression test for Issue #142.
 import json
 import pytest
 from djust import LiveView
+from djust.decorators import event_handler
 from django.test import RequestFactory
 from django.contrib.sessions.middleware import SessionMiddleware
 
@@ -30,7 +31,8 @@ class ReplaceContainerView(LiveView):
     def mount(self, request):
         self.show_messages = False
 
-    def toggle(self):
+    @event_handler()
+    def toggle(self, **kwargs):
         self.show_messages = not self.show_messages
 
 
@@ -133,7 +135,8 @@ class ReplaceWithSiblingView(LiveView):
     def mount(self, request):
         self.show_messages = False
 
-    def toggle(self):
+    @event_handler()
+    def toggle(self, **kwargs):
         self.show_messages = not self.show_messages
 
 

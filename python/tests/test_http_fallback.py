@@ -191,9 +191,10 @@ class TestHTTPFallbackProtocol:
         assert response.status_code == 200
 
         data = json.loads(response.content.decode("utf-8"))
-        # _cacheRequestId should be passed through to the response
-        # (when present in params, it gets added to response_data)
         assert "patches" in data or "html" in data
+        # cache_request_id should be echoed back in the response
+        if "patches" in data:
+            assert data.get("cache_request_id") == "req-123"
 
     def test_no_event_returns_400(self):
         """Missing event name in both body and header returns 400."""
@@ -208,3 +209,95 @@ class TestHTTPFallbackProtocol:
 
         response = view.post(post_request)
         assert response.status_code == 400
+
+
+@pytest.mark.django_db
+class TestHTTPFallbackSecurity:
+    """Test that post() enforces event security (matches WebSocket security model)."""
+
+    def _setup_view(self, view_cls=None):
+        """Create a view and do initial GET to establish state."""
+        view = (view_cls or CounterView)()
+        factory = RequestFactory()
+        get_request = factory.get("/test/")
+        get_request = add_session_to_request(get_request)
+        view.get(get_request)
+        return view, factory, get_request
+
+    def test_unsafe_event_name_blocked(self):
+        """Dunder and private method names are blocked."""
+        view, factory, get_request = self._setup_view()
+
+        post_request = factory.post(
+            "/test/",
+            data='{"event":"__init__","params":{}}',
+            content_type="application/json",
+        )
+        post_request.session = get_request.session
+
+        response = view.post(post_request)
+        assert response.status_code == 400
+
+    def test_private_method_blocked(self):
+        """_private methods are blocked by is_safe_event_name."""
+        view, factory, get_request = self._setup_view()
+
+        post_request = factory.post(
+            "/test/",
+            data='{"event":"_initialize_temporary_assigns","params":{}}',
+            content_type="application/json",
+        )
+        post_request.session = get_request.session
+
+        response = view.post(post_request)
+        assert response.status_code == 400
+
+    def test_undecorated_method_blocked(self):
+        """Public methods without @event_handler are blocked via POST."""
+
+        class UnsafeView(LiveView):
+            template = "<div data-djust-root>{{ data }}</div>"
+
+            def mount(self, request, **kwargs):
+                self.data = "safe"
+
+            def undecorated_method(self):
+                """This method is NOT decorated with @event_handler."""
+                self.data = "hacked"
+
+        view, factory, get_request = self._setup_view(UnsafeView)
+
+        post_request = factory.post(
+            "/test/",
+            data='{"event":"undecorated_method","params":{}}',
+            content_type="application/json",
+        )
+        post_request.session = get_request.session
+
+        response = view.post(post_request)
+        assert response.status_code == 400
+
+    def test_allowed_events_bypass(self):
+        """Methods listed in _allowed_events can bypass @event_handler check."""
+
+        class AllowListView(LiveView):
+            template = "<div data-djust-root>{{ count }}</div>"
+            _allowed_events = frozenset({"legacy_handler"})
+
+            def mount(self, request, **kwargs):
+                self.count = 0
+
+            def legacy_handler(self, **kwargs):
+                self.count += 1
+
+        view, factory, get_request = self._setup_view(AllowListView)
+
+        post_request = factory.post(
+            "/test/",
+            data='{"event":"legacy_handler","params":{}}',
+            content_type="application/json",
+        )
+        post_request.session = get_request.session
+
+        response = view.post(post_request)
+        assert response.status_code == 200

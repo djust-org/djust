@@ -10,6 +10,7 @@ Documents any issues found during testing.
 import json
 import pytest
 from djust import LiveView
+from djust.decorators import event_handler
 from django.test import RequestFactory
 from django.contrib.sessions.middleware import SessionMiddleware
 
@@ -74,7 +75,8 @@ class DeepNestingView(LiveView):
     def mount(self, request):
         self.text = "initial"
 
-    def update(self):
+    @event_handler()
+    def update(self, **kwargs):
         self.text = "changed"
 
 
@@ -104,14 +106,17 @@ class LargeListView(LiveView):
     def mount(self, request):
         self.items = [f"Item {i}" for i in range(50)]
 
-    def append(self):
+    @event_handler()
+    def append(self, **kwargs):
         self.items.append(f"Item {len(self.items)}")
 
-    def remove_first(self):
+    @event_handler()
+    def remove_first(self, **kwargs):
         if self.items:
             self.items.pop(0)
 
-    def change_middle(self):
+    @event_handler()
+    def change_middle(self, **kwargs):
         mid = len(self.items) // 2
         self.items[mid] = "CHANGED"
 
@@ -171,7 +176,8 @@ class ConditionalView(LiveView):
         self.title = "Title"
         self.description = "Description"
 
-    def toggle(self):
+    @event_handler()
+    def toggle(self, **kwargs):
         self.show_detail = not self.show_detail
 
 
@@ -238,7 +244,8 @@ class MultiChangeView(LiveView):
         self.badge_text = "Status"
         self.footer = "Footer"
 
-    def change_everything(self):
+    @event_handler()
+    def change_everything(self, **kwargs):
         self.header_class = "active"
         self.title = "New Title"
         self.paragraph = "New Content"
@@ -283,7 +290,8 @@ class ReplaceStressView(LiveView):
             {"author": "Bob", "text": "Hi there"},
         ]
 
-    def switch_conversation(self):
+    @event_handler()
+    def switch_conversation(self, **kwargs):
         self.messages = [
             {"author": "Carol", "text": "New conversation"},
             {"author": "Dave", "text": "Completely different"},
@@ -338,7 +346,8 @@ class FormValidationView(LiveView):
             {"label": "City", "type": "text", "error": "Required"},
         ]
 
-    def clear_errors(self):
+    @event_handler()
+    def clear_errors(self, **kwargs):
         for field in self.fields:
             field["error"] = ""
 
@@ -369,7 +378,8 @@ class CounterView(LiveView):
     def mount(self, request):
         self.count = 0
 
-    def increment(self):
+    @event_handler()
+    def increment(self, **kwargs):
         self.count += 1
 
 
@@ -423,10 +433,12 @@ class EmptyStateView(LiveView):
     def mount(self, request):
         self.items = []
 
-    def add_items(self):
+    @event_handler()
+    def add_items(self, **kwargs):
         self.items = ["Alpha", "Beta", "Gamma"]
 
-    def clear_items(self):
+    @event_handler()
+    def clear_items(self, **kwargs):
         self.items = []
 
 
@@ -483,7 +495,8 @@ class UnicodeView(LiveView):
     def mount(self, request):
         self.text = "Hello World"
 
-    def set_unicode(self):
+    @event_handler()
+    def set_unicode(self, **kwargs):
         self.text = "Привет мир 🌍 日本語 العربية <script>alert('xss')</script>"
 
 
@@ -510,7 +523,8 @@ class NoChangeView(LiveView):
         self.text = "stable"
         self.badge = "unchanged"
 
-    def noop(self):
+    @event_handler()
+    def noop(self, **kwargs):
         pass  # No state change
 
 
@@ -552,10 +566,12 @@ class TableView(LiveView):
             {"name": "Bob", "score": 85},
         ]
 
-    def add_row(self):
+    @event_handler()
+    def add_row(self, **kwargs):
         self.rows.append({"name": "Carol", "score": 92})
 
-    def update_scores(self):
+    @event_handler()
+    def update_scores(self, **kwargs):
         for row in self.rows:
             row["score"] += 5
 
