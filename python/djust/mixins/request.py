@@ -162,8 +162,15 @@ class RequestMixin:
 
         try:
             data = json.loads(request.body)
-            event_name = data.get("event")
-            params = data.get("params", {})
+            # Support both formats:
+            # 1. Standard: {"event": "name", "params": {...}}
+            # 2. HTTP fallback: X-Djust-Event header + flat params in body
+            event_name = data.get("event") or request.headers.get("X-Djust-Event", "")
+            params = (
+                data.get("params")
+                if "params" in data
+                else {k: v for k, v in data.items() if not k.startswith("_")}
+            )
 
             if not event_name:
                 logger.warning("HTTP fallback POST with no event name from %s", request.path)
