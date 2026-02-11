@@ -447,10 +447,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     else:
                         rendered_context[key] = value
 
-                from ..serialization import DjangoJSONEncoder
+                from ..serialization import normalize_django_value
 
-                json_str = json.dumps(rendered_context, cls=DjangoJSONEncoder, default=str)
-                json_compatible_context = json.loads(json_str)
+                json_compatible_context = normalize_django_value(rendered_context)
 
             temp_rust.update_state(json_compatible_context)
             if safe_keys:

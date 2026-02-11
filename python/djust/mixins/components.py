@@ -2,10 +2,9 @@
 ComponentMixin - Component lifecycle and management for LiveView.
 """
 
-import json
 from typing import Any, Dict
 
-from ..serialization import DjangoJSONEncoder
+from ..serialization import normalize_django_value
 
 
 class ComponentMixin:
@@ -117,7 +116,6 @@ class ComponentMixin:
                 component.component_id = key
                 component_state[key] = self._extract_component_state(component)
 
-        component_state_json = json.dumps(component_state, cls=DjangoJSONEncoder)
-        component_state_serializable = json.loads(component_state_json)
+        component_state_serializable = normalize_django_value(component_state)
         request.session[f"{view_key}_components"] = component_state_serializable
         request.session.modified = True

@@ -7,12 +7,13 @@ Extracted from live_view.py for modularity.
 import importlib.util
 import json
 import logging
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timedelta
 from decimal import Decimal
-from typing import Dict, List
+from typing import Any, Dict, List
 from uuid import UUID
 
 from django.db import models
+from django.utils.functional import Promise
 
 logger = logging.getLogger(__name__)
 
@@ -315,3 +316,158 @@ class DjangoJSONEncoder(json.JSONEncoder):
                         attr_name,
                         type(obj).__name__,
                     )
+
+
+# ---------------------------------------------------------------------------
+# Direct Python-to-Python value normalizer (replaces json.loads(json.dumps()))
+# ---------------------------------------------------------------------------
+
+# Singleton encoder instance reused for model serialization (GIL-safe: only
+# calls _serialize_model_safely which mutates _property_cache and
+# obj._djust_prop_cache -- dict writes are atomic under CPython's GIL but
+# this is not truly thread-safe under free-threaded builds).
+_encoder = DjangoJSONEncoder()
+
+
+def normalize_django_value(value: Any, _depth: int = 0) -> Any:
+    """Convert Django/Python types to JSON-safe Python primitives **directly**.
+
+    For types supported by both, this produces output identical to
+    ``json.loads(json.dumps(value, cls=DjangoJSONEncoder))`` but avoids the
+    serialise-then-parse roundtrip through JSON text, giving a meaningful
+    speedup when called in hot paths (context serialization, state sync).
+
+    **Enhancements beyond DjangoJSONEncoder**: the following types would raise
+    ``TypeError`` under ``json.dumps(value, cls=DjangoJSONEncoder)`` but are
+    handled here as a convenience:
+
+    - timedelta  -- ISO-8601 duration string (via ``django.utils.duration``)
+    - Promise    -- str() (Django lazy translation strings)
+
+    Supported types:
+    - None, bool, int, float, str  -- pass through
+    - Decimal                      -- float()
+    - UUID                         -- str()
+    - datetime, date, time         -- .isoformat()
+    - timedelta                    -- ISO-8601 duration string (via Django util)
+    - Promise (lazy strings)       -- str()
+    - dict                         -- recurse values
+    - list / tuple                 -- recurse elements (always returns list)
+    - Django Model                 -- serialized via DjangoJSONEncoder._serialize_model_safely, then recursed
+    - QuerySet                     -- list of normalized models
+    - FieldFile / file-like        -- .url or None
+    - Component / LiveComponent    -- str() (renders HTML)
+    - callable                     -- None (safety net, matches encoder)
+    - anything else                -- str() fallback
+
+    Args:
+        value: The value to normalize.
+        _depth: Internal recursion depth counter (do not set manually).
+    """
+    # Fast path: JSON-native primitives need no conversion
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+
+    if isinstance(value, str):
+        return value
+
+    # Containers -- recurse
+    if isinstance(value, dict):
+        return {k: normalize_django_value(v, _depth) for k, v in value.items()}
+
+    if isinstance(value, (list, tuple)):
+        return [normalize_django_value(item, _depth) for item in value]
+
+    # Django lazy translation strings (Promise) -- must be before str check
+    # since Promise is not a str subclass
+    if isinstance(value, Promise):
+        return str(value)
+
+    # Decimal -> float (matches DjangoJSONEncoder.default)
+    if isinstance(value, Decimal):
+        return float(value)
+
+    # UUID -> str
+    if isinstance(value, UUID):
+        return str(value)
+
+    # datetime/date/time -> isoformat
+    # Note: check datetime before date because datetime is a subclass of date
+    if isinstance(value, datetime):
+        return value.isoformat()
+
+    if isinstance(value, date):
+        return value.isoformat()
+
+    if isinstance(value, time):
+        return value.isoformat()
+
+    # timedelta -> ISO-8601 duration string (Django compat)
+    if isinstance(value, timedelta):
+        from django.utils.duration import duration_iso_string
+
+        return duration_iso_string(value)
+
+    # Django FieldFile / ImageFieldFile (must check before Model)
+    from django.db.models.fields.files import FieldFile
+
+    if isinstance(value, FieldFile):
+        if value:
+            try:
+                return value.url
+            except ValueError:
+                return None
+        return None
+
+    # Django Model -> serialize via encoder, then normalize nested values
+    if isinstance(value, models.Model):
+        max_depth = DjangoJSONEncoder._get_max_depth()
+        if _depth >= max_depth:
+            # At max depth, return a minimal representation
+            return {
+                "id": str(value.pk) if value.pk is not None else None,
+                "pk": value.pk,
+                "__str__": str(value),
+            }
+        # Increment DjangoJSONEncoder._depth so _serialize_model_safely
+        # respects the depth limit for prefetched relations.
+        DjangoJSONEncoder._depth += 1
+        try:
+            model_dict = _encoder._serialize_model_safely(value)
+        finally:
+            DjangoJSONEncoder._depth -= 1
+        return normalize_django_value(model_dict, _depth + 1)
+
+    # Duck-typing fallback for file-like objects (must be after Model check)
+    if hasattr(value, "url") and hasattr(value, "name") and not isinstance(value, type):
+        if not isinstance(value, (dict, list, tuple, str)):
+            if value:
+                try:
+                    return value.url
+                except (ValueError, AttributeError):
+                    return None
+            return None
+
+    # QuerySet -> list of normalized models
+    if hasattr(value, "model") and hasattr(value, "__iter__"):
+        return [normalize_django_value(item, _depth) for item in value]
+
+    # Components -> rendered HTML string
+    try:
+        from .components.base import Component, LiveComponent
+
+        if isinstance(value, (Component, LiveComponent)):
+            return str(value)
+    except ImportError:
+        pass  # components module is optional; skip check if not installed
+
+    # Safety net: skip callables (matches encoder behavior)
+    if callable(value):
+        logger.debug(
+            "Skipping callable %s during normalization",
+            type(value).__name__,
+        )
+        return None
+
+    # Final fallback
+    return str(value)
