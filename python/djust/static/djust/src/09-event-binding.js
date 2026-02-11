@@ -333,7 +333,7 @@ function throttle(func, limit) {
 
 // Helper: Get LiveView root element
 function getLiveViewRoot() {
-    return document.querySelector('[data-djust-root]') || document.body;
+    return document.querySelector('[data-djust-view]') || document.querySelector('[data-djust-root]') || document.body;
 }
 
 // Helper: Clear optimistic state

@@ -102,6 +102,19 @@ class TestDeepDictSerialization:
         assert isinstance(serialized["item"], dict)
         assert serialized["item"]["id"] == "1"
 
+    def test_serialize_model_includes_pk_key(self):
+        """Model serialization includes 'pk' key alongside 'id' (#262).
+
+        'id' is the legacy string representation (for backwards compat).
+        'pk' is the native type (for template rendering: {{ model.pk }}).
+        """
+        model = self._make_model(title="Test")
+        encoder = DjangoJSONEncoder()
+        result = encoder._serialize_model_safely(model)
+        assert "pk" in result, "Serialized model must include 'pk' key"
+        assert result["pk"] == 1, "'pk' must be the native primary key value"
+        assert result["id"] == "1", "'id' must be the string representation"
+
     def test_deep_serialize_dict_nested(self):
         """Dict-in-dict containing Model is recursively serialized."""
         model = self._make_model(title="Nested")

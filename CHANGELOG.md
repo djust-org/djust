@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`DjustMiddlewareStack`** — New ASGI middleware for apps that don't use `django.contrib.auth`. Wraps WebSocket routes with session middleware only (no auth required). Import from `djust.routing` or `djust`. Updated `C005` system check to recognize both `AuthMiddlewareStack` and `DjustMiddlewareStack`. ([#265](https://github.com/djust-org/djust/issues/265))
 - **System check `C006`** — Warns when `daphne` is in `INSTALLED_APPS` but `whitenoise` middleware is missing. Daphne doesn't serve static files, so without WhiteNoise the client JS returns 404. Includes setup instructions in the hint. ([#259](https://github.com/djust-org/djust/issues/259))
+- **`startproject` / `startapp` CLI commands** — `python -m djust startproject mysite` creates a Django project pre-configured for djust (daphne, whitenoise, channels, ASGI routing, template backend). `python -m djust startapp dashboard` creates a LiveView app with a counter example. Eliminates the 8+ manual setup steps. ([#266](https://github.com/djust-org/djust/issues/266))
+- **Simplified root element** — `data-djust-view` is now the only required attribute on LiveView container elements. The client auto-stamps `data-djust-root` and `data-liveview-root` at init time. Old three-attribute format still works. ([#258](https://github.com/djust-org/djust/issues/258))
+- **Model `.pk` in templates** — `{{ model.pk }}` now works in Rust-rendered templates. Model serialization includes a `pk` key with the native primary key value alongside the existing string `id` key. ([#262](https://github.com/djust-org/djust/issues/262))
 
 ### Fixed
 
