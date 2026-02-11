@@ -330,6 +330,88 @@ class TestHTTPFallbackSecurity:
         response = view.post(post_request)
         assert response.status_code == 400
 
+
+@pytest.mark.django_db
+class TestHTTPPostDebugPayload:
+    """Test that POST responses include _debug payload when DEBUG=True (#267)."""
+
+    def _setup_view(self):
+        """Create a view and do initial GET to establish state."""
+        view = CounterView()
+        factory = RequestFactory()
+        get_request = factory.get("/test/")
+        get_request = add_session_to_request(get_request)
+        view.get(get_request)
+        return view, factory, get_request
+
+    def test_debug_in_post_response(self, settings):
+        """When DEBUG=True, POST response should include _debug payload."""
+        settings.DEBUG = True
+        view, factory, get_request = self._setup_view()
+
+        post_request = factory.post(
+            "/test/",
+            data='{"event":"increment","params":{}}',
+            content_type="application/json",
+        )
+        post_request.session = get_request.session
+
+        response = view.post(post_request)
+        assert response.status_code == 200
+
+        data = json.loads(response.content.decode("utf-8"))
+        assert "_debug" in data
+        debug = data["_debug"]
+
+        # Should contain view class info
+        assert debug["view_class"] == "CounterView"
+
+        # Should contain event name
+        assert debug["_eventName"] == "increment"
+
+        # Should contain performance timing
+        assert "performance" in debug
+        assert "handler_ms" in debug["performance"]
+        assert "render_ms" in debug["performance"]
+        assert isinstance(debug["performance"]["handler_ms"], (int, float))
+        assert isinstance(debug["performance"]["render_ms"], (int, float))
+
+        # Should contain handlers and variables
+        assert "handlers" in debug
+        assert "variables" in debug
+
+    def test_no_debug_when_not_debug(self, settings):
+        """When DEBUG=False, POST response should NOT include _debug payload."""
+        settings.DEBUG = False
+        view, factory, get_request = self._setup_view()
+
+        post_request = factory.post(
+            "/test/",
+            data='{"event":"increment","params":{}}',
+            content_type="application/json",
+        )
+        post_request.session = get_request.session
+
+        response = view.post(post_request)
+        assert response.status_code == 200
+
+        data = json.loads(response.content.decode("utf-8"))
+        assert "_debug" not in data
+
+
+@pytest.mark.django_db
+class TestHTTPFallbackSecurityUndecorated:
+    """Test that undecorated methods are blocked via POST."""
+
+    def _setup_view(self, view_cls=None):
+        """Create a view and do initial GET to establish state."""
+        view = (view_cls or CounterView)()
+        factory = RequestFactory()
+        get_request = factory.get("/test/")
+        get_request = add_session_to_request(get_request)
+        view.get(get_request)
+        return view, factory, get_request
+
     def test_undecorated_method_blocked(self):
         """Public methods without @event_handler are blocked via POST."""
 

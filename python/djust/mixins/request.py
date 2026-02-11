@@ -230,6 +230,7 @@ class RequestMixin:
 
             # Call the event handler — only @event_handler-decorated methods
             # can be invoked via POST (matches WS security)
+            t_handler_ms = 0.0
             handler = getattr(self, event_name, None)
             if handler and callable(handler):
                 if not is_event_handler(handler):
@@ -264,10 +265,12 @@ class RequestMixin:
                     )
 
                 coerced_params = validation.get("coerced_params", params)
+                t0_handler = time.perf_counter()
                 if coerced_params:
                     handler(**coerced_params)
                 else:
                     handler()
+                t_handler_ms = (time.perf_counter() - t0_handler) * 1000
 
             # Save updated state back to session
             updated_context = self.get_context_data()
@@ -279,13 +282,31 @@ class RequestMixin:
             self._save_components_to_session(request, updated_context)
 
             # Render with diff to get patches
+            t0_render = time.perf_counter()
             html, patches_json, version = self.render_with_diff(request)
+            t_render_ms = (time.perf_counter() - t0_render) * 1000
 
             import json as json_module
 
             PATCH_THRESHOLD = 100
 
             cache_request_id = params.get("_cacheRequestId")
+
+            # Inject debug info for the debug panel (HTTP-only mode)
+            from django.conf import settings as _settings
+
+            def _inject_debug(resp_data):
+                if _settings.DEBUG:
+                    try:
+                        debug_info = self.get_debug_info()
+                        debug_info["_eventName"] = event_name
+                        debug_info["performance"] = {
+                            "handler_ms": round(t_handler_ms, 2),
+                            "render_ms": round(t_render_ms, 2),
+                        }
+                        resp_data["_debug"] = debug_info
+                    except Exception:
+                        pass
 
             if patches_json:
                 patches = json_module.loads(patches_json)
@@ -295,17 +316,20 @@ class RequestMixin:
                     response_data = {"patches": patches, "version": version}
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
+                    _inject_debug(response_data)
                     return JsonResponse(response_data)
                 else:
                     self._rust_view.reset()
                     response_data = {"html": html, "version": version}
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
+                    _inject_debug(response_data)
                     return JsonResponse(response_data)
             else:
                 response_data = {"html": html, "version": version}
                 if cache_request_id:
                     response_data["cache_request_id"] = cache_request_id
+                _inject_debug(response_data)
                 return JsonResponse(response_data)
 
         except Exception as e:
