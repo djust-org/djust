@@ -78,7 +78,19 @@ class ContextMixin:
         # JIT auto-serialization for QuerySets and Models
         jit_serialized_keys = set()
         template_content = None
+
+        # Short-circuit: skip JIT pipeline if no DB objects in context (#278)
+        _has_db_values = False
         if JIT_AVAILABLE:
+            for _v in context.values():
+                if isinstance(_v, (QuerySet, models.Model)):
+                    _has_db_values = True
+                    break
+                if isinstance(_v, list) and _v and isinstance(_v[0], models.Model):
+                    _has_db_values = True
+                    break
+
+        if _has_db_values:
             try:
                 template_content = self._get_template_content()
                 if template_content:
