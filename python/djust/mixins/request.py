@@ -296,7 +296,7 @@ class RequestMixin:
             def _inject_debug(resp_data):
                 if _settings.DEBUG:
                     try:
-                        debug_info = self.get_debug_info()
+                        debug_info = self.get_debug_update()
                         debug_info["_eventName"] = event_name
                         debug_info["performance"] = {
                             "handler_ms": round(t_handler_ms, 2),

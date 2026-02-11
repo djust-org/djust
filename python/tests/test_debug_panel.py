@@ -464,7 +464,7 @@ class TestAttachDebugPayload:
 
     @patch("django.conf.settings")
     def test_debug_payload_attached_when_debug_true(self, mock_settings):
-        """_debug field is added to response when DEBUG=True"""
+        """_debug field is added to response when DEBUG=True (slim payload)"""
         mock_settings.DEBUG = True
         consumer = self._make_consumer_with_view()
 
@@ -474,8 +474,10 @@ class TestAttachDebugPayload:
         assert "_debug" in response
         debug = response["_debug"]
         assert debug["view_class"] == "TestView"
-        assert "handlers" in debug
+        # Event responses use slim payload: variables but NOT handlers
+        # (handlers are static, only sent on initial mount)
         assert "variables" in debug
+        assert "handlers" not in debug
         assert debug["_eventName"] == "increment"
 
     @patch("django.conf.settings")

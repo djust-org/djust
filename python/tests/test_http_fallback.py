@@ -376,9 +376,10 @@ class TestHTTPPostDebugPayload:
         assert isinstance(debug["performance"]["handler_ms"], (int, float))
         assert isinstance(debug["performance"]["render_ms"], (int, float))
 
-        # Should contain handlers and variables
-        assert "handlers" in debug
+        # Event responses contain variables but NOT handlers (handlers are
+        # static and only sent on initial mount to reduce payload size)
         assert "variables" in debug
+        assert "handlers" not in debug
 
     def test_no_debug_when_not_debug(self, settings):
         """When DEBUG=False, POST response should NOT include _debug payload."""

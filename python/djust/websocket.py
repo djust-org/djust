@@ -348,10 +348,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         performance: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
-        Attach _debug payload to a WebSocket response when DEBUG is enabled.
+        Attach slim _debug payload to a WebSocket response when DEBUG is enabled.
 
-        This allows the debug panel to update Handlers, Variables, Patches,
-        and State tabs after each interaction, not just on initial page load.
+        Only sends variables (which change per event), performance, and patches.
+        Handler metadata is static and only sent on initial mount via
+        get_debug_info() / window.DJUST_DEBUG_INFO.
         """
         from django.conf import settings
 
@@ -361,13 +362,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
 
         try:
-            debug_info = self.view_instance.get_debug_info()
+            debug_info = self.view_instance.get_debug_update()
             if event_name:
                 debug_info["_eventName"] = event_name
             if performance:
                 debug_info["performance"] = performance
-            # Include patches from the response so the debug panel Patches tab
-            # can display them without duplicating the data extraction logic.
             if "patches" in response:
                 debug_info["patches"] = response["patches"]
             response["_debug"] = debug_info

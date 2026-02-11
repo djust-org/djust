@@ -96,6 +96,62 @@ class PostProcessingMixin:
             "config": {"maxHistory": max_history},
         }
 
+    def get_debug_update(self) -> Dict[str, Any]:
+        """
+        Get a slim debug payload for event responses (skip static handler metadata).
+
+        Unlike get_debug_info() which includes handler signatures (~20KB+),
+        this returns only the parts that change per event: variables and view class.
+        Handlers are static and only sent on initial mount via get_debug_info().
+        """
+        variables = {}
+
+        for name in dir(self):
+            if name.startswith("_"):
+                continue
+
+            try:
+                attr = getattr(self, name)
+            except AttributeError:
+                continue
+
+            if callable(attr):
+                continue
+            if isinstance(attr, type) or hasattr(attr, "__module__"):
+                continue
+
+            try:
+                from django import forms
+
+                if isinstance(attr, forms.Form):
+                    continue
+
+                type_name = type(attr).__name__
+
+                try:
+                    serialized = json.dumps(attr, default=str)
+                    size_bytes = len(serialized.encode("utf-8"))
+                except (TypeError, ValueError):
+                    size_bytes = sys.getsizeof(attr)
+
+                value_repr = repr(attr)
+                if len(value_repr) > 100:
+                    value_repr = value_repr[:100] + "..."
+
+                variables[name] = {
+                    "name": name,
+                    "type": type_name,
+                    "value": value_repr,
+                    "size_bytes": size_bytes,
+                }
+            except Exception:
+                logger.debug("Failed to collect debug panel variable '%s'", name)
+
+        return {
+            "view_class": self.__class__.__name__,
+            "variables": variables,
+        }
+
     def _hydrate_react_components(self, html: str) -> str:
         """
         Post-process HTML to hydrate React component placeholders.
