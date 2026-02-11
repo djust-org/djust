@@ -19,6 +19,8 @@ Examples:
 """
 
 import argparse
+import os
+import re
 import sys
 
 
@@ -218,8 +220,6 @@ def cmd_profile(args):
 
 def cmd_analyze(args):
     """Analyze LiveView templates for optimization opportunities."""
-    import os
-
     if not args.path:
         print("Error: Please provide a path to analyze")
         print("Usage: python -m djust.cli analyze <path>")
@@ -318,9 +318,6 @@ def cmd_analyze(args):
 
 def cmd_startproject(args):
     """Create a new djust project with all boilerplate pre-configured."""
-    import os
-    import re
-
     name = args.name
     if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", name):
         print(f"Error: '{name}' is not a valid Python identifier.")
@@ -515,9 +512,6 @@ urlpatterns = [
 
 def cmd_startapp(args):
     """Create a new djust app with a LiveView and template."""
-    import os
-    import re
-
     name = args.name
     if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", name):
         print(f"Error: '{name}' is not a valid Python identifier.")
@@ -535,6 +529,22 @@ def cmd_startapp(args):
 
     # __init__.py
     _write(os.path.join(app_dir, "__init__.py"), "")
+
+    # apps.py
+    app_class = name.replace("_", " ").title().replace(" ", "") + "Config"
+    _write(
+        os.path.join(app_dir, "apps.py"),
+        f"""from django.apps import AppConfig
+
+
+class {app_class}(AppConfig):
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "{name}"
+""",
+    )
+
+    # models.py
+    _write(os.path.join(app_dir, "models.py"), "")
 
     # views.py
     _write(
@@ -595,12 +605,10 @@ urlpatterns = [
     print()
 
 
-def _write(path, content):
+def _write(filepath, content):
     """Write content to a file, creating parent directories if needed."""
-    import os
-
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w") as f:
+    os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
+    with open(filepath, "w") as f:
         f.write(content)
 
 

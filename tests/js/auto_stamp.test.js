@@ -56,8 +56,11 @@ async function createDom(containerHTML) {
 
     dom.window.eval(clientCode);
 
-    // Wait for DOMContentLoaded to fire (djustInit deferred)
-    await new Promise(r => setTimeout(r, 20));
+    // Poll for djustInitialized flag instead of fixed timeout (avoids flakiness on slow CI)
+    for (let i = 0; i < 50; i++) {
+        if (dom.window.djustInitialized) break;
+        await new Promise(r => setTimeout(r, 5));
+    }
 
     return dom;
 }

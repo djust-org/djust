@@ -26,7 +26,7 @@ function djustInit() {
     const allContainers = autoStampRootAttributes();
 
     if (allContainers.length === 0) {
-        console.error(
+        if (globalThis.djustDebug) console.error(
             '[LiveView] No containers found! Your template root element needs:\n' +
             '  data-djust-view="app.views.MyView"\n' +
             'Example: <div data-djust-view="myapp.views.DashboardView">'

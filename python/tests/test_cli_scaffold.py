@@ -101,6 +101,21 @@ class TestStartApp:
         content = urls.read_text()
         assert "DashboardView" in content
 
+    def test_creates_apps_py(self, tmp_cwd):
+        args = types.SimpleNamespace(name="dashboard")
+        cmd_startapp(args)
+        apps = tmp_cwd / "dashboard" / "apps.py"
+        assert apps.exists()
+        content = apps.read_text()
+        assert "class DashboardConfig(AppConfig)" in content
+        assert 'name = "dashboard"' in content
+
+    def test_creates_models_py(self, tmp_cwd):
+        args = types.SimpleNamespace(name="dashboard")
+        cmd_startapp(args)
+        models = tmp_cwd / "dashboard" / "models.py"
+        assert models.exists()
+
     def test_rejects_existing_directory(self, tmp_cwd):
         (tmp_cwd / "existing").mkdir()
         args = types.SimpleNamespace(name="existing")
