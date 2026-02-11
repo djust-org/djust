@@ -327,14 +327,18 @@ class DjangoJSONEncoder(json.JSONEncoder):
 _encoder = DjangoJSONEncoder()
 
 
-def normalize_django_value(value: Any) -> Any:
+def normalize_django_value(value: Any, _depth: int = 0) -> Any:
     """Convert Django/Python types to JSON-safe Python primitives **directly**.
 
     This produces output identical to ``json.loads(json.dumps(value, cls=DjangoJSONEncoder))``
     but avoids the serialise-then-parse roundtrip through JSON text, giving a
     meaningful speedup when called in hot paths (context serialization, state sync).
 
-    Supported types mirror :class:`DjangoJSONEncoder`:
+    Supported types mirror :class:`DjangoJSONEncoder`, with these enhancements:
+    - timedelta  -- ISO-8601 duration string (via ``django.utils.duration``)
+    - Promise    -- str() (Django lazy translation strings)
+
+    Supported types:
     - None, bool, int, float, str  -- pass through
     - Decimal                      -- float()
     - UUID                         -- str()
@@ -349,6 +353,10 @@ def normalize_django_value(value: Any) -> Any:
     - Component / LiveComponent    -- str() (renders HTML)
     - callable                     -- None (safety net, matches encoder)
     - anything else                -- str() fallback
+
+    Args:
+        value: The value to normalize.
+        _depth: Internal recursion depth counter (do not set manually).
     """
     # Fast path: JSON-native primitives need no conversion
     if value is None or isinstance(value, (bool, int, float)):
@@ -359,10 +367,10 @@ def normalize_django_value(value: Any) -> Any:
 
     # Containers -- recurse
     if isinstance(value, dict):
-        return {k: normalize_django_value(v) for k, v in value.items()}
+        return {k: normalize_django_value(v, _depth) for k, v in value.items()}
 
     if isinstance(value, (list, tuple)):
-        return [normalize_django_value(item) for item in value]
+        return [normalize_django_value(item, _depth) for item in value]
 
     # Django lazy translation strings (Promise) -- must be before str check
     # since Promise is not a str subclass
@@ -407,8 +415,22 @@ def normalize_django_value(value: Any) -> Any:
 
     # Django Model -> serialize via encoder, then normalize nested values
     if isinstance(value, models.Model):
-        model_dict = _encoder._serialize_model_safely(value)
-        return normalize_django_value(model_dict)
+        max_depth = DjangoJSONEncoder._get_max_depth()
+        if _depth >= max_depth:
+            # At max depth, return a minimal representation
+            return {
+                "id": str(value.pk) if value.pk is not None else None,
+                "pk": value.pk,
+                "__str__": str(value),
+            }
+        # Increment DjangoJSONEncoder._depth so _serialize_model_safely
+        # respects the depth limit for prefetched relations.
+        DjangoJSONEncoder._depth += 1
+        try:
+            model_dict = _encoder._serialize_model_safely(value)
+        finally:
+            DjangoJSONEncoder._depth -= 1
+        return normalize_django_value(model_dict, _depth + 1)
 
     # Duck-typing fallback for file-like objects (must be after Model check)
     if hasattr(value, "url") and hasattr(value, "name") and not isinstance(value, type):
@@ -422,7 +444,7 @@ def normalize_django_value(value: Any) -> Any:
 
     # QuerySet -> list of normalized models
     if hasattr(value, "model") and hasattr(value, "__iter__"):
-        return [normalize_django_value(item) for item in value]
+        return [normalize_django_value(item, _depth) for item in value]
 
     # Components -> rendered HTML string
     try:
