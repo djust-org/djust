@@ -134,7 +134,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
         the FK ID without triggering a database query.
         """
         result = {
-            "id": str(obj.pk) if obj.pk else None,
+            "id": str(obj.pk) if obj.pk is not None else None,
             "pk": obj.pk,
             "__str__": str(obj),
             "__model__": obj.__class__.__name__,
@@ -171,7 +171,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
                         result[field_name] = self._serialize_model_safely(related)
                     elif related:
                         result[field_name] = {
-                            "id": str(related.pk) if related.pk else None,
+                            "id": str(related.pk) if related.pk is not None else None,
                             "pk": related.pk,
                             "__str__": str(related),
                         }

@@ -603,25 +603,6 @@ def _write(path, content):
         f.write(content)
 
 
-def _detect_settings_module():
-    """Try to detect the Django settings module from environment or manage.py."""
-    import os
-
-    module = os.environ.get("DJANGO_SETTINGS_MODULE")
-    if module:
-        return module
-    if os.path.exists("manage.py"):
-        with open("manage.py") as f:
-            for line in f:
-                if "DJANGO_SETTINGS_MODULE" in line and "=" in line:
-                    # Extract from: os.environ.setdefault("DJANGO_SETTINGS_MODULE", "x.settings")
-                    parts = line.split('"')
-                    for i, p in enumerate(parts):
-                        if p.endswith(".settings"):
-                            return p
-    return None
-
-
 def cmd_clear(args):
     """Clear state backend caches."""
     setup_django()
