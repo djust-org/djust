@@ -2087,7 +2087,7 @@ function bindLiveViewEvents() {
         if (pollHandler && !element.dataset.liveviewPollBound) {
             element.dataset.liveviewPollBound = 'true';
             const parsed = parseEventHandler(pollHandler);
-            const interval = parseInt(element.getAttribute('dj-poll-interval')) || 5000;
+            const interval = parseInt(element.getAttribute('dj-poll-interval'), 10) || 5000;
             const pollParams = extractTypedParams(element);
 
             const intervalId = setInterval(() => {
@@ -3097,6 +3097,13 @@ function morphChildren(existing, desired) {
 function morphElement(existing, desired) {
     // Tag mismatch — replace entirely
     if (existing.tagName !== desired.tagName) {
+        // Clean up poll timers before replacing (prevents orphaned intervals)
+        if (existing._djustPollIntervalId) {
+            clearInterval(existing._djustPollIntervalId);
+            if (existing._djustPollVisibilityHandler) {
+                document.removeEventListener('visibilitychange', existing._djustPollVisibilityHandler);
+            }
+        }
         existing.parentNode.replaceChild(desired.cloneNode(true), existing);
         return;
     }
@@ -3500,6 +3507,13 @@ function applySinglePatch(patch) {
     try {
         switch (patch.type) {
             case 'Replace':
+                // Clean up poll timers before replacing (prevents orphaned intervals)
+                if (node._djustPollIntervalId) {
+                    clearInterval(node._djustPollIntervalId);
+                    if (node._djustPollVisibilityHandler) {
+                        document.removeEventListener('visibilitychange', node._djustPollVisibilityHandler);
+                    }
+                }
                 const newNode = createNodeFromVNode(patch.node, isInSvgContext(node.parentNode));
                 node.parentNode.replaceChild(newNode, node);
                 break;

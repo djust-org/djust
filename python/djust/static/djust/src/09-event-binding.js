@@ -309,7 +309,7 @@ function bindLiveViewEvents() {
         if (pollHandler && !element.dataset.liveviewPollBound) {
             element.dataset.liveviewPollBound = 'true';
             const parsed = parseEventHandler(pollHandler);
-            const interval = parseInt(element.getAttribute('dj-poll-interval')) || 5000;
+            const interval = parseInt(element.getAttribute('dj-poll-interval'), 10) || 5000;
             const pollParams = extractTypedParams(element);
 
             const intervalId = setInterval(() => {

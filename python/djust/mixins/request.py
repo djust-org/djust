@@ -306,7 +306,7 @@ class RequestMixin:
                         }
                         resp_data["_debug"] = debug_info
                     except Exception:
-                        pass
+                        logger.debug("Failed to inject debug info", exc_info=True)
 
             if patches_json:
                 patches = json_module.loads(patches_json)
