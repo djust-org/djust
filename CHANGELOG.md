@@ -7,55 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0rc3] - 2026-02-10
+## [0.3.0] - 2026-02-11
 
 ### Added
 
-- **All 57 Django template filters** — Added remaining 13 filters: `escapejs`, `linenumbers`, `get_digit`, `iriencode`, `urlize`, `urlizetrunc`, `truncatechars_html`, `truncatewords_html`, `safeseq`, `escapeseq`, `unordered_list`, `phone2numeric`, `pprint`. The Rust template engine now supports the complete set of Django built-in filters. ([#254](https://github.com/djust-org/djust/issues/254))
-- **`dj-poll` attribute** — Declarative polling for LiveView elements. Add `dj-poll="handler_name"` to any element to trigger the handler at regular intervals. Configurable via `dj-poll-interval` (default: 5000ms). Automatically pauses when the page is hidden and resumes on visibility change. Uses `_skipLoading` to avoid loading indicators during background polls. ([#269](https://github.com/djust-org/djust/issues/269))
-- **`extractTypedParams` test coverage** — Comprehensive JS test suite for the data-attribute→parameter extraction logic covering kebab→snake conversion, `dj_` prefix stripping, type coercions (`:int`, `:bool`, `:float`, `:json`, `:list`), internal attribute skipping, and prototype pollution protection. ([#268](https://github.com/djust-org/djust/issues/268))
-- **`DjustMiddlewareStack`** — New ASGI middleware for apps that don't use `django.contrib.auth`. Wraps WebSocket routes with session middleware only (no auth required). Import from `djust.routing` or `djust`. Updated `C005` system check to recognize both `AuthMiddlewareStack` and `DjustMiddlewareStack`. ([#265](https://github.com/djust-org/djust/issues/265))
-- **System check `C006`** — Warns when `daphne` is in `INSTALLED_APPS` but `whitenoise` middleware is missing. Daphne doesn't serve static files, so without WhiteNoise the client JS returns 404. Includes setup instructions in the hint. ([#259](https://github.com/djust-org/djust/issues/259))
-- **`startproject` / `startapp` CLI commands** — `python -m djust startproject mysite` creates a Django project pre-configured for djust (daphne, whitenoise, channels, ASGI routing, template backend). `python -m djust startapp dashboard` creates a LiveView app with a counter example. Eliminates the 8+ manual setup steps. ([#266](https://github.com/djust-org/djust/issues/266))
-- **Simplified root element** — `data-djust-view` is now the only required attribute on LiveView container elements. The client auto-stamps `data-djust-root` and `data-liveview-root` at init time. Old three-attribute format still works. ([#258](https://github.com/djust-org/djust/issues/258))
-- **Model `.pk` in templates** — `{{ model.pk }}` now works in Rust-rendered templates. Model serialization includes a `pk` key with the native primary key value alongside the existing string `id` key. ([#262](https://github.com/djust-org/djust/issues/262))
-
-### Performance
-
-- **Batched `sync_to_async` calls** — Event handler processing now uses 2 thread hops instead of 4, saving ~1-4ms per event. Context preparation and VDOM rendering are batched into a single `sync_to_async` crossing. Sub-phase timing metadata (context_prep_ms, vdom_diff_ms) preserved for the debug panel. ([#277](https://github.com/djust-org/djust/issues/277))
-- **Eliminated JSON encode/decode roundtrip** — Replaced 17 `json.loads(json.dumps(value, cls=DjangoJSONEncoder))` patterns with direct `normalize_django_value()` Python-to-Python type normalization. Saves 2-5ms per event for views with database objects. ([#279](https://github.com/djust-org/djust/issues/279))
-- **Cached template variable extraction** — Rust `extract_template_variables()` results are now cached by content hash (SHA-256). Eliminates redundant FFI calls on repeated renders of the same template. Size-capped at 256 entries with automatic eviction. ([#280](https://github.com/djust-org/djust/issues/280))
-- **Cached context processor resolution** — `resolve_context_processors()` results cached per settings configuration. Avoids re-importing processor functions on every request. Invalidated on `setting_changed` signal. ([#281](https://github.com/djust-org/djust/issues/281))
-- **JIT short-circuit for non-DB views** — Views without QuerySets or Models in context skip the entire JIT serialization pipeline (template extraction, codegen, optimization). Saves ~0.5ms per event for simple views. ([#278](https://github.com/djust-org/djust/issues/278))
-
-### Fixed
-
-- **Debug panel HTTP-only mode** — POST responses now include `_debug` payload (view class, handlers, variables, performance timing) when `DEBUG=True`, enabling the debug panel to update in HTTP-only mode (no WebSocket). The client-side response handler forwards debug data to `djustDebugPanel.processDebugInfo()`. ([#267](https://github.com/djust-org/djust/issues/267))
-- **HTTP Fallback Protocol** — `post()` now accepts the HTTP fallback format where the event name is in the `X-Djust-Event` header and params are flat in the body JSON. Previously only the WebSocket-originated `{"event": "name", "params": {...}}` format worked. ([#255](https://github.com/djust-org/djust/issues/255))
-- **Silent LiveView config failures** — Client JS now shows a helpful `console.error` with example markup when no LiveView containers are found. Added Django system check `V005` that warns when a LiveView's module is not in `LIVEVIEW_ALLOWED_MODULES`. All `console.log` calls in init and TurboNav guarded behind `djustDebug` flag. ([#257](https://github.com/djust-org/djust/issues/257))
-- **Tag registry test pollution** — `clear_tag_handlers()` in tag registry tests now restores built-in handlers (url, static, etc.) in teardown, preventing subsequent URL tag tests from failing. Corrected misleading comments about `{% url %}` with loop variables — feature works via two-stage resolution. ([#261](https://github.com/djust-org/djust/issues/261))
-- **VDOM patch failure recovery** — When VDOM patches fail (e.g., `{% if %}` blocks shifting DOM structure), the client now requests recovery HTML on demand instead of reloading the page. Uses DOM morphing (`morphChildren`) to preserve event listeners and form state. Recovery HTML is fetched via a new `request_html` WebSocket message type, avoiding the bandwidth overhead of sending full HTML with every patch response. ([#259](https://github.com/djust-org/djust/issues/259))
-- **HTTP-only mode session state on GET** — When `use_websocket: False` is configured, `get()` now saves view state to the session immediately. Previously the first `post()` after page load found no saved state and had to re-mount, which was wasteful for views with expensive `mount()` methods (e.g., scanning directories, API calls). ([#264](https://github.com/djust-org/djust/issues/264))
-- **`use_websocket: False` client-side enforcement** — Setting `LIVEVIEW_CONFIG = {'use_websocket': False}` now actually prevents the client JS from opening a WebSocket connection. Previously the config was injected into the page as `window.DJUST_USE_WEBSOCKET` but never checked, so WebSocket connections were always attempted. ([#260](https://github.com/djust-org/djust/issues/260))
-
-### Security
-
-- **HTTP POST handler dispatch gating** — `post()` now enforces the same security model as the WebSocket path: only `@event_handler`-decorated methods can be invoked. Previously any callable attribute on the view was reachable via POST. Also validates event names with `is_safe_event_name()` to block dunders and private methods.
-- **HTML-escaped `urlize` and `unordered_list` filters** — Both filters now escape their output to prevent XSS. Added to `safe_output_filters` to prevent double-escaping. ([#254](https://github.com/djust-org/djust/issues/254))
-
-### Removed
-
-- **`_allowed_events` class attribute** — The backwards-compatibility escape hatch that allowed undecorated methods to be called via WebSocket or HTTP POST has been removed. All event handlers must now use the `@event_handler` decorator.
-
-## [0.3.0rc2] - 2026-02-09
-
-### Changed
-
-- **BREAKING: `data-dj-*` prefix stripping** — Client-side `extractTypedParams()` now strips the `dj_` prefix from `data-dj-*` attributes. `data-dj-preset="dark"` sends `{preset: "dark"}` instead of `{dj_preset: "dark"}`. Update handler parameter names accordingly: `dj_foo` → `foo`. See `docs/DX_ISSUES.md` DX-006 for migration details.
-
-### Added
-
-- **Template Filters** — Added 11 built-in Django template filters to the Rust engine: `default_if_none`, `wordcount`, `wordwrap`, `striptags`, `addslashes`, `ljust`, `rjust`, `center`, `make_list`, `json_script`, `force_escape`. ([#246](https://github.com/djust-org/djust/issues/246))
+- **All 57 Django template filters** — The Rust template engine now supports the complete set of Django built-in filters. Added 24 filters across two batches: `default_if_none`, `wordcount`, `wordwrap`, `striptags`, `addslashes`, `ljust`, `rjust`, `center`, `make_list`, `json_script`, `force_escape`, `escapejs`, `linenumbers`, `get_digit`, `iriencode`, `urlize`, `urlizetrunc`, `truncatechars_html`, `truncatewords_html`, `safeseq`, `escapeseq`, `unordered_list`, `phone2numeric`, `pprint`. ([#246](https://github.com/djust-org/djust/issues/246), [#254](https://github.com/djust-org/djust/issues/254))
 - **Authentication & Authorization** — Opinionated, framework-enforced auth for LiveViews. View-level `login_required` and `permission_required` class attributes (plus `LoginRequiredMixin`/`PermissionRequiredMixin` for Django-familiar patterns). Custom auth logic via `check_permissions()` hook. Handler-level `@permission_required()` decorator for protecting individual event handlers. Auth checks run server-side before `mount()` and before handler dispatch — no client-side bypass possible. Integrates with `djust_audit` command (shows auth posture per view) and Django system checks (`djust.S005` warns on unprotected views with exposed state).
 - **Navigation & URL State** — `live_patch()` updates URL query params without remount, `live_redirect()` navigates to a different view over the same WebSocket. Includes `handle_params()` callback, `live_session()` URL routing helper, and client-side `dj-patch`/`dj-navigate` directives with popstate handling. ([#236](https://github.com/djust-org/djust/pull/236))
 - **Presence Tracking** — Real-time user presence with `PresenceMixin` and `PresenceManager`. Pluggable backends (in-memory and Redis). Includes `LiveCursorMixin` and `CursorTracker` for collaborative live cursor features. ([#236](https://github.com/djust-org/djust/pull/236))
@@ -65,45 +21,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Model Binding** — `dj-model` two-way data binding with `.lazy` and `.debounce-N` modifiers. Server-side `ModelBindingMixin` with security field blocklist and type coercion. ([#236](https://github.com/djust-org/djust/pull/236))
 - **Client Directives** — `dj-confirm` confirmation dialogs, `dj-target` scoped updates, embedded view routing in event handlers. ([#236](https://github.com/djust-org/djust/pull/236))
 - **Server-Push API** — Background tasks (Celery, management commands, cron jobs) can now push state updates to connected LiveView clients via `push_to_view()`. Includes per-view channel groups (auto-joined on mount), a sync/async public API (`push_to_view` / `apush_to_view`), and periodic `handle_tick()` for self-updating views. ([#230](https://github.com/djust-org/djust/issues/230))
-- **Auto-build client.js from src/ modules** — Pre-commit hook runs `build-client.sh` when `src/` files change, eliminating manual concatenation drift between `src/` and built JS files. ([#211](https://github.com/djust-org/djust/issues/211))
-- **Keyed-mutation fuzz test generator** — New proptest generator produces tree B by mutating tree A (reorder, insert, remove keyed children), guaranteeing key overlap and exercising keyed diff paths far more effectively than independent random generation. Proptest cases bumped from 500 to 1000. ([#216](https://github.com/djust-org/djust/issues/216), [#217](https://github.com/djust-org/djust/issues/217))
-- **Better Error Messages** — Improved error messages for common LiveView event handler mistakes (missing `@event_handler`, wrong method signature). ([#248](https://github.com/djust-org/djust/issues/248))
-
-### Fixed
-
-- **Client-side SetText mis-targets text nodes after keyed MoveChild** — MoveChild patches now include `child_d` (the child's `djust_id`) so the client resolves the child to move by `data-dj-id` instead of stale index. Fixes incorrect DOM mutations when multiple MoveChild patches shift indices before subsequent patches are applied. ([#225](https://github.com/djust-org/djust/issues/225))
-- **VDOM diff/patch round-trip failure on keyed child reorder** — `apply_patches` now processes patches level-by-level (shallowest parent first) so structural changes establish correct tree shape before deeper patches navigate into children. ([#212](https://github.com/djust-org/djust/issues/212))
-- **apply_patches djust_id-based resolution** — Rewrote `apply_patches` to resolve parent nodes by `djust_id` instead of path-based traversal, preventing mis-targeting when structural patches at shallower levels invalidate deeper path indices. Fixed patch application order (removes → inserts → moves) and MoveChild index clamping. ([#216](https://github.com/djust-org/djust/issues/216))
-- **Diff engine keyed+unkeyed interleaving** — The diff engine now emits `MoveChild` patches for unkeyed element children (with `djust_id`) when their absolute position changes due to keyed sibling moves, fixing incorrect patch targeting in mixed keyed/unkeyed child lists. ([#219](https://github.com/djust-org/djust/issues/219))
-- **Text node targeting after keyed moves** — `SetText` patches now carry `djust_id` when available (for test infrastructure), and `sync_ids` propagates IDs to text nodes. Test `assign_ids` gives synthetic IDs to text nodes so `apply_patches` resolves them by ID after structural changes shift path indices. ([#221](https://github.com/djust-org/djust/issues/221))
-- **DOM morphing preserves event listeners** — `html_update` now uses morphdom-style DOM diffing instead of `innerHTML`, preserving user-bound event listeners. ([#236](https://github.com/djust-org/djust/pull/236))
-- **Textarea newlines preserved** — Template whitespace stripping no longer collapses newlines inside `<textarea>` elements. ([#236](https://github.com/djust-org/djust/pull/236))
-- **PresenceMixin crash without auth** — `track_presence()` now checks for `request.user` before accessing it, preventing crashes in apps without `AuthenticationMiddleware`. ([#236](https://github.com/djust-org/djust/pull/236))
-- **`_skip_render` support in server_push** — `server_push()` now checks `_skip_render`, preventing phantom renders and VDOM version mismatches. ([#236](https://github.com/djust-org/djust/pull/236))
-- **jsdom pinned to v26** — Fix vitest v4 compatibility. ([#252](https://github.com/djust-org/djust/pull/252))
-
-## [0.3.0rc1] - 2026-02-05
-
-### Added
-
 - **Progressive Web App (PWA) Support** — Complete offline-first PWA implementation with service worker integration, IndexedDB/LocalStorage abstraction, optimistic UI updates, and offline-aware template directives. Includes comprehensive template tags (`{% djust_pwa_head %}`, `{% djust_pwa_manifest %}`), PWA mixins (`PWAMixin`, `OfflineMixin`, `SyncMixin`), and automatic synchronization when online. ([#235](https://github.com/djust-org/djust/pull/235))
 - **Multi-Tenant SaaS Support** — Production-ready multi-tenant architecture with flexible tenant resolution strategies (subdomain, path, header, session, custom, chained), automatic data isolation, tenant-aware state backends, and comprehensive template context injection. Includes `TenantMixin` and `TenantScopedMixin` for views. ([#235](https://github.com/djust-org/djust/pull/235))
-- **PWA Template Tags** — 8 new template tags for PWA functionality: `djust_pwa_head`, `djust_pwa_manifest`, `djust_sw_register`, `djust_offline_indicator`, plus offline directives `dj-offline-hide`, `dj-offline-show`, `dj-offline-disable`, `dj-offline-queued`.
-- **PWA Management Command** — `generate_sw` command for automatic service worker generation with customizable caching strategies, static file collection, and version management.
-- **Comprehensive Test Coverage** — 114 new tests (53 PWA tests, 61 multi-tenant tests) covering template tags, service worker generation, tenant resolution, isolation, and security.
+- **`dj-poll` attribute** — Declarative polling for LiveView elements. Add `dj-poll="handler_name"` to any element to trigger the handler at regular intervals. Configurable via `dj-poll-interval` (default: 5000ms). Automatically pauses when the page is hidden and resumes on visibility change. ([#269](https://github.com/djust-org/djust/issues/269))
+- **`DjustMiddlewareStack`** — New ASGI middleware for apps that don't use `django.contrib.auth`. Wraps WebSocket routes with session middleware only (no auth required). Updated `C005` system check to recognize both `AuthMiddlewareStack` and `DjustMiddlewareStack`. ([#265](https://github.com/djust-org/djust/issues/265))
+- **System check `C006`** — Warns when `daphne` is in `INSTALLED_APPS` but `whitenoise` middleware is missing. ([#259](https://github.com/djust-org/djust/issues/259))
+- **`startproject` / `startapp` / `new` CLI commands** — `python -m djust new myapp` creates a full project with optional features (`--with-auth`, `--with-db`, `--with-presence`, `--with-streaming`, `--from-schema`). Legacy `startproject` and `startapp` commands also available. ([#266](https://github.com/djust-org/djust/issues/266))
+- **`djust mcp install` CLI command** — Automates MCP server setup for Claude Code, Cursor, and Windsurf. Tries `claude mcp add` first (canonical for Claude Code), falls back to writing `.mcp.json` directly. Merges with existing config, backs up malformed files, idempotent.
+- **Simplified root element** — `data-djust-view` is now the only required attribute on LiveView container elements. The client auto-stamps `data-djust-root` and `data-liveview-root` at init time. Old three-attribute format still works. ([#258](https://github.com/djust-org/djust/issues/258))
+- **Model `.pk` in templates** — `{{ model.pk }}` now works in Rust-rendered templates. Model serialization includes a `pk` key with the native primary key value. ([#262](https://github.com/djust-org/djust/issues/262))
+- **Better Error Messages** — Improved error messages for common LiveView event handler mistakes (missing `@event_handler`, wrong method signature). ([#248](https://github.com/djust-org/djust/issues/248))
+- **`LiveViewSmokeTest` mixin** — Automated smoke and fuzz testing for LiveView classes. ([#251](https://github.com/djust-org/djust/pull/251))
+- **`djust_audit` management command** — Security audit showing auth posture, exposed state, and handler signatures per view.
+- **`djust_check` management command** — Django system checks for project validation.
+- **Auto-build client.js from src/ modules** — Pre-commit hook runs `build-client.sh` when `src/` files change. ([#211](https://github.com/djust-org/djust/issues/211))
+- **Keyed-mutation fuzz test generator** — New proptest generator produces tree B by mutating tree A, exercising keyed diff paths more effectively. Proptest cases bumped from 500 to 1000. ([#216](https://github.com/djust-org/djust/issues/216), [#217](https://github.com/djust-org/djust/issues/217))
 
 ### Changed
 
+- **BREAKING: `data-dj-*` prefix stripping** — Client-side `extractTypedParams()` now strips the `dj_` prefix from `data-dj-*` attributes. `data-dj-preset="dark"` sends `{preset: "dark"}` instead of `{dj_preset: "dark"}`. Update handler parameter names accordingly: `dj_foo` → `foo`.
 - **State Backends** — Enhanced with tenant-aware isolation support (`TenantAwareRedisBackend`, `TenantAwareMemoryBackend`).
-- **Template Context** — Automatic tenant information injection in multi-tenant mode.
+- **Standardized on Python 3.12** — Minimum supported Python version is now 3.12.
+
+### Performance
+
+- **Batched `sync_to_async` calls** — Event handler processing now uses 2 thread hops instead of 4, saving ~1-4ms per event. ([#277](https://github.com/djust-org/djust/issues/277))
+- **Eliminated JSON encode/decode roundtrip** — Direct `normalize_django_value()` Python-to-Python type normalization replaces 17 `json.loads(json.dumps(...))` patterns. Saves 2-5ms per event for views with database objects. ([#279](https://github.com/djust-org/djust/issues/279))
+- **Cached template variable extraction** — Rust `extract_template_variables()` results cached by content hash (SHA-256). Size-capped at 256 entries with automatic eviction. ([#280](https://github.com/djust-org/djust/issues/280))
+- **Cached context processor resolution** — `resolve_context_processors()` results cached per settings configuration. Invalidated on `setting_changed` signal. ([#281](https://github.com/djust-org/djust/issues/281))
+- **JIT short-circuit for non-DB views** — Views without QuerySets or Models in context skip the entire JIT serialization pipeline. Saves ~0.5ms per event for simple views. ([#278](https://github.com/djust-org/djust/issues/278))
+- **Slimmer debug payload** — Event responses send only state variables; handler metadata moved to initial mount as static data. ~68% smaller debug payloads (~25KB → ~8KB per event).
+
+### Fixed
+
+- **Inline args on form events** — `dj-change`, `dj-input`, `dj-blur`, `dj-focus` now parse inline arguments (e.g., `dj-change="toggle(3)"`) before sending to server. Also fixed state change detection to use deep copy comparison, catching in-place mutations.
+- **Error overlay on intentional disconnect** — Suppress "WebSocket Connection Failed" overlay during TurboNav navigation via `_intentionalDisconnect` flag.
+- **VDOM patch failure recovery** — When VDOM patches fail, the client requests recovery HTML on demand instead of reloading the page. Uses DOM morphing to preserve event listeners and form state. ([#259](https://github.com/djust-org/djust/issues/259))
+- **HTTP Fallback Protocol** — `post()` now accepts the HTTP fallback format where the event name is in the `X-Djust-Event` header and params are flat in the body JSON. ([#255](https://github.com/djust-org/djust/issues/255))
+- **Debug panel HTTP-only mode** — POST responses include `_debug` payload when `DEBUG=True`, enabling the debug panel in HTTP-only mode. ([#267](https://github.com/djust-org/djust/issues/267))
+- **Silent LiveView config failures** — Client JS now shows helpful `console.error` when no LiveView containers are found. Added system check `V005` for modules not in `LIVEVIEW_ALLOWED_MODULES`. ([#257](https://github.com/djust-org/djust/issues/257))
+- **HTTP-only mode session state on GET** — `get()` now saves view state to the session immediately when `use_websocket: False`. ([#264](https://github.com/djust-org/djust/issues/264))
+- **`use_websocket: False` client-side enforcement** — Setting now actually prevents WebSocket connections. ([#260](https://github.com/djust-org/djust/issues/260))
+- **DOM morphing preserves event listeners** — `html_update` now uses morphdom-style DOM diffing instead of `innerHTML`. ([#236](https://github.com/djust-org/djust/pull/236))
+- **Textarea newlines preserved** — Template whitespace stripping no longer collapses newlines inside `<textarea>` elements. ([#236](https://github.com/djust-org/djust/pull/236))
+- **PresenceMixin crash without auth** — `track_presence()` now checks for `request.user` before accessing it. ([#236](https://github.com/djust-org/djust/pull/236))
+- **`_skip_render` support in server_push** — `server_push()` now checks `_skip_render`, preventing phantom renders and VDOM version mismatches. ([#236](https://github.com/djust-org/djust/pull/236))
+- **Client-side SetText mis-targets after keyed MoveChild** — MoveChild patches now include `child_d` for `data-dj-id` resolution. ([#225](https://github.com/djust-org/djust/issues/225))
+- **VDOM diff/patch round-trip on keyed child reorder** — Patches now processed level-by-level (shallowest parent first). ([#212](https://github.com/djust-org/djust/issues/212))
+- **apply_patches djust_id-based resolution** — Resolves parent nodes by `djust_id` instead of path-based traversal. ([#216](https://github.com/djust-org/djust/issues/216))
+- **Diff engine keyed+unkeyed interleaving** — Emits `MoveChild` patches for unkeyed element children in keyed contexts. ([#219](https://github.com/djust-org/djust/issues/219))
+- **Text node targeting after keyed moves** — `SetText` patches carry `djust_id` when available; `sync_ids` propagates IDs to text nodes. ([#221](https://github.com/djust-org/djust/issues/221))
+- **Tag registry test pollution** — `clear_tag_handlers()` now restores built-in handlers in teardown. ([#261](https://github.com/djust-org/djust/issues/261))
 
 ### Security
 
-- **Template tag XSS prevention** — All PWA template tags (`pwa_tags.py`, `djust_pwa.py`) now use `format_html()` and `escape()` instead of `mark_safe()` with f-string interpolation. Prevents script injection via manipulated URLs, class names, or CSS selectors.
-- **Sync endpoint hardening** — Removed `@csrf_exempt` from `sync_endpoint_view`. Added authentication requirement, payload validation (type checking, field whitelist, action count limit of 100), and safe field extraction to prevent arbitrary kwargs injection.
-- **Silent exception elimination** — All `except: pass` patterns replaced with appropriate `logger.warning()` or `logger.debug()` calls across PWA and tenant modules.
-- **f-string logging conversion** — Converted 75+ `logger.*(f"...")` calls to `%s`-style formatting across all PWA, tenant, and template tag files.
-- **Production JS hardened** — Replaced all `console.log`/`console.error` calls in `pwa.js` with `_log()` helper that routes through `window.djust.reportError` / `window.djust.debug`.
+- **HTTP POST handler dispatch gating** — `post()` now enforces the same security model as the WebSocket path: only `@event_handler`-decorated methods can be invoked. Validates event names with `is_safe_event_name()` to block dunders and private methods.
+- **Auto-escaping in Rust template engine** — `SafeString` values propagated to Rust for proper auto-escaping.
+- **HTML-escaped `urlize` and `unordered_list` filters** — Both filters now escape their output to prevent XSS. ([#254](https://github.com/djust-org/djust/issues/254))
+- **Template tag XSS prevention** — All PWA template tags now use `format_html()` and `escape()` instead of `mark_safe()` with f-string interpolation.
+- **Sync endpoint hardening** — Removed `@csrf_exempt` from `sync_endpoint_view`. Added authentication requirement, payload validation, and safe field extraction.
+- **Silent exception elimination** — All `except: pass` patterns replaced with appropriate logging calls.
+- **Production JS hardened** — All `console.log` calls guarded behind `djustDebug` flag.
+
+### Removed
+
+- **`_allowed_events` class attribute** — The backwards-compatibility escape hatch that allowed undecorated methods to be called via WebSocket or HTTP POST has been removed. All event handlers must now use the `@event_handler` decorator.
 
 ## [0.2.2] - 2026-02-01
 
@@ -336,7 +318,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bug fixes and stability improvements
 
-[Unreleased]: https://github.com/djust-org/djust/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/djust-org/djust/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/djust-org/djust/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/djust-org/djust/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/djust-org/djust/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/djust-org/djust/compare/v0.2.0a2...v0.2.0
