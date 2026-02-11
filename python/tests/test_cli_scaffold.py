@@ -42,6 +42,8 @@ class TestStartProject:
         assert "CHANNEL_LAYERS" in content
         assert "LIVEVIEW_ALLOWED_MODULES" in content
         assert "SECRET_KEY" in content
+        assert "os.environ.get" in content
+        assert "django-insecure-" in content
 
     def test_creates_asgi_with_live_session(self, tmp_cwd):
         args = types.SimpleNamespace(name="mysite")
