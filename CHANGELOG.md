@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0rc3] - 2026-02-10
+
 ### Added
 
 - **All 57 Django template filters** — Added remaining 13 filters: `escapejs`, `linenumbers`, `get_digit`, `iriencode`, `urlize`, `urlizetrunc`, `truncatechars_html`, `truncatewords_html`, `safeseq`, `escapeseq`, `unordered_list`, `phone2numeric`, `pprint`. The Rust template engine now supports the complete set of Django built-in filters. ([#254](https://github.com/djust-org/djust/issues/254))
@@ -17,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`startproject` / `startapp` CLI commands** — `python -m djust startproject mysite` creates a Django project pre-configured for djust (daphne, whitenoise, channels, ASGI routing, template backend). `python -m djust startapp dashboard` creates a LiveView app with a counter example. Eliminates the 8+ manual setup steps. ([#266](https://github.com/djust-org/djust/issues/266))
 - **Simplified root element** — `data-djust-view` is now the only required attribute on LiveView container elements. The client auto-stamps `data-djust-root` and `data-liveview-root` at init time. Old three-attribute format still works. ([#258](https://github.com/djust-org/djust/issues/258))
 - **Model `.pk` in templates** — `{{ model.pk }}` now works in Rust-rendered templates. Model serialization includes a `pk` key with the native primary key value alongside the existing string `id` key. ([#262](https://github.com/djust-org/djust/issues/262))
+
+### Performance
+
+- **Batched `sync_to_async` calls** — Event handler processing now uses 2 thread hops instead of 4, saving ~1-4ms per event. Context preparation and VDOM rendering are batched into a single `sync_to_async` crossing. Sub-phase timing metadata (context_prep_ms, vdom_diff_ms) preserved for the debug panel. ([#277](https://github.com/djust-org/djust/issues/277))
+- **Eliminated JSON encode/decode roundtrip** — Replaced 17 `json.loads(json.dumps(value, cls=DjangoJSONEncoder))` patterns with direct `normalize_django_value()` Python-to-Python type normalization. Saves 2-5ms per event for views with database objects. ([#279](https://github.com/djust-org/djust/issues/279))
+- **Cached template variable extraction** — Rust `extract_template_variables()` results are now cached by content hash (SHA-256). Eliminates redundant FFI calls on repeated renders of the same template. Size-capped at 256 entries with automatic eviction. ([#280](https://github.com/djust-org/djust/issues/280))
+- **Cached context processor resolution** — `resolve_context_processors()` results cached per settings configuration. Avoids re-importing processor functions on every request. Invalidated on `setting_changed` signal. ([#281](https://github.com/djust-org/djust/issues/281))
+- **JIT short-circuit for non-DB views** — Views without QuerySets or Models in context skip the entire JIT serialization pipeline (template extraction, codegen, optimization). Saves ~0.5ms per event for simple views. ([#278](https://github.com/djust-org/djust/issues/278))
 
 ### Fixed
 
@@ -31,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - **HTTP POST handler dispatch gating** — `post()` now enforces the same security model as the WebSocket path: only `@event_handler`-decorated methods can be invoked. Previously any callable attribute on the view was reachable via POST. Also validates event names with `is_safe_event_name()` to block dunders and private methods.
+- **HTML-escaped `urlize` and `unordered_list` filters** — Both filters now escape their output to prevent XSS. Added to `safe_output_filters` to prevent double-escaping. ([#254](https://github.com/djust-org/djust/issues/254))
 
 ### Removed
 
