@@ -459,7 +459,7 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
         if isinstance(value, (Component, LiveComponent)):
             return str(value)
     except ImportError:
-        pass
+        pass  # components module is optional; skip check if not installed
 
     # Safety net: skip callables (matches encoder behavior)
     if callable(value):
