@@ -7,6 +7,7 @@ import logging
 from typing import Any, Dict
 
 from django.db import models
+from django.test.signals import setting_changed
 
 from ..serialization import DjangoJSONEncoder
 
@@ -17,6 +18,16 @@ _context_processors_cache: Dict[Any, list] = {}
 
 # Module-level cache for resolved processor callables, keyed by tuple of processor paths
 _resolved_processors_cache: Dict[tuple, list] = {}
+
+
+def _clear_processor_caches(**kwargs):
+    """Clear caches when settings change (e.g., during @override_settings in tests)."""
+    if kwargs.get("setting") == "TEMPLATES":
+        _context_processors_cache.clear()
+        _resolved_processors_cache.clear()
+
+
+setting_changed.connect(_clear_processor_caches)
 
 try:
     import djust.optimization.query_optimizer  # noqa: F401
@@ -300,8 +311,10 @@ class ContextMixin:
             except Exception as e:
                 module = getattr(processor, "__module__", "")
                 qualname = getattr(processor, "__qualname__", "")
-                if module or qualname:
+                if module and qualname:
                     proc_name = module + "." + qualname
+                elif module or qualname:
+                    proc_name = module or qualname
                 else:
                     proc_name = repr(processor)
                 logger.warning(

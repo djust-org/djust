@@ -4,15 +4,22 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from djust.mixins.context import ContextMixin, _resolved_processors_cache
+from djust.mixins.context import (
+    ContextMixin,
+    _resolved_processors_cache,
+    _context_processors_cache,
+    _clear_processor_caches,
+)
 
 
 @pytest.fixture(autouse=True)
 def clear_cache():
-    """Ensure the resolved processors cache is empty before each test."""
+    """Ensure the caches are empty before each test."""
     _resolved_processors_cache.clear()
+    _context_processors_cache.clear()
     yield
     _resolved_processors_cache.clear()
+    _context_processors_cache.clear()
 
 
 class TestResolvedProcessorsCaching:
@@ -97,3 +104,47 @@ class TestResolvedProcessorsCaching:
         assert tuple(paths_1) in _resolved_processors_cache
         assert tuple(paths_2) in _resolved_processors_cache
         assert len(_resolved_processors_cache) == 2
+
+
+class TestSettingChangedSignalClearsCaches:
+    """Tests that setting_changed signal clears processor caches."""
+
+    def test_templates_setting_clears_both_caches(self):
+        """When TEMPLATES setting changes, both caches are cleared."""
+        # Populate both caches
+        _resolved_processors_cache[("a.b",)] = ["fake_callable"]
+        _context_processors_cache[("some.backend",)] = ["processor.path"]
+
+        assert len(_resolved_processors_cache) == 1
+        assert len(_context_processors_cache) == 1
+
+        # Simulate what Django does during @override_settings(TEMPLATES=...)
+        _clear_processor_caches(setting="TEMPLATES")
+
+        assert len(_resolved_processors_cache) == 0
+        assert len(_context_processors_cache) == 0
+
+    def test_non_templates_setting_does_not_clear_caches(self):
+        """Changing a setting other than TEMPLATES leaves caches intact."""
+        _resolved_processors_cache[("a.b",)] = ["fake_callable"]
+        _context_processors_cache[("some.backend",)] = ["processor.path"]
+
+        _clear_processor_caches(setting="DEBUG")
+
+        assert len(_resolved_processors_cache) == 1
+        assert len(_context_processors_cache) == 1
+
+    def test_signal_handler_connected(self):
+        """Verify the signal handler is actually connected to setting_changed."""
+        from django.test.signals import setting_changed
+
+        # Check that _clear_processor_caches is among the receivers
+        receivers = [ref for ref in setting_changed.receivers]
+        handler_connected = any(
+            getattr(r[1](), "__name__", None) == "_clear_processor_caches"
+            for r in receivers
+            if r[1]() is not None
+        )
+        assert (
+            handler_connected
+        ), "_clear_processor_caches is not connected to setting_changed signal"
