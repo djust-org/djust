@@ -140,6 +140,13 @@ function reinitLiveViewForTurboNav() {
         if (globalThis.djustDebug) console.log('[LiveView:TurboNav] No LiveView containers found, skipping WebSocket');
     }
 
+    // Clean up existing poll intervals before re-binding
+    document.querySelectorAll('[data-liveview-poll-bound]').forEach(el => {
+        if (el._djustPollIntervalId) clearInterval(el._djustPollIntervalId);
+        if (el._djustPollVisibilityHandler) document.removeEventListener('visibilitychange', el._djustPollVisibilityHandler);
+        delete el.dataset.liveviewPollBound;
+    });
+
     // Re-bind events
     bindLiveViewEvents();
 
@@ -322,6 +329,11 @@ function handleServerResponse(data, eventName, triggerElement) {
             if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
             const form = document.querySelector('[data-djust-root] form');
             if (form) form.reset();
+        }
+
+        // Forward debug info to debug panel (HTTP-only mode)
+        if (data._debug && window.djustDebugPanel && typeof window.djustDebugPanel.processDebugInfo === 'function') {
+            window.djustDebugPanel.processDebugInfo(data._debug);
         }
 
         // Stop loading state
@@ -2069,6 +2081,31 @@ function bindLiveViewEvents() {
                 element.addEventListener(eventType, wrappedHandler);
             }
         });
+
+        // Handle dj-poll — declarative polling
+        const pollHandler = element.getAttribute('dj-poll');
+        if (pollHandler && !element.dataset.liveviewPollBound) {
+            element.dataset.liveviewPollBound = 'true';
+            const parsed = parseEventHandler(pollHandler);
+            const interval = parseInt(element.getAttribute('dj-poll-interval'), 10) || 5000;
+            const pollParams = extractTypedParams(element);
+
+            const intervalId = setInterval(() => {
+                if (document.hidden) return;
+                handleEvent(parsed.name, Object.assign({}, pollParams, { _skipLoading: true }));
+            }, interval);
+
+            element._djustPollIntervalId = intervalId;
+
+            // Pause/resume on visibility change
+            const visHandler = () => {
+                if (!document.hidden) {
+                    handleEvent(parsed.name, Object.assign({}, pollParams, { _skipLoading: true }));
+                }
+            };
+            document.addEventListener('visibilitychange', visHandler);
+            element._djustPollVisibilityHandler = visHandler;
+        }
     });
 }
 
@@ -2312,7 +2349,7 @@ async function handleEvent(eventName, params = {}) {
         }
 
         // Still show brief loading state for UX consistency
-        globalLoadingManager.startLoading(eventName, triggerElement);
+        if (!params._skipLoading) globalLoadingManager.startLoading(eventName, triggerElement);
 
         // Apply cached patches
         if (cached.patches && cached.patches.length > 0) {
@@ -2322,7 +2359,7 @@ async function handleEvent(eventName, params = {}) {
             bindLiveViewEvents();
         }
 
-        globalLoadingManager.stopLoading(eventName, triggerElement);
+        if (!params._skipLoading) globalLoadingManager.stopLoading(eventName, triggerElement);
         return;
     }
 
@@ -2331,7 +2368,7 @@ async function handleEvent(eventName, params = {}) {
         console.log(`[LiveView:cache] Cache miss: ${cacheKey}`);
     }
 
-    globalLoadingManager.startLoading(eventName, triggerElement);
+    if (!params._skipLoading) globalLoadingManager.startLoading(eventName, triggerElement);
 
     // Prepare params for request
     let paramsWithCache = params;
@@ -3060,6 +3097,13 @@ function morphChildren(existing, desired) {
 function morphElement(existing, desired) {
     // Tag mismatch — replace entirely
     if (existing.tagName !== desired.tagName) {
+        // Clean up poll timers before replacing (prevents orphaned intervals)
+        if (existing._djustPollIntervalId) {
+            clearInterval(existing._djustPollIntervalId);
+            if (existing._djustPollVisibilityHandler) {
+                document.removeEventListener('visibilitychange', existing._djustPollVisibilityHandler);
+            }
+        }
         existing.parentNode.replaceChild(desired.cloneNode(true), existing);
         return;
     }
@@ -3463,6 +3507,13 @@ function applySinglePatch(patch) {
     try {
         switch (patch.type) {
             case 'Replace':
+                // Clean up poll timers before replacing (prevents orphaned intervals)
+                if (node._djustPollIntervalId) {
+                    clearInterval(node._djustPollIntervalId);
+                    if (node._djustPollVisibilityHandler) {
+                        document.removeEventListener('visibilitychange', node._djustPollVisibilityHandler);
+                    }
+                }
                 const newNode = createNodeFromVNode(patch.node, isInSvgContext(node.parentNode));
                 node.parentNode.replaceChild(newNode, node);
                 break;

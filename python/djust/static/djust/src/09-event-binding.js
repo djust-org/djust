@@ -303,6 +303,31 @@ function bindLiveViewEvents() {
                 element.addEventListener(eventType, wrappedHandler);
             }
         });
+
+        // Handle dj-poll — declarative polling
+        const pollHandler = element.getAttribute('dj-poll');
+        if (pollHandler && !element.dataset.liveviewPollBound) {
+            element.dataset.liveviewPollBound = 'true';
+            const parsed = parseEventHandler(pollHandler);
+            const interval = parseInt(element.getAttribute('dj-poll-interval'), 10) || 5000;
+            const pollParams = extractTypedParams(element);
+
+            const intervalId = setInterval(() => {
+                if (document.hidden) return;
+                handleEvent(parsed.name, Object.assign({}, pollParams, { _skipLoading: true }));
+            }, interval);
+
+            element._djustPollIntervalId = intervalId;
+
+            // Pause/resume on visibility change
+            const visHandler = () => {
+                if (!document.hidden) {
+                    handleEvent(parsed.name, Object.assign({}, pollParams, { _skipLoading: true }));
+                }
+            };
+            document.addEventListener('visibilitychange', visHandler);
+            element._djustPollVisibilityHandler = visHandler;
+        }
     });
 }
 

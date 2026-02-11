@@ -174,6 +174,11 @@ function handleServerResponse(data, eventName, triggerElement) {
             if (form) form.reset();
         }
 
+        // Forward debug info to debug panel (HTTP-only mode)
+        if (data._debug && window.djustDebugPanel && typeof window.djustDebugPanel.processDebugInfo === 'function') {
+            window.djustDebugPanel.processDebugInfo(data._debug);
+        }
+
         // Stop loading state
         globalLoadingManager.stopLoading(eventName, triggerElement);
         return true;

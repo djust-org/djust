@@ -21,7 +21,7 @@ async function handleEvent(eventName, params = {}) {
         }
 
         // Still show brief loading state for UX consistency
-        globalLoadingManager.startLoading(eventName, triggerElement);
+        if (!params._skipLoading) globalLoadingManager.startLoading(eventName, triggerElement);
 
         // Apply cached patches
         if (cached.patches && cached.patches.length > 0) {
@@ -31,7 +31,7 @@ async function handleEvent(eventName, params = {}) {
             bindLiveViewEvents();
         }
 
-        globalLoadingManager.stopLoading(eventName, triggerElement);
+        if (!params._skipLoading) globalLoadingManager.stopLoading(eventName, triggerElement);
         return;
     }
 
@@ -40,7 +40,7 @@ async function handleEvent(eventName, params = {}) {
         console.log(`[LiveView:cache] Cache miss: ${cacheKey}`);
     }
 
-    globalLoadingManager.startLoading(eventName, triggerElement);
+    if (!params._skipLoading) globalLoadingManager.startLoading(eventName, triggerElement);
 
     // Prepare params for request
     let paramsWithCache = params;
