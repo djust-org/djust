@@ -14,10 +14,10 @@ from ..session_utils import _jit_serializer_cache, _get_model_hash
 
 logger = logging.getLogger(__name__)
 
-# Cache template_content id → sha256 hash (avoids recomputing per variable).
-# Keyed by id(template_content) to avoid keeping large template strings alive as dict keys.
-# The id is safe here because the template string is kept alive by the caller for the
-# duration of get_context_data(), and stale entries are harmless (just a cache miss).
+# Cache template_content id → sha256 hash (avoids recomputing per variable within a single request).
+# Keyed by id(template_content) which is safe within a single request lifetime where the
+# caller holds a reference to the string. Used only by _jit_serialize_queryset/_jit_serialize_model
+# for the _expected_keys_cache and _jit_serializer_cache lookups (not for _variable_extraction_cache).
 _template_hash_cache: Dict[int, str] = {}
 
 # Cache (template_hash, variable_name) → expected top-level key count
@@ -35,9 +35,12 @@ except ImportError:
     extract_template_variables = None
 
 # Cache template content hash → extract_template_variables() result.
-# Keyed by content hash (not id()) so it survives GC and works across requests.
+# Keyed by SHA-256 content hash (not id()) so it survives GC and works across requests.
 # Hot reload is safe: changed template content produces a different hash.
+# Size cap: one entry per unique template file; typical djust apps have < 50 templates.
+# If the cache exceeds 256 entries (defensive cap), it is cleared to prevent unbounded growth.
 _variable_extraction_cache: Dict[str, dict] = {}
+_VARIABLE_EXTRACTION_CACHE_MAX = 256
 
 
 def _cached_extract_template_variables(template_content: str) -> Optional[dict]:
@@ -48,11 +51,9 @@ def _cached_extract_template_variables(template_content: str) -> Optional[dict]:
     if not extract_template_variables:
         return None
 
-    # Compute content hash, reusing _template_hash_cache for the current string
-    _tc_id = id(template_content)
-    if _tc_id not in _template_hash_cache:
-        _template_hash_cache[_tc_id] = hashlib.sha256(template_content.encode()).hexdigest()[:8]
-    content_hash = _template_hash_cache[_tc_id]
+    # Compute SHA-256 directly from content — safe regardless of GC/id reuse.
+    # ~2µs for a ~10KB string, negligible vs the Rust FFI call being cached.
+    content_hash = hashlib.sha256(template_content.encode()).hexdigest()[:8]
 
     if content_hash in _variable_extraction_cache:
         return _variable_extraction_cache[content_hash]
@@ -62,6 +63,10 @@ def _cached_extract_template_variables(template_content: str) -> Optional[dict]:
     except Exception:
         logger.debug("Rust template variable extractor unavailable, using fallback")
         result = None
+
+    # Defensive size cap: clear cache if it grows beyond expected cardinality.
+    if len(_variable_extraction_cache) >= _VARIABLE_EXTRACTION_CACHE_MAX:
+        _variable_extraction_cache.clear()
 
     _variable_extraction_cache[content_hash] = result
     return result
