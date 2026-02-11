@@ -83,10 +83,8 @@ class RequestMixin:
             view_key = f"liveview_{request.path}"
             # Use _cached_context (pre-context-processor copy) to avoid
             # non-serializable processor objects (PermWrapper, csrf, etc.)
-            from ..components.base import LiveComponent as _LC
-
             _cached = self._cached_context or {}
-            _session_state = {k: v for k, v in _cached.items() if not isinstance(v, _LC)}
+            _session_state = {k: v for k, v in _cached.items() if not isinstance(v, LiveComponent)}
             _session_json = json.dumps(_session_state, cls=DjangoJSONEncoder)
             request.session[view_key] = json.loads(_session_json)
             t0_sc = time.perf_counter()
