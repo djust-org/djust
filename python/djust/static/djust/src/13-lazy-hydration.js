@@ -132,7 +132,11 @@ const lazyHydrationManager = {
 
         console.log(`[LiveView:lazy] Hydrating: ${viewPath}`);
 
-        // Ensure WebSocket is connected
+        // Ensure WebSocket is connected (skip in HTTP-only mode)
+        if (window.DJUST_USE_WEBSOCKET === false) {
+            if (globalThis.djustDebug) console.log('[LiveView:lazy] HTTP-only mode — skipping WebSocket for lazy element');
+            return;
+        }
         if (!liveViewWS || !liveViewWS.enabled) {
             liveViewWS = new LiveViewWebSocket();
             window.djust.liveViewInstance = liveViewWS;

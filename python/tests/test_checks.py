@@ -237,6 +237,60 @@ class TestC004DjustInstalled:
         assert len(c004) == 0
 
 
+class TestC006DaphneWithoutWhitenoise:
+    """C006 -- daphne without whitenoise for static file serving."""
+
+    def test_c006_daphne_no_whitenoise(self, settings):
+        """C006 fires when daphne is installed but whitenoise is not in MIDDLEWARE."""
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+        settings.MIDDLEWARE = [
+            "django.middleware.security.SecurityMiddleware",
+            "django.contrib.sessions.middleware.SessionMiddleware",
+        ]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c006 = [e for e in errors if e.id == "djust.C006"]
+        assert len(c006) == 1
+        assert "WhiteNoise" in c006[0].hint
+        assert "static" in c006[0].msg.lower()
+
+    def test_c006_passes_with_whitenoise(self, settings):
+        """C006 should not fire when whitenoise middleware is present."""
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+        settings.MIDDLEWARE = [
+            "django.middleware.security.SecurityMiddleware",
+            "whitenoise.middleware.WhiteNoiseMiddleware",
+            "django.contrib.sessions.middleware.SessionMiddleware",
+        ]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c006 = [e for e in errors if e.id == "djust.C006"]
+        assert len(c006) == 0
+
+    def test_c006_not_triggered_without_daphne(self, settings):
+        """C006 should not fire when daphne is not installed."""
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["django.contrib.staticfiles", "djust"]
+        settings.MIDDLEWARE = [
+            "django.middleware.security.SecurityMiddleware",
+        ]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c006 = [e for e in errors if e.id == "djust.C006"]
+        assert len(c006) == 0
+
+
 class TestS004DebugAllowedHosts:
     """S004 -- DEBUG=True with non-localhost ALLOWED_HOSTS."""
 
@@ -1399,3 +1453,37 @@ class TestNoAppDirsReturnsEmpty:
             errors = check_code_quality(None)
 
         assert errors == []
+
+
+# ---------------------------------------------------------------------------
+# DjustMiddlewareStack (Issue #265)
+# ---------------------------------------------------------------------------
+
+
+class TestDjustMiddlewareStack:
+    """DjustMiddlewareStack wraps inner app with session middleware only."""
+
+    def test_import_from_routing(self):
+        """DjustMiddlewareStack is importable from djust.routing."""
+        from djust.routing import DjustMiddlewareStack as DMS
+
+        assert callable(DMS)
+
+    def test_import_from_package(self):
+        """DjustMiddlewareStack is importable from top-level djust package."""
+        from djust import DjustMiddlewareStack as DMS
+
+        assert callable(DMS)
+
+    def test_wraps_with_session_middleware(self):
+        """DjustMiddlewareStack wraps inner app with SessionMiddlewareStack."""
+        from djust.routing import DjustMiddlewareStack
+
+        class MockInnerApp:
+            pass
+
+        result = DjustMiddlewareStack(MockInnerApp)
+        # SessionMiddlewareStack returns a middleware instance that has .inner
+        cls_name = type(result).__name__
+        mod_name = type(result).__module__ or ""
+        assert "session" in cls_name.lower() or "session" in mod_name.lower()

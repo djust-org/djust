@@ -74,6 +74,25 @@ class RequestMixin:
 
         t_save_components = 0.0
 
+        # Save state to session on GET when WebSocket is disabled (HTTP-only mode).
+        # Without this, the first POST finds no saved state and re-mounts,
+        # which is wasteful when mount() is expensive (e.g., scanning dirs, API calls).
+        from ..config import config as _lv_config
+
+        if not _lv_config.get("use_websocket", True):
+            view_key = f"liveview_{request.path}"
+            # Use _cached_context (pre-context-processor copy) to avoid
+            # non-serializable processor objects (PermWrapper, csrf, etc.)
+            from ..components.base import LiveComponent as _LC
+
+            _cached = self._cached_context or {}
+            _session_state = {k: v for k, v in _cached.items() if not isinstance(v, _LC)}
+            _session_json = json.dumps(_session_state, cls=DjangoJSONEncoder)
+            request.session[view_key] = json.loads(_session_json)
+            t0_sc = time.perf_counter()
+            self._save_components_to_session(request, _cached)
+            t_save_components = (time.perf_counter() - t0_sc) * 1000
+
         # IMPORTANT: Always call get_template() on GET requests to set _full_template
         t0 = time.perf_counter()
         self.get_template()

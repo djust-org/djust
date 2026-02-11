@@ -26,7 +26,7 @@ from .forms import FormMixin, LiveViewForm, form_field
 from .drafts import DraftModeMixin
 from .push import push_to_view, apush_to_view
 from .presence import PresenceMixin, LiveCursorMixin, PresenceManager, CursorTracker
-from .routing import live_session, get_route_map_script
+from .routing import live_session, get_route_map_script, DjustMiddlewareStack
 from .streaming import StreamingMixin
 from .uploads import UploadMixin
 
@@ -220,6 +220,8 @@ __all__ = [
     # Navigation & URL state
     "live_session",
     "get_route_map_script",
+    # Middleware
+    "DjustMiddlewareStack",
     # Streaming
     "StreamingMixin",
     # File uploads
