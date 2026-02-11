@@ -670,8 +670,9 @@ def cmd_mcp(args):
 
 
 def _mcp_install():
-    """Write .mcp.json with correct paths for the djust MCP server."""
-    import json
+    """Install djust MCP server config for Claude Code / Cursor / Windsurf."""
+    import shutil
+    import subprocess
 
     # Find manage.py by walking up from cwd
     manage_py = _find_manage_py()
@@ -683,9 +684,45 @@ def _mcp_install():
     # Get absolute paths
     python_path = os.path.abspath(sys.executable)
     manage_path = os.path.abspath(manage_py)
+
+    # Try `claude mcp add` first (canonical for Claude Code users)
+    claude_bin = shutil.which("claude")
+    if claude_bin:
+        result = subprocess.run(
+            [
+                claude_bin,
+                "mcp",
+                "add",
+                "--scope",
+                "project",
+                "djust",
+                python_path,
+                "--",
+                manage_path,
+                "djust_mcp",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            print("Registered via claude CLI: %s" % result.stdout.strip())
+            print("\n  Python:    %s" % python_path)
+            print("  manage.py: %s" % manage_path)
+            print("\nRestart Claude Code to activate.")
+            return
+
+        # claude mcp add failed — fall through to manual .mcp.json write
+        print("Warning: claude mcp add failed, writing .mcp.json directly.")
+
+    _write_mcp_json(python_path, manage_path)
+
+
+def _write_mcp_json(python_path, manage_path):
+    """Write .mcp.json directly (fallback for Cursor/Windsurf or missing claude CLI)."""
+    import json
+
     mcp_json_path = os.path.join(os.getcwd(), ".mcp.json")
 
-    # Build the djust MCP config entry
     djust_entry = {
         "type": "stdio",
         "command": python_path,
