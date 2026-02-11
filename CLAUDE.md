@@ -157,6 +157,10 @@ def search(self, value: str = "", **kwargs):
 - `_private` — internal state, not exposed to templates
 - `public` — auto-exposed to template context and JIT serialization
 
+## Template Filters
+
+The Rust template engine supports **all 57 Django built-in filters** in `crates/djust_templates/src/filters.rs`. HTML-producing filters (`urlize`, `urlizetrunc`, `unordered_list`) handle their own escaping internally and are listed in `safe_output_filters` in `renderer.rs` to prevent double-escaping.
+
 ## Common Pitfalls
 
 - **Ruff F509**: `%`-format strings containing CSS semicolons trigger false positives. Separate HTML (`%s` substitution) from CSS (static string) and concatenate.
