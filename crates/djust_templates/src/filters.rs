@@ -1024,17 +1024,16 @@ fn get_digit(s: &str, n: usize) -> String {
 }
 
 fn iriencode(s: &str) -> String {
-    // Like urlencode but preserves non-ASCII characters (for IRIs)
+    // Like urlencode but preserves non-ASCII characters (for IRIs).
+    // Matches Django's iri_to_uri: preserves RFC 3986 unreserved + reserved chars.
     let mut result = String::with_capacity(s.len() * 3);
     for c in s.chars() {
         if c.is_ascii_alphanumeric()
-            || c == '-'
-            || c == '_'
-            || c == '.'
-            || c == '~'
-            || c == '/'
-            || c == ':'
+            || matches!(c, '-' | '_' | '.' | '~')  // unreserved
+            || matches!(c, '/' | ':' | '?' | '#' | '[' | ']' | '@')  // gen-delims
+            || matches!(c, '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '=')  // sub-delims
             || !c.is_ascii()
+        // non-ASCII preserved for IRIs
         {
             result.push(c);
         } else {
@@ -1091,7 +1090,7 @@ static URLIZE_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r#"(?x)
         (?:
-            (?:https?://|www\.)          # URL starting with http(s):// or www.
+            (?:https?://|ftp://|www\.)   # URL starting with http(s)://, ftp://, or www.
             [^\s<>"']+                   # URL body
         )
         |
@@ -1148,16 +1147,32 @@ fn urlize(text: &str, trunc_limit: Option<usize>) -> String {
 }
 
 fn strip_url_trailing<'a>(href: &'a str, display: &'a str) -> (String, String, String) {
-    // Strip trailing punctuation that's likely not part of the URL
-    let trailing_chars: &[char] = &['.', ',', ')', '!', '?', ';', ':'];
+    // Strip trailing punctuation that's likely not part of the URL.
+    // Only strip ')' if parentheses are unbalanced (preserves Wikipedia-style URLs).
+    let trailing_chars: &[char] = &['.', ',', '!', '?', ';', ':'];
     let mut href_s = href.to_string();
     let mut display_s = display.to_string();
     let mut trailing = String::new();
 
-    while href_s.ends_with(trailing_chars) {
-        let c = href_s.pop().unwrap();
-        display_s.pop();
-        trailing.insert(0, c);
+    loop {
+        if href_s.ends_with(trailing_chars) {
+            let c = href_s.pop().unwrap();
+            display_s.pop();
+            trailing.insert(0, c);
+        } else if href_s.ends_with(')') {
+            // Only strip ')' if there are more closing than opening parens
+            let open = href_s.chars().filter(|&c| c == '(').count();
+            let close = href_s.chars().filter(|&c| c == ')').count();
+            if close > open {
+                href_s.pop();
+                display_s.pop();
+                trailing.insert(0, ')');
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
     }
 
     (href_s, display_s, trailing)
@@ -1213,6 +1228,63 @@ fn unordered_list(items: &[Value], depth: usize) -> String {
     result.join("\n")
 }
 
+/// Tracks open HTML tags during truncation, providing shared logic for
+/// `truncate_chars_html` and `truncate_words_html`.
+struct HtmlTagTracker {
+    open_tags: Vec<String>,
+}
+
+impl HtmlTagTracker {
+    fn new() -> Self {
+        Self {
+            open_tags: Vec::new(),
+        }
+    }
+
+    /// Read a full HTML tag from the char iterator and track open/close state.
+    /// Returns the raw tag string (e.g. `<b>`, `</p>`).
+    fn consume_tag(&mut self, chars: &mut impl Iterator<Item = char>) -> String {
+        let mut tag = String::from('<');
+        for tc in chars {
+            tag.push(tc);
+            if tc == '>' {
+                break;
+            }
+        }
+        let tag_inner = tag.trim_start_matches('<').trim_end_matches('>').trim();
+        if let Some(stripped) = tag_inner.strip_prefix('/') {
+            let name = stripped
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
+            if let Some(pos) = self.open_tags.iter().rposition(|t| *t == name) {
+                self.open_tags.remove(pos);
+            }
+        } else if !tag_inner.ends_with('/')
+            && !tag_inner.starts_with('!')
+            && !is_void_element(tag_inner.split_whitespace().next().unwrap_or(""))
+        {
+            let name = tag_inner
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
+            if !name.is_empty() {
+                self.open_tags.push(name);
+            }
+        }
+        tag
+    }
+
+    /// Append closing tags for all still-open elements (in reverse order).
+    fn close_open_tags(&self, result: &mut String) {
+        for tag_name in self.open_tags.iter().rev() {
+            result.push_str(&format!("</{tag_name}>"));
+        }
+    }
+}
+
 fn truncate_chars_html(text: &str, limit: usize) -> String {
     if limit == 0 {
         return String::new();
@@ -1220,56 +1292,19 @@ fn truncate_chars_html(text: &str, limit: usize) -> String {
 
     let ellipsis = "...";
     let mut visible_count = 0;
-    let mut open_tags: Vec<String> = Vec::new();
+    let mut tracker = HtmlTagTracker::new();
     let mut result = String::new();
     let mut chars = text.chars().peekable();
     let target = limit.saturating_sub(ellipsis.len());
 
     while let Some(c) = chars.next() {
         if c == '<' {
-            let mut tag = String::from('<');
-            // Read the entire tag
-            for tc in chars.by_ref() {
-                tag.push(tc);
-                if tc == '>' {
-                    break;
-                }
-            }
-            // Parse tag name for open/close tracking
-            let tag_inner = tag.trim_start_matches('<').trim_end_matches('>').trim();
-            if let Some(stripped) = tag_inner.strip_prefix('/') {
-                // Closing tag
-                let name = stripped
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_lowercase();
-                if let Some(pos) = open_tags.iter().rposition(|t| *t == name) {
-                    open_tags.remove(pos);
-                }
-            } else if !tag_inner.ends_with('/')
-                && !tag_inner.starts_with('!')
-                && !is_void_element(tag_inner.split_whitespace().next().unwrap_or(""))
-            {
-                // Opening tag (non-self-closing, non-void)
-                let name = tag_inner
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_lowercase();
-                if !name.is_empty() {
-                    open_tags.push(name);
-                }
-            }
-            result.push_str(&tag);
+            result.push_str(&tracker.consume_tag(&mut chars));
         } else {
             visible_count += 1;
             if visible_count > target {
                 result.push_str(ellipsis);
-                // Close open tags in reverse order
-                for tag_name in open_tags.iter().rev() {
-                    result.push_str(&format!("</{tag_name}>"));
-                }
+                tracker.close_open_tags(&mut result);
                 return result;
             }
             result.push(c);
@@ -1288,53 +1323,21 @@ fn truncate_words_html(text: &str, limit: usize) -> String {
     let ellipsis = " ...";
     let mut word_count = 0;
     let mut in_word = false;
-    let mut open_tags: Vec<String> = Vec::new();
+    let mut tracker = HtmlTagTracker::new();
     let mut result = String::new();
     let mut chars = text.chars().peekable();
 
     while let Some(c) = chars.next() {
         if c == '<' {
             in_word = false;
-            let mut tag = String::from('<');
-            for tc in chars.by_ref() {
-                tag.push(tc);
-                if tc == '>' {
-                    break;
-                }
-            }
-            let tag_inner = tag.trim_start_matches('<').trim_end_matches('>').trim();
-            if let Some(stripped) = tag_inner.strip_prefix('/') {
-                let name = stripped
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_lowercase();
-                if let Some(pos) = open_tags.iter().rposition(|t| *t == name) {
-                    open_tags.remove(pos);
-                }
-            } else if !tag_inner.ends_with('/')
-                && !tag_inner.starts_with('!')
-                && !is_void_element(tag_inner.split_whitespace().next().unwrap_or(""))
-            {
-                let name = tag_inner
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_lowercase();
-                if !name.is_empty() {
-                    open_tags.push(name);
-                }
-            }
-            result.push_str(&tag);
+            result.push_str(&tracker.consume_tag(&mut chars));
         } else if c.is_whitespace() {
             if in_word {
                 in_word = false;
             }
             if word_count >= limit {
                 result.push_str(ellipsis);
-                for tag_name in open_tags.iter().rev() {
-                    result.push_str(&format!("</{tag_name}>"));
-                }
+                tracker.close_open_tags(&mut result);
                 return result;
             }
             result.push(c);
@@ -1344,9 +1347,7 @@ fn truncate_words_html(text: &str, limit: usize) -> String {
                 in_word = true;
                 if word_count > limit {
                     result.push_str(ellipsis);
-                    for tag_name in open_tags.iter().rev() {
-                        result.push_str(&format!("</{tag_name}>"));
-                    }
+                    tracker.close_open_tags(&mut result);
                     return result;
                 }
             }
@@ -2055,6 +2056,11 @@ mod tests {
         let value = Value::String("http://example.com/path".to_string());
         let result = apply_filter("iriencode", &value, None).unwrap();
         assert_eq!(result.to_string(), "http://example.com/path");
+
+        // Preserves # and ? (query/fragment)
+        let value = Value::String("http://example.com/path?q=1&p=2#frag".to_string());
+        let result = apply_filter("iriencode", &value, None).unwrap();
+        assert_eq!(result.to_string(), "http://example.com/path?q=1&p=2#frag");
     }
 
     #[test]
@@ -2144,6 +2150,26 @@ mod tests {
         let result = apply_filter("urlize", &value, None).unwrap();
         let s = result.to_string();
         assert!(s.contains("<a href=\"http://www.example.com\""));
+
+        // ftp:// support
+        let value = Value::String("Download from ftp://files.example.com/pub".to_string());
+        let result = apply_filter("urlize", &value, None).unwrap();
+        let s = result.to_string();
+        assert!(s.contains("<a href=\"ftp://files.example.com/pub\""));
+
+        // Balanced parentheses preserved (Wikipedia-style URLs)
+        let value =
+            Value::String("See https://en.wikipedia.org/wiki/Foo_(bar) for details".to_string());
+        let result = apply_filter("urlize", &value, None).unwrap();
+        let s = result.to_string();
+        assert!(s.contains("href=\"https://en.wikipedia.org/wiki/Foo_(bar)\""));
+
+        // Unbalanced trailing paren still stripped
+        let value = Value::String("(visit https://example.com) for info".to_string());
+        let result = apply_filter("urlize", &value, None).unwrap();
+        let s = result.to_string();
+        assert!(s.contains("href=\"https://example.com\""));
+        assert!(s.contains("</a>)"));
     }
 
     #[test]
