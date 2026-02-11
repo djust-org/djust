@@ -77,7 +77,15 @@ fn render_node_with_loader<L: TemplateLoader>(
             // 1. |safe is the last filter (matches Django behavior)
             // 2. The variable is marked safe in the context (like Django's SafeData)
             // 3. A filter that produces already-escaped/safe output is in the chain
-            let safe_output_filters = ["safe", "safeseq", "force_escape", "json_script"];
+            let safe_output_filters = [
+                "safe",
+                "safeseq",
+                "force_escape",
+                "json_script",
+                "urlize",
+                "urlizetrunc",
+                "unordered_list",
+            ];
             let is_safe = filter_specs
                 .iter()
                 .any(|(name, _)| safe_output_filters.contains(&name.as_str()))

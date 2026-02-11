@@ -1111,16 +1111,17 @@ fn urlize(text: &str, trunc_limit: Option<usize>) -> String {
     let mut last_end = 0;
 
     for m in URLIZE_RE.find_iter(text) {
-        // Append text before this match
-        result.push_str(&text[last_end..m.start()]);
+        // Escape non-URL text between matches (prevents XSS via raw HTML injection)
+        result.push_str(&html_escape(&text[last_end..m.start()]));
 
         let matched = m.as_str();
 
         // Determine if this is an email or a URL
         if matched.contains('@') && !matched.starts_with("http") {
-            // Email
-            let display = truncate_url_display(matched, trunc_limit);
-            result.push_str(&format!("<a href=\"mailto:{matched}\">{display}</a>"));
+            // Email — escape href and display text
+            let safe_href = html_escape(matched);
+            let display = html_escape(&truncate_url_display(matched, trunc_limit));
+            result.push_str(&format!("<a href=\"mailto:{safe_href}\">{display}</a>"));
         } else {
             // URL
             let href = if matched.starts_with("www.") {
@@ -1130,17 +1131,19 @@ fn urlize(text: &str, trunc_limit: Option<usize>) -> String {
             };
             // Strip trailing punctuation from href/display that's not part of URL
             let (href_clean, display_raw, trailing) = strip_url_trailing(&href, matched);
-            let display = truncate_url_display(&display_raw, trunc_limit);
+            let safe_href = html_escape(&href_clean);
+            let display = html_escape(&truncate_url_display(&display_raw, trunc_limit));
+            let safe_trailing = html_escape(&trailing);
             result.push_str(&format!(
-                "<a href=\"{href_clean}\" rel=\"nofollow\">{display}</a>{trailing}"
+                "<a href=\"{safe_href}\" rel=\"nofollow\">{display}</a>{safe_trailing}"
             ));
         }
 
         last_end = m.end();
     }
 
-    // Append remainder
-    result.push_str(&text[last_end..]);
+    // Escape remaining text after last match
+    result.push_str(&html_escape(&text[last_end..]));
     result
 }
 
@@ -1190,16 +1193,17 @@ fn unordered_list(items: &[Value], depth: usize) -> String {
             None
         };
 
+        let escaped_item = html_escape(&item.to_string());
         match sublist {
             Some(sub) if !sub.is_empty() => {
                 let sub_content = unordered_list(sub, depth + 1);
                 let sub_indent = "\t".repeat(depth + 1);
                 result.push(format!(
-                    "{indent}<li>{item}\n{sub_indent}<ul>\n{sub_content}\n{sub_indent}</ul>\n{indent}</li>"
+                    "{indent}<li>{escaped_item}\n{sub_indent}<ul>\n{sub_content}\n{sub_indent}</ul>\n{indent}</li>"
                 ));
             }
             _ => {
-                result.push(format!("{indent}<li>{item}</li>"));
+                result.push(format!("{indent}<li>{escaped_item}</li>"));
             }
         }
 
