@@ -112,16 +112,9 @@ class ContextMixin:
                 template_content = self._get_template_content()
                 if template_content:
                     # Extract variable paths once for list[Model] optimization
-                    from ..mixins.jit import extract_template_variables
+                    from ..mixins.jit import _cached_extract_template_variables
 
-                    variable_paths_map = None
-                    if extract_template_variables:
-                        try:
-                            variable_paths_map = extract_template_variables(template_content)
-                        except Exception:
-                            logger.debug(
-                                "Rust template variable extractor unavailable, using fallback"
-                            )
+                    variable_paths_map = _cached_extract_template_variables(template_content)
 
                     # Compute template hash once for codegen cache keys
                     import hashlib
