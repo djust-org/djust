@@ -85,6 +85,9 @@ function reinitLiveViewForTurboNav() {
     // Clear lazy hydration state
     lazyHydrationManager.init();
 
+    // Auto-stamp root attributes on new content before querying containers
+    autoStampRootAttributes();
+
     // Find all LiveView containers in the new content
     const allContainers = document.querySelectorAll('[data-djust-view]');
     const lazyContainers = document.querySelectorAll('[data-djust-view][data-djust-lazy]');

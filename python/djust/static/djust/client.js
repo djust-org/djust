@@ -109,6 +109,9 @@ function reinitLiveViewForTurboNav() {
     // Clear lazy hydration state
     lazyHydrationManager.init();
 
+    // Auto-stamp root attributes on new content before querying containers
+    autoStampRootAttributes();
+
     // Find all LiveView containers in the new content
     const allContainers = document.querySelectorAll('[data-djust-view]');
     const lazyContainers = document.querySelectorAll('[data-djust-view][data-djust-lazy]');
@@ -2096,7 +2099,7 @@ function throttle(func, limit) {
 
 // Helper: Get LiveView root element
 function getLiveViewRoot() {
-    return document.querySelector('[data-djust-root]') || document.body;
+    return document.querySelector('[data-djust-view]') || document.querySelector('[data-djust-root]') || document.body;
 }
 
 // Helper: Clear optimistic state
@@ -3894,6 +3897,22 @@ const lazyHydrationManager = {
 // Expose lazy hydration API
 window.djust.lazyHydration = lazyHydrationManager;
 
+// Auto-stamp data-djust-root and data-liveview-root on [data-djust-view]
+// elements so developers only need to write data-djust-view (#258).
+// Extracted as a helper so both djustInit() and reinitLiveViewForTurboNav() can call it.
+function autoStampRootAttributes() {
+    const allContainers = document.querySelectorAll('[data-djust-view]');
+    allContainers.forEach(container => {
+        if (!container.hasAttribute('data-djust-root')) {
+            container.setAttribute('data-djust-root', '');
+        }
+        if (!container.hasAttribute('data-liveview-root')) {
+            container.setAttribute('data-liveview-root', '');
+        }
+    });
+    return allContainers;
+}
+
 // Initialize on load (support both normal page load and dynamic script injection via TurboNav)
 function djustInit() {
     if (globalThis.djustDebug) console.log('[LiveView] Initializing...');
@@ -3901,20 +3920,21 @@ function djustInit() {
     // Initialize lazy hydration manager
     lazyHydrationManager.init();
 
-    // Find all LiveView containers
-    const allContainers = document.querySelectorAll('[data-djust-view]');
-    const lazyContainers = document.querySelectorAll('[data-djust-view][data-djust-lazy]');
-    const eagerContainers = document.querySelectorAll('[data-djust-view]:not([data-djust-lazy])');
+    // Auto-stamp root attributes on all [data-djust-view] elements
+    const allContainers = autoStampRootAttributes();
 
     if (allContainers.length === 0) {
-        console.error(
+        if (globalThis.djustDebug) console.error(
             '[LiveView] No containers found! Your template root element needs:\n' +
-            '  data-djust-root data-liveview-root data-djust-view="app.views.MyView"\n' +
-            'Example: <div data-djust-root data-liveview-root data-djust-view="myapp.views.DashboardView">'
+            '  data-djust-view="app.views.MyView"\n' +
+            'Example: <div data-djust-view="myapp.views.DashboardView">'
         );
     } else {
-        if (globalThis.djustDebug) console.log(`[LiveView] Found ${allContainers.length} containers (${lazyContainers.length} lazy, ${eagerContainers.length} eager)`);
+        if (globalThis.djustDebug) console.log(`[LiveView] Found ${allContainers.length} containers`);
     }
+
+    const lazyContainers = document.querySelectorAll('[data-djust-view][data-djust-lazy]');
+    const eagerContainers = document.querySelectorAll('[data-djust-view]:not([data-djust-lazy])');
 
     // Register lazy containers with the lazy hydration manager
     lazyContainers.forEach(container => {
