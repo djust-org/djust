@@ -1176,19 +1176,62 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                         version,
                                     )
                             else:
-                                # Get context with tracking
-                                with tracker.track("Context Preparation"):
-                                    context = await sync_to_async(
-                                        self.view_instance.get_context_data
-                                    )()
+                                # Batch sync work into a single thread hop
+                                # to avoid multiple sync_to_async crossings
+                                # (each hop costs ~0.5-2ms overhead).
+                                def _sync_context_and_render():
+                                    """Single sync function that gets context and renders.
+
+                                    Returns (ctx, html, patches, version). Note: ctx
+                                    (the result of get_context_data()) is returned for
+                                    tracking/diagnostics only — it feeds
+                                    tracker.track_context_size() and
+                                    _build_context_snapshot(), NOT the render path.
+                                    render_with_diff() builds its own context internally.
+                                    """
+                                    # Sub-phase timing: preserve granularity lost by
+                                    # batching into a single sync_to_async hop.
+                                    t0 = time.perf_counter()
+                                    ctx = self.view_instance.get_context_data()
+                                    t1 = time.perf_counter()
+                                    with profiler.profile(profiler.OP_RENDER):
+                                        r_html, r_patches, r_version = (
+                                            self.view_instance.render_with_diff()
+                                        )
+                                    t2 = time.perf_counter()
+                                    context_prep_ms = (t1 - t0) * 1000
+                                    vdom_diff_ms = (t2 - t1) * 1000
+                                    logger.debug(
+                                        "[djust] _sync_context_and_render sub-phases: "
+                                        "context_prep=%.2fms vdom_diff=%.2fms",
+                                        context_prep_ms,
+                                        vdom_diff_ms,
+                                    )
+                                    return (
+                                        ctx,
+                                        r_html,
+                                        r_patches,
+                                        r_version,
+                                        context_prep_ms,
+                                        vdom_diff_ms,
+                                    )
+
+                                with tracker.track("Context + Render (batched)") as batch_node:
+                                    (
+                                        context,
+                                        html,
+                                        patches,
+                                        version,
+                                        ctx_ms,
+                                        diff_ms,
+                                    ) = await sync_to_async(_sync_context_and_render)()
+                                    # Record sub-phase durations so the profiler can
+                                    # still distinguish slow context prep from slow
+                                    # VDOM diffing, even though they share one thread hop.
+                                    batch_node.metadata["context_prep_ms"] = ctx_ms
+                                    batch_node.metadata["vdom_diff_ms"] = diff_ms
                                     tracker.track_context_size(context)
 
-                                # Render and generate patches with tracking
-                                with tracker.track("VDOM Diff"):
-                                    with profiler.profile(profiler.OP_RENDER):
-                                        html, patches, version = await sync_to_async(
-                                            self.view_instance.render_with_diff
-                                        )()
                                     patch_list = None  # Initialize for later use
                                     # patches can be: JSON string with patches, "[]" for empty, or None
                                     if patches is not None:
@@ -1326,14 +1369,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         )
                     else:
                         # patches=None means VDOM diff failed or was skipped - send full HTML
-                        # Strip comments and whitespace to match Rust VDOM parser
-                        html = await sync_to_async(
-                            self.view_instance._strip_comments_and_whitespace
-                        )(html)
-                        # Extract innerHTML to avoid nesting <div data-djust-root> divs
-                        html_content = await sync_to_async(
-                            self.view_instance._extract_liveview_content
-                        )(html)
+                        # Batch strip + extract into a single thread hop
+                        # to avoid two separate sync_to_async crossings.
+                        def _sync_strip_and_extract(raw_html):
+                            stripped = self.view_instance._strip_comments_and_whitespace(raw_html)
+                            content = self.view_instance._extract_liveview_content(stripped)
+                            return stripped, content
+
+                        html, html_content = await sync_to_async(_sync_strip_and_extract)(html)
 
                         if version > 1:
                             logger.warning(
