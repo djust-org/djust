@@ -1176,19 +1176,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                         version,
                                     )
                             else:
-                                # Get context with tracking
-                                with tracker.track("Context Preparation"):
-                                    context = await sync_to_async(
-                                        self.view_instance.get_context_data
+                                # Batch sync work into a single thread hop
+                                # to avoid multiple sync_to_async crossings
+                                # (each hop costs ~0.5-2ms overhead).
+                                def _sync_context_and_render():
+                                    """Single sync function that gets context and renders."""
+                                    ctx = self.view_instance.get_context_data()
+                                    with profiler.profile(profiler.OP_RENDER):
+                                        r_html, r_patches, r_version = (
+                                            self.view_instance.render_with_diff()
+                                        )
+                                    return ctx, r_html, r_patches, r_version
+
+                                with tracker.track("Context + Render (batched)"):
+                                    context, html, patches, version = await sync_to_async(
+                                        _sync_context_and_render
                                     )()
                                     tracker.track_context_size(context)
 
-                                # Render and generate patches with tracking
-                                with tracker.track("VDOM Diff"):
-                                    with profiler.profile(profiler.OP_RENDER):
-                                        html, patches, version = await sync_to_async(
-                                            self.view_instance.render_with_diff
-                                        )()
                                     patch_list = None  # Initialize for later use
                                     # patches can be: JSON string with patches, "[]" for empty, or None
                                     if patches is not None:
@@ -1326,14 +1331,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         )
                     else:
                         # patches=None means VDOM diff failed or was skipped - send full HTML
-                        # Strip comments and whitespace to match Rust VDOM parser
-                        html = await sync_to_async(
-                            self.view_instance._strip_comments_and_whitespace
-                        )(html)
-                        # Extract innerHTML to avoid nesting <div data-djust-root> divs
-                        html_content = await sync_to_async(
-                            self.view_instance._extract_liveview_content
-                        )(html)
+                        # Batch strip + extract into a single thread hop
+                        # to avoid two separate sync_to_async crossings.
+                        def _sync_strip_and_extract(raw_html):
+                            stripped = self.view_instance._strip_comments_and_whitespace(raw_html)
+                            content = self.view_instance._extract_liveview_content(stripped)
+                            return stripped, content
+
+                        html, html_content = await sync_to_async(_sync_strip_and_extract)(html)
 
                         if version > 1:
                             logger.warning(
