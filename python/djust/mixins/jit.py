@@ -186,13 +186,13 @@ class JITMixin:
         3. Compiles custom serializer function
         4. Caches serializer for reuse
         """
-        if not JIT_AVAILABLE or not extract_template_variables:
+        if not JIT_AVAILABLE:
             return [normalize_django_value(obj) for obj in queryset]
 
         try:
             variable_paths_map = _cached_extract_template_variables(template_content)
             if variable_paths_map is None:
-                return [json.loads(json.dumps(obj, cls=DjangoJSONEncoder)) for obj in queryset]
+                return [normalize_django_value(obj) for obj in queryset]
             paths_for_var = variable_paths_map.get(variable_name, [])
 
             if not paths_for_var:
@@ -283,13 +283,13 @@ class JITMixin:
         """
         Apply JIT auto-serialization to a single Django Model instance.
         """
-        if not JIT_AVAILABLE or not extract_template_variables:
+        if not JIT_AVAILABLE:
             return normalize_django_value(obj)
 
         try:
             variable_paths_map = _cached_extract_template_variables(template_content)
             if variable_paths_map is None:
-                return json.loads(json.dumps(obj, cls=DjangoJSONEncoder))
+                return normalize_django_value(obj)
             paths_for_var = variable_paths_map.get(variable_name, [])
 
             if not paths_for_var:
