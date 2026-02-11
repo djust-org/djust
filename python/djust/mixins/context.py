@@ -79,18 +79,22 @@ class ContextMixin:
         jit_serialized_keys = set()
         template_content = None
 
-        # Short-circuit: skip JIT pipeline if no DB objects in context (#278)
-        _has_db_values = False
+        # Short-circuit: skip JIT pipeline if no DB objects in context (#278).
+        # NOTE: This scan only checks top-level context values. DB objects nested
+        # inside dicts will NOT trigger JIT; they are handled later by
+        # _deep_serialize_dict() which falls back to DjangoJSONEncoder when
+        # template_content is None.
+        has_db_values = False
         if JIT_AVAILABLE:
-            for _v in context.values():
-                if isinstance(_v, (QuerySet, models.Model)):
-                    _has_db_values = True
+            for val in context.values():
+                if isinstance(val, (QuerySet, models.Model)):
+                    has_db_values = True
                     break
-                if isinstance(_v, list) and _v and isinstance(_v[0], models.Model):
-                    _has_db_values = True
+                if isinstance(val, list) and val and isinstance(val[0], models.Model):
+                    has_db_values = True
                     break
 
-        if _has_db_values:
+        if has_db_values:
             try:
                 template_content = self._get_template_content()
                 if template_content:
