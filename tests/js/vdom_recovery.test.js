@@ -6,7 +6,7 @@
  * html_recovery for DOM morphing — instead of reloading the page.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { JSDOM } from 'jsdom';
 
 const fs = await import('fs');
