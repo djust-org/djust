@@ -378,5 +378,151 @@ class TestForceEscapeFilter:
         assert "&quot;" in result
 
 
+class TestEscapejsFilter:
+    """Tests for escapejs filter."""
+
+    def test_escapejs_quotes_and_backslash(self):
+        """Test escapejs escapes quotes, backslash, and special chars."""
+        template = "{{ text|escapejs }}"
+        context = {"text": 'it\'s a "test"\\done'}
+        result = render_template(template, context)
+        assert "\\u0027" in result  # single quote
+        assert "\\u0022" in result  # double quote
+        assert "\\u005C" in result  # backslash
+
+    def test_escapejs_newlines(self):
+        """Test escapejs escapes newlines and tabs."""
+        template = "{{ text|escapejs }}"
+        context = {"text": "line1\nline2\ttab"}
+        result = render_template(template, context)
+        assert "\\u000A" in result
+        assert "\\u0009" in result
+
+
+class TestUrlizeFilter:
+    """Tests for urlize filter."""
+
+    def test_urlize_url(self):
+        """Test urlize wraps URLs in anchor tags."""
+        template = "{{ text|urlize|safe }}"
+        context = {"text": "Visit https://example.com today"}
+        result = render_template(template, context)
+        assert '<a href="https://example.com"' in result
+        assert 'rel="nofollow"' in result
+
+    def test_urlize_email(self):
+        """Test urlize wraps emails in mailto links."""
+        template = "{{ text|urlize|safe }}"
+        context = {"text": "Email user@example.com for help"}
+        result = render_template(template, context)
+        assert '<a href="mailto:user@example.com">' in result
+
+
+class TestTruncateHtmlFilters:
+    """Tests for truncatechars_html and truncatewords_html filters."""
+
+    def test_truncatechars_html_preserves_tags(self):
+        """Test truncatechars_html counts only visible chars and closes tags."""
+        template = "{{ html|truncatechars_html:11|safe }}"
+        context = {"html": "<p>Hello <b>world</b> this is long</p>"}
+        result = render_template(template, context)
+        assert "..." in result
+        assert "<p>" in result
+
+    def test_truncatewords_html_preserves_tags(self):
+        """Test truncatewords_html counts only words outside tags."""
+        template = "{{ html|truncatewords_html:3|safe }}"
+        context = {"html": "<p>one two <b>three four</b> five</p>"}
+        result = render_template(template, context)
+        assert "one" in result
+        assert "two" in result
+        assert "three" in result
+        assert "..." in result
+
+
+class TestLinenumbersFilter:
+    """Tests for linenumbers filter."""
+
+    def test_linenumbers_basic(self):
+        """Test linenumbers prepends line numbers."""
+        template = "{{ text|linenumbers }}"
+        context = {"text": "first\nsecond\nthird"}
+        result = render_template(template, context)
+        assert "1. first" in result
+        assert "2. second" in result
+        assert "3. third" in result
+
+
+class TestPhone2numericFilter:
+    """Tests for phone2numeric filter."""
+
+    def test_phone2numeric_basic(self):
+        """Test phone2numeric converts letters to digits."""
+        template = "{{ phone|phone2numeric }}"
+        context = {"phone": "1-800-COLLECT"}
+        result = render_template(template, context)
+        assert result == "1-800-2655328"
+
+
+class TestGetDigitFilter:
+    """Tests for get_digit filter."""
+
+    def test_get_digit_rightmost(self):
+        """Test get_digit returns Nth digit from right."""
+        template = "{{ num|get_digit:1 }}"
+        context = {"num": "12345"}
+        result = render_template(template, context)
+        assert result == "5"
+
+    def test_get_digit_third(self):
+        """Test get_digit returns 3rd digit from right."""
+        template = "{{ num|get_digit:3 }}"
+        context = {"num": "12345"}
+        result = render_template(template, context)
+        assert result == "3"
+
+
+class TestIriencodeFilter:
+    """Tests for iriencode filter."""
+
+    def test_iriencode_preserves_non_ascii(self):
+        """Test iriencode preserves non-ASCII characters."""
+        template = "{{ text|iriencode }}"
+        context = {"text": "café"}
+        result = render_template(template, context)
+        assert "café" in result
+
+    def test_iriencode_encodes_spaces(self):
+        """Test iriencode encodes spaces."""
+        template = "{{ text|iriencode }}"
+        context = {"text": "hello world"}
+        result = render_template(template, context)
+        assert "%20" in result
+
+
+class TestPprintFilter:
+    """Tests for pprint filter."""
+
+    def test_pprint_string(self):
+        """Test pprint of a string value."""
+        template = "{{ text|pprint }}"
+        context = {"text": "hello"}
+        result = render_template(template, context)
+        assert "hello" in result
+
+
+class TestUnorderedListFilter:
+    """Tests for unordered_list filter."""
+
+    def test_unordered_list_flat(self):
+        """Test unordered_list with flat list."""
+        template = "{{ items|unordered_list|safe }}"
+        context = {"items": ["one", "two", "three"]}
+        result = render_template(template, context)
+        assert "<li>one</li>" in result
+        assert "<li>two</li>" in result
+        assert "<li>three</li>" in result
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

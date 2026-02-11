@@ -2,6 +2,8 @@
 
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use djust_core::{DjangoRustError, Result, Value};
+use once_cell::sync::Lazy;
+use regex::Regex;
 
 pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Result<Value> {
     match filter_name {
@@ -334,6 +336,80 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
         "force_escape" => {
             // force_escape filter: always HTML-escape (unlike escape which is a no-op)
             Ok(Value::String(html_escape(&value.to_string())))
+        }
+        "escapejs" => {
+            // escapejs filter: escape string for use in JavaScript
+            Ok(Value::String(escape_js(&value.to_string())))
+        }
+        "linenumbers" => {
+            // linenumbers filter: prepend line numbers to each line
+            Ok(Value::String(add_linenumbers(&value.to_string())))
+        }
+        "get_digit" => {
+            // get_digit filter: return Nth digit from right (1-indexed)
+            let n = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            Ok(Value::String(get_digit(&value.to_string(), n)))
+        }
+        "iriencode" => {
+            // iriencode filter: like urlencode but preserves non-ASCII chars
+            Ok(Value::String(iriencode(&value.to_string())))
+        }
+        "phone2numeric" => {
+            // phone2numeric filter: convert phone letters to digits
+            Ok(Value::String(phone2numeric(&value.to_string())))
+        }
+        "pprint" => {
+            // pprint filter: Python-like repr of value
+            Ok(Value::String(pprint_value(value)))
+        }
+        "safeseq" => {
+            // safeseq filter: marks each item in a sequence as safe (no-op at filter level)
+            Ok(value.clone())
+        }
+        "escapeseq" => {
+            // escapeseq filter: apply HTML escaping to each item in a sequence
+            match value {
+                Value::List(items) => {
+                    let escaped: Vec<Value> = items
+                        .iter()
+                        .map(|item| Value::String(html_escape(&item.to_string())))
+                        .collect();
+                    Ok(Value::List(escaped))
+                }
+                _ => Ok(Value::String(html_escape(&value.to_string()))),
+            }
+        }
+        "urlize" => {
+            // urlize filter: convert URLs and emails to clickable links
+            Ok(Value::String(urlize(&value.to_string(), None)))
+        }
+        "urlizetrunc" => {
+            // urlizetrunc filter: like urlize but truncates displayed URL
+            let limit = arg.and_then(|s| s.parse::<usize>().ok());
+            Ok(Value::String(urlize(&value.to_string(), limit)))
+        }
+        "unordered_list" => {
+            // unordered_list filter: recursively render nested lists as <li>/<ul>
+            match value {
+                Value::List(items) => Ok(Value::String(unordered_list(items, 1))),
+                _ => Ok(value.clone()),
+            }
+        }
+        "truncatechars_html" => {
+            // truncatechars_html filter: truncate by char count, preserving HTML tags
+            let num_chars = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(20);
+            Ok(Value::String(truncate_chars_html(
+                &value.to_string(),
+                num_chars,
+            )))
+        }
+        "truncatewords_html" => {
+            // truncatewords_html filter: truncate by word count, preserving HTML tags
+            let num_words = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(10);
+            Ok(Value::String(truncate_words_html(
+                &value.to_string(),
+                num_words,
+            )))
         }
         _ => Err(DjangoRustError::TemplateError(format!(
             "Unknown filter: {filter_name}"
@@ -898,6 +974,403 @@ fn value_to_json(value: &Value) -> String {
             format!("{{{}}}", parts.join(", "))
         }
     }
+}
+
+fn escape_js(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => result.push_str("\\u005C"),
+            '\'' => result.push_str("\\u0027"),
+            '"' => result.push_str("\\u0022"),
+            '>' => result.push_str("\\u003E"),
+            '<' => result.push_str("\\u003C"),
+            '&' => result.push_str("\\u0026"),
+            '=' => result.push_str("\\u003D"),
+            '-' => result.push_str("\\u002D"),
+            ';' => result.push_str("\\u003B"),
+            '\n' => result.push_str("\\u000A"),
+            '\r' => result.push_str("\\u000D"),
+            '\t' => result.push_str("\\u0009"),
+            '\0' => result.push_str("\\u0000"),
+            '\u{2028}' => result.push_str("\\u2028"),
+            '\u{2029}' => result.push_str("\\u2029"),
+            _ => result.push(c),
+        }
+    }
+    result
+}
+
+fn add_linenumbers(s: &str) -> String {
+    let lines: Vec<&str> = s.split('\n').collect();
+    let width = lines.len().to_string().len();
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, line)| format!("{:>width$}. {line}", i + 1))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn get_digit(s: &str, n: usize) -> String {
+    if n == 0 {
+        return s.to_string();
+    }
+    let digits: Vec<char> = s.chars().filter(|c| c.is_ascii_digit()).collect();
+    if n > digits.len() {
+        return s.to_string();
+    }
+    digits[digits.len() - n].to_string()
+}
+
+fn iriencode(s: &str) -> String {
+    // Like urlencode but preserves non-ASCII characters (for IRIs)
+    let mut result = String::with_capacity(s.len() * 3);
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric()
+            || c == '-'
+            || c == '_'
+            || c == '.'
+            || c == '~'
+            || c == '/'
+            || c == ':'
+            || !c.is_ascii()
+        {
+            result.push(c);
+        } else {
+            let mut buf = [0u8; 4];
+            let encoded = c.encode_utf8(&mut buf);
+            for byte in encoded.bytes() {
+                result.push_str(&format!("%{:02X}", byte));
+            }
+        }
+    }
+    result
+}
+
+fn phone2numeric(s: &str) -> String {
+    s.chars()
+        .map(|c| match c.to_ascii_uppercase() {
+            'A' | 'B' | 'C' => '2',
+            'D' | 'E' | 'F' => '3',
+            'G' | 'H' | 'I' => '4',
+            'J' | 'K' | 'L' => '5',
+            'M' | 'N' | 'O' => '6',
+            'P' | 'Q' | 'R' | 'S' => '7',
+            'T' | 'U' | 'V' => '8',
+            'W' | 'X' | 'Y' | 'Z' => '9',
+            other => other,
+        })
+        .collect()
+}
+
+fn pprint_value(value: &Value) -> String {
+    match value {
+        Value::Null => "None".to_string(),
+        Value::Bool(true) => "True".to_string(),
+        Value::Bool(false) => "False".to_string(),
+        Value::Integer(n) => n.to_string(),
+        Value::Float(f) => format!("{f}"),
+        Value::String(s) => format!("'{s}'"),
+        Value::List(items) => {
+            let parts: Vec<String> = items.iter().map(pprint_value).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        Value::Object(map) => {
+            let mut parts: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("'{}': {}", k, pprint_value(v)))
+                .collect();
+            parts.sort();
+            format!("{{{}}}", parts.join(", "))
+        }
+    }
+}
+
+static URLIZE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r#"(?x)
+        (?:
+            (?:https?://|www\.)          # URL starting with http(s):// or www.
+            [^\s<>"']+                   # URL body
+        )
+        |
+        (?:
+            [a-zA-Z0-9._%+\-]+          # email local part
+            @
+            [a-zA-Z0-9.\-]+             # email domain
+            \.[a-zA-Z]{2,}              # TLD
+        )
+    "#,
+    )
+    .unwrap()
+});
+
+fn urlize(text: &str, trunc_limit: Option<usize>) -> String {
+    let mut result = String::new();
+    let mut last_end = 0;
+
+    for m in URLIZE_RE.find_iter(text) {
+        // Append text before this match
+        result.push_str(&text[last_end..m.start()]);
+
+        let matched = m.as_str();
+
+        // Determine if this is an email or a URL
+        if matched.contains('@') && !matched.starts_with("http") {
+            // Email
+            let display = truncate_url_display(matched, trunc_limit);
+            result.push_str(&format!("<a href=\"mailto:{matched}\">{display}</a>"));
+        } else {
+            // URL
+            let href = if matched.starts_with("www.") {
+                format!("http://{matched}")
+            } else {
+                matched.to_string()
+            };
+            // Strip trailing punctuation from href/display that's not part of URL
+            let (href_clean, display_raw, trailing) = strip_url_trailing(&href, matched);
+            let display = truncate_url_display(&display_raw, trunc_limit);
+            result.push_str(&format!(
+                "<a href=\"{href_clean}\" rel=\"nofollow\">{display}</a>{trailing}"
+            ));
+        }
+
+        last_end = m.end();
+    }
+
+    // Append remainder
+    result.push_str(&text[last_end..]);
+    result
+}
+
+fn strip_url_trailing<'a>(href: &'a str, display: &'a str) -> (String, String, String) {
+    // Strip trailing punctuation that's likely not part of the URL
+    let trailing_chars: &[char] = &['.', ',', ')', '!', '?', ';', ':'];
+    let mut href_s = href.to_string();
+    let mut display_s = display.to_string();
+    let mut trailing = String::new();
+
+    while href_s.ends_with(trailing_chars) {
+        let c = href_s.pop().unwrap();
+        display_s.pop();
+        trailing.insert(0, c);
+    }
+
+    (href_s, display_s, trailing)
+}
+
+fn truncate_url_display(s: &str, limit: Option<usize>) -> String {
+    match limit {
+        Some(n) if s.chars().count() > n => {
+            let truncated: String = s.chars().take(n.saturating_sub(3)).collect();
+            format!("{truncated}...")
+        }
+        _ => s.to_string(),
+    }
+}
+
+fn unordered_list(items: &[Value], depth: usize) -> String {
+    let indent = "\t".repeat(depth);
+    let mut result = Vec::new();
+
+    let mut i = 0;
+    while i < items.len() {
+        let item = &items[i];
+
+        // Check if the next item is a sublist
+        let sublist = if i + 1 < items.len() {
+            if let Value::List(sub) = &items[i + 1] {
+                i += 1; // consume the sublist
+                Some(sub)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        match sublist {
+            Some(sub) if !sub.is_empty() => {
+                let sub_content = unordered_list(sub, depth + 1);
+                let sub_indent = "\t".repeat(depth + 1);
+                result.push(format!(
+                    "{indent}<li>{item}\n{sub_indent}<ul>\n{sub_content}\n{sub_indent}</ul>\n{indent}</li>"
+                ));
+            }
+            _ => {
+                result.push(format!("{indent}<li>{item}</li>"));
+            }
+        }
+
+        i += 1;
+    }
+
+    result.join("\n")
+}
+
+fn truncate_chars_html(text: &str, limit: usize) -> String {
+    if limit == 0 {
+        return String::new();
+    }
+
+    let ellipsis = "...";
+    let mut visible_count = 0;
+    let mut open_tags: Vec<String> = Vec::new();
+    let mut result = String::new();
+    let mut chars = text.chars().peekable();
+    let target = limit.saturating_sub(ellipsis.len());
+
+    while let Some(c) = chars.next() {
+        if c == '<' {
+            let mut tag = String::from('<');
+            // Read the entire tag
+            for tc in chars.by_ref() {
+                tag.push(tc);
+                if tc == '>' {
+                    break;
+                }
+            }
+            // Parse tag name for open/close tracking
+            let tag_inner = tag.trim_start_matches('<').trim_end_matches('>').trim();
+            if let Some(stripped) = tag_inner.strip_prefix('/') {
+                // Closing tag
+                let name = stripped
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_lowercase();
+                if let Some(pos) = open_tags.iter().rposition(|t| *t == name) {
+                    open_tags.remove(pos);
+                }
+            } else if !tag_inner.ends_with('/')
+                && !tag_inner.starts_with('!')
+                && !is_void_element(tag_inner.split_whitespace().next().unwrap_or(""))
+            {
+                // Opening tag (non-self-closing, non-void)
+                let name = tag_inner
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_lowercase();
+                if !name.is_empty() {
+                    open_tags.push(name);
+                }
+            }
+            result.push_str(&tag);
+        } else {
+            visible_count += 1;
+            if visible_count > target {
+                result.push_str(ellipsis);
+                // Close open tags in reverse order
+                for tag_name in open_tags.iter().rev() {
+                    result.push_str(&format!("</{tag_name}>"));
+                }
+                return result;
+            }
+            result.push(c);
+        }
+    }
+
+    // Text was shorter than the limit, return as-is
+    result
+}
+
+fn truncate_words_html(text: &str, limit: usize) -> String {
+    if limit == 0 {
+        return String::new();
+    }
+
+    let ellipsis = " ...";
+    let mut word_count = 0;
+    let mut in_word = false;
+    let mut open_tags: Vec<String> = Vec::new();
+    let mut result = String::new();
+    let mut chars = text.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '<' {
+            in_word = false;
+            let mut tag = String::from('<');
+            for tc in chars.by_ref() {
+                tag.push(tc);
+                if tc == '>' {
+                    break;
+                }
+            }
+            let tag_inner = tag.trim_start_matches('<').trim_end_matches('>').trim();
+            if let Some(stripped) = tag_inner.strip_prefix('/') {
+                let name = stripped
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_lowercase();
+                if let Some(pos) = open_tags.iter().rposition(|t| *t == name) {
+                    open_tags.remove(pos);
+                }
+            } else if !tag_inner.ends_with('/')
+                && !tag_inner.starts_with('!')
+                && !is_void_element(tag_inner.split_whitespace().next().unwrap_or(""))
+            {
+                let name = tag_inner
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_lowercase();
+                if !name.is_empty() {
+                    open_tags.push(name);
+                }
+            }
+            result.push_str(&tag);
+        } else if c.is_whitespace() {
+            if in_word {
+                in_word = false;
+            }
+            if word_count >= limit {
+                result.push_str(ellipsis);
+                for tag_name in open_tags.iter().rev() {
+                    result.push_str(&format!("</{tag_name}>"));
+                }
+                return result;
+            }
+            result.push(c);
+        } else {
+            if !in_word {
+                word_count += 1;
+                in_word = true;
+                if word_count > limit {
+                    result.push_str(ellipsis);
+                    for tag_name in open_tags.iter().rev() {
+                        result.push_str(&format!("</{tag_name}>"));
+                    }
+                    return result;
+                }
+            }
+            result.push(c);
+        }
+    }
+
+    result
+}
+
+fn is_void_element(tag: &str) -> bool {
+    matches!(
+        tag.to_lowercase().as_str(),
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
 }
 
 pub mod tags {
@@ -1500,5 +1973,245 @@ mod tests {
         let result = apply_filter("force_escape", &value, None).unwrap();
         assert!(result.to_string().contains("&#x27;"));
         assert!(result.to_string().contains("&quot;"));
+    }
+
+    #[test]
+    fn test_escapejs_filter() {
+        let value = Value::String("hello\\world".to_string());
+        let result = apply_filter("escapejs", &value, None).unwrap();
+        assert!(result.to_string().contains("\\u005C"));
+
+        let value = Value::String("it's \"quoted\"".to_string());
+        let result = apply_filter("escapejs", &value, None).unwrap();
+        assert!(result.to_string().contains("\\u0027"));
+        assert!(result.to_string().contains("\\u0022"));
+
+        let value = Value::String("line1\nline2\ttab".to_string());
+        let result = apply_filter("escapejs", &value, None).unwrap();
+        assert!(result.to_string().contains("\\u000A"));
+        assert!(result.to_string().contains("\\u0009"));
+
+        // Test U+2028/U+2029 (line/paragraph separators)
+        let value = Value::String("a\u{2028}b\u{2029}c".to_string());
+        let result = apply_filter("escapejs", &value, None).unwrap();
+        assert!(result.to_string().contains("\\u2028"));
+        assert!(result.to_string().contains("\\u2029"));
+    }
+
+    #[test]
+    fn test_linenumbers_filter() {
+        let value = Value::String("first\nsecond\nthird".to_string());
+        let result = apply_filter("linenumbers", &value, None).unwrap();
+        assert_eq!(result.to_string(), "1. first\n2. second\n3. third");
+    }
+
+    #[test]
+    fn test_linenumbers_filter_alignment() {
+        // With 10+ lines, numbers should be right-aligned
+        let lines: Vec<&str> = (0..12).map(|_| "line").collect();
+        let value = Value::String(lines.join("\n"));
+        let result = apply_filter("linenumbers", &value, None).unwrap();
+        let output = result.to_string();
+        assert!(output.starts_with(" 1. line"));
+        assert!(output.contains("12. line"));
+    }
+
+    #[test]
+    fn test_get_digit_filter() {
+        // 1 = rightmost digit
+        let value = Value::String("12345".to_string());
+        let result = apply_filter("get_digit", &value, Some("1")).unwrap();
+        assert_eq!(result.to_string(), "5");
+
+        let result = apply_filter("get_digit", &value, Some("3")).unwrap();
+        assert_eq!(result.to_string(), "3");
+
+        // Out of range returns original
+        let result = apply_filter("get_digit", &value, Some("10")).unwrap();
+        assert_eq!(result.to_string(), "12345");
+
+        // 0 returns original (Django behavior)
+        let result = apply_filter("get_digit", &value, Some("0")).unwrap();
+        assert_eq!(result.to_string(), "12345");
+    }
+
+    #[test]
+    fn test_iriencode_filter() {
+        // Preserves non-ASCII chars (unlike urlencode)
+        let value = Value::String("café".to_string());
+        let result = apply_filter("iriencode", &value, None).unwrap();
+        assert_eq!(result.to_string(), "café");
+
+        // Encodes ASCII specials (spaces)
+        let value = Value::String("hello world".to_string());
+        let result = apply_filter("iriencode", &value, None).unwrap();
+        assert!(result.to_string().contains("%20"));
+
+        // Preserves / and :
+        let value = Value::String("http://example.com/path".to_string());
+        let result = apply_filter("iriencode", &value, None).unwrap();
+        assert_eq!(result.to_string(), "http://example.com/path");
+    }
+
+    #[test]
+    fn test_phone2numeric_filter() {
+        let value = Value::String("1-800-COLLECT".to_string());
+        let result = apply_filter("phone2numeric", &value, None).unwrap();
+        assert_eq!(result.to_string(), "1-800-2655328");
+    }
+
+    #[test]
+    fn test_pprint_filter() {
+        // String value
+        let value = Value::String("hello".to_string());
+        let result = apply_filter("pprint", &value, None).unwrap();
+        assert_eq!(result.to_string(), "'hello'");
+
+        // Integer
+        let value = Value::Integer(42);
+        let result = apply_filter("pprint", &value, None).unwrap();
+        assert_eq!(result.to_string(), "42");
+
+        // List
+        let value = Value::List(vec![Value::Integer(1), Value::Integer(2)]);
+        let result = apply_filter("pprint", &value, None).unwrap();
+        assert_eq!(result.to_string(), "[1, 2]");
+
+        // Bool
+        let value = Value::Bool(true);
+        let result = apply_filter("pprint", &value, None).unwrap();
+        assert_eq!(result.to_string(), "True");
+
+        // Null
+        let value = Value::Null;
+        let result = apply_filter("pprint", &value, None).unwrap();
+        assert_eq!(result.to_string(), "None");
+    }
+
+    #[test]
+    fn test_safeseq_filter() {
+        let value = Value::List(vec![
+            Value::String("<b>bold</b>".to_string()),
+            Value::String("plain".to_string()),
+        ]);
+        let result = apply_filter("safeseq", &value, None).unwrap();
+        // safeseq is a no-op at filter level; returns the list unchanged
+        if let Value::List(items) = result {
+            assert_eq!(items.len(), 2);
+            assert_eq!(items[0].to_string(), "<b>bold</b>");
+        } else {
+            panic!("Expected List value");
+        }
+    }
+
+    #[test]
+    fn test_escapeseq_filter() {
+        let value = Value::List(vec![
+            Value::String("<b>bold</b>".to_string()),
+            Value::String("plain".to_string()),
+        ]);
+        let result = apply_filter("escapeseq", &value, None).unwrap();
+        if let Value::List(items) = result {
+            assert_eq!(items.len(), 2);
+            assert_eq!(items[0].to_string(), "&lt;b&gt;bold&lt;/b&gt;");
+            assert_eq!(items[1].to_string(), "plain");
+        } else {
+            panic!("Expected List value");
+        }
+    }
+
+    #[test]
+    fn test_urlize_filter() {
+        // URL detection
+        let value = Value::String("Visit https://example.com for info".to_string());
+        let result = apply_filter("urlize", &value, None).unwrap();
+        let s = result.to_string();
+        assert!(s.contains("<a href=\"https://example.com\""));
+        assert!(s.contains("rel=\"nofollow\""));
+
+        // Email detection
+        let value = Value::String("Email user@example.com for help".to_string());
+        let result = apply_filter("urlize", &value, None).unwrap();
+        let s = result.to_string();
+        assert!(s.contains("<a href=\"mailto:user@example.com\">"));
+
+        // www prefix
+        let value = Value::String("Go to www.example.com today".to_string());
+        let result = apply_filter("urlize", &value, None).unwrap();
+        let s = result.to_string();
+        assert!(s.contains("<a href=\"http://www.example.com\""));
+    }
+
+    #[test]
+    fn test_urlizetrunc_filter() {
+        let value = Value::String("Visit https://example.com/very/long/path for info".to_string());
+        let result = apply_filter("urlizetrunc", &value, Some("15")).unwrap();
+        let s = result.to_string();
+        assert!(s.contains("..."));
+        assert!(s.contains("href=\"https://example.com/very/long/path\""));
+    }
+
+    #[test]
+    fn test_unordered_list_filter() {
+        // Flat list
+        let value = Value::List(vec![
+            Value::String("one".to_string()),
+            Value::String("two".to_string()),
+        ]);
+        let result = apply_filter("unordered_list", &value, None).unwrap();
+        let s = result.to_string();
+        assert!(s.contains("<li>one</li>"));
+        assert!(s.contains("<li>two</li>"));
+
+        // Nested list: ["item", ["sub1", "sub2"]]
+        let value = Value::List(vec![
+            Value::String("parent".to_string()),
+            Value::List(vec![
+                Value::String("child1".to_string()),
+                Value::String("child2".to_string()),
+            ]),
+        ]);
+        let result = apply_filter("unordered_list", &value, None).unwrap();
+        let s = result.to_string();
+        assert!(s.contains("<li>parent"));
+        assert!(s.contains("<ul>"));
+        assert!(s.contains("<li>child1</li>"));
+        assert!(s.contains("<li>child2</li>"));
+        assert!(s.contains("</ul>"));
+    }
+
+    #[test]
+    fn test_truncatechars_html_filter() {
+        // Truncate and close tags
+        let value = Value::String("<p>Hello <b>world</b> this is long</p>".to_string());
+        let result = apply_filter("truncatechars_html", &value, Some("11")).unwrap();
+        let s = result.to_string();
+        // Should preserve tags, count only visible chars, and close open tags
+        assert!(s.contains("<p>"));
+        assert!(s.contains("..."));
+        // Open tags should be closed
+        assert!(s.ends_with("</p>") || s.ends_with("</b></p>"));
+
+        // Short text unchanged
+        let value = Value::String("<b>Hi</b>".to_string());
+        let result = apply_filter("truncatechars_html", &value, Some("20")).unwrap();
+        assert_eq!(result.to_string(), "<b>Hi</b>");
+    }
+
+    #[test]
+    fn test_truncatewords_html_filter() {
+        // Truncate by words, preserving tags
+        let value = Value::String("<p>one two <b>three four</b> five six</p>".to_string());
+        let result = apply_filter("truncatewords_html", &value, Some("3")).unwrap();
+        let s = result.to_string();
+        assert!(s.contains("one"));
+        assert!(s.contains("two"));
+        assert!(s.contains("three"));
+        assert!(s.contains("..."));
+
+        // Short text unchanged
+        let value = Value::String("<b>one two</b>".to_string());
+        let result = apply_filter("truncatewords_html", &value, Some("10")).unwrap();
+        assert_eq!(result.to_string(), "<b>one two</b>");
     }
 }
