@@ -6,14 +6,14 @@ DjustMiddlewareStack for apps without django.contrib.auth,
 and emitting a client-side route map for live_redirect navigation.
 """
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from django.urls import URLPattern, path
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
 
-def DjustMiddlewareStack(inner):
+def DjustMiddlewareStack(inner: Any) -> Any:
     """
     ASGI middleware stack for djust that doesn't require django.contrib.auth.
 

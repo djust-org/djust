@@ -3815,7 +3815,7 @@ const lazyHydrationManager = {
             return;
         }
 
-        console.log(`[LiveView:lazy] Hydrating: ${viewPath}`);
+        if (globalThis.djustDebug) console.log(`[LiveView:lazy] Hydrating: ${viewPath}`);
 
         // Ensure WebSocket is connected (skip in HTTP-only mode)
         if (window.DJUST_USE_WEBSOCKET === false) {
@@ -3848,7 +3848,7 @@ const lazyHydrationManager = {
 
     // Process all queued mounts when WebSocket connects
     processPendingMounts() {
-        console.log(`[LiveView:lazy] Processing ${this.pendingMounts.length} pending mounts`);
+        if (globalThis.djustDebug) console.log(`[LiveView:lazy] Processing ${this.pendingMounts.length} pending mounts`);
         const mounts = this.pendingMounts.slice();
         this.pendingMounts = [];
         mounts.forEach(({ element, viewPath }) => {
@@ -3862,7 +3862,7 @@ const lazyHydrationManager = {
         const hasContent = element.innerHTML && element.innerHTML.trim().length > 0;
 
         if (hasContent) {
-            console.log('[LiveView:lazy] Using pre-rendered content');
+            if (globalThis.djustDebug) console.log('[LiveView:lazy] Using pre-rendered content');
             liveViewWS.skipMountHtml = true;
         }
 
