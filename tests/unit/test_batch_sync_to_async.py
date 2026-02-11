@@ -140,7 +140,7 @@ class TestBatchedSyncToAsyncCallCount:
 
         with patch("djust.websocket.sync_to_async", side_effect=tracking_sync_to_async):
             batched_fn = tracking_sync_to_async(_sync_strip_and_extract)
-            html, html_content = await batched_fn("<div>raw</div>")
+            _html, _content = await batched_fn("<div>raw</div>")
 
         # 1 call, not 2 separate ones
         assert len(calls) == 1
