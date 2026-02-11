@@ -1,0 +1,203 @@
+# djust
+
+djust is a Python/Rust framework that brings Phoenix LiveView-style reactive server-side rendering to Django. Views update in real-time over WebSockets with ~5KB client JS, no build step.
+
+## Setup
+
+```bash
+pip install djust
+```
+
+```python
+# settings.py
+INSTALLED_APPS = ['djust', ...]
+ASGI_APPLICATION = 'myproject.asgi.application'
+
+# asgi.py
+from djust.routing import live_session
+from channels.routing import ProtocolTypeRouter, URLRouter
+from channels.auth import AuthMiddlewareStack
+application = ProtocolTypeRouter({
+    "http": get_asgi_application(),
+    "websocket": AuthMiddlewareStack(URLRouter([
+        live_session("app/", include("myapp.urls")),
+    ])),
+})
+
+# urls.py
+from djust.routing import live_session
+urlpatterns = [live_session("myview/", MyView, name="myview")]
+```
+
+## LiveView Lifecycle
+
+mount() -> _refresh() -> get_context_data() -> template renders -> event -> handler -> _refresh() -> get_context_data() -> re-render
+
+```python
+from djust import LiveView
+from djust.decorators import event_handler, debounce
+
+class ItemListView(LiveView):
+    template_name = 'items/list.html'
+
+    def mount(self, request, **kwargs):
+        self.search = ""
+        self.filter = "all"
+        self._refresh()
+
+    def _refresh(self):
+        qs = Item.objects.all()
+        if self.search:
+            qs = qs.filter(name__icontains=self.search)
+        if self.filter != "all":
+            qs = qs.filter(status=self.filter)
+        self._items = qs  # PRIVATE variable (underscore prefix)
+
+    def get_context_data(self, **kwargs):
+        self.items = self._items  # PUBLIC = triggers Rust JIT serialization
+        context = super().get_context_data(**kwargs)
+        return context
+
+    @event_handler()
+    @debounce(wait=0.5)
+    def search_items(self, value: str = "", **kwargs):
+        self.search = value
+        self._refresh()
+
+    @event_handler()
+    def filter_items(self, value: str = "all", **kwargs):
+        self.filter = value
+        self._refresh()
+```
+
+## Event Handlers
+
+All handlers MUST use `@event_handler()` decorator and accept `**kwargs`.
+
+```python
+# Input/change events: use `value` parameter name
+@event_handler()
+def on_input(self, value: str = "", **kwargs):
+    self.text = value
+
+# Button with data attributes: data-item-id="5" -> item_id=5
+@event_handler()
+def delete(self, item_id: int = 0, **kwargs):
+    Item.objects.filter(id=item_id).delete()
+    self._refresh()
+
+# Form submission: all fields as kwargs
+@event_handler()
+def submit(self, **form_data):
+    name = form_data.get("name")
+    email = form_data.get("email")
+
+# Debounce search input (wait 500ms after typing stops)
+@event_handler()
+@debounce(wait=0.5)
+def search(self, value: str = "", **kwargs):
+    self.query = value
+    self._refresh()
+
+# Throttle (max once per second)
+@event_handler()
+@throttle(interval=1.0)
+def on_scroll(self, position: int = 0, **kwargs):
+    self.scroll_pos = position
+```
+
+## Template Directives
+
+```html
+<!-- Click -->
+<button dj-click="increment">+1</button>
+
+<!-- Click with data params -->
+<button dj-click="delete" data-item-id="{{ item.id }}">Delete</button>
+
+<!-- Text input (fires on every keystroke) -->
+<input type="text" dj-input="search" value="{{ query }}" />
+
+<!-- Change (fires on blur/select change) -->
+<select dj-change="filter">
+    <option value="all">All</option>
+    <option value="active">Active</option>
+</select>
+
+<!-- Form submit -->
+<form dj-submit="save">
+    {% csrf_token %}
+    <input name="title" type="text" />
+    <button type="submit">Save</button>
+</form>
+
+<!-- Keyboard events -->
+<input dj-keydown.enter="submit_search" />
+
+<!-- Hooks (JS lifecycle callbacks) -->
+<div dj-hook="chart" id="chart-container"></div>
+
+<!-- Partial updates (skip re-rendering this subtree) -->
+<div dj-update="ignore">User-controlled DOM here</div>
+
+<!-- Keyed lists (optimal diffing) -->
+{% for item in items %}
+<div data-key="{{ item.id }}">{{ item.name }}</div>
+{% endfor %}
+```
+
+## JIT Serialization (Critical Pattern)
+
+QuerySets MUST be stored in private variables (`self._items`) and assigned to public variables (`self.items`) only inside `get_context_data()`. This enables Rust-based serialization (10-100x faster than Python).
+
+```python
+# CORRECT
+def _refresh(self):
+    self._items = Item.objects.filter(active=True)  # private
+
+def get_context_data(self, **kwargs):
+    self.items = self._items  # public <- private (JIT happens here)
+    return super().get_context_data(**kwargs)
+
+# WRONG - bypasses JIT
+def mount(self, request, **kwargs):
+    self.items = Item.objects.all()  # never assign QuerySet to public directly
+
+# WRONG - disables JIT
+def _refresh(self):
+    self._items = list(Item.objects.all())  # never convert to list
+```
+
+## Forms (FormMixin)
+
+```python
+from djust.forms import FormMixin
+
+class MyFormView(FormMixin, LiveView):
+    template_name = 'form.html'
+    form_class = MyForm
+
+    def mount(self, request, pk=None, **kwargs):
+        if pk:
+            self._model_instance = MyModel.objects.get(pk=pk)
+        super().mount(request, **kwargs)  # AFTER setting _model_instance
+
+    def form_valid(self, form):
+        obj = form.save()
+        self.success_message = "Saved!"
+        self.redirect_url = reverse('detail', kwargs={'pk': obj.pk})
+
+    def form_invalid(self, form):
+        self.error_message = "Please fix errors below"
+```
+
+## Common Pitfalls
+
+1. Missing `@event_handler()` decorator -- handler won't be called
+2. Using `query` instead of `value` for input events -- parameter stays default
+3. Assigning QuerySet to public var outside `get_context_data()` -- bypasses JIT
+4. Converting QuerySet to `list()` -- disables Rust serialization
+5. Missing `**kwargs` on handlers -- breaks when extra params sent
+6. Missing default values on handler params -- errors on missing data
+7. Forgetting `super().get_context_data(**kwargs)` -- JIT never runs
+8. Forgetting `{% csrf_token %}` in forms -- submission rejected

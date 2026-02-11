@@ -1,0 +1,124 @@
+# djust Documentation Configuration
+# Navigation structure for the docs sidebar
+
+navigation:
+  - title: Getting Started
+    slug: getting-started
+    url: /docs/getting-started/
+    order: 1
+    level: beginner
+
+  - title: Core Concepts
+    slug: core-concepts
+    url: /docs/core-concepts/
+    order: 2
+    level: beginner
+
+  - title: Components
+    slug: components
+    url: /docs/components/
+    order: 3
+    level: beginner
+
+  - title: State Management
+    slug: state
+    url: /docs/state/
+    order: 4
+    level: intermediate
+
+  - title: Forms
+    slug: forms
+    url: /docs/forms/
+    order: 5
+    level: intermediate
+
+  - title: Guides
+    slug: guides
+    url: /docs/guides/
+    order: 6
+    group: true
+    children:
+      - title: Streaming
+        slug: streaming
+        file: guides/streaming.md
+        order: 1
+        level: intermediate
+      - title: Presence
+        slug: presence
+        file: guides/presence.md
+        order: 2
+        level: intermediate
+      - title: Uploads
+        slug: uploads
+        file: guides/uploads.md
+        order: 3
+        level: intermediate
+      - title: Navigation
+        slug: navigation
+        file: guides/navigation.md
+        order: 4
+        level: intermediate
+      - title: Hooks
+        slug: hooks
+        file: guides/hooks.md
+        order: 5
+        level: intermediate
+      - title: Model Binding
+        slug: model-binding
+        file: guides/model-binding.md
+        order: 6
+        level: intermediate
+      - title: Multi-Tenant
+        slug: multi-tenant
+        file: guides/multi-tenant.md
+        order: 7
+        level: advanced
+      - title: PWA
+        slug: pwa
+        file: guides/pwa.md
+        order: 8
+        level: intermediate
+      - title: Deployment
+        slug: deployment
+        file: guides/deployment.md
+        order: 9
+        level: intermediate
+
+  - title: Testing
+    slug: testing
+    url: /docs/testing/
+    order: 7
+    level: intermediate
+
+  - title: Advanced
+    slug: advanced
+    url: /docs/advanced/
+    order: 8
+    group: true
+    children:
+      - title: Server Push
+        slug: server-push
+        file: advanced/server-push.md
+        order: 1
+        level: advanced
+      - title: VDOM Architecture
+        slug: vdom-architecture
+        file: advanced/vdom-architecture.md
+        order: 2
+        level: advanced
+      - title: Debug Panel
+        slug: debug-panel
+        file: advanced/debug-panel.md
+        order: 3
+        level: advanced
+      - title: Security
+        slug: security
+        file: advanced/security.md
+        order: 4
+        level: advanced
+
+  - title: API Reference
+    slug: api
+    url: /docs/api/
+    order: 9
+    level: reference

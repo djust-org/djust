@@ -1,0 +1,30 @@
+# djust
+
+> djust is a Python/Rust framework that brings Phoenix LiveView-style reactive server-side rendering to Django. Real-time UI updates over WebSockets with ~5KB client JS, zero build step, and Rust-powered VDOM diffing + template rendering for 10-100x performance.
+
+## Docs
+
+- [Getting Started](https://djust.org/docs/getting-started/): Installation, setup, and your first LiveView
+- [Core Concepts](https://djust.org/docs/core-concepts/): LiveView lifecycle, mount/render cycle, event handling
+- [Components](https://djust.org/docs/components/): LiveComponent, stateful and stateless components
+- [State Management](https://djust.org/docs/state/): Decorators (@debounce, @throttle, @cache, @optimistic, @client_state)
+- [Forms](https://djust.org/docs/forms/): FormMixin, real-time validation, form handling patterns
+- [Testing](https://djust.org/docs/testing/): LiveViewTestClient, SnapshotTestMixin, LiveViewSmokeTest
+- [API Reference](https://djust.org/docs/api/): Full API documentation
+- [Features](https://djust.org/features/): Feature overview and capabilities
+- [Security](https://djust.org/security/): Security model, CSRF, authorization patterns
+- [Examples](https://djust.org/examples/): Interactive code examples
+- [Benchmarks](https://djust.org/benchmarks/): Performance comparisons
+- [FAQ](https://djust.org/faq/): Common questions and answers
+
+## Optional
+
+- [Blog](https://djust.org/blog/): Framework updates and technical articles
+- [Use Cases](https://djust.org/use-cases/): Real-world application patterns
+- [Philosophy](https://djust.org/philosophy/): Design principles and manifesto
+- [Comparison](https://djust.org/comparison/): How djust compares to HTMX, React, etc.
+- [Quickstart](https://djust.org/quickstart/): 5-minute getting started guide
+
+## AI-Optimized Reference
+
+- [Full LLM Reference](https://djust.org/docs/llms-full.txt): Complete framework reference in one file (<4000 tokens), optimized for LLM context windows

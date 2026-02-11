@@ -11,6 +11,7 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[Multi-Tenant Guide](guides/multi-tenant.md)** - SaaS architecture with tenant isolation
 - **[Deployment Guide](guides/DEPLOYMENT.md)** - Deploy djust to production
 - **[HTTP Mode Example](guides/HTTP_MODE_EXAMPLE.md)** - Use djust without WebSockets
+- **[MCP Server](guides/mcp-server.md)** - AI assistant integration via Model Context Protocol
 
 ### 🔌 Real-Time Features
 - **[Navigation](guides/navigation.md)** - URL state management with live_patch and live_redirect
