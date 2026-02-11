@@ -1,5 +1,6 @@
 """Tests for normalize_django_value() in djust.serialization."""
 
+import json
 from datetime import datetime, date, time, timedelta
 from decimal import Decimal
 from uuid import UUID
@@ -247,3 +248,93 @@ class TestUnknownType:
         result = normalize_django_value(b"hello")
         assert result == "b'hello'"
         assert isinstance(result, str)
+
+
+class TestParityWithJSONRoundtrip:
+    """Assert normalize_django_value(x) == json.loads(json.dumps(x, cls=DjangoJSONEncoder))
+    for every type that both code paths handle.
+
+    timedelta and Promise are intentionally excluded -- they are enhancements
+    that DjangoJSONEncoder does not support (would raise TypeError).
+    """
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            None,
+            True,
+            False,
+            0,
+            42,
+            -7,
+            3.14,
+            "",
+            "hello world",
+            Decimal("9.99"),
+            Decimal("0"),
+            Decimal("-123.456"),
+            UUID("12345678-1234-5678-1234-567812345678"),
+            datetime(2024, 6, 15, 12, 30, 45),
+            date(2024, 6, 15),
+            time(8, 0, 0),
+            time(23, 59, 59),
+        ],
+        ids=[
+            "None",
+            "True",
+            "False",
+            "zero",
+            "int",
+            "neg_int",
+            "float",
+            "empty_str",
+            "str",
+            "Decimal",
+            "Decimal_zero",
+            "Decimal_neg",
+            "UUID",
+            "datetime",
+            "date",
+            "time_morning",
+            "time_night",
+        ],
+    )
+    def test_scalar_parity(self, value):
+        expected = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+        assert normalize_django_value(value) == expected
+
+    def test_dict_parity(self):
+        value = {"name": "test", "price": Decimal("19.95"), "active": True}
+        expected = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+        assert normalize_django_value(value) == expected
+
+    def test_list_parity(self):
+        value = [Decimal("1.1"), UUID("abcdefab-cdef-abcd-efab-cdefabcdefab"), 42]
+        expected = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+        assert normalize_django_value(value) == expected
+
+    def test_nested_structure_parity(self):
+        value = {
+            "items": [
+                {
+                    "id": UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+                    "price": Decimal("5.00"),
+                    "created": datetime(2024, 1, 1, 0, 0, 0),
+                },
+                {
+                    "id": UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+                    "price": Decimal("10.00"),
+                    "created": date(2024, 6, 15),
+                },
+            ],
+            "count": 2,
+            "label": "batch",
+        }
+        expected = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+        assert normalize_django_value(value) == expected
+
+    def test_tuple_becomes_list_parity(self):
+        """tuple -> list matches JSON roundtrip (JSON has no tuple type)."""
+        value = (Decimal("1.0"), "a", 3)
+        expected = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+        assert normalize_django_value(value) == expected

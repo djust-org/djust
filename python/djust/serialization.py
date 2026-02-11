@@ -322,19 +322,25 @@ class DjangoJSONEncoder(json.JSONEncoder):
 # Direct Python-to-Python value normalizer (replaces json.loads(json.dumps()))
 # ---------------------------------------------------------------------------
 
-# Singleton encoder instance reused for model serialization (thread-safe: only
-# calls _serialize_model_safely which is a pure data transform).
+# Singleton encoder instance reused for model serialization (GIL-safe: only
+# calls _serialize_model_safely which mutates _property_cache and
+# obj._djust_prop_cache -- dict writes are atomic under CPython's GIL but
+# this is not truly thread-safe under free-threaded builds).
 _encoder = DjangoJSONEncoder()
 
 
 def normalize_django_value(value: Any, _depth: int = 0) -> Any:
     """Convert Django/Python types to JSON-safe Python primitives **directly**.
 
-    This produces output identical to ``json.loads(json.dumps(value, cls=DjangoJSONEncoder))``
-    but avoids the serialise-then-parse roundtrip through JSON text, giving a
-    meaningful speedup when called in hot paths (context serialization, state sync).
+    For types supported by both, this produces output identical to
+    ``json.loads(json.dumps(value, cls=DjangoJSONEncoder))`` but avoids the
+    serialise-then-parse roundtrip through JSON text, giving a meaningful
+    speedup when called in hot paths (context serialization, state sync).
 
-    Supported types mirror :class:`DjangoJSONEncoder`, with these enhancements:
+    **Enhancements beyond DjangoJSONEncoder**: the following types would raise
+    ``TypeError`` under ``json.dumps(value, cls=DjangoJSONEncoder)`` but are
+    handled here as a convenience:
+
     - timedelta  -- ISO-8601 duration string (via ``django.utils.duration``)
     - Promise    -- str() (Django lazy translation strings)
 
