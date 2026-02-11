@@ -34,6 +34,39 @@ try:
 except ImportError:
     extract_template_variables = None
 
+# Cache template content hash → extract_template_variables() result.
+# Keyed by content hash (not id()) so it survives GC and works across requests.
+# Hot reload is safe: changed template content produces a different hash.
+_variable_extraction_cache: Dict[str, dict] = {}
+
+
+def _cached_extract_template_variables(template_content: str) -> Optional[dict]:
+    """Extract template variables with caching by content hash.
+
+    Returns the variable paths map, or None if extraction is unavailable.
+    """
+    if not extract_template_variables:
+        return None
+
+    # Compute content hash, reusing _template_hash_cache for the current string
+    _tc_id = id(template_content)
+    if _tc_id not in _template_hash_cache:
+        _template_hash_cache[_tc_id] = hashlib.sha256(template_content.encode()).hexdigest()[:8]
+    content_hash = _template_hash_cache[_tc_id]
+
+    if content_hash in _variable_extraction_cache:
+        return _variable_extraction_cache[content_hash]
+
+    try:
+        result = extract_template_variables(template_content)
+    except Exception:
+        logger.debug("Rust template variable extractor unavailable, using fallback")
+        result = None
+
+    _variable_extraction_cache[content_hash] = result
+    return result
+
+
 try:
     from ..optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
     from ..optimization.codegen import generate_serializer_code, compile_serializer
@@ -152,7 +185,9 @@ class JITMixin:
             return [normalize_django_value(obj) for obj in queryset]
 
         try:
-            variable_paths_map = extract_template_variables(template_content)
+            variable_paths_map = _cached_extract_template_variables(template_content)
+            if variable_paths_map is None:
+                return [json.loads(json.dumps(obj, cls=DjangoJSONEncoder)) for obj in queryset]
             paths_for_var = variable_paths_map.get(variable_name, [])
 
             if not paths_for_var:
@@ -247,7 +282,9 @@ class JITMixin:
             return normalize_django_value(obj)
 
         try:
-            variable_paths_map = extract_template_variables(template_content)
+            variable_paths_map = _cached_extract_template_variables(template_content)
+            if variable_paths_map is None:
+                return json.loads(json.dumps(obj, cls=DjangoJSONEncoder))
             paths_for_var = variable_paths_map.get(variable_name, [])
 
             if not paths_for_var:
