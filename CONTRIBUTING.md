@@ -361,7 +361,7 @@ When modifying code with dual implementations:
 ## Areas for Contribution
 
 ### High Priority
-- Additional Django template filters and tags
+- Additional Django template tags (custom tags beyond built-ins)
 - More comprehensive test coverage
 - Performance optimizations
 - Documentation improvements

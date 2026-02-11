@@ -264,9 +264,11 @@ djust supports Django template syntax with event binding:
 <!-- Variables -->
 <h1>{{ title }}</h1>
 
-<!-- Filters -->
+<!-- Filters (all 57 Django built-in filters supported) -->
 <p>{{ text|upper }}</p>
+<p>{{ description|truncatewords:20 }}</p>
 <a href="?q={{ query|urlencode }}">Search</a>
+{{ body|urlize|safe }}
 
 <!-- Control flow -->
 {% if show %}
@@ -670,7 +672,6 @@ Your support helps us maintain and improve djust for everyone!
 Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
 
 Areas we'd love help with:
-- Additional Django template filters/tags
 - More example applications
 - Performance optimizations
 - Documentation improvements
@@ -681,7 +682,7 @@ Areas we'd love help with:
 - [x] Template inheritance (`{% extends %}`)
 - [x] `{% url %}` and `{% include %}` tags
 - [x] Comparison operators in `{% if %}` tags
-- [x] More Django template filters (`urlencode`)
+- [x] All 57 Django built-in template filters
 - [x] Security hardening (WebSocket origin validation, HMAC signing, rate limiting)
 - [x] Developer debug panel with event history and VDOM inspection
 - [x] Reusable component library (`djust_components` crate)
@@ -697,7 +698,8 @@ Areas we'd love help with:
 ## 🔒 Security
 
 - CSRF protection via Django middleware
-- XSS protection via automatic template escaping
+- XSS protection via automatic template escaping (Rust engine escapes all variables by default)
+- HTML-producing filters (`urlize`, `unordered_list`) handle their own escaping internally
 - WebSocket authentication via Django sessions
 - WebSocket origin validation and HMAC message signing (v0.2.1)
 - Per-view and global rate limiting support
