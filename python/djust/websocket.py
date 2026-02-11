@@ -287,6 +287,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     "patches": patches,
                     "version": version,
                 }
+                # Include HTML if provided (e.g., patch compression fallback)
+                if html:
+                    response["html"] = html
                 if timing:
                     response["timing"] = timing
                 if performance:
@@ -543,6 +546,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.handle_presence_heartbeat(data)
             elif msg_type == "cursor_move":
                 await self.handle_cursor_move(data)
+            elif msg_type == "request_html":
+                await self.handle_request_html(data)
             else:
                 logger.warning("Unknown message type: %s", msg_type)
                 await self.send_error(f"Unknown message type: {msg_type}")
@@ -1304,6 +1309,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         ) * 1000  # Total server time
                         perf_summary = tracker.get_summary()
 
+                        # Store rendered HTML for on-demand recovery.
+                        # Client sends request_html when applyPatches() fails
+                        # (e.g., {% if %} blocks shifting DOM structure).
+                        self._recovery_html = html
+                        self._recovery_version = version
+
                         await self._send_update(
                             patches=patch_list,
                             version=version,
@@ -1810,6 +1821,39 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await sync_to_async(self.view_instance.handle_cursor_move)(x, y)
         except Exception as e:
             logger.error("Error handling cursor move: %s", e)
+
+    async def handle_request_html(self, data: Dict[str, Any]):
+        """
+        Handle client request for full HTML when VDOM patches fail.
+
+        The client sends {"type": "request_html"} when applyPatches() returns
+        false (e.g., due to {% if %} blocks shifting DOM structure). Server
+        responds with the last rendered HTML for client-side DOM morphing.
+        """
+        if not self.view_instance:
+            await self.send_error("View not mounted")
+            return
+
+        html = getattr(self, "_recovery_html", None)
+        version = getattr(self, "_recovery_version", 0)
+
+        if not html:
+            await self.send_error("No recovery HTML available")
+            return
+
+        html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
+        html_content = await sync_to_async(self.view_instance._extract_liveview_content)(html)
+
+        # Clear recovery state (one-time use)
+        self._recovery_html = None
+
+        await self.send_json(
+            {
+                "type": "html_recovery",
+                "html": html_content,
+                "version": version,
+            }
+        )
 
     async def presence_event(self, event):
         """

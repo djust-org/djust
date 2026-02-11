@@ -239,6 +239,28 @@ class LiveViewWebSocket {
                 this.lastTriggerElement = null;
                 break;
 
+            case 'html_recovery': {
+                // Server response to request_html — morph DOM with recovered HTML.
+                // Bypasses normal version tracking to avoid mismatch loops.
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(data.html, 'text/html');
+                const liveviewRoot = getLiveViewRoot();
+                if (!liveviewRoot) {
+                    window.location.reload();
+                    break;
+                }
+                const newRoot = doc.querySelector('[data-djust-root]') || doc.body;
+                morphChildren(liveviewRoot, newRoot);
+                clientVdomVersion = data.version;
+                initReactCounters();
+                initTodoItems();
+                bindLiveViewEvents();
+                if (globalThis.djustDebug) {
+                    console.log('[LiveView] DOM recovered via morph, version:', data.version);
+                }
+                break;
+            }
+
             case 'error':
                 console.error('[LiveView] Server error:', data.error);
                 if (data.traceback) {
