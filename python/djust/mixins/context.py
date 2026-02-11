@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 # Module-level cache for context processors, keyed by TEMPLATES config tuple
 _context_processors_cache: Dict[Any, list] = {}
 
+# Module-level cache for resolved processor callables, keyed by tuple of processor paths
+_resolved_processors_cache: Dict[tuple, list] = {}
+
 try:
     import djust.optimization.query_optimizer  # noqa: F401
     import djust.optimization.codegen  # noqa: F401
@@ -281,13 +284,11 @@ class ContextMixin:
         if request is None:
             return context
 
-        from django.utils.module_loading import import_string
+        processor_paths = self._get_context_processors()
+        resolved = self._get_resolved_processors(processor_paths)
 
-        context_processors = self._get_context_processors()
-
-        for processor_path in context_processors:
+        for processor in resolved:
             try:
-                processor = import_string(processor_path)
                 processor_context = processor(request)
                 if processor_context:
                     # Only add keys not already set by the view — view context
@@ -297,6 +298,36 @@ class ContextMixin:
                         if k not in context:
                             context[k] = v
             except Exception as e:
-                logger.warning(f"Failed to apply context processor {processor_path}: {e}")
+                logger.warning(
+                    "Failed to apply context processor %s: %s",
+                    getattr(processor, "__module__", "")
+                    + "."
+                    + getattr(processor, "__qualname__", ""),
+                    e,
+                )
 
         return context
+
+    @staticmethod
+    def _get_resolved_processors(processor_paths: list) -> list:
+        """
+        Resolve processor dotted paths to callable objects, caching the result.
+
+        Uses tuple(processor_paths) as an immutable, hashable cache key so that
+        import_string() is only called once per unique set of processor paths.
+        """
+        cache_key = tuple(processor_paths)
+        if cache_key in _resolved_processors_cache:
+            return _resolved_processors_cache[cache_key]
+
+        from django.utils.module_loading import import_string
+
+        resolved = []
+        for path in processor_paths:
+            try:
+                resolved.append(import_string(path))
+            except Exception as e:
+                logger.warning("Failed to import context processor %s: %s", path, e)
+
+        _resolved_processors_cache[cache_key] = resolved
+        return resolved
