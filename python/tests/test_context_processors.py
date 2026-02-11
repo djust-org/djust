@@ -8,6 +8,7 @@ making variables like GOOGLE_ANALYTICS_ID, user, messages, etc. available.
 import pytest
 from unittest.mock import patch, Mock
 from djust import LiveView
+from djust.mixins.context import _resolved_processors_cache
 from django.test import RequestFactory, override_settings
 
 
@@ -120,6 +121,8 @@ class TestContextProcessors:
     @override_settings(TEMPLATES=TEMPLATES_WITH_CONTEXT_PROCESSORS)
     def test_context_processors_handle_processor_errors(self, mock_request):
         """Test that errors in context processors are handled gracefully."""
+        # Clear cache so previous test runs don't affect import_string mocking
+        _resolved_processors_cache.clear()
         view = AnalyticsView()
         view.setup(mock_request)
         view._initialize_temporary_assigns()

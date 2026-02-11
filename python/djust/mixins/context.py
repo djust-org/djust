@@ -298,11 +298,15 @@ class ContextMixin:
                         if k not in context:
                             context[k] = v
             except Exception as e:
+                module = getattr(processor, "__module__", "")
+                qualname = getattr(processor, "__qualname__", "")
+                if module or qualname:
+                    proc_name = module + "." + qualname
+                else:
+                    proc_name = repr(processor)
                 logger.warning(
                     "Failed to apply context processor %s: %s",
-                    getattr(processor, "__module__", "")
-                    + "."
-                    + getattr(processor, "__qualname__", ""),
+                    proc_name,
                     e,
                 )
 
@@ -315,6 +319,9 @@ class ContextMixin:
 
         Uses tuple(processor_paths) as an immutable, hashable cache key so that
         import_string() is only called once per unique set of processor paths.
+
+        Only caches when ALL imports succeed. If any import fails, the resolved
+        list is returned but not cached, so failed imports are retried next call.
         """
         cache_key = tuple(processor_paths)
         if cache_key in _resolved_processors_cache:
@@ -323,11 +330,14 @@ class ContextMixin:
         from django.utils.module_loading import import_string
 
         resolved = []
+        all_succeeded = True
         for path in processor_paths:
             try:
                 resolved.append(import_string(path))
             except Exception as e:
                 logger.warning("Failed to import context processor %s: %s", path, e)
+                all_succeeded = False
 
-        _resolved_processors_cache[cache_key] = resolved
+        if all_succeeded:
+            _resolved_processors_cache[cache_key] = resolved
         return resolved
