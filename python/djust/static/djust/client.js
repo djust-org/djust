@@ -1952,10 +1952,18 @@ function bindLiveViewEvents() {
         const changeHandler = element.getAttribute('dj-change');
         if (changeHandler && !element.dataset.liveviewChangeBound) {
             element.dataset.liveviewChangeBound = 'true';
+            // Parse handler string to extract function name and arguments
+            const parsedChange = parseEventHandler(changeHandler);
 
             const changeHandlerFn = async (e) => {
                 const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
                 const params = buildFormEventParams(e.target, value);
+
+                // Add positional arguments from handler syntax if present
+                // e.g., dj-change="toggle_todo(3)" -> params._args = [3]
+                if (parsedChange.args.length > 0) {
+                    params._args = parsedChange.args;
+                }
 
                 // Add target element for loading state (consistent with other handlers)
                 params._targetElement = e.target;
@@ -1969,7 +1977,7 @@ function bindLiveViewEvents() {
                 if (globalThis.djustDebug) {
                     console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
                 }
-                await handleEvent(changeHandler, params);
+                await handleEvent(parsedChange.name, params);
             };
 
             // Apply rate limiting if specified
@@ -1984,6 +1992,8 @@ function bindLiveViewEvents() {
         const inputHandler = element.getAttribute('dj-input');
         if (inputHandler && !element.dataset.liveviewInputBound) {
             element.dataset.liveviewInputBound = 'true';
+            // Parse handler string to extract function name and arguments
+            const parsedInput = parseEventHandler(inputHandler);
 
             // Determine rate limit strategy
             const inputType = element.type || element.tagName.toLowerCase();
@@ -2000,7 +2010,10 @@ function bindLiveViewEvents() {
 
             const handler = async (e) => {
                 const params = buildFormEventParams(e.target, e.target.value);
-                await handleEvent(inputHandler, params);
+                if (parsedInput.args.length > 0) {
+                    params._args = parsedInput.args;
+                }
+                await handleEvent(parsedInput.name, params);
             };
 
             // Apply rate limiting wrapper
@@ -2018,9 +2031,13 @@ function bindLiveViewEvents() {
         const blurHandler = element.getAttribute('dj-blur');
         if (blurHandler && !element.dataset.liveviewBlurBound) {
             element.dataset.liveviewBlurBound = 'true';
+            const parsedBlur = parseEventHandler(blurHandler);
             element.addEventListener('blur', async (e) => {
                 const params = buildFormEventParams(e.target, e.target.value);
-                await handleEvent(blurHandler, params);
+                if (parsedBlur.args.length > 0) {
+                    params._args = parsedBlur.args;
+                }
+                await handleEvent(parsedBlur.name, params);
             });
         }
 
@@ -2028,9 +2045,13 @@ function bindLiveViewEvents() {
         const focusHandler = element.getAttribute('dj-focus');
         if (focusHandler && !element.dataset.liveviewFocusBound) {
             element.dataset.liveviewFocusBound = 'true';
+            const parsedFocus = parseEventHandler(focusHandler);
             element.addEventListener('focus', async (e) => {
                 const params = buildFormEventParams(e.target, e.target.value);
-                await handleEvent(focusHandler, params);
+                if (parsedFocus.args.length > 0) {
+                    params._args = parsedFocus.args;
+                }
+                await handleEvent(parsedFocus.name, params);
             });
         }
 

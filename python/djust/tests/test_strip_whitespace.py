@@ -289,8 +289,8 @@ class TestSnapshotAssigns:
         assert "count" in snap
         assert "_private" not in snap
 
-    def test_list_reassignment_detected(self):
-        """Assigning a new list should change the snapshot."""
+    def test_list_same_content_no_render(self):
+        """Reassigning a list with identical content should match (no render)."""
         from djust.live_view import LiveView
         from djust.websocket import _snapshot_assigns
 
@@ -300,4 +300,43 @@ class TestSnapshotAssigns:
         snap1 = _snapshot_assigns(view)
         view.items = [1, 2, 3]  # New list object, same content
         snap2 = _snapshot_assigns(view)
-        assert snap1 != snap2  # Different id() even though equal content
+        assert snap1 == snap2  # Same content → no render needed
+
+    def test_list_different_content_detected(self):
+        """Reassigning a list with different content should differ."""
+        from djust.live_view import LiveView
+        from djust.websocket import _snapshot_assigns
+
+        view = LiveView()
+        view.items = [1, 2, 3]
+
+        snap1 = _snapshot_assigns(view)
+        view.items = [1, 2, 4]
+        snap2 = _snapshot_assigns(view)
+        assert snap1 != snap2
+
+    def test_inplace_mutation_detected(self):
+        """In-place dict mutation within a list should be detected."""
+        from djust.live_view import LiveView
+        from djust.websocket import _snapshot_assigns
+
+        view = LiveView()
+        view.todos = [{"id": 1, "text": "Buy groceries", "completed": False}]
+
+        snap1 = _snapshot_assigns(view)
+        view.todos[0]["completed"] = True  # In-place mutation
+        snap2 = _snapshot_assigns(view)
+        assert snap1 != snap2  # Deep copy detects the mutation
+
+    def test_inplace_list_append_detected(self):
+        """In-place list.append should be detected."""
+        from djust.live_view import LiveView
+        from djust.websocket import _snapshot_assigns
+
+        view = LiveView()
+        view.items = [1, 2]
+
+        snap1 = _snapshot_assigns(view)
+        view.items.append(3)
+        snap2 = _snapshot_assigns(view)
+        assert snap1 != snap2

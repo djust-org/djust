@@ -37,17 +37,31 @@ except ImportError:
 
 
 def _snapshot_assigns(view_instance):
-    """Snapshot public assigns (non-underscore attributes) by identity.
+    """Snapshot public assigns (non-underscore attributes) by deep copy.
 
-    Returns a dict of {attr_name: id(value)} for all public attributes.
-    Used to detect whether a handler changed any state — if the snapshot
-    is identical before and after, the render cycle can be skipped.
+    Returns a dict of {attr_name: deep_copy_of_value} for all public
+    attributes. Used to detect whether a handler changed any state — if
+    the snapshot is identical before and after, the render cycle can be
+    skipped.
 
-    Note: in-place mutations (list.append, dict[k]=v) are NOT detected
-    because the object identity stays the same. This is intentional —
-    mutated state should still trigger a render (safe default).
+    Deep copy correctly detects in-place mutations (list.append,
+    dict[k]=v, nested modifications). For non-copyable objects
+    (querysets, file handles, etc.), a unique sentinel is used that
+    never compares equal, ensuring the render is never skipped.
     """
-    return {k: id(v) for k, v in view_instance.__dict__.items() if not k.startswith("_")}
+    import copy
+
+    snapshot = {}
+    for k, v in view_instance.__dict__.items():
+        if k.startswith("_"):
+            continue
+        try:
+            snapshot[k] = copy.deepcopy(v)
+        except Exception:
+            # Non-copyable: use unique sentinel so pre != post always,
+            # ensuring render is never skipped (safe default).
+            snapshot[k] = object()
+    return snapshot
 
 
 def _build_context_snapshot(context, max_value_len=100):
