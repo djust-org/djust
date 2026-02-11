@@ -11,7 +11,7 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.db import models
 
-from ..serialization import DjangoJSONEncoder
+from ..serialization import normalize_django_value
 from ..validation import validate_handler_params
 from ..security import safe_setattr
 from ..security.event_guard import is_safe_event_name
@@ -65,9 +65,9 @@ class RequestMixin:
         t0 = time.perf_counter()
         for key, value in list(state.items()):
             if isinstance(value, models.Model):
-                state[key] = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+                state[key] = normalize_django_value(value)
             elif isinstance(value, list) and value and isinstance(value[0], models.Model):
-                state[key] = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+                state[key] = normalize_django_value(value)
 
         state_serializable = state
         t_json = (time.perf_counter() - t0) * 1000
@@ -85,8 +85,7 @@ class RequestMixin:
             # non-serializable processor objects (PermWrapper, csrf, etc.)
             _cached = self._cached_context or {}
             _session_state = {k: v for k, v in _cached.items() if not isinstance(v, LiveComponent)}
-            _session_json = json.dumps(_session_state, cls=DjangoJSONEncoder)
-            request.session[view_key] = json.loads(_session_json)
+            request.session[view_key] = normalize_django_value(_session_state)
             t0_sc = time.perf_counter()
             self._save_components_to_session(request, _cached)
             t_save_components = (time.perf_counter() - t0_sc) * 1000
@@ -275,8 +274,7 @@ class RequestMixin:
             # Save updated state back to session
             updated_context = self.get_context_data()
             state = {k: v for k, v in updated_context.items() if not isinstance(v, LiveComponent)}
-            state_json = json.dumps(state, cls=DjangoJSONEncoder)
-            state_serializable = json.loads(state_json)
+            state_serializable = normalize_django_value(state)
             request.session[view_key] = state_serializable
 
             self._save_components_to_session(request, updated_context)

@@ -3,11 +3,10 @@ RustBridgeMixin - Rust backend integration for LiveView.
 """
 
 import hashlib
-import json
 import logging
 from urllib.parse import parse_qs, urlencode
 
-from ..serialization import DjangoJSONEncoder
+from ..serialization import normalize_django_value
 from ..utils import get_template_dirs
 
 logger = logging.getLogger(__name__)
@@ -128,8 +127,7 @@ class RustBridgeMixin:
                         safe_keys.append(key)
                     rendered_context[key] = value
 
-            json_str = json.dumps(rendered_context, cls=DjangoJSONEncoder)
-            json_compatible_context = json.loads(json_str)
+            json_compatible_context = normalize_django_value(rendered_context)
 
             self._rust_view.update_state(json_compatible_context)
             if safe_keys:

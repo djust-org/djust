@@ -3,14 +3,13 @@ JITMixin - JIT auto-serialization for QuerySets and Models.
 """
 
 import hashlib
-import json
 import logging
 import os
 import re
 import sys
 from typing import Dict, Optional
 
-from ..serialization import DjangoJSONEncoder
+from ..serialization import normalize_django_value
 from ..session_utils import _jit_serializer_cache, _get_model_hash
 
 logger = logging.getLogger(__name__)
@@ -150,7 +149,7 @@ class JITMixin:
         4. Caches serializer for reuse
         """
         if not JIT_AVAILABLE or not extract_template_variables:
-            return [json.loads(json.dumps(obj, cls=DjangoJSONEncoder)) for obj in queryset]
+            return [normalize_django_value(obj) for obj in queryset]
 
         try:
             variable_paths_map = extract_template_variables(template_content)
@@ -161,7 +160,7 @@ class JITMixin:
                     f"[JIT] No paths found for '{variable_name}', using DjangoJSONEncoder fallback",
                     file=sys.stderr,
                 )
-                return [json.loads(json.dumps(obj, cls=DjangoJSONEncoder)) for obj in queryset]
+                return [normalize_django_value(obj) for obj in queryset]
 
             model_class = queryset.model
             _tc_id = id(template_content)
@@ -238,21 +237,21 @@ class JITMixin:
             logger.error(
                 f"[JIT ERROR] Serialization failed for '{variable_name}': {e}\nTraceback:\n{traceback.format_exc()}"
             )
-            return [json.loads(json.dumps(obj, cls=DjangoJSONEncoder)) for obj in queryset]
+            return [normalize_django_value(obj) for obj in queryset]
 
     def _jit_serialize_model(self, obj, template_content: str, variable_name: str) -> Dict:
         """
         Apply JIT auto-serialization to a single Django Model instance.
         """
         if not JIT_AVAILABLE or not extract_template_variables:
-            return json.loads(json.dumps(obj, cls=DjangoJSONEncoder))
+            return normalize_django_value(obj)
 
         try:
             variable_paths_map = extract_template_variables(template_content)
             paths_for_var = variable_paths_map.get(variable_name, [])
 
             if not paths_for_var:
-                return json.loads(json.dumps(obj, cls=DjangoJSONEncoder))
+                return normalize_django_value(obj)
 
             model_class = obj.__class__
             _tc_id = id(template_content)
@@ -276,7 +275,7 @@ class JITMixin:
 
         except Exception as e:
             logger.debug(f"JIT serialization failed for {variable_name}: {e}")
-            return json.loads(json.dumps(obj, cls=DjangoJSONEncoder))
+            return normalize_django_value(obj)
 
     def _lazy_serialize_context(self, context: dict) -> dict:
         """
@@ -314,7 +313,7 @@ class JITMixin:
                 return str(value)
 
             try:
-                return json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+                return normalize_django_value(value)
             except (TypeError, ValueError):
                 return str(value)
 

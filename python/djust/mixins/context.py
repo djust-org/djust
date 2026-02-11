@@ -2,13 +2,12 @@
 ContextMixin - Context data management for LiveView.
 """
 
-import json
 import logging
 from typing import Any, Dict
 
 from django.db import models
 
-from ..serialization import DjangoJSONEncoder
+from ..serialization import normalize_django_value
 
 logger = logging.getLogger(__name__)
 
@@ -197,11 +196,9 @@ class ContextMixin:
             if isinstance(value, dict):
                 context[key] = self._deep_serialize_dict(value, tc, key)
             elif isinstance(value, models.Model):
-                context[key] = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+                context[key] = normalize_django_value(value)
             elif isinstance(value, list) and value and isinstance(value[0], models.Model):
-                context[key] = [
-                    json.loads(json.dumps(item, cls=DjangoJSONEncoder)) for item in value
-                ]
+                context[key] = [normalize_django_value(item) for item in value]
 
         self._jit_serialized_keys = jit_serialized_keys
 
@@ -222,19 +219,19 @@ class ContextMixin:
                 if template_content:
                     result[k] = self._jit_serialize_model(v, template_content, child_name)
                 else:
-                    result[k] = json.loads(json.dumps(v, cls=DjangoJSONEncoder))
+                    result[k] = normalize_django_value(v)
             elif isinstance(v, QuerySet):
                 if template_content:
                     result[k] = self._jit_serialize_queryset(v, template_content, child_name)
                 else:
-                    result[k] = [json.loads(json.dumps(item, cls=DjangoJSONEncoder)) for item in v]
+                    result[k] = [normalize_django_value(item) for item in v]
             elif isinstance(v, list) and v and isinstance(v[0], models.Model):
                 if template_content:
                     result[k] = [
                         self._jit_serialize_model(item, template_content, child_name) for item in v
                     ]
                 else:
-                    result[k] = [json.loads(json.dumps(item, cls=DjangoJSONEncoder)) for item in v]
+                    result[k] = [normalize_django_value(item) for item in v]
             elif isinstance(v, dict):
                 result[k] = self._deep_serialize_dict(v, template_content, child_name)
             else:

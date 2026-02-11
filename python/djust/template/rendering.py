@@ -8,7 +8,6 @@ URL tag resolution, JIT serialization, and Rust-based rendering.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import re
 
@@ -31,7 +30,7 @@ logger = logging.getLogger(__name__)
 try:
     from djust._rust import extract_template_variables, serialize_queryset
     from djust.optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
-    from djust.serialization import DjangoJSONEncoder
+    from djust.serialization import DjangoJSONEncoder, normalize_django_value
     from djust.live_view import (
         _get_model_hash,
         clear_jit_cache,  # noqa: F401 - exported for external use
@@ -125,7 +124,7 @@ class DjustTemplate:
         if not JIT_AVAILABLE:
             # Fallback to DjangoJSONEncoder
             logger.debug(f"[JIT] Not available, using DjangoJSONEncoder for '{variable_name}'")
-            return [json.loads(json.dumps(obj, cls=DjangoJSONEncoder)) for obj in queryset]
+            return [normalize_django_value(obj) for obj in queryset]
 
         try:
             # Extract variable paths from template
@@ -135,7 +134,7 @@ class DjustTemplate:
             if not paths_for_var:
                 # No template access detected, use default serialization
                 logger.debug(f"[JIT] No paths found for '{variable_name}', using DjangoJSONEncoder")
-                return [json.loads(json.dumps(obj, cls=DjangoJSONEncoder)) for obj in queryset]
+                return [normalize_django_value(obj) for obj in queryset]
 
             # Generate cache key (includes model hash for invalidation on model changes)
             model_class = queryset.model
@@ -176,7 +175,7 @@ class DjustTemplate:
         except Exception as e:
             # Graceful fallback
             logger.warning(f"[JIT] Serialization failed for '{variable_name}': {e}", exc_info=True)
-            return [json.loads(json.dumps(obj, cls=DjangoJSONEncoder)) for obj in queryset]
+            return [normalize_django_value(obj) for obj in queryset]
 
     def _jit_serialize_model(self, model_instance: models.Model, variable_name: str) -> dict:
         """
@@ -194,7 +193,7 @@ class DjustTemplate:
             return {"id": str(model_instance.pk), "__str__": str(model_instance)}
 
         try:
-            return json.loads(json.dumps(model_instance, cls=DjangoJSONEncoder))
+            return normalize_django_value(model_instance)
         except Exception as e:
             logger.warning(f"Model serialization failed for '{variable_name}': {e}")
             return {"id": str(model_instance.pk), "__str__": str(model_instance)}
