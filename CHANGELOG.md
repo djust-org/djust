@@ -32,8 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Model `.pk` in templates** — `{{ model.pk }}` now works in Rust-rendered templates. Model serialization includes a `pk` key with the native primary key value. ([#262](https://github.com/djust-org/djust/issues/262))
 - **Better Error Messages** — Improved error messages for common LiveView event handler mistakes (missing `@event_handler`, wrong method signature). ([#248](https://github.com/djust-org/djust/issues/248))
 - **`LiveViewSmokeTest` mixin** — Automated smoke and fuzz testing for LiveView classes. ([#251](https://github.com/djust-org/djust/pull/251))
+- **MCP server** — `python manage.py djust_mcp` starts a Model Context Protocol server for AI assistant integration. Provides framework introspection, system checks, scaffolding, and validation tools. Used by `djust mcp install` to configure Claude Code, Cursor, and Windsurf.
 - **`djust_audit` management command** — Security audit showing auth posture, exposed state, and handler signatures per view.
-- **`djust_check` management command** — Django system checks for project validation.
+- **`djust_check` management command** — Django system checks for project validation. Gains `--fix` flag for safe auto-fixes and `--format json` for enhanced output with fix hints.
+- **`djust_schema` management command** — Extract and generate Django models from JSON schema files.
+- **`djust_ai_context` management command** — Generate AI-focused context files for LLM integrations.
+- **AI documentation** — `docs/ai/` with focused guides for events, forms, JIT, lifecycle, security, and templates. `docs/llms.txt` and `docs/llms-full.txt` for LLM context.
 - **Auto-build client.js from src/ modules** — Pre-commit hook runs `build-client.sh` when `src/` files change. ([#211](https://github.com/djust-org/djust/issues/211))
 - **Keyed-mutation fuzz test generator** — New proptest generator produces tree B by mutating tree A, exercising keyed diff paths more effectively. Proptest cases bumped from 500 to 1000. ([#216](https://github.com/djust-org/djust/issues/216), [#217](https://github.com/djust-org/djust/issues/217))
 
