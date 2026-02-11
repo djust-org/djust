@@ -3,8 +3,11 @@
 djust CLI - Command-line tools for djust developers
 
 Usage:
-    python -m djust startproject <name>   Create a new djust project
+    python -m djust new <name> [options]  Create a new djust project (recommended)
+    python -m djust startproject <name>   Create a new djust project (legacy)
     python -m djust startapp <name>       Create a new djust app
+
+    python -m djust mcp install            Write .mcp.json for Claude Code / Cursor
 
     python -m djust.cli stats             Show state backend statistics
     python -m djust.cli health            Run health checks on backends
@@ -13,6 +16,9 @@ Usage:
     python -m djust.cli clear             Clear state backend caches
 
 Examples:
+    python -m djust new myapp
+    python -m djust new myapp --with-auth --with-db
+    python -m djust new myapp --from-schema schema.json
     python -m djust startproject mysite
     python -m djust startapp dashboard
     python -m djust.cli stats
@@ -316,6 +322,45 @@ def cmd_analyze(args):
     print(f"\nAnalyzed {len(files_to_check)} file(s)")
 
 
+def cmd_new(args):
+    """Create a new djust project with optional features."""
+    from djust.scaffolding.generator import generate_project
+
+    try:
+        generate_project(
+            app_name=args.name,
+            with_auth=getattr(args, "with_auth", False),
+            with_db=getattr(args, "with_db", False),
+            with_presence=getattr(args, "with_presence", False),
+            with_streaming=getattr(args, "with_streaming", False),
+            from_schema=getattr(args, "from_schema", None),
+            auto_setup=not getattr(args, "no_setup", False),
+        )
+    except ValueError as e:
+        print("Error: %s" % e)
+        sys.exit(1)
+
+    features = []
+    if getattr(args, "with_auth", False):
+        features.append("auth")
+    if getattr(args, "with_db", False):
+        features.append("database")
+    if getattr(args, "with_presence", False):
+        features.append("presence")
+    if getattr(args, "with_streaming", False):
+        features.append("streaming")
+    if getattr(args, "from_schema", None):
+        features.append("schema-generated models")
+
+    print("\nCreated djust project '%s'" % args.name)
+    if features:
+        print("  Features: %s" % ", ".join(features))
+    print("\nNext steps:")
+    print("  cd %s" % args.name)
+    print("  make dev")
+    print()
+
+
 def cmd_startproject(args):
     """Create a new djust project with all boilerplate pre-configured."""
     name = args.name
@@ -612,6 +657,86 @@ def _write(filepath, content):
         f.write(content)
 
 
+def cmd_mcp(args):
+    """MCP server management."""
+    if not hasattr(args, "mcp_command") or not args.mcp_command:
+        print("Usage: python -m djust mcp <command>")
+        print("\nCommands:")
+        print("  install    Write .mcp.json for Claude Code / Cursor")
+        sys.exit(0)
+
+    if args.mcp_command == "install":
+        _mcp_install()
+
+
+def _mcp_install():
+    """Write .mcp.json with correct paths for the djust MCP server."""
+    import json
+
+    # Find manage.py by walking up from cwd
+    manage_py = _find_manage_py()
+    if not manage_py:
+        print("Error: Could not find manage.py in current or parent directories.")
+        print("Run this command from within a Django project.")
+        sys.exit(1)
+
+    # Get absolute paths
+    python_path = os.path.abspath(sys.executable)
+    manage_path = os.path.abspath(manage_py)
+    mcp_json_path = os.path.join(os.getcwd(), ".mcp.json")
+
+    # Build the djust MCP config entry
+    djust_entry = {
+        "type": "stdio",
+        "command": python_path,
+        "args": [manage_path, "djust_mcp"],
+    }
+
+    # Read existing .mcp.json if present, merge to preserve other servers
+    config = {}
+    if os.path.exists(mcp_json_path):
+        try:
+            with open(mcp_json_path) as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            backup_path = mcp_json_path + ".bak"
+            os.rename(mcp_json_path, backup_path)
+            print("Warning: .mcp.json was malformed. Backed up to .mcp.json.bak")
+            config = {}
+
+    if "mcpServers" not in config:
+        config["mcpServers"] = {}
+
+    already_correct = config["mcpServers"].get("djust") == djust_entry
+    config["mcpServers"]["djust"] = djust_entry
+
+    with open(mcp_json_path, "w") as f:
+        json.dump(config, f, indent=2)
+        f.write("\n")
+
+    if already_correct:
+        print("MCP configuration already up to date: %s" % mcp_json_path)
+    else:
+        print("Wrote MCP configuration: %s" % mcp_json_path)
+
+    print("\n  Python:    %s" % python_path)
+    print("  manage.py: %s" % manage_path)
+    print("\nRestart Claude Code to activate.")
+
+
+def _find_manage_py():
+    """Walk up from cwd looking for manage.py."""
+    current = os.getcwd()
+    while True:
+        candidate = os.path.join(current, "manage.py")
+        if os.path.isfile(candidate):
+            return candidate
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+
+
 def cmd_clear(args):
     """Clear state backend caches."""
     setup_django()
@@ -655,8 +780,50 @@ def main():
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    # startproject command
-    sp_parser = subparsers.add_parser("startproject", help="Create a new djust project")
+    # new command (recommended)
+    new_parser = subparsers.add_parser(
+        "new", help="Create a new djust project with optional features"
+    )
+    new_parser.add_argument("name", help="Project name")
+    new_parser.add_argument(
+        "--with-auth",
+        action="store_true",
+        dest="with_auth",
+        help="Include login/logout views and auth middleware",
+    )
+    new_parser.add_argument(
+        "--with-db",
+        action="store_true",
+        dest="with_db",
+        help="Include Django models, admin, and database-backed views",
+    )
+    new_parser.add_argument(
+        "--with-presence",
+        action="store_true",
+        dest="with_presence",
+        help="Include PresenceMixin for online user tracking",
+    )
+    new_parser.add_argument(
+        "--with-streaming",
+        action="store_true",
+        dest="with_streaming",
+        help="Include StreamingMixin for real-time stream updates",
+    )
+    new_parser.add_argument(
+        "--from-schema",
+        dest="from_schema",
+        metavar="SCHEMA_FILE",
+        help="Path to a JSON schema file describing models",
+    )
+    new_parser.add_argument(
+        "--no-setup",
+        action="store_true",
+        dest="no_setup",
+        help="Skip automatic venv/install/migrate setup",
+    )
+
+    # startproject command (legacy)
+    sp_parser = subparsers.add_parser("startproject", help="Create a new djust project (legacy)")
     sp_parser.add_argument("name", help="Project name")
 
     # startapp command
@@ -679,6 +846,11 @@ def main():
     analyze_parser = subparsers.add_parser("analyze", help="Analyze templates for optimization")
     analyze_parser.add_argument("path", nargs="?", help="Path to analyze")
 
+    # mcp command group
+    mcp_parser = subparsers.add_parser("mcp", help="MCP server management")
+    mcp_sub = mcp_parser.add_subparsers(dest="mcp_command")
+    mcp_sub.add_parser("install", help="Write .mcp.json for Claude Code / Cursor")
+
     # clear command
     clear_parser = subparsers.add_parser("clear", help="Clear state backend caches")
     clear_parser.add_argument("-f", "--force", action="store_true", help="Skip confirmation prompt")
@@ -694,12 +866,14 @@ def main():
 
     # Execute command
     commands = {
+        "new": cmd_new,
         "startproject": cmd_startproject,
         "startapp": cmd_startapp,
         "stats": cmd_stats,
         "health": cmd_health,
         "profile": cmd_profile,
         "analyze": cmd_analyze,
+        "mcp": cmd_mcp,
         "clear": cmd_clear,
     }
 
