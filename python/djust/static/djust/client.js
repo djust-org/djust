@@ -360,6 +360,7 @@ class LiveViewWebSocket {
         this.reconnectDelay = 1000;
         this.viewMounted = false;
         this.enabled = true;  // Can be disabled to use HTTP fallback
+        this._intentionalDisconnect = false;  // Set by disconnect() to suppress error overlay
         this.lastEventName = null;  // Phase 5: Track last event for loading state
         this.lastTriggerElement = null;  // Phase 5: Track trigger element for scoped loading
 
@@ -388,6 +389,8 @@ class LiveViewWebSocket {
             if (globalThis.djustDebug) console.log('[LiveView] Heartbeat stopped');
         }
 
+        // Mark as intentional so onclose doesn't show error overlay
+        this._intentionalDisconnect = true;
         // Clear reconnect attempts so we don't auto-reconnect
         this.reconnectAttempts = this.maxReconnectAttempts;
 
@@ -427,6 +430,7 @@ class LiveViewWebSocket {
         this.ws.onopen = (_event) => {
             console.log('[LiveView] WebSocket connected');
             this.reconnectAttempts = 0;
+            this._intentionalDisconnect = false;
 
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
@@ -469,6 +473,12 @@ class LiveViewWebSocket {
             document.querySelectorAll('.optimistic-pending').forEach(el => {
                 el.classList.remove('optimistic-pending');
             });
+
+            // Skip reconnection logic if this was an intentional disconnect (TurboNav)
+            if (this._intentionalDisconnect) {
+                this._intentionalDisconnect = false;
+                return;
+            }
 
             if (this.reconnectAttempts < this.maxReconnectAttempts) {
                 this.reconnectAttempts++;
