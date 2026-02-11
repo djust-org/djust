@@ -2,14 +2,40 @@
 URL routing helpers for djust LiveView.
 
 Provides live_session() for grouping views that share a WebSocket connection,
+DjustMiddlewareStack for apps without django.contrib.auth,
 and emitting a client-side route map for live_redirect navigation.
 """
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from django.urls import URLPattern, path
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
+
+
+def DjustMiddlewareStack(inner: Any) -> Any:
+    """
+    ASGI middleware stack for djust that doesn't require django.contrib.auth.
+
+    Use this instead of ``channels.auth.AuthMiddlewareStack`` when your app
+    doesn't need authentication. It wraps the inner application with session
+    middleware only, so ``request.session`` works but ``request.user`` will
+    not be populated.
+
+    Example::
+
+        from djust.routing import DjustMiddlewareStack
+
+        application = ProtocolTypeRouter({
+            "http": get_asgi_application(),
+            "websocket": DjustMiddlewareStack(
+                URLRouter(websocket_urlpatterns)
+            ),
+        })
+    """
+    from channels.sessions import SessionMiddlewareStack
+
+    return SessionMiddlewareStack(inner)
 
 
 def live_session(

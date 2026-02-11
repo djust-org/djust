@@ -212,6 +212,84 @@ class TestHTTPFallbackProtocol:
 
 
 @pytest.mark.django_db
+class TestHTTPOnlySessionState:
+    """Test that GET saves session state when use_websocket is False (Issue #264)."""
+
+    def test_http_only_mode_saves_state_on_get(self, settings):
+        """When use_websocket=False, GET saves state to session so POST doesn't re-mount."""
+        view = CounterView()
+        factory = RequestFactory()
+        get_request = factory.get("/test/")
+        get_request = add_session_to_request(get_request)
+
+        from djust.config import config as lv_config
+
+        original = lv_config.get("use_websocket", True)
+        lv_config.set("use_websocket", False)
+        try:
+            view.get(get_request)
+
+            # Check that state was saved in the session
+            view_key = "liveview_/test/"
+            saved_state = get_request.session.get(view_key, {})
+            assert "count" in saved_state
+            assert saved_state["count"] == 0
+
+            # Now POST should NOT re-mount (saved state found)
+            post_request = factory.post(
+                "/test/",
+                data='{"event":"increment","params":{}}',
+                content_type="application/json",
+            )
+            post_request.session = get_request.session
+            response = view.post(post_request)
+            assert response.status_code == 200
+
+            # Modify saved session count so we can distinguish restore (5 -> 6)
+            # from re-mount (0 -> 1)
+            get_request.session[view_key] = {"count": 5}
+
+            post_request = factory.post(
+                "/test/",
+                data='{"event":"increment","params":{}}',
+                content_type="application/json",
+            )
+            post_request.session = get_request.session
+            response = view.post(post_request)
+            assert response.status_code == 200
+
+            data = json.loads(response.content.decode("utf-8"))
+            # If state was restored from session, count is 5+1=6, not 0+1=1
+            if "html" in data:
+                assert "6" in data["html"]
+            else:
+                assert "patches" in data
+        finally:
+            lv_config.set("use_websocket", original)
+
+    def test_websocket_mode_does_not_save_state_on_get(self, settings):
+        """When use_websocket=True (default), GET does NOT save state to session."""
+        view = CounterView()
+        factory = RequestFactory()
+        get_request = factory.get("/test/")
+        get_request = add_session_to_request(get_request)
+
+        from djust.config import config as lv_config
+
+        original = lv_config.get("use_websocket", True)
+        lv_config.set("use_websocket", True)
+        try:
+            view.get(get_request)
+
+            # State should NOT be in session (WebSocket mode manages state in-memory)
+            view_key = "liveview_/test/"
+            saved_state = get_request.session.get(view_key, {})
+            assert saved_state == {}
+        finally:
+            lv_config.set("use_websocket", original)
+
+
+@pytest.mark.django_db
 class TestHTTPFallbackSecurity:
     """Test that post() enforces event security (matches WebSocket security model)."""
 

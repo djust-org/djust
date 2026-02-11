@@ -7,12 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`DjustMiddlewareStack`** — New ASGI middleware for apps that don't use `django.contrib.auth`. Wraps WebSocket routes with session middleware only (no auth required). Import from `djust.routing` or `djust`. Updated `C005` system check to recognize both `AuthMiddlewareStack` and `DjustMiddlewareStack`. ([#265](https://github.com/djust-org/djust/issues/265))
+- **System check `C006`** — Warns when `daphne` is in `INSTALLED_APPS` but `whitenoise` middleware is missing. Daphne doesn't serve static files, so without WhiteNoise the client JS returns 404. Includes setup instructions in the hint. ([#259](https://github.com/djust-org/djust/issues/259))
+
 ### Fixed
 
 - **HTTP Fallback Protocol** — `post()` now accepts the HTTP fallback format where the event name is in the `X-Djust-Event` header and params are flat in the body JSON. Previously only the WebSocket-originated `{"event": "name", "params": {...}}` format worked. ([#255](https://github.com/djust-org/djust/issues/255))
 - **Silent LiveView config failures** — Client JS now shows a helpful `console.error` with example markup when no LiveView containers are found. Added Django system check `V005` that warns when a LiveView's module is not in `LIVEVIEW_ALLOWED_MODULES`. All `console.log` calls in init and TurboNav guarded behind `djustDebug` flag. ([#257](https://github.com/djust-org/djust/issues/257))
 - **Tag registry test pollution** — `clear_tag_handlers()` in tag registry tests now restores built-in handlers (url, static, etc.) in teardown, preventing subsequent URL tag tests from failing. Corrected misleading comments about `{% url %}` with loop variables — feature works via two-stage resolution. ([#261](https://github.com/djust-org/djust/issues/261))
 - **VDOM patch failure recovery** — When VDOM patches fail (e.g., `{% if %}` blocks shifting DOM structure), the client now requests recovery HTML on demand instead of reloading the page. Uses DOM morphing (`morphChildren`) to preserve event listeners and form state. Recovery HTML is fetched via a new `request_html` WebSocket message type, avoiding the bandwidth overhead of sending full HTML with every patch response. ([#259](https://github.com/djust-org/djust/issues/259))
+- **HTTP-only mode session state on GET** — When `use_websocket: False` is configured, `get()` now saves view state to the session immediately. Previously the first `post()` after page load found no saved state and had to re-mount, which was wasteful for views with expensive `mount()` methods (e.g., scanning directories, API calls). ([#264](https://github.com/djust-org/djust/issues/264))
+- **`use_websocket: False` client-side enforcement** — Setting `LIVEVIEW_CONFIG = {'use_websocket': False}` now actually prevents the client JS from opening a WebSocket connection. Previously the config was injected into the page as `window.DJUST_USE_WEBSOCKET` but never checked, so WebSocket connections were always attempted. ([#260](https://github.com/djust-org/djust/issues/260))
 
 ### Security
 

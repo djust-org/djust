@@ -189,34 +189,58 @@ def check_configuration(app_configs, **kwargs):
             app_map = getattr(asgi_app, "application_mapping", None)
             if app_map and "websocket" in app_map:
                 ws_app = app_map["websocket"]
-                # Walk the middleware chain looking for AuthMiddlewareStack
-                has_auth = False
+                # Walk the middleware chain looking for Auth/DjustMiddlewareStack
+                has_middleware = False
                 current = ws_app
                 for _ in range(10):  # bounded walk
                     cls_name = type(current).__name__
                     mod_name = type(current).__module__ or ""
                     if "auth" in cls_name.lower() or "auth" in mod_name.lower():
-                        has_auth = True
+                        has_middleware = True
+                        break
+                    if "session" in cls_name.lower() or "session" in mod_name.lower():
+                        # DjustMiddlewareStack wraps SessionMiddlewareStack
+                        has_middleware = True
                         break
                     # Follow common wrapper patterns
                     inner = getattr(current, "inner", None) or getattr(current, "application", None)
                     if inner is None or inner is current:
                         break
                     current = inner
-                if not has_auth:
+                if not has_middleware:
                     errors.append(
                         Warning(
-                            "WebSocket routes are not wrapped with AuthMiddlewareStack.",
+                            "WebSocket routes are not wrapped with AuthMiddlewareStack "
+                            "or DjustMiddlewareStack.",
                             hint=(
-                                "Without AuthMiddlewareStack, request.user is unavailable in "
+                                "Without middleware, request.session is unavailable in "
                                 "LiveView mount() over WebSocket. Wrap your URLRouter: "
-                                "AuthMiddlewareStack(URLRouter(websocket_urlpatterns))"
+                                "AuthMiddlewareStack(URLRouter(...)) for apps with auth, "
+                                "or DjustMiddlewareStack(URLRouter(...)) for apps without."
                             ),
                             id="djust.C005",
                         )
                     )
         except Exception:
             pass  # Don't fail the check if ASGI app can't be introspected
+
+    # C006 -- daphne without whitenoise for static file serving
+    if has_daphne:
+        middleware = list(getattr(settings, "MIDDLEWARE", []))
+        has_whitenoise = any("whitenoise" in m.lower() for m in middleware)
+        if not has_whitenoise:
+            errors.append(
+                Warning(
+                    "Daphne does not serve static files. "
+                    "Without WhiteNoise, djust's client JS and CSS will return 404.",
+                    hint=(
+                        "Add 'whitenoise.middleware.WhiteNoiseMiddleware' to MIDDLEWARE "
+                        "after SecurityMiddleware, add 'django.contrib.staticfiles' to "
+                        "INSTALLED_APPS, set STATIC_ROOT, and run 'collectstatic'."
+                    ),
+                    id="djust.C006",
+                )
+            )
 
     # S004 -- DEBUG=True with non-localhost ALLOWED_HOSTS
     if getattr(settings, "DEBUG", False):

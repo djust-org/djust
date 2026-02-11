@@ -3815,9 +3815,13 @@ const lazyHydrationManager = {
             return;
         }
 
-        console.log(`[LiveView:lazy] Hydrating: ${viewPath}`);
+        if (globalThis.djustDebug) console.log(`[LiveView:lazy] Hydrating: ${viewPath}`);
 
-        // Ensure WebSocket is connected
+        // Ensure WebSocket is connected (skip in HTTP-only mode)
+        if (window.DJUST_USE_WEBSOCKET === false) {
+            if (globalThis.djustDebug) console.log('[LiveView:lazy] HTTP-only mode — skipping WebSocket for lazy element');
+            return;
+        }
         if (!liveViewWS || !liveViewWS.enabled) {
             liveViewWS = new LiveViewWebSocket();
             window.djust.liveViewInstance = liveViewWS;
@@ -3844,7 +3848,7 @@ const lazyHydrationManager = {
 
     // Process all queued mounts when WebSocket connects
     processPendingMounts() {
-        console.log(`[LiveView:lazy] Processing ${this.pendingMounts.length} pending mounts`);
+        if (globalThis.djustDebug) console.log(`[LiveView:lazy] Processing ${this.pendingMounts.length} pending mounts`);
         const mounts = this.pendingMounts.slice();
         this.pendingMounts = [];
         mounts.forEach(({ element, viewPath }) => {
@@ -3858,7 +3862,7 @@ const lazyHydrationManager = {
         const hasContent = element.innerHTML && element.innerHTML.trim().length > 0;
 
         if (hasContent) {
-            console.log('[LiveView:lazy] Using pre-rendered content');
+            if (globalThis.djustDebug) console.log('[LiveView:lazy] Using pre-rendered content');
             liveViewWS.skipMountHtml = true;
         }
 
@@ -3917,8 +3921,9 @@ function djustInit() {
         lazyHydrationManager.register(container);
     });
 
-    // Only initialize WebSocket if there are eager containers
-    if (eagerContainers.length > 0) {
+    // Only initialize WebSocket if there are eager containers AND WebSocket is enabled
+    const wsEnabled = window.DJUST_USE_WEBSOCKET !== false;
+    if (eagerContainers.length > 0 && wsEnabled) {
         // Initialize WebSocket
         liveViewWS = new LiveViewWebSocket();
         window.djust.liveViewInstance = liveViewWS;
@@ -3926,6 +3931,12 @@ function djustInit() {
 
         // Start heartbeat
         liveViewWS.startHeartbeat();
+    } else if (eagerContainers.length > 0 && !wsEnabled) {
+        // HTTP-only mode: create WS instance but disable it so sendEvent() falls through to HTTP
+        liveViewWS = new LiveViewWebSocket();
+        liveViewWS.enabled = false;
+        window.djust.liveViewInstance = liveViewWS;
+        if (globalThis.djustDebug) console.log('[LiveView] HTTP-only mode (use_websocket: false)');
     } else if (lazyContainers.length > 0) {
         if (globalThis.djustDebug) console.log('[LiveView] Deferring WebSocket connection until lazy elements are needed');
     }

@@ -26,8 +26,9 @@ function djustInit() {
         lazyHydrationManager.register(container);
     });
 
-    // Only initialize WebSocket if there are eager containers
-    if (eagerContainers.length > 0) {
+    // Only initialize WebSocket if there are eager containers AND WebSocket is enabled
+    const wsEnabled = window.DJUST_USE_WEBSOCKET !== false;
+    if (eagerContainers.length > 0 && wsEnabled) {
         // Initialize WebSocket
         liveViewWS = new LiveViewWebSocket();
         window.djust.liveViewInstance = liveViewWS;
@@ -35,6 +36,12 @@ function djustInit() {
 
         // Start heartbeat
         liveViewWS.startHeartbeat();
+    } else if (eagerContainers.length > 0 && !wsEnabled) {
+        // HTTP-only mode: create WS instance but disable it so sendEvent() falls through to HTTP
+        liveViewWS = new LiveViewWebSocket();
+        liveViewWS.enabled = false;
+        window.djust.liveViewInstance = liveViewWS;
+        if (globalThis.djustDebug) console.log('[LiveView] HTTP-only mode (use_websocket: false)');
     } else if (lazyContainers.length > 0) {
         if (globalThis.djustDebug) console.log('[LiveView] Deferring WebSocket connection until lazy elements are needed');
     }
