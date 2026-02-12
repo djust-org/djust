@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0rc5] - 2026-02-11
+
+### Added
+
+- **Automatic change tracking** — Phoenix-style render optimization. The framework automatically detects which context values changed between renders and only sends those to Rust's `update_state()`. Replaces the manual `static_assigns` API. Two-layer detection: snapshot comparison for instance attributes, `id()` reference comparison for computed values (e.g., `@lru_cache` results). Immutable types (`str`, `int`, `float`, `bool`, `None`, `bytes`, `tuple`, `frozenset`) skip `deepcopy` in snapshots.
+
+### Fixed
+
+- **Developer Tools Events tab not capturing events** — The debug panel loaded after the WebSocket connected, so its prototype hooks missed the existing connection's `onmessage` handler. Fixed `_hookExistingWebSocket()` to wrap the existing handler using the original property descriptor. Also added `html_update` to event response type matching.
+
+### Removed
+
+- **`static_assigns` class attribute** — Replaced by automatic change tracking. The framework now detects unchanged values automatically — no manual annotation needed.
+
 ## [0.3.0rc4] - 2026-02-11
 
 ### Added
