@@ -2643,6 +2643,9 @@
                 // Hook into onmessage property setter to capture messages
                 // assigned via ws.onmessage = handler (bypasses addEventListener)
                 const onmessageDescriptor = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
+                // Save original descriptor for _hookExistingWebSocket to use
+                // when wrapping an already-assigned onmessage handler
+                this._originalOnmessageDescriptor = onmessageDescriptor;
                 if (onmessageDescriptor) {
                     Object.defineProperty(WebSocket.prototype, 'onmessage', {
                         set(handler) {
@@ -2687,6 +2690,23 @@
                 });
                 return originalSend(data);
             };
+
+            // Wrap the existing onmessage handler to capture received messages.
+            // The onmessage was set BEFORE hookIntoLiveView() ran, so the
+            // prototype setter hook didn't intercept it. Use the original
+            // property descriptor to read/write the raw handler and avoid
+            // double-wrapping through our own setter hook.
+            const desc = this._originalOnmessageDescriptor;
+            if (desc) {
+                const currentHandler = desc.get.call(ws);
+                if (currentHandler) {
+                    desc.set.call(ws, function(event) {
+                        self._handleReceivedMessage(event);
+                        return currentHandler.call(this, event);
+                    });
+                }
+            }
+
             ws._djustDebugHooked = true;
         }
 
@@ -2707,7 +2727,7 @@
 
             // Match response to pending events and capture completed event
             if (payload && this._pendingEvents) {
-                const isEventResponse = payload.type === 'patch' || payload.type === 'error' || payload.type === 'noop';
+                const isEventResponse = payload.type === 'patch' || payload.type === 'html_update' || payload.type === 'error' || payload.type === 'noop';
                 if (isEventResponse) {
                     // Find the most recent pending event (FIFO)
                     const keys = Object.keys(this._pendingEvents);
