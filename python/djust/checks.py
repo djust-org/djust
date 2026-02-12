@@ -550,6 +550,33 @@ def check_liveviews(app_configs, **kwargs):
                     )
                 )
 
+        # Q007 -- overlapping static_assigns and temporary_assigns
+        static = set(getattr(cls, "static_assigns", []))
+        temporary = set(getattr(cls, "temporary_assigns", {}).keys())
+        overlap = static & temporary
+        if overlap:
+            cls_file = ""
+            cls_line = None
+            try:
+                cls_file = inspect.getfile(cls)
+                cls_line = inspect.getsourcelines(cls)[1]
+            except (OSError, TypeError):
+                pass
+            errors.append(
+                DjustWarning(
+                    "%s: keys %s appear in both static_assigns and temporary_assigns."
+                    % (cls_label, overlap),
+                    hint="A key cannot be both static (never re-sent) and temporary (cleared after render).",
+                    id="djust.Q007",
+                    fix_hint=(
+                        "Remove overlapping keys from either static_assigns or "
+                        "temporary_assigns in `%s`." % cls.__qualname__
+                    ),
+                    file_path=cls_file,
+                    line_number=cls_line,
+                )
+            )
+
         # V005 -- module not in LIVEVIEW_ALLOWED_MODULES
         allowed = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", None)
         if allowed is not None and module not in allowed:

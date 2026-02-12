@@ -48,12 +48,16 @@ def _snapshot_assigns(view_instance):
     dict[k]=v, nested modifications). For non-copyable objects
     (querysets, file handles, etc.), a unique sentinel is used that
     never compares equal, ensuring the render is never skipped.
+
+    Static assigns are excluded — they never change after mount, so
+    deep-copying them wastes CPU and memory.
     """
     import copy
 
+    _static_skip = set(getattr(view_instance, "static_assigns", []))
     snapshot = {}
     for k, v in view_instance.__dict__.items():
-        if k.startswith("_"):
+        if k.startswith("_") or k in _static_skip:
             continue
         try:
             snapshot[k] = copy.deepcopy(v)
