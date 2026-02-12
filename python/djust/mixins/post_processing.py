@@ -214,6 +214,15 @@ class PostProcessingMixin:
 
         loading_classes_js = json.dumps(loading_grouping_classes)
 
+        # Graceful fallback: Auto-inject Tailwind CDN in development if compiled CSS is missing
+        tailwind_cdn_fallback = ""
+        if settings.DEBUG and self._should_inject_tailwind_cdn():
+            tailwind_cdn_fallback = (
+                '\n        <script src="https://cdn.tailwindcss.com"></script>\n'
+                "        <!-- djust: Tailwind CDN injected (development fallback) -->\n"
+                '        <!-- Run "python manage.py djust_setup_css tailwind" to compile CSS -->\n'
+            )
+
         debug_info_script = ""
         debug_css_link = ""
         if settings.DEBUG:
@@ -264,6 +273,10 @@ class PostProcessingMixin:
 
         full_script = config_script + script
 
+        # Inject Tailwind CDN fallback in <head> if needed (dev mode only)
+        if tailwind_cdn_fallback and "</head>" in html:
+            html = html.replace("</head>", f"{tailwind_cdn_fallback}</head>")
+
         if debug_css_link and "</head>" in html:
             html = html.replace("</head>", f"{debug_css_link}</head>")
 
@@ -273,3 +286,46 @@ class PostProcessingMixin:
             html += full_script
 
         return html
+
+    def _should_inject_tailwind_cdn(self) -> bool:
+        """Check if Tailwind CDN should be auto-injected as fallback."""
+        import os
+        from django.conf import settings
+
+        # Only in DEBUG mode
+        if not settings.DEBUG:
+            return False
+
+        # Check if Tailwind is configured
+        has_tailwind_config = os.path.exists("tailwind.config.js")
+
+        # Check for input.css in STATICFILES_DIRS
+        has_input_css = False
+        static_dirs = getattr(settings, "STATICFILES_DIRS", [])
+        for static_dir in static_dirs:
+            input_path = os.path.join(static_dir, "css", "input.css")
+            if os.path.exists(input_path):
+                try:
+                    with open(input_path, "r") as f:
+                        content = f.read()
+                        if "@import" in content and "tailwind" in content.lower():
+                            has_input_css = True
+                            break
+                except Exception:
+                    pass
+
+        if not (has_tailwind_config or has_input_css):
+            return False
+
+        # Check if output.css exists
+        for static_dir in static_dirs:
+            if os.path.exists(os.path.join(static_dir, "css", "output.css")):
+                return False  # Compiled CSS exists, no fallback needed
+
+        # Tailwind configured but output.css missing → inject CDN
+        logger.info(
+            "[djust] Tailwind CSS configured but output.css not found. "
+            "Using CDN as fallback in development. "
+            "Run 'python manage.py djust_setup_css tailwind' to compile CSS."
+        )
+        return True

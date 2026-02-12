@@ -64,6 +64,131 @@ _EVENT_HANDLER_LIKE_NAMES = re.compile(
 )
 
 
+def _check_tailwind_cdn_in_production(errors):
+    """Check for Tailwind CDN usage in production (performance issue)."""
+    template_dirs = _get_template_dirs()
+    for template_dir in template_dirs:
+        for root, dirs, files in os.walk(template_dir):
+            for filename in files:
+                if filename.endswith((".html", ".htm")):
+                    # Check base/layout templates (most common location)
+                    if "base" in filename.lower() or "layout" in filename.lower():
+                        filepath = os.path.join(root, filename)
+                        try:
+                            with open(filepath, "r", encoding="utf-8") as f:
+                                content = f.read()
+                                if "cdn.tailwindcss.com" in content:
+                                    errors.append(
+                                        DjustWarning(
+                                            f"Tailwind CDN detected in production template: {filename}",
+                                            hint=(
+                                                "Using Tailwind CDN in production is slow and triggers console warnings. "
+                                                "Compile Tailwind CSS instead:\n"
+                                                "1. Run: python manage.py djust_setup_css tailwind\n"
+                                                "2. Or manually: tailwindcss -i static/css/input.css -o static/css/output.css --minify"
+                                            ),
+                                            id="djust.C010",
+                                        )
+                                    )
+                        except Exception:
+                            pass  # Skip files that can't be read
+
+
+def _check_missing_compiled_css(errors):
+    """Warn if Tailwind is configured but compiled CSS is missing."""
+    from django.conf import settings
+
+    # Check common Tailwind indicators
+    has_tailwind_config = os.path.exists("tailwind.config.js")
+    has_input_css = False
+
+    # Check for input.css in STATICFILES_DIRS
+    static_dirs = getattr(settings, "STATICFILES_DIRS", [])
+    for static_dir in static_dirs:
+        if os.path.exists(os.path.join(static_dir, "css", "input.css")):
+            has_input_css = True
+            # Check if it's a Tailwind file
+            try:
+                with open(os.path.join(static_dir, "css", "input.css"), "r") as f:
+                    content = f.read()
+                    if "@import" in content and "tailwind" in content.lower():
+                        has_input_css = True
+                        break
+            except Exception:
+                pass
+
+    if has_tailwind_config or has_input_css:
+        # Check if output.css exists
+        output_exists = False
+        for static_dir in static_dirs:
+            if os.path.exists(os.path.join(static_dir, "css", "output.css")):
+                output_exists = True
+                break
+
+        if not output_exists:
+            if settings.DEBUG:
+                errors.append(
+                    DjustInfo(
+                        "Tailwind CSS configured but output.css not found (development mode).",
+                        hint=(
+                            "djust will use Tailwind CDN as fallback in development. "
+                            "For better performance, compile CSS:\n"
+                            "  python manage.py djust_setup_css tailwind --watch"
+                        ),
+                        id="djust.C011",
+                    )
+                )
+            else:
+                errors.append(
+                    DjustWarning(
+                        "Tailwind CSS configured but output.css not found.",
+                        hint=(
+                            "Run: tailwindcss -i static/css/input.css -o static/css/output.css --minify\n"
+                            "Or: python manage.py djust_setup_css tailwind"
+                        ),
+                        id="djust.C011",
+                    )
+                )
+
+
+def _check_manual_client_js(errors):
+    """Detect manual client.js loading in base templates (causes double-loading)."""
+    template_dirs = _get_template_dirs()
+    for template_dir in template_dirs:
+        for root, dirs, files in os.walk(template_dir):
+            for filename in files:
+                if filename.endswith((".html", ".htm")):
+                    # Check base/layout templates
+                    if "base" in filename.lower() or "layout" in filename.lower():
+                        filepath = os.path.join(root, filename)
+                        try:
+                            with open(filepath, "r", encoding="utf-8") as f:
+                                lines = f.readlines()
+                                for line_num, line in enumerate(lines, 1):
+                                    # Look for manual client.js loading
+                                    if "djust/client.js" in line and "<script" in line:
+                                        # Make sure it's not a comment
+                                        stripped = line.strip()
+                                        if not stripped.startswith(
+                                            "<!--"
+                                        ) and not stripped.startswith("*"):
+                                            errors.append(
+                                                DjustWarning(
+                                                    f"Manual client.js detected in {filename}:{line_num}",
+                                                    hint=(
+                                                        "djust automatically injects client.js for LiveView pages. "
+                                                        "Remove the manual <script src=\"{% static 'djust/client.js' %}\"> tag "
+                                                        "to avoid double-loading and race conditions."
+                                                    ),
+                                                    id="djust.C012",
+                                                    file_path=filepath,
+                                                    line_number=line_num,
+                                                )
+                                            )
+                        except Exception:
+                            pass  # Skip files that can't be read
+
+
 def _get_project_app_dirs():
     """Return directories for project apps (excluding third-party and djust itself)."""
     from django.apps import apps
@@ -222,6 +347,16 @@ def check_configuration(app_configs, **kwargs):
                 fix_hint="Add `'djust'` to INSTALLED_APPS in your Django settings file.",
             )
         )
+
+    # C010 -- Tailwind CDN in production
+    if not settings.DEBUG:
+        _check_tailwind_cdn_in_production(errors)
+
+    # C011 -- Missing compiled CSS
+    _check_missing_compiled_css(errors)
+
+    # C012 -- Manual client.js in base templates
+    _check_manual_client_js(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     asgi_path = getattr(settings, "ASGI_APPLICATION", None)
