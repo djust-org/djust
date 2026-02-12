@@ -36,6 +36,9 @@ except ImportError:
     SessionActorHandle = None
 
 
+_IMMUTABLE_TYPES = (str, int, float, bool, type(None), bytes, tuple, frozenset)
+
+
 def _snapshot_assigns(view_instance):
     """Snapshot public assigns (non-underscore attributes) by deep copy.
 
@@ -49,23 +52,39 @@ def _snapshot_assigns(view_instance):
     (querysets, file handles, etc.), a unique sentinel is used that
     never compares equal, ensuring the render is never skipped.
 
-    Static assigns are excluded — they never change after mount, so
-    deep-copying them wastes CPU and memory.
+    Immutable types (str, int, float, bool, None, bytes, tuple, frozenset)
+    are stored directly — no deep copy needed since they cannot be mutated.
     """
     import copy
 
-    _static_skip = set(getattr(view_instance, "static_assigns", []))
     snapshot = {}
     for k, v in view_instance.__dict__.items():
-        if k.startswith("_") or k in _static_skip:
+        if k.startswith("_"):
             continue
-        try:
-            snapshot[k] = copy.deepcopy(v)
-        except Exception:
-            # Non-copyable: use unique sentinel so pre != post always,
-            # ensuring render is never skipped (safe default).
-            snapshot[k] = object()
+        if isinstance(v, _IMMUTABLE_TYPES):
+            snapshot[k] = v
+        else:
+            try:
+                snapshot[k] = copy.deepcopy(v)
+            except Exception:
+                # Non-copyable: use unique sentinel so pre != post always,
+                # ensuring render is never skipped (safe default).
+                snapshot[k] = object()
     return snapshot
+
+
+def _compute_changed_keys(pre, post):
+    """Return set of keys that differ between two snapshots.
+
+    Detects added, removed, and modified keys.
+    """
+    changed = set()
+    for k in set(pre) | set(post):
+        if k not in pre or k not in post:
+            changed.add(k)
+        elif pre[k] != post[k]:
+            changed.add(k)
+    return changed
 
 
 def _build_context_snapshot(context, max_value_len=100):
@@ -1165,6 +1184,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 logger.debug(
                                     "[djust] Auto-skipping render for '%s' — no assigns changed",
                                     event_name,
+                                )
+                            else:
+                                # Phoenix-style: track which keys actually changed
+                                # so _sync_state_to_rust can skip unchanged values
+                                self.view_instance._changed_keys = _compute_changed_keys(
+                                    pre_assigns, post_assigns
                                 )
 
                         if skip_render:

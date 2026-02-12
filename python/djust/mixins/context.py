@@ -57,16 +57,9 @@ class ContextMixin:
 
         context = {}
 
-        # Skip static assigns after first render — Rust retains them
-        _static_skip = set()
-        if getattr(self, "_static_assigns_sent", False):
-            _static_skip = set(getattr(self, "static_assigns", []))
-
         # Add all non-private attributes as context
         for key in dir(self):
             if not key.startswith("_"):
-                if key in _static_skip:
-                    continue
                 try:
                     value = getattr(self, key)
                     if not callable(value):

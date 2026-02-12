@@ -103,13 +103,45 @@ class RustBridgeMixin:
                 backend.set(self._cache_key, self._rust_view)
 
     def _sync_state_to_rust(self):
-        """Sync Python state to Rust backend"""
+        """Sync Python state to Rust backend.
+
+        Phoenix-style change tracking: only sends values that actually changed
+        since the last render. Rust's update_state() merges (extends), so
+        unchanged keys are retained from the previous render.
+
+        Two-layer detection:
+          1. Instance attribute changes — snapshot-based (_changed_keys from handle_event)
+          2. Computed value changes — id() reference comparison against previous render
+        """
         if self._rust_view:
             from ..components.base import Component, LiveComponent
             from django import forms
             from django.utils.safestring import SafeString
 
-            context = self.get_context_data()
+            full_context = self.get_context_data()
+
+            changed_keys = getattr(self, "_changed_keys", None)
+            prev_refs = getattr(self, "_prev_context_refs", {})
+
+            # Determine which context to send to Rust
+            if prev_refs:
+                # Incremental: only send values that actually changed
+                context = {}
+                for key, value in full_context.items():
+                    if changed_keys and key in changed_keys:
+                        context[key] = value  # instance attr changed (snapshot)
+                    elif key not in prev_refs:
+                        context[key] = value  # new key
+                    elif id(value) != prev_refs.get(key):
+                        context[key] = value  # different object reference
+                    # else: unchanged — Rust already has it
+            else:
+                # First render: send everything
+                context = full_context
+
+            # Store refs for next comparison (full context, not filtered)
+            self._prev_context_refs = {k: id(v) for k, v in full_context.items()}
+            self._changed_keys = None  # Clear
 
             # Detect SafeString values before serialization loses the type info
             safe_keys = []
@@ -132,9 +164,3 @@ class RustBridgeMixin:
             self._rust_view.update_state(json_compatible_context)
             if safe_keys:
                 self._rust_view.mark_safe_keys(safe_keys)
-
-            # Mark static assigns as sent — subsequent syncs will skip them
-            if getattr(self, "static_assigns", None) and not getattr(
-                self, "_static_assigns_sent", False
-            ):
-                self._static_assigns_sent = True
