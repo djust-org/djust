@@ -433,6 +433,22 @@ LIVEVIEW_CONFIG = {
 | `debug_vdom` | `False` | Enable detailed VDOM debugging logs |
 | `css_framework` | `'bootstrap5'` | CSS framework for components |
 
+**CSS Framework Setup:**
+
+For Tailwind CSS (recommended), use the one-command setup:
+
+```bash
+python manage.py djust_setup_css tailwind
+```
+
+This auto-detects template directories, creates config files, and builds your CSS. For production:
+
+```bash
+python manage.py djust_setup_css tailwind --minify
+```
+
+See the [CSS Framework Guide](docs/guides/css-frameworks.md) for detailed setup instructions, Bootstrap configuration, and CI/CD integration.
+
 **Debug Mode:**
 
 When troubleshooting VDOM issues, enable debug logging:

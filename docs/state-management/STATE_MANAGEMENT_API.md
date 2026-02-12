@@ -1307,10 +1307,13 @@ Enable detailed logging for troubleshooting @loading behavior:
 ```html
 <script>
     // Enable debug logging (shows registration, modifiers, and state changes)
+    // Must be set BEFORE djust client.js loads
     window.djustDebug = true;
 </script>
-<script src="{% static 'djust/client.js' %}"></script>
+<!-- djust auto-injects client.js - no manual script tag needed -->
 ```
+
+**Note:** djust automatically injects `client.js` for LiveView pages. The above example shows the debug flag must be set before the client loads.
 
 **Debug Output:**
 ```javascript
