@@ -18,6 +18,7 @@ A practical guide to building reactive LiveView applications with djust.
 - [Forms](#forms)
 - [Testing](#testing)
 - [Debugging](#debugging)
+- [Common Pitfalls](#common-pitfalls)
 
 ---
 
@@ -763,6 +764,214 @@ logger = logging.getLogger(__name__)
 def my_handler(self, **kwargs):
     logger.debug("Handler called with %s", kwargs)
 ```
+
+---
+
+## Common Pitfalls
+
+### Manual client.js Loading
+
+**Problem:** Adding `<script src="{% static 'djust/client.js' %}">` to base template.
+
+**Why it's wrong:**
+- djust automatically injects `client.js` for all LiveView pages
+- Manual loading causes duplicate initialization
+- Race conditions between manual and auto-injected scripts
+- Console warnings: "client.js already loaded, skipping duplicate initialization"
+
+**Solution:**
+Remove the manual script tag. djust handles it automatically:
+
+```html
+<!-- ❌ Don't do this -->
+<script src="{% static 'djust/client.js' %}" defer></script>
+
+<!-- ✅ Do this instead -->
+<!-- djust auto-injects client.js -->
+```
+
+System check `djust.C012` detects this automatically via `python manage.py check`.
+
+### Tailwind CDN in Production
+
+**Problem:** Using `<script src="https://cdn.tailwindcss.com"></script>` in production.
+
+**Why it's wrong:**
+- Slow: ~300KB uncompressed, blocks rendering
+- Console warnings about JIT compilation in browser
+- No tree-shaking (includes all utilities, even unused ones)
+- Production performance impact
+
+**Solution:**
+Compile CSS before deployment:
+
+```bash
+# One-command setup
+python manage.py djust_setup_css tailwind --minify
+
+# Or manually
+npx tailwindcss -i static/css/input.css -o static/css/output.css --minify
+```
+
+Then in your template:
+```html
+<!-- ❌ Don't do this in production -->
+<script src="https://cdn.tailwindcss.com"></script>
+
+<!-- ✅ Do this instead -->
+<link rel="stylesheet" href="{% static 'css/output.css' %}">
+```
+
+System check `djust.C010` warns about CDN usage in production automatically.
+
+### Missing Compiled CSS
+
+**Problem:** Deploying to production without compiling CSS.
+
+**Why it's wrong:**
+- Dev fallback (Tailwind CDN) doesn't work in production
+- Unstyled pages
+- Missing utility classes
+
+**Solution:**
+Always compile CSS before deployment:
+
+```bash
+python manage.py djust_setup_css tailwind --minify
+git add static/css/output.css
+git commit -m "feat: add compiled CSS"
+```
+
+System check `djust.C011` warns if Tailwind is configured but `output.css` is missing.
+
+### Converting QuerySets to Lists
+
+**Problem:** Converting QuerySets to lists with `list()` or slicing with `[:]`.
+
+**Why it's wrong:**
+- JIT serialization requires QuerySets
+- Lists force immediate evaluation (memory impact)
+- Loses pagination benefits
+- No lazy loading in templates
+
+**Solution:**
+Always pass QuerySets directly:
+
+```python
+# ❌ Don't do this
+def get_context_data(self, **kwargs):
+    context = super().get_context_data(**kwargs)
+    context["items"] = list(self._items)  # Forces evaluation
+    return context
+
+# ✅ Do this instead
+def get_context_data(self, **kwargs):
+    context = super().get_context_data(**kwargs)
+    context["items"] = self._items  # Keeps QuerySet
+    return context
+```
+
+### Missing `data-key` on Dynamic Lists
+
+**Problem:** Rendering dynamic lists without `data-key` attributes.
+
+**Why it's wrong:**
+- VDOM can't track identity across updates
+- Re-renders entire list instead of updating changed items
+- Loss of focus/scroll position
+- Animations break
+
+**Solution:**
+Always add `data-key` to list items:
+
+```html
+<!-- ❌ Don't do this -->
+{% for item in items %}
+    <div>{{ item.name }}</div>
+{% endfor %}
+
+<!-- ✅ Do this instead -->
+{% for item in items %}
+    <div data-key="{{ item.id }}">{{ item.name }}</div>
+{% endfor %}
+```
+
+### Missing `**kwargs` in Event Handlers
+
+**Problem:** Event handlers without `**kwargs` parameter.
+
+**Why it's wrong:**
+- Breaks when extra params are passed from client
+- Not forward-compatible with new framework features
+- System check `djust.V003` warns about this
+
+**Solution:**
+Always include `**kwargs`:
+
+```python
+# ❌ Don't do this
+@event_handler
+def delete_item(self, item_id: int):
+    Item.objects.filter(id=item_id).delete()
+
+# ✅ Do this instead
+@event_handler
+def delete_item(self, item_id: int = 0, **kwargs):
+    Item.objects.filter(id=item_id).delete()
+```
+
+### No Default Values for Handler Parameters
+
+**Problem:** Handler parameters without defaults.
+
+**Why it's wrong:**
+- Breaks if client doesn't send the parameter
+- Not defensive against missing data
+- Harder to test
+
+**Solution:**
+Provide sensible defaults:
+
+```python
+# ❌ Don't do this
+@event_handler
+def search(self, query: str, **kwargs):
+    self.results = search_products(query)
+
+# ✅ Do this instead
+@event_handler
+def search(self, query: str = "", **kwargs):
+    if not query:
+        self.results = []
+    else:
+        self.results = search_products(query)
+```
+
+### Exposing Sensitive Data
+
+**Problem:** Exposing sensitive data through public instance variables.
+
+**Why it's wrong:**
+- All public variables are sent to client in JIT serialization
+- Sensitive data visible in browser DevTools
+- Security risk
+
+**Solution:**
+Use private variables for sensitive data:
+
+```python
+# ❌ Don't do this
+def mount(self, request, **kwargs):
+    self.user_password_hash = request.user.password  # Exposed!
+    self.api_secret = settings.SECRET_KEY  # Exposed!
+
+# ✅ Do this instead
+def mount(self, request, **kwargs):
+    self._user_password_hash = request.user.password  # Private
+    self._api_secret = settings.SECRET_KEY  # Private
+```
+
+See the [Security Guide](security.md) for more details.
 
 ---
 
