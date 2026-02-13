@@ -63,6 +63,48 @@ _EVENT_HANDLER_LIKE_NAMES = re.compile(
     r"^(handle_|on_|toggle_|select_|update_|delete_|create_|add_|remove_|save_|cancel_|submit_|close_|open_)"
 )
 
+_SERVICE_INSTANCE_KEYWORDS = re.compile(r"(Service|Client|Session|API|Connection)", re.IGNORECASE)
+
+_DJ_VIEW_RE = re.compile(r"data-djust-view")
+
+
+def _check_manual_client_js(errors):
+    """Detect manual client.js loading in base templates (causes double-loading)."""
+    template_dirs = _get_template_dirs()
+    for template_dir in template_dirs:
+        for root, dirs, files in os.walk(template_dir):
+            for filename in files:
+                if filename.endswith((".html", ".htm")):
+                    # Check base/layout templates
+                    if "base" in filename.lower() or "layout" in filename.lower():
+                        filepath = os.path.join(root, filename)
+                        try:
+                            with open(filepath, "r", encoding="utf-8") as f:
+                                lines = f.readlines()
+                                for line_num, line in enumerate(lines, 1):
+                                    # Look for manual client.js loading
+                                    if "djust/client.js" in line and "<script" in line:
+                                        # Make sure it's not a comment
+                                        stripped = line.strip()
+                                        if not stripped.startswith(
+                                            "<!--"
+                                        ) and not stripped.startswith("*"):
+                                            errors.append(
+                                                DjustWarning(
+                                                    f"Manual client.js detected in {filename}:{line_num}",
+                                                    hint=(
+                                                        "djust automatically injects client.js for LiveView pages. "
+                                                        "Remove the manual <script src=\"{% static 'djust/client.js' %}\"> tag "
+                                                        "to avoid double-loading and race conditions."
+                                                    ),
+                                                    id="djust.C012",
+                                                    file_path=filepath,
+                                                    line_number=line_num,
+                                                )
+                                            )
+                        except Exception:
+                            pass  # Skip files that can't be read
+
 
 def _get_project_app_dirs():
     """Return directories for project apps (excluding third-party and djust itself)."""
@@ -135,12 +177,48 @@ def _iter_js_files(directories):
 
 
 def _parse_python_file(filepath):
-    """Return AST tree for a Python file, or None on parse failure."""
+    """Return (AST tree, source_lines) for a Python file, or (None, []) on failure.
+
+    source_lines is 1-indexed: source_lines[0] is unused, source_lines[1] is line 1.
+    """
     try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
-            return ast.parse(fh.read(), filename=filepath)
+            source = fh.read()
+        tree = ast.parse(source, filename=filepath)
+        # Prepend empty string so source_lines[1] == first line of file
+        lines = [""] + source.splitlines()
+        return tree, lines
     except SyntaxError:
-        return None
+        return None, []
+
+
+def _has_noqa(source_lines, lineno, check_id):
+    """Return True if source line has a # noqa comment suppressing check_id.
+
+    Supports:
+        # noqa           — suppress all checks on this line
+        # noqa: Q001     — suppress specific check
+        # noqa: Q001,S002 — suppress multiple checks
+    """
+    if lineno < 1 or lineno >= len(source_lines):
+        return False
+    line = source_lines[lineno]
+    # Find # noqa in the line
+    idx = line.find("# noqa")
+    if idx == -1:
+        return False
+    rest = line[idx + 6 :].strip()
+    if not rest:
+        return True  # bare # noqa — suppress everything
+    if rest.startswith(":"):
+        # Split on comma, take first whitespace-delimited token from each
+        # to handle trailing comments like "# noqa: Q001 — reason here"
+        codes = []
+        for part in rest[1:].split(","):
+            token = part.strip().split()[0] if part.strip() else ""
+            codes.append(token)
+        return check_id in codes
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +300,9 @@ def check_configuration(app_configs, **kwargs):
                 fix_hint="Add `'djust'` to INSTALLED_APPS in your Django settings file.",
             )
         )
+
+    # C012 -- Manual client.js in base templates
+    _check_manual_client_js(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     asgi_path = getattr(settings, "ASGI_APPLICATION", None)
@@ -566,7 +647,131 @@ def check_liveviews(app_configs, **kwargs):
                 )
             )
 
+        # V007 -- event handler missing **kwargs
+        for name, method in cls.__dict__.items():
+            if not callable(method):
+                continue
+            if not is_event_handler(method):
+                continue
+            # Unwrap decorators to get original function
+            inner = method
+            for _attempt in range(10):
+                inner = getattr(inner, "__wrapped__", None) or getattr(inner, "func", None)
+                if inner is None:
+                    break
+            sig_target = inner if inner is not None else method
+            try:
+                sig = inspect.signature(sig_target)
+            except (ValueError, TypeError):
+                continue
+            has_var_keyword = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            )
+            if not has_var_keyword:
+                method_file = ""
+                method_line = None
+                try:
+                    method_file = inspect.getfile(sig_target)
+                    method_line = inspect.getsourcelines(sig_target)[1]
+                except (OSError, TypeError):
+                    pass
+                errors.append(
+                    DjustWarning(
+                        "%s.%s() event handler missing **kwargs in signature." % (cls_label, name),
+                        hint="Add **kwargs to the event handler signature to receive event parameters.",
+                        id="djust.V007",
+                        fix_hint=(
+                            "Add `**kwargs` to the `%s` method signature in `%s`."
+                            % (name, method_file or cls_label)
+                        ),
+                        file_path=method_file,
+                        line_number=method_line,
+                    )
+                )
+
+    # V006 -- service instance in mount() (AST-based scan of project files)
+    _check_service_instances_in_mount(errors)
+
     return errors
+
+
+def _check_service_instances_in_mount(errors):
+    """V006: Detect service/client/session instantiation in mount() methods via AST."""
+    app_dirs = _get_project_app_dirs()
+    if not app_dirs:
+        return
+
+    for filepath in _iter_python_files(app_dirs):
+        tree, source_lines = _parse_python_file(filepath)
+        if tree is None:
+            continue
+
+        relpath = os.path.relpath(filepath)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+
+            # Find mount() methods inside class definitions
+            for item in node.body:
+                if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if item.name != "mount":
+                    continue
+
+                # Walk the mount body looking for self.X = SomeService(...)
+                for stmt in ast.walk(item):
+                    if not isinstance(stmt, ast.Assign):
+                        continue
+                    for target in stmt.targets:
+                        if not isinstance(target, ast.Attribute):
+                            continue
+                        if not (isinstance(target.value, ast.Name) and target.value.id == "self"):
+                            continue
+                        # Check if the value is a Call whose function name
+                        # contains service-like keywords
+                        if not isinstance(stmt.value, ast.Call):
+                            continue
+                        call_name = _get_call_name(stmt.value)
+                        if call_name and _SERVICE_INSTANCE_KEYWORDS.search(call_name):
+                            if not _has_noqa(source_lines, stmt.lineno, "V006"):
+                                errors.append(
+                                    DjustWarning(
+                                        "%s:%d -- Service instance '%s' assigned in mount(). "
+                                        "Service instances cannot be serialized."
+                                        % (relpath, stmt.lineno, target.attr),
+                                        hint=(
+                                            "Use a helper method pattern instead. "
+                                            "See: docs/guides/services.md"
+                                        ),
+                                        id="djust.V006",
+                                        fix_hint=(
+                                            "Move `self.%s = %s(...)` out of mount() into a "
+                                            "helper method or property at line %d in `%s`."
+                                            % (target.attr, call_name, stmt.lineno, relpath)
+                                        ),
+                                        file_path=filepath,
+                                        line_number=stmt.lineno,
+                                    )
+                                )
+
+
+def _get_call_name(call_node):
+    """Extract a human-readable name from a Call node's function."""
+    func = call_node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        # e.g., boto3.client -> "boto3.client"
+        parts = []
+        current = func
+        while isinstance(current, ast.Attribute):
+            parts.append(current.attr)
+            current = current.value
+        if isinstance(current, ast.Name):
+            parts.append(current.id)
+        return ".".join(reversed(parts))
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -583,7 +788,7 @@ def check_security(app_configs, **kwargs):
         return errors
 
     for filepath in _iter_python_files(app_dirs):
-        tree = _parse_python_file(filepath)
+        tree, source_lines = _parse_python_file(filepath)
         if tree is None:
             continue
 
@@ -601,7 +806,9 @@ def check_security(app_configs, **kwargs):
 
                 if func_name == "mark_safe" and node.args:
                     arg = node.args[0]
-                    if isinstance(arg, ast.JoinedStr):
+                    if isinstance(arg, ast.JoinedStr) and not _has_noqa(
+                        source_lines, node.lineno, "S001"
+                    ):
                         errors.append(
                             DjustError(
                                 "%s:%d -- mark_safe() with f-string is a XSS risk."
@@ -640,7 +847,9 @@ def check_security(app_configs, **kwargs):
                             )
                             if "csrf" in doc.lower():
                                 has_justification = True
-                        if not has_justification:
+                        if not has_justification and not _has_noqa(
+                            source_lines, deco.lineno, "S002"
+                        ):
                             errors.append(
                                 DjustWarning(
                                     "%s:%d -- @csrf_exempt without justification."
@@ -660,7 +869,11 @@ def check_security(app_configs, **kwargs):
             # S003 -- bare except: pass
             if isinstance(node, ast.ExceptHandler):
                 if node.type is None:  # bare except
-                    if len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
+                    if (
+                        len(node.body) == 1
+                        and isinstance(node.body[0], ast.Pass)
+                        and not _has_noqa(source_lines, node.lineno, "S003")
+                    ):
                         errors.append(
                             DjustWarning(
                                 "%s:%d -- bare 'except: pass' swallows all exceptions."
@@ -730,16 +943,22 @@ def check_templates(app_configs, **kwargs):
             )
 
         # T002 -- LiveView template missing data-djust-root
-        # Only flag if file looks like a LiveView template (has dj-click or dj-input etc.)
+        # Flag if file has dj-* directives or data-djust-view but no data-djust-root
         has_dj_attrs = re.search(r"dj-(click|input|change|submit|model)", content)
-        if has_dj_attrs and not _DJ_ROOT_RE.search(content):
+        has_djust_view = _DJ_VIEW_RE.search(content)
+        has_djust_root = _DJ_ROOT_RE.search(content)
+        if (has_dj_attrs or has_djust_view) and not has_djust_root:
             # Check if it extends a base template (in which case root is likely in the base)
             if not re.search(r"\{%\s*extends\s+", content):
                 errors.append(
-                    DjustInfo(
-                        "%s -- LiveView template may be missing 'data-djust-root' attribute."
-                        % relpath,
-                        hint="Add data-djust-root to the root element of your LiveView template.",
+                    DjustWarning(
+                        "%s -- LiveView template missing 'data-djust-root' attribute. "
+                        "Without data-djust-root, djust cannot identify the root element "
+                        "for DOM patching." % relpath,
+                        hint=(
+                            "Add data-djust-root to the root element of your LiveView template. "
+                            'Example: <div data-djust-root data-djust-view="myapp.views.MyView">'
+                        ),
                         id="djust.T002",
                         fix_hint=(
                             "Add `data-djust-root` attribute to the root element "
@@ -791,7 +1010,53 @@ def check_templates(app_configs, **kwargs):
                 )
             )
 
+        # T005 -- data-djust-view and data-djust-root on different elements
+        if has_djust_view and has_djust_root:
+            _check_view_root_same_element(content, relpath, filepath, errors)
+
     return errors
+
+
+def _check_view_root_same_element(content, relpath, filepath, errors):
+    """T005: Detect when data-djust-view and data-djust-root are on different elements."""
+    # Use regex to find HTML tags and check if both attributes co-occur
+    # Find all tags that have either attribute
+    tag_re = re.compile(r"<[a-zA-Z][^>]*>", re.DOTALL)
+    has_combined_tag = False
+    has_view_only = False
+    has_root_only = False
+    view_only_lineno = None
+    for match in tag_re.finditer(content):
+        tag = match.group(0)
+        tag_has_view = "data-djust-view" in tag
+        tag_has_root = "data-djust-root" in tag
+        if tag_has_view and tag_has_root:
+            has_combined_tag = True
+            break
+        if tag_has_view and not tag_has_root:
+            has_view_only = True
+            if view_only_lineno is None:
+                view_only_lineno = content[: match.start()].count("\n") + 1
+        if tag_has_root and not tag_has_view:
+            has_root_only = True
+
+    if has_view_only and has_root_only and not has_combined_tag:
+        errors.append(
+            DjustWarning(
+                "%s -- data-djust-view and data-djust-root are on different elements." % relpath,
+                hint=(
+                    "data-djust-view and data-djust-root must be on the same root element. "
+                    'Example: <div data-djust-root data-djust-view="myapp.views.MyView">'
+                ),
+                id="djust.T005",
+                fix_hint=(
+                    "Move data-djust-view and data-djust-root onto the same element "
+                    "in `%s`." % relpath
+                ),
+                file_path=filepath,
+                line_number=view_only_lineno,
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -808,7 +1073,7 @@ def check_code_quality(app_configs, **kwargs):
         return errors
 
     for filepath in _iter_python_files(app_dirs):
-        tree = _parse_python_file(filepath)
+        tree, source_lines = _parse_python_file(filepath)
         if tree is None:
             continue
 
@@ -819,19 +1084,20 @@ def check_code_quality(app_configs, **kwargs):
             if isinstance(node, ast.Call):
                 func = node.func
                 if isinstance(func, ast.Name) and func.id == "print":
-                    errors.append(
-                        DjustInfo(
-                            "%s:%d -- print() statement found." % (relpath, node.lineno),
-                            hint="Use logging module instead of print() in production code.",
-                            id="djust.Q001",
-                            fix_hint=(
-                                "Replace `print(...)` with `logger.info(...)` "
-                                "at line %d in `%s`." % (node.lineno, relpath)
-                            ),
-                            file_path=filepath,
-                            line_number=node.lineno,
+                    if not _has_noqa(source_lines, node.lineno, "Q001"):
+                        errors.append(
+                            DjustInfo(
+                                "%s:%d -- print() statement found." % (relpath, node.lineno),
+                                hint="Use logging module instead of print() in production code.",
+                                id="djust.Q001",
+                                fix_hint=(
+                                    "Replace `print(...)` with `logger.info(...)` "
+                                    "at line %d in `%s`." % (node.lineno, relpath)
+                                ),
+                                file_path=filepath,
+                                line_number=node.lineno,
+                            )
                         )
-                    )
 
             # Q002 -- f-string in logger calls
             if isinstance(node, ast.Call):
@@ -852,7 +1118,9 @@ def check_code_quality(app_configs, **kwargs):
                     elif isinstance(receiver, ast.Attribute) and receiver.attr in ("logger", "log"):
                         is_logger = True
                     if is_logger and node.args:
-                        if isinstance(node.args[0], ast.JoinedStr):
+                        if isinstance(node.args[0], ast.JoinedStr) and not _has_noqa(
+                            source_lines, node.lineno, "Q002"
+                        ):
                             errors.append(
                                 DjustWarning(
                                     "%s:%d -- f-string in logger call." % (relpath, node.lineno),

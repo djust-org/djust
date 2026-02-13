@@ -2,7 +2,11 @@
 LiveView base class and decorator for reactive Django views
 """
 
+import io
+import json
 import logging
+import socket
+import threading
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from django.views import View
@@ -165,6 +169,115 @@ class LiveView(
     def handle_tick(self):
         """Override for periodic server-side updates. Called every tick_interval ms."""
         pass
+
+    # ============================================================================
+    # STATE SERIALIZATION VALIDATION
+    # ============================================================================
+
+    @staticmethod
+    def _is_serializable(value: Any) -> bool:
+        """Check if a value can be safely serialized to JSON for state transfer.
+
+        Returns True for primitives, collections, Django models/QuerySets, and
+        any value that json.dumps can handle. Returns False for service instances,
+        connections, file handles, threads, and other non-serializable objects.
+        """
+        # Primitives are always fine
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return True
+
+        # Collections: check recursively would be expensive; allow them and
+        # let actual serialization catch nested issues
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return True
+
+        if isinstance(value, dict):
+            return True
+
+        # Django models and QuerySets are serialized by JIT pipeline
+        try:
+            from django.db import models
+            from django.db.models import QuerySet
+
+            if isinstance(value, (models.Model, QuerySet)):
+                return True
+        except ImportError:
+            pass
+
+        # Non-serializable types: file handles, threads, locks, sockets
+        _non_serializable = (io.IOBase, threading.Thread, socket.socket)
+        try:
+            # threading.Lock() returns _thread.lock which isn't directly a type
+            import _thread
+
+            _non_serializable = _non_serializable + (_thread.LockType,)
+        except (ImportError, AttributeError):
+            pass
+        if isinstance(value, _non_serializable):
+            return False
+
+        # Detect common service/client patterns by type name
+        type_name = type(value).__name__.lower()
+        _suspect_names = ("service", "client", "session", "connection", "api")
+        if any(name in type_name for name in _suspect_names):
+            return False
+
+        # Detect objects with generic repr like '<ClassName object at 0x...>'
+        try:
+            obj_repr = repr(value)
+            if " object at 0x" in obj_repr:
+                return False
+        except Exception:
+            return False
+
+        # Final check: try to actually serialize it
+        try:
+            json.dumps(value, cls=DjangoJSONEncoder)
+            return True
+        except (TypeError, ValueError, OverflowError):
+            return False
+
+    def get_state(self) -> Dict[str, Any]:
+        """Get serializable state from this LiveView instance.
+
+        Iterates over public (non-underscore) instance attributes and validates
+        that each value can be serialized. In DEBUG mode, raises TypeError with
+        a helpful message for non-serializable values. In production, logs an
+        error and skips the attribute.
+
+        Returns:
+            Dictionary of {attribute_name: value} for all serializable public state.
+        """
+        from django.conf import settings
+
+        state = {}
+        for key, value in self.__dict__.items():
+            if key.startswith("_"):
+                continue
+
+            if callable(value):
+                continue
+
+            if not self._is_serializable(value):
+                class_name = self.__class__.__name__
+                value_type = type(value).__name__
+                msg = (
+                    f"Non-serializable value in {class_name}.{key}: "
+                    f"{value_type} cannot be stored in LiveView state. "
+                    f"Service instances, connections, and file handles must "
+                    f"be created in event handlers or accessed via utility "
+                    f"functions — not stored as instance attributes. "
+                    f"See: https://djust.org/docs/guides/services.md"
+                )
+                if getattr(settings, "DEBUG", False):
+                    raise TypeError(msg)
+                else:
+                    logger.error(msg)
+                    continue
+
+            state[key] = value
+
+        return state
 
     # ============================================================================
     # TEMPORARY ASSIGNS - Memory optimization for large collections

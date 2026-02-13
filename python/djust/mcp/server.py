@@ -477,7 +477,283 @@ def create_server():
                 }
             )
 
+        # Check for service instance patterns stored in state
+        _service_patterns = [
+            ("Service(", "service instantiation"),
+            (".client(", "client instantiation"),
+            ("Session(", "session instantiation"),
+            ("boto3.", "AWS SDK usage"),
+            ("requests.", "requests library usage"),
+            ("httpx.", "httpx library usage"),
+        ]
+        for node in _ast.walk(tree):
+            if not isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                continue
+            # Only check mount() and handler-like methods
+            if node.name not in ("mount", "connected") and not handler_pattern.match(node.name):
+                continue
+            for stmt in _ast.walk(node):
+                if isinstance(stmt, _ast.Assign):
+                    for target in stmt.targets:
+                        if (
+                            isinstance(target, _ast.Attribute)
+                            and isinstance(target.value, _ast.Name)
+                            and target.value.id == "self"
+                            and not target.attr.startswith("_")
+                        ):
+                            # Check the source code around this assignment
+                            try:
+                                source_segment = _ast.get_source_segment(code, stmt.value)
+                            except Exception:
+                                source_segment = None
+                            source_text = source_segment or ""
+                            for pattern_str, desc in _service_patterns:
+                                if pattern_str in source_text:
+                                    issues.append(
+                                        {
+                                            "severity": "error",
+                                            "message": (
+                                                "Service instance stored in state: self.%s "
+                                                "(%s). Non-serializable objects cannot be "
+                                                "stored as view attributes." % (target.attr, desc)
+                                            ),
+                                            "line": stmt.lineno,
+                                            "fix_hint": (
+                                                "Use helper method pattern: define "
+                                                "def _get_%s(self) that creates the instance "
+                                                "on demand. See: docs/guides/services.md"
+                                                % target.attr
+                                            ),
+                                        }
+                                    )
+                                    break
+
         return json.dumps(issues, indent=2)
+
+    @mcp.tool()
+    def detect_common_issues(code: str) -> str:
+        """Detect common djust anti-patterns in LiveView code.
+
+        Checks for:
+        - Service instance assignments (Issue #292)
+        - Missing **kwargs in event handlers
+        - Public QuerySet attributes (should be private with _)
+        - Missing @event_handler decorators on handler-like methods
+
+        Returns JSON with detected issues and pattern suggestions.
+        """
+        import ast as _ast
+        import re
+
+        issues = []
+
+        try:
+            tree = _ast.parse(code)
+        except SyntaxError as e:
+            return json.dumps(
+                {
+                    "issues": [
+                        {
+                            "type": "syntax_error",
+                            "severity": "error",
+                            "message": "Syntax error: %s" % e,
+                            "line": e.lineno,
+                        }
+                    ],
+                    "summary": {"total": 1, "errors": 1, "warnings": 0},
+                }
+            )
+
+        handler_pattern = re.compile(
+            r"^(handle_|on_|toggle_|select_|update_|delete_|"
+            r"create_|add_|remove_|save_|cancel_|submit_|close_|open_)"
+        )
+
+        # Patterns indicating service/client instantiation
+        _service_call_names = {
+            "client",
+            "Client",
+            "Session",
+            "session",
+            "connect",
+            "Connection",
+        }
+        _service_module_names = {"boto3", "requests", "httpx", "redis", "paramiko"}
+
+        for node in _ast.walk(tree):
+            if not isinstance(node, _ast.ClassDef):
+                continue
+
+            # Track which methods have @event_handler
+            decorated_handlers = set()
+
+            for item in node.body:
+                if not isinstance(item, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                    continue
+
+                # --- Check: handler-like methods without @event_handler ---
+                is_decorated_handler = False
+                for dec in item.decorator_list:
+                    if isinstance(dec, _ast.Name) and dec.id == "event_handler":
+                        is_decorated_handler = True
+                    elif isinstance(dec, _ast.Call):
+                        func = dec.func
+                        if isinstance(func, _ast.Name) and func.id == "event_handler":
+                            is_decorated_handler = True
+
+                if is_decorated_handler:
+                    decorated_handlers.add(item.name)
+
+                    # --- Check: missing **kwargs on decorated handlers ---
+                    if not item.args.kwarg:
+                        issues.append(
+                            {
+                                "type": "missing_kwargs",
+                                "severity": "warning",
+                                "message": (
+                                    "Event handler '%s' missing **kwargs parameter" % item.name
+                                ),
+                                "line": item.lineno,
+                                "fix": (
+                                    "Add **kwargs to the method signature:\n"
+                                    "def %s(self, ..., **kwargs):" % item.name
+                                ),
+                            }
+                        )
+                elif handler_pattern.match(item.name) and item.name != "mount":
+                    issues.append(
+                        {
+                            "type": "missing_decorator",
+                            "severity": "warning",
+                            "message": (
+                                "Method '%s' looks like an event handler but lacks "
+                                "@event_handler decorator" % item.name
+                            ),
+                            "line": item.lineno,
+                            "fix": (
+                                "Add @event_handler() decorator:\n"
+                                "@event_handler()\n"
+                                "def %s(self, ..., **kwargs):" % item.name
+                            ),
+                        }
+                    )
+
+                # --- Check: service instance assignments ---
+                for stmt in _ast.walk(item):
+                    if not isinstance(stmt, _ast.Assign):
+                        continue
+                    for target in stmt.targets:
+                        if not (
+                            isinstance(target, _ast.Attribute)
+                            and isinstance(target.value, _ast.Name)
+                            and target.value.id == "self"
+                        ):
+                            continue
+                        attr_name = target.attr
+
+                        # Detect service-like attribute names
+                        is_service = False
+                        service_desc = ""
+
+                        if attr_name in (
+                            "service",
+                            "client",
+                            "session",
+                            "connection",
+                            "conn",
+                            "api",
+                            "sdk",
+                        ):
+                            is_service = True
+                            service_desc = "service-like attribute name '%s'" % attr_name
+
+                        # Detect known service module calls
+                        if not is_service:
+                            try:
+                                source_segment = _ast.get_source_segment(code, stmt.value)
+                            except Exception:
+                                source_segment = None
+                            if source_segment:
+                                for mod in _service_module_names:
+                                    if mod in source_segment:
+                                        is_service = True
+                                        service_desc = "%s usage in assignment to self.%s" % (
+                                            mod,
+                                            attr_name,
+                                        )
+                                        break
+
+                        if is_service and not attr_name.startswith("_"):
+                            issues.append(
+                                {
+                                    "type": "service_in_state",
+                                    "severity": "error",
+                                    "message": (
+                                        "Service instance stored in state: %s. "
+                                        "Non-serializable objects cannot be stored as "
+                                        "view attributes." % service_desc
+                                    ),
+                                    "line": stmt.lineno,
+                                    "fix": (
+                                        "Use helper method pattern:\n"
+                                        "\n"
+                                        "# Instead of self.%s = ...\n"
+                                        "def _get_%s(self):\n"
+                                        "    return ...  # create instance on demand\n"
+                                        "\n"
+                                        "See: docs/guides/services.md" % (attr_name, attr_name)
+                                    ),
+                                }
+                            )
+
+                        # --- Check: public QuerySet attribute ---
+                        if not attr_name.startswith("_") and isinstance(stmt.value, _ast.Call):
+                            # Check for Model.objects.filter/all/etc
+                            call_node = stmt.value
+                            if isinstance(call_node.func, _ast.Attribute):
+                                func_attr = call_node.func
+                                if isinstance(func_attr.value, _ast.Attribute):
+                                    if func_attr.value.attr == "objects":
+                                        issues.append(
+                                            {
+                                                "type": "public_queryset",
+                                                "severity": "warning",
+                                                "message": (
+                                                    "Public QuerySet attribute 'self.%s': "
+                                                    "QuerySets should be stored in private "
+                                                    "variables (self._%s) and assigned to "
+                                                    "public in get_context_data()."
+                                                    % (attr_name, attr_name)
+                                                ),
+                                                "line": stmt.lineno,
+                                                "fix": (
+                                                    "Rename to self._%s and assign to "
+                                                    "self.%s in get_context_data():\n"
+                                                    "\n"
+                                                    "def _refresh(self):\n"
+                                                    "    self._%s = Model.objects.filter(...)  # private\n"
+                                                    "\n"
+                                                    "def get_context_data(self, **kwargs):\n"
+                                                    "    self.%s = self._%s  # public (JIT here)\n"
+                                                    "    return super().get_context_data(**kwargs)"
+                                                    % (
+                                                        attr_name,
+                                                        attr_name,
+                                                        attr_name,
+                                                        attr_name,
+                                                        attr_name,
+                                                    )
+                                                ),
+                                            }
+                                        )
+
+        summary = {
+            "total": len(issues),
+            "errors": sum(1 for i in issues if i["severity"] == "error"),
+            "warnings": sum(1 for i in issues if i["severity"] == "warning"),
+        }
+
+        return json.dumps({"issues": issues, "summary": summary}, indent=2)
 
     # === Code generation tools ===
 

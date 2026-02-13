@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0rc6] - 2026-02-12
+
+### Added
+
+- **CSS Framework Support** — Comprehensive Tailwind CSS integration with three-part system: (1) System checks (`djust.C010`, `djust.C011`, `djust.C012`) automatically warn about Tailwind CDN in production, missing compiled CSS, and manual `client.js` loading. (2) Graceful fallback auto-injects Tailwind CDN in development mode when `output.css` is missing. (3) CLI helper command `python manage.py djust_setup_css tailwind` creates `input.css` with Tailwind v4 syntax, auto-detects template directories, finds Tailwind CLI, and builds CSS with optional `--watch` and `--minify` flags. Eliminates duplicate client.js race conditions and guides developers toward production-ready setup.
+
+### Fixed
+
+- **Duplicate client.js loading race condition** — djust now automatically detects and warns (via `djust.C012` system check) when base or layout templates manually include `<script src="{% static 'djust/client.js' %}">`. Since the framework auto-injects `client.js`, manual loading causes double-initialization and console warnings. The check provides clear guidance to remove manual script tags.
+- **Tailwind CDN in production** — New `djust.C010` system check warns when Tailwind CDN (`cdn.tailwindcss.com`) is detected in production templates (`DEBUG=False`). Provides actionable guidance to compile CSS with `djust_setup_css` command or Tailwind CLI. Prevents slow CDN performance and console warnings in production.
+
 ## [0.3.0rc5] - 2026-02-11
 
 ### Added

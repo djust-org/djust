@@ -352,6 +352,105 @@ class TestS004DebugAllowedHosts:
         assert len(s004) == 0
 
 
+class TestC012ManualClientJs:
+    """C012 -- Manual client.js loading in base templates."""
+
+    def test_c012_detects_manual_client_js(self, tmp_path, settings):
+        """C012 fires when manual client.js script tag is found in base template."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "base.html").write_text(
+            "<html><head><script src=\"{% static 'djust/client.js' %}\" defer></script></head></html>"
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c012 = [e for e in errors if e.id == "djust.C012"]
+        assert len(c012) == 1
+        assert "client.js" in c012[0].msg
+        assert "base.html" in c012[0].msg
+
+    def test_c012_detects_in_layout_template(self, tmp_path, settings):
+        """C012 fires when manual client.js script tag is found in layout template."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "layout.html").write_text(
+            '<html><body><script src="/static/djust/client.js"></script></body></html>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c012 = [e for e in errors if e.id == "djust.C012"]
+        assert len(c012) == 1
+        assert "layout.html" in c012[0].msg
+
+    def test_c012_passes_without_manual_script(self, tmp_path, settings):
+        """C012 should not fire when client.js is not manually loaded."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "base.html").write_text(
+            "<html><head><!-- djust auto-injects client.js --></head></html>"
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c012 = [e for e in errors if e.id == "djust.C012"]
+        assert len(c012) == 0
+
+    def test_c012_passes_for_non_base_templates(self, tmp_path, settings):
+        """C012 should not fire for client.js in non-base/layout templates."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page.html").write_text(
+            '<div><script src="/static/djust/client.js"></script></div>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c012 = [e for e in errors if e.id == "djust.C012"]
+        assert len(c012) == 0
+
+
 # ---------------------------------------------------------------------------
 # LiveView checks (V001-V004)
 # ---------------------------------------------------------------------------
@@ -1487,3 +1586,436 @@ class TestDjustMiddlewareStack:
         cls_name = type(result).__name__
         mod_name = type(result).__module__ or ""
         assert "session" in cls_name.lower() or "session" in mod_name.lower()
+
+
+# ---------------------------------------------------------------------------
+# V006 -- Service instance detection in mount()
+# ---------------------------------------------------------------------------
+
+
+class TestV006ServiceInstanceInMount:
+    """V006 -- detect service/client/session instantiation in mount()."""
+
+    def test_v006_detects_service_in_mount(self, tmp_path):
+        """V006 fires when self.service = SomeService() is in mount()."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.service = PaymentService()
+            """)
+        )
+
+        from djust.checks import _check_service_instances_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_service_instances_in_mount(errors)
+
+        v006 = [e for e in errors if e.id == "djust.V006"]
+        assert len(v006) == 1
+        assert "service" in v006[0].msg
+        assert "serialized" in v006[0].msg
+
+    def test_v006_detects_boto3_client(self, tmp_path):
+        """V006 fires when self.client = boto3.client(...) is in mount()."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class S3View:
+                    def mount(self, request, **kwargs):
+                        self.client = boto3.client('s3')
+            """)
+        )
+
+        from djust.checks import _check_service_instances_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_service_instances_in_mount(errors)
+
+        v006 = [e for e in errors if e.id == "djust.V006"]
+        assert len(v006) == 1
+        assert "client" in v006[0].msg
+
+    def test_v006_detects_session(self, tmp_path):
+        """V006 fires for self.session = requests.Session()."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class ApiView:
+                    def mount(self, request, **kwargs):
+                        self.session = requests.Session()
+            """)
+        )
+
+        from djust.checks import _check_service_instances_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_service_instances_in_mount(errors)
+
+        v006 = [e for e in errors if e.id == "djust.V006"]
+        assert len(v006) == 1
+        assert "session" in v006[0].msg
+
+    def test_v006_passes_normal_assignment(self, tmp_path):
+        """V006 should not fire for normal assignments like self.count = 0."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class CounterView:
+                    def mount(self, request, **kwargs):
+                        self.count = 0
+                        self.items = list()
+            """)
+        )
+
+        from djust.checks import _check_service_instances_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_service_instances_in_mount(errors)
+
+        v006 = [e for e in errors if e.id == "djust.V006"]
+        assert len(v006) == 0
+
+    def test_v006_passes_outside_mount(self, tmp_path):
+        """V006 should not fire for service instances outside mount()."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.count = 0
+
+                    def _get_service(self):
+                        self.service = PaymentService()
+            """)
+        )
+
+        from djust.checks import _check_service_instances_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_service_instances_in_mount(errors)
+
+        v006 = [e for e in errors if e.id == "djust.V006"]
+        assert len(v006) == 0
+
+    def test_v006_noqa_suppresses(self, tmp_path):
+        """V006 should be suppressible with # noqa: V006."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.service = PaymentService()  # noqa: V006
+            """)
+        )
+
+        from djust.checks import _check_service_instances_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_service_instances_in_mount(errors)
+
+        v006 = [e for e in errors if e.id == "djust.V006"]
+        assert len(v006) == 0
+
+
+# ---------------------------------------------------------------------------
+# V007 -- Event handler signature validation
+# ---------------------------------------------------------------------------
+
+
+class TestV007EventHandlerSignature:
+    """V007 -- event handler missing **kwargs."""
+
+    def test_v007_missing_kwargs(self):
+        """V007 fires when @event_handler method lacks **kwargs."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.decorators import event_handler
+        from djust.checks import check_liveviews
+
+        def mount(self, request, **kwargs):
+            pass
+
+        @event_handler()
+        def handle_click(self, item_id=0):
+            pass
+
+        cls = type(
+            "V007NoKwargsView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "t.html",
+                "mount": mount,
+                "handle_click": handle_click,
+            },
+        )
+
+        try:
+            errors = check_liveviews(None)
+            v007 = [e for e in errors if e.id == "djust.V007"]
+            assert any("V007NoKwargsView" in e.msg and "handle_click" in e.msg for e in v007)
+        finally:
+            del cls
+            _force_gc()
+
+    def test_v007_passes_with_kwargs(self):
+        """V007 should not fire when **kwargs is present."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.decorators import event_handler
+        from djust.checks import check_liveviews
+
+        def mount(self, request, **kwargs):
+            pass
+
+        @event_handler()
+        def handle_click(self, item_id=0, **kwargs):
+            pass
+
+        cls = type(
+            "V007WithKwargsView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "t.html",
+                "mount": mount,
+                "handle_click": handle_click,
+            },
+        )
+
+        try:
+            errors = check_liveviews(None)
+            v007 = [e for e in errors if e.id == "djust.V007"]
+            assert not any("V007WithKwargsView" in e.msg for e in v007)
+        finally:
+            del cls
+            _force_gc()
+
+    def test_v007_passes_with_event_alias(self):
+        """V007 should not fire when **event is used instead of **kwargs."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.decorators import event_handler
+        from djust.checks import check_liveviews
+
+        def mount(self, request, **kwargs):
+            pass
+
+        @event_handler()
+        def handle_click(self, **event):
+            pass
+
+        cls = type(
+            "V007EventAliasView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "t.html",
+                "mount": mount,
+                "handle_click": handle_click,
+            },
+        )
+
+        try:
+            errors = check_liveviews(None)
+            v007 = [e for e in errors if e.id == "djust.V007"]
+            assert not any("V007EventAliasView" in e.msg for e in v007)
+        finally:
+            del cls
+            _force_gc()
+
+    def test_v007_ignores_non_event_handlers(self):
+        """V007 should not fire for methods without @event_handler."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.checks import check_liveviews
+
+        def mount(self, request, **kwargs):
+            pass
+
+        def helper(self, item_id=0):
+            pass
+
+        cls = type(
+            "V007NonHandlerView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "t.html",
+                "mount": mount,
+                "helper": helper,
+            },
+        )
+
+        try:
+            errors = check_liveviews(None)
+            v007 = [e for e in errors if e.id == "djust.V007"]
+            assert not any("V007NonHandlerView" in e.msg for e in v007)
+        finally:
+            del cls
+            _force_gc()
+
+
+# ---------------------------------------------------------------------------
+# T005 -- Template structure validation (data-djust-view / data-djust-root)
+# ---------------------------------------------------------------------------
+
+
+class TestT005ViewRootSameElement:
+    """T005 -- data-djust-view and data-djust-root on different elements."""
+
+    def test_t005_detects_different_elements(self, tmp_path, settings):
+        """T005 fires when data-djust-view and data-djust-root are on different elements."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text(
+            "<div data-djust-root>\n"
+            '  <div data-djust-view="myapp.views.MyView">content</div>\n'
+            "</div>"
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t005 = [e for e in errors if e.id == "djust.T005"]
+        assert len(t005) == 1
+        assert "different elements" in t005[0].msg
+
+    def test_t005_passes_same_element(self, tmp_path, settings):
+        """T005 should not fire when both attributes are on the same element."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "good.html").write_text(
+            '<div data-djust-root data-djust-view="myapp.views.MyView">content</div>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t005 = [e for e in errors if e.id == "djust.T005"]
+        assert len(t005) == 0
+
+    def test_t005_passes_no_view_attr(self, tmp_path, settings):
+        """T005 should not fire when data-djust-view is not present."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "no_view.html").write_text(
+            '<div data-djust-root><button dj-click="go">Go</button></div>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t005 = [e for e in errors if e.id == "djust.T005"]
+        assert len(t005) == 0
+
+
+# ---------------------------------------------------------------------------
+# T002 enhanced -- Warning severity and data-djust-view detection
+# ---------------------------------------------------------------------------
+
+
+class TestT002Enhanced:
+    """T002 enhanced -- Warning severity and data-djust-view without root."""
+
+    def test_t002_is_warning_severity(self, tmp_path, settings):
+        """T002 should be Warning severity (not Info)."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "no_root.html").write_text('<div><button dj-click="go">Go</button></div>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates, DjustWarning
+
+        errors = check_templates(None)
+        t002 = [e for e in errors if e.id == "djust.T002"]
+        assert len(t002) == 1
+        # Verify it is a DjustWarning (not DjustInfo)
+        assert isinstance(t002[0], DjustWarning)
+
+    def test_t002_detects_djust_view_without_root(self, tmp_path, settings):
+        """T002 fires when data-djust-view is present but data-djust-root is missing."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "view_no_root.html").write_text(
+            '<div data-djust-view="myapp.views.MyView">content</div>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t002 = [e for e in errors if e.id == "djust.T002"]
+        assert len(t002) == 1
+        assert "data-djust-root" in t002[0].msg
+
+    def test_t002_improved_message(self, tmp_path, settings):
+        """T002 message should mention DOM patching."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "no_root.html").write_text('<div><button dj-click="go">Go</button></div>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t002 = [e for e in errors if e.id == "djust.T002"]
+        assert len(t002) == 1
+        assert "DOM patching" in t002[0].msg

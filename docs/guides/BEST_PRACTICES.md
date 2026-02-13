@@ -18,6 +18,7 @@ A practical guide to building reactive LiveView applications with djust.
 - [Forms](#forms)
 - [Testing](#testing)
 - [Debugging](#debugging)
+- [Common Pitfalls](#common-pitfalls)
 
 ---
 
@@ -52,6 +53,93 @@ djust follows a naming convention for what gets exposed to templates:
 - **Private** (`self._items`) — internal state, hidden from templates
 
 Use private variables for intermediate data (QuerySets, caches) and only expose what the template needs.
+
+### State Serialization Rules
+
+**Critical**: LiveView state must be JSON-serializable because it's sent over WebSockets and persisted between events. Storing non-serializable objects causes mysterious errors.
+
+#### What's Serializable
+
+These types are safe to store in state:
+
+| Type | Examples | Notes |
+|------|----------|-------|
+| Primitives | `str`, `int`, `float`, `bool`, `None` | ✓ Always safe |
+| Collections | `list`, `dict`, `tuple`, `set` | ✓ Safe if contents are serializable |
+| Django models | `User`, `Product`, etc. | ✓ Serialized via JIT (10-100x faster) |
+| Django QuerySets | `Product.objects.filter(...)` | ✓ Use private → public pattern |
+| Date/time | `datetime`, `date`, `time` | ✓ Auto-converted to ISO strings |
+| UUID | `uuid.UUID` | ✓ Auto-converted to string |
+| Decimal | `decimal.Decimal` | ✓ Auto-converted to string |
+
+#### What's NOT Serializable
+
+These types will cause serialization failures:
+
+| Type | Examples | Impact |
+|------|----------|--------|
+| Service instances | `boto3.client()`, `PaymentService()` | ✗ Converts to useless string `"<Client object at 0x...>"` |
+| API sessions | `requests.Session()`, `httpx.Client()` | ✗ Loses connection, headers, state |
+| Database connections | `connection.cursor()` | ✗ Can't serialize socket |
+| File handles | `open(...)`, `io.BytesIO()` | ✗ Can't serialize file descriptor |
+| Threads/locks | `threading.Thread()`, `threading.Lock()` | ✗ Not transferable across processes |
+| Cached methods | `@cached_property` results with services | ✗ If cached value is non-serializable |
+
+#### Detection & Prevention
+
+djust provides multiple layers of protection:
+
+**1. Runtime validation (DEBUG mode)**
+
+In development, djust detects non-serializable state and raises `TypeError` immediately:
+
+```python
+class MyView(LiveView):
+    def mount(self, request, **kwargs):
+        self.client = boto3.client('s3')  # ✗ TypeError in DEBUG mode
+```
+
+```
+TypeError: Cannot serialize client=<botocore.client.S3 object at 0x...> in MyView.
+Service instances must be created on-demand via helper methods.
+See: docs/guides/services.md
+```
+
+**2. System check V006**
+
+```bash
+python manage.py check --tag djust
+```
+
+Static analysis detects service instantiation patterns in `mount()` methods.
+
+**3. Best practice: Helper method pattern**
+
+Instead of storing services in state, create them on-demand:
+
+```python
+# ✗ BAD: Stores service in state
+class MyView(LiveView):
+    def mount(self, request, **kwargs):
+        self.s3_client = boto3.client('s3')  # Gets serialized to string!
+
+    @event_handler
+    def upload(self, **kwargs):
+        self.s3_client.upload_file(...)  # AttributeError: str has no upload_file
+
+# ✓ GOOD: Helper method creates on-demand
+class MyView(LiveView):
+    def _get_s3_client(self):
+        """Create S3 client on-demand. Not stored in state."""
+        return boto3.client('s3')
+
+    @event_handler
+    def upload(self, **kwargs):
+        client = self._get_s3_client()
+        client.upload_file(...)  # Works every time
+```
+
+For more patterns and examples, see the [Working with External Services](services.md) guide.
 
 ---
 
@@ -766,11 +854,386 @@ def my_handler(self, **kwargs):
 
 ---
 
+## Common Pitfalls
+
+### Service Instances in State
+
+**Problem:** Storing service instances (AWS clients, API sessions, database connections) in LiveView state.
+
+**Why it's wrong:**
+- Service instances aren't JSON-serializable — they contain connections, sockets, internal state
+- During serialization, they convert to useless strings: `"<Client object at 0x...>"`
+- On the next event, methods fail: `AttributeError: 'str' object has no attribute 'upload_file'`
+- Silent failure makes debugging extremely difficult
+
+**Solution:**
+Use the helper method pattern to create services on-demand:
+
+```python
+# ❌ Don't do this
+class PaymentView(LiveView):
+    def mount(self, request, **kwargs):
+        self.stripe_client = stripe.Client(api_key=settings.STRIPE_KEY)
+        # After serialization: self.stripe_client becomes a string!
+
+    @event_handler
+    def charge_card(self, amount: int = 0, **kwargs):
+        self.stripe_client.charges.create(amount=amount)  # AttributeError!
+
+# ✅ Do this instead
+class PaymentView(LiveView):
+    def _get_stripe_client(self):
+        """Create Stripe client on-demand. Not stored in state."""
+        return stripe.Client(api_key=settings.STRIPE_KEY)
+
+    @event_handler
+    def charge_card(self, amount: int = 0, **kwargs):
+        client = self._get_stripe_client()
+        client.charges.create(amount=amount)  # Works every time
+```
+
+**Related:**
+- Runtime check: Raises `TypeError` in DEBUG mode when serialization fails
+- System check: `djust.V006` detects service patterns via AST analysis
+- Guide: [Working with External Services](services.md)
+
+### Missing `data-djust-root`
+
+**Problem:** LiveView template has `data-djust-view` but is missing `data-djust-root`.
+
+**Why it's wrong:**
+- djust requires BOTH attributes to function:
+  - `data-djust-view`: Identifies the LiveView class (for WebSocket connection)
+  - `data-djust-root`: Marks the root element for VDOM patching
+- Missing `data-djust-root` causes confusing error: **"DJE-053: No DOM changes detected"**
+- Template renders correctly on initial load but WebSocket updates fail silently
+
+**Solution:**
+Add both attributes to the same root element:
+
+```html
+<!-- ❌ Don't do this -->
+<div data-djust-view="MyView">
+    <h1>{{ title }}</h1>
+    <p>{{ content }}</p>
+</div>
+
+<!-- ✅ Do this instead -->
+<div data-djust-view="MyView" data-djust-root>
+    <h1>{{ title }}</h1>
+    <p>{{ content }}</p>
+</div>
+```
+
+**With template inheritance:**
+
+```html
+<!-- base.html -->
+{% extends "base.html" %}
+
+{% block content %}
+<div data-djust-view="MyView" data-djust-root>
+    <!-- CRITICAL: Both attributes on the SAME element -->
+    <h1>{{ title }}</h1>
+    {% block inner %}{% endblock %}
+</div>
+{% endblock %}
+```
+
+**Related:**
+- System check: `djust.T002` detects missing `data-djust-root` (Warning severity)
+- System check: `djust.T005` detects when attributes are on different elements
+- Guide: [Template Requirements](template-requirements.md)
+- Error code: [DJE-053](error-codes.md#dje-053-no-dom-changes)
+
+### ASGI Configuration Issues
+
+**Problem:** Using Daphne or Uvicorn without proper WebSocket routing in `asgi.py`.
+
+**Why it's wrong:**
+- HTTP requests work, but WebSocket connections fail with 404/403
+- LiveView loads initially (HTTP) but becomes non-interactive
+- Console shows: `WebSocket connection to 'ws://...' failed: Error during WebSocket handshake`
+- Django Channels requires explicit WebSocket URL routing
+
+**Solution:**
+Use `ProtocolTypeRouter` to route WebSocket connections:
+
+```python
+# ❌ Don't do this
+# asgi.py
+import os
+from django.core.asgi import get_asgi_application
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.settings')
+application = get_asgi_application()  # Only handles HTTP!
+
+# ✅ Do this instead
+# asgi.py
+import os
+from django.core.asgi import get_asgi_application
+from channels.routing import ProtocolTypeRouter, URLRouter
+from channels.security.websocket import AllowedHostsOriginValidator
+from djust.routing import websocket_urlpatterns
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.settings')
+
+application = ProtocolTypeRouter({
+    "http": get_asgi_application(),
+    "websocket": AllowedHostsOriginValidator(
+        URLRouter(websocket_urlpatterns)
+    ),
+})
+```
+
+**Related:**
+- System check: `djust.C003` warns if WebSocket routing isn't configured
+- Deployment guide: See DEPLOYMENT.md for production ASGI setup
+
+### Missing WhiteNoise with Daphne
+
+**Problem:** Using Daphne in production without WhiteNoise for static files.
+
+**Why it's wrong:**
+- Daphne doesn't serve static files by default (unlike `runserver`)
+- CSS, JS, images return 404 in production
+- djust client.js fails to load → no WebSocket connection
+- Development works (DEBUG middleware) but production breaks
+
+**Solution:**
+Add WhiteNoise middleware:
+
+```python
+# settings.py
+MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',  # Add this!
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    # ... rest of middleware
+]
+
+# Recommended: Enable compression and caching
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+```
+
+Then collect static files before deployment:
+
+```bash
+python manage.py collectstatic --noinput
+```
+
+**Related:**
+- Deployment guide: See DEPLOYMENT.md for full production checklist
+- Alternative: Use Nginx/Caddy to serve static files
+
+### Search Without Debouncing
+
+**Problem:** Search input triggers API calls on every keystroke.
+
+**Why it's wrong:**
+- Excessive server load: typing "django" = 6 requests (d, dj, dja, djan, djang, django)
+- Wasted database queries for incomplete input
+- Poor UX: results flash rapidly as user types
+- Race conditions: later responses can arrive before earlier ones
+
+**Solution:**
+Use `@debounce` to wait for user to stop typing:
+
+```python
+# ❌ Don't do this
+@event_handler
+def search(self, value: str = "", **kwargs):
+    """Fires on EVERY keystroke"""
+    self.search_query = value
+    self._refresh_results()  # Database query every keystroke!
+
+# ✅ Do this instead
+@event_handler
+@debounce(wait=0.5)  # Wait 500ms after typing stops
+def search(self, value: str = "", **kwargs):
+    """Fires 500ms after user stops typing"""
+    self.search_query = value
+    self._refresh_results()  # Only queries when typing stops
+```
+
+**Typical debounce values:**
+- Search/filter: 300-500ms
+- Autocomplete: 200-300ms
+- Form validation: 500-1000ms
+- Long-form editing (auto-save): 2000-5000ms
+
+**Alternative:** Use `dj-model.debounce-N` in template:
+
+```html
+<input type="text" dj-model.debounce-500="search_query" placeholder="Search...">
+```
+
+**Related:**
+- Decorator: `@throttle(interval=N)` for scroll/resize events (different use case)
+- Performance guide: See [Performance](#performance) section above
+
+### Manual client.js Loading
+
+**Problem:** Adding `<script src="{% static 'djust/client.js' %}">` to base template.
+
+**Why it's wrong:**
+- djust automatically injects `client.js` for all LiveView pages
+- Manual loading causes duplicate initialization
+- Race conditions between manual and auto-injected scripts
+- Console warnings: "client.js already loaded, skipping duplicate initialization"
+
+**Solution:**
+Remove the manual script tag. djust handles it automatically:
+
+```html
+<!-- ❌ Don't do this -->
+<script src="{% static 'djust/client.js' %}" defer></script>
+
+<!-- ✅ Do this instead -->
+<!-- djust auto-injects client.js -->
+```
+
+System check `djust.C012` detects this automatically via `python manage.py check`.
+
+### Converting QuerySets to Lists
+
+**Problem:** Converting QuerySets to lists with `list()` or slicing with `[:]`.
+
+**Why it's wrong:**
+- JIT serialization requires QuerySets
+- Lists force immediate evaluation (memory impact)
+- Loses pagination benefits
+- No lazy loading in templates
+
+**Solution:**
+Always pass QuerySets directly:
+
+```python
+# ❌ Don't do this
+def get_context_data(self, **kwargs):
+    context = super().get_context_data(**kwargs)
+    context["items"] = list(self._items)  # Forces evaluation
+    return context
+
+# ✅ Do this instead
+def get_context_data(self, **kwargs):
+    context = super().get_context_data(**kwargs)
+    context["items"] = self._items  # Keeps QuerySet
+    return context
+```
+
+### Missing `data-key` on Dynamic Lists
+
+**Problem:** Rendering dynamic lists without `data-key` attributes.
+
+**Why it's wrong:**
+- VDOM can't track identity across updates
+- Re-renders entire list instead of updating changed items
+- Loss of focus/scroll position
+- Animations break
+
+**Solution:**
+Always add `data-key` to list items:
+
+```html
+<!-- ❌ Don't do this -->
+{% for item in items %}
+    <div>{{ item.name }}</div>
+{% endfor %}
+
+<!-- ✅ Do this instead -->
+{% for item in items %}
+    <div data-key="{{ item.id }}">{{ item.name }}</div>
+{% endfor %}
+```
+
+### Missing `**kwargs` in Event Handlers
+
+**Problem:** Event handlers without `**kwargs` parameter.
+
+**Why it's wrong:**
+- Breaks when extra params are passed from client
+- Not forward-compatible with new framework features
+- System check `djust.V003` warns about this
+
+**Solution:**
+Always include `**kwargs`:
+
+```python
+# ❌ Don't do this
+@event_handler
+def delete_item(self, item_id: int):
+    Item.objects.filter(id=item_id).delete()
+
+# ✅ Do this instead
+@event_handler
+def delete_item(self, item_id: int = 0, **kwargs):
+    Item.objects.filter(id=item_id).delete()
+```
+
+### No Default Values for Handler Parameters
+
+**Problem:** Handler parameters without defaults.
+
+**Why it's wrong:**
+- Breaks if client doesn't send the parameter
+- Not defensive against missing data
+- Harder to test
+
+**Solution:**
+Provide sensible defaults:
+
+```python
+# ❌ Don't do this
+@event_handler
+def search(self, query: str, **kwargs):
+    self.results = search_products(query)
+
+# ✅ Do this instead
+@event_handler
+def search(self, query: str = "", **kwargs):
+    if not query:
+        self.results = []
+    else:
+        self.results = search_products(query)
+```
+
+### Exposing Sensitive Data
+
+**Problem:** Exposing sensitive data through public instance variables.
+
+**Why it's wrong:**
+- All public variables are sent to client in JIT serialization
+- Sensitive data visible in browser DevTools
+- Security risk
+
+**Solution:**
+Use private variables for sensitive data:
+
+```python
+# ❌ Don't do this
+def mount(self, request, **kwargs):
+    self.user_password_hash = request.user.password  # Exposed!
+    self.api_secret = settings.SECRET_KEY  # Exposed!
+
+# ✅ Do this instead
+def mount(self, request, **kwargs):
+    self._user_password_hash = request.user.password  # Private
+    self._api_secret = settings.SECRET_KEY  # Private
+```
+
+See the [Security Guide](security.md) for more details.
+
+---
+
 ## Checklist
 
 When building a djust LiveView:
 
 - [ ] Declare state with `state(default=...)` at the class level
+- [ ] Never store service instances in state — use helper methods instead
+- [ ] Add both `data-djust-view` and `data-djust-root` to template root element
 - [ ] Use `@event_handler` on all event handlers
 - [ ] Include `**kwargs` in all event handlers
 - [ ] Provide default values for all handler parameters
@@ -780,8 +1243,11 @@ When building a djust LiveView:
 - [ ] Call `super().get_context_data()` to trigger Rust serialization
 - [ ] Never convert QuerySets to lists
 - [ ] Add `data-key` to dynamic list items
+- [ ] Use `@debounce` on search/filter inputs to reduce server load
 - [ ] Add `{% csrf_token %}` to all forms
 - [ ] Validate user input in event handlers
 - [ ] Use `dj-confirm` for destructive actions
 - [ ] Check authentication/authorization in `mount()` and handlers
-- [ ] Run `python manage.py check` to catch common issues
+- [ ] Configure WebSocket routing in `asgi.py` with `ProtocolTypeRouter`
+- [ ] Add WhiteNoise middleware when using Daphne/Uvicorn
+- [ ] Run `python manage.py check --tag djust` to catch common issues
