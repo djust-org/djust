@@ -1363,14 +1363,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # the <div data-djust-root> boundary (e.g. in base.html while
                         # VDOM root is in the child template).
                         if len(patch_list) == 0 and version > 1:
+                            _template = (
+                                getattr(self.view_instance, "template_name", None)
+                                or "<inline template>"
+                            )
                             logger.warning(
                                 "[djust] Event '%s' on %s produced no DOM changes (DJE-053). "
-                                "The modified state may be outside <div data-djust-root>. "
-                                "Consider using push_event for client-side-only state changes. "
-                                "Run with DJUST_VDOM_TRACE=1 for detailed diff output. "
+                                "Template: %s. "
+                                "Debugging steps: "
+                                "(1) Ensure the modified state variable is rendered inside "
+                                "<div data-djust-root> in your template. "
+                                "(2) Check that your template has the data-djust-root attribute "
+                                "on the outermost container div. "
+                                "(3) If this event only updates client-side state, use "
+                                "push_event + _skip_render = True instead. "
+                                "(4) Run with DJUST_VDOM_TRACE=1 for detailed diff output. "
+                                "(5) Run 'python manage.py check --tag djust' to detect "
+                                "common configuration issues. "
                                 "See: https://djust.org/errors/DJE-053",
                                 event_name,
                                 self.view_instance.__class__.__name__,
+                                _template,
                             )
                             if not component_id:
                                 # Build diagnostic snapshot for debugging
@@ -1421,16 +1434,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         html, html_content = await sync_to_async(_sync_strip_and_extract)(html)
 
                         if version > 1:
+                            _template = (
+                                getattr(self.view_instance, "template_name", None)
+                                or "<inline template>"
+                            )
                             logger.warning(
                                 "[djust] Event '%s' on %s fell back to full HTML update "
-                                "(DJE-053). VDOM diff returned no patches — this may "
+                                "(DJE-053). Template: %s. "
+                                "VDOM diff returned no patches — this may "
                                 "cause event listeners and DOM state to be lost. "
-                                "If this event only updates client-side state, use "
+                                "Debugging steps: "
+                                "(1) Verify your template has <div data-djust-root> wrapping "
+                                "all dynamic content. "
+                                "(2) If this event only updates client-side state, use "
                                 "push_event + _skip_render = True instead. "
-                                "Run with DJUST_VDOM_TRACE=1 for detailed diff output. "
+                                "(3) Run with DJUST_VDOM_TRACE=1 for detailed diff output. "
+                                "(4) Run 'python manage.py check --tag djust' to detect "
+                                "common configuration issues. "
                                 "See: https://djust.org/errors/DJE-053",
                                 event_name,
                                 self.view_instance.__class__.__name__,
+                                _template,
                             )
                         else:
                             logger.debug("[WebSocket] First render, sending full HTML update.")

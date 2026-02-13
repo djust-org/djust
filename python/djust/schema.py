@@ -826,15 +826,180 @@ BEST_PRACTICES = {
             "        item.delete()"
         ),
     },
+    "state_management": {
+        "serialization": {
+            "description": (
+                "djust serializes view state for WebSocket transport. Only JSON-serializable "
+                "values can be stored as instance attributes. Non-serializable objects "
+                "(service clients, DB connections, file handles) cause runtime errors."
+            ),
+            "serializable": [
+                "str, int, float, bool, None",
+                "list, dict, tuple (with serializable contents)",
+                "Django model instances (auto-serialized via JIT)",
+                "QuerySets (auto-serialized via Rust JIT — keep as private _var)",
+                "datetime, date, time, Decimal, UUID (auto-coerced)",
+            ],
+            "not_serializable": [
+                "Service/API clients (boto3.client, httpx.Client, requests.Session)",
+                "Database connections or cursors",
+                "File handles or sockets",
+                "Thread/process objects",
+                "Class instances with non-serializable attributes",
+            ],
+            "fix_pattern": (
+                "# WRONG: storing service instance in state\n"
+                "def mount(self, request, **kwargs):\n"
+                "    self.s3_client = boto3.client('s3')  # Will fail on serialize\n"
+                "\n"
+                "# CORRECT: use a helper method\n"
+                "def _get_s3_client(self):\n"
+                "    return boto3.client('s3')\n"
+                "\n"
+                "def upload_file(self, **kwargs):\n"
+                "    client = self._get_s3_client()  # Created fresh each call\n"
+                "    client.upload_file(...)"
+            ),
+        },
+    },
+    "templates": {
+        "required_attributes": {
+            "description": (
+                "djust templates require two data attributes on the root element for "
+                "the VDOM diffing engine to function correctly."
+            ),
+            "attributes": [
+                "data-djust-view: Identifies the view class for WebSocket routing",
+                "data-djust-root: Marks the root element for VDOM patching scope",
+            ],
+            "example": (
+                '<div data-djust-view="{{ view_name }}" data-djust-root>\n'
+                "  <!-- your template content -->\n"
+                "</div>"
+            ),
+        },
+    },
+    "event_handler_signature": {
+        "description": (
+            "All event handlers MUST accept **kwargs to handle extra parameters "
+            "sent by the client (data-* attributes, form fields, etc.). Missing "
+            "**kwargs causes TypeError when unexpected params arrive."
+        ),
+        "correct": (
+            "@event_handler()\n"
+            "def delete_item(self, item_id: int = 0, **kwargs):\n"
+            "    Item.objects.filter(id=item_id).delete()"
+        ),
+        "wrong": (
+            "@event_handler()\n"
+            "def delete_item(self, item_id: int = 0):  # Missing **kwargs!\n"
+            "    Item.objects.filter(id=item_id).delete()"
+        ),
+    },
     "common_pitfalls": [
-        "Missing @event_handler() decorator — handler won't be called",
-        "Using 'query' instead of 'value' for input events — parameter stays default",
-        "Assigning QuerySet to public var outside get_context_data() — bypasses JIT",
-        "Converting QuerySet to list() — disables Rust serialization",
-        "Missing **kwargs on handlers — breaks when extra params sent",
-        "Missing default values on handler params — errors on missing data",
-        "Forgetting super().get_context_data(**kwargs) — JIT never runs",
-        "Forgetting {% csrf_token %} in forms — submission rejected",
+        {
+            "id": 1,
+            "problem": "Service instances stored in state",
+            "why": (
+                "Objects like boto3 clients, httpx.Client, or requests.Session are not "
+                "JSON-serializable. djust serializes all view state for WebSocket transport, "
+                "so storing these as self.client causes serialization errors."
+            ),
+            "solution": (
+                "Use a helper method pattern: define a private method like _get_client() "
+                "that creates the service instance on demand. Call it inside event handlers "
+                "instead of storing the result on self."
+            ),
+            "related_doc": "docs/guides/services.md",
+        },
+        {
+            "id": 2,
+            "problem": "Missing data-djust-root attribute on template root element",
+            "why": (
+                "The VDOM diffing engine needs data-djust-root to identify the patch scope. "
+                "Without it, DOM updates silently fail or produce incorrect diffs."
+            ),
+            "solution": (
+                "Add both data-djust-view and data-djust-root to the outermost element: "
+                '<div data-djust-view="{{ view_name }}" data-djust-root>'
+            ),
+            "related_doc": "docs/guides/template-requirements.md",
+        },
+        {
+            "id": 3,
+            "problem": "Event handler missing **kwargs",
+            "why": (
+                "The client sends additional context (data-* attributes, form fields) as "
+                "keyword arguments. Without **kwargs, Python raises TypeError on unexpected args."
+            ),
+            "solution": "Add **kwargs to every event handler signature.",
+            "related_check": "djust.V004",
+        },
+        {
+            "id": 4,
+            "problem": "ASGI config without WebSocket routing",
+            "why": (
+                "djust requires both HTTP and WebSocket protocols. Using only "
+                "get_asgi_application() handles HTTP but drops WebSocket connections."
+            ),
+            "solution": (
+                "Use ProtocolTypeRouter with both 'http' and 'websocket' keys. "
+                "Wrap websocket routes in AuthMiddlewareStack and URLRouter."
+            ),
+            "related_doc": "docs/guides/error-codes.md",
+        },
+        {
+            "id": 5,
+            "problem": "Missing WhiteNoise middleware when using Daphne/uvicorn",
+            "why": (
+                "ASGI servers don't serve static files by default. Without WhiteNoise, "
+                "client.js and other static assets return 404."
+            ),
+            "solution": (
+                "Add 'whitenoise.middleware.WhiteNoiseMiddleware' to MIDDLEWARE after "
+                "SecurityMiddleware. Run collectstatic for production."
+            ),
+            "related_doc": "docs/guides/error-codes.md",
+        },
+        {
+            "id": 6,
+            "problem": "Search input without debouncing",
+            "why": (
+                "Every keystroke sends a WebSocket message and triggers a full re-render. "
+                "This floods the server and causes poor UX with flickering."
+            ),
+            "solution": (
+                "Add @debounce(wait=0.5) decorator to the search handler. "
+                "This waits 500ms after the last keystroke before firing."
+            ),
+            "related_check": "djust.Q001",
+        },
+        {
+            "id": 7,
+            "problem": "Converting QuerySets to lists before template rendering",
+            "why": (
+                "Calling list() on a QuerySet forces Python-side serialization, bypassing "
+                "the Rust JIT engine that is 10-100x faster."
+            ),
+            "solution": (
+                "Pass QuerySets directly. Store as self._items (private) in _refresh(), "
+                "assign to self.items (public) in get_context_data()."
+            ),
+            "related_doc": "docs/guides/services.md",
+        },
+        {
+            "id": 8,
+            "problem": "Manually loading client.js in templates",
+            "why": (
+                "djust auto-injects client.js via middleware. Manual <script> tags cause "
+                "double-loading, duplicate WebSocket connections, and race conditions."
+            ),
+            "solution": (
+                "Remove any manual <script> tags for djust client.js. "
+                "The middleware handles injection automatically."
+            ),
+            "related_doc": "docs/guides/template-requirements.md",
+        },
     ],
 }
 

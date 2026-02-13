@@ -14,6 +14,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 ## 🧪 Testing Requirements
 
 ### Test Coverage
+
 - [ ] **New features have tests** - All new functionality must include unit/integration tests
 - [ ] **Bug fixes have regression tests** - Prevent the same issue from recurring
 - [ ] **Test coverage maintained** - No significant decrease in overall test coverage
@@ -22,6 +23,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **Integration tests pass** - End-to-end verification that features work together, not just unit tests in isolation
 
 ### Test Quality
+
 - [ ] **Tests are deterministic** - No flaky or randomly failing tests
 - [ ] **Test names are descriptive** - Clear what is being tested and expected outcome
 - [ ] **Test isolation** - Tests don't depend on other tests or external state
@@ -32,6 +34,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 ## 💻 Code Quality
 
 ### Architecture & Design
+
 - [ ] **Follows djust patterns** - Consistent with existing codebase architecture
 - [ ] **Single responsibility** - Functions and classes have clear, focused purposes
 - [ ] **Appropriate abstractions** - No over-engineering or under-engineering
@@ -41,6 +44,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **No simulated/stub code** - Comments containing "simulate", "would be implemented", "in a real implementation", or "for now" indicate incomplete code that should not ship
 
 ### Python Code Standards
+
 - [ ] **Type hints** are present for all public APIs and complex functions
 - [ ] **Docstrings** follow Django/djust conventions for public methods/classes
 - [ ] **Exception handling** uses existing djust logging system (see below)
@@ -48,6 +52,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **Security considerations** - No SQL injection, XSS, or other vulnerabilities
 
 ### Rust Code Standards (if applicable)
+
 - [ ] **cargo fmt** has been run - Code is properly formatted
 - [ ] **cargo clippy** warnings addressed - No lint warnings
 - [ ] **Error handling** uses appropriate Result types
@@ -55,6 +60,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **Performance implications** considered for VDOM-affecting changes
 
 ### JavaScript Code Standards
+
 - [ ] **ESLint rules** pass - Code follows project style guide
 - [ ] **No console.log** in production code without debug guard - All `console.log` calls must be wrapped in `if (globalThis.djustDebug)` guards. Unguarded logging is auto-rejected
 - [ ] **Generated JS follows same rules** - Python code that generates JavaScript strings (e.g., service worker generators, template tags) must also avoid `console.log` and use proper escaping
@@ -67,12 +73,16 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 **MANDATORY: All exceptions must use the existing djust logging system**
 
 ### Python Exception Handling
+
 - [ ] **Use djust logger** instead of print statements or bare exceptions:
-```python
-import logging
-logger = logging.getLogger(__name__)
+
+  ```python
+  import logging
+  logger = logging.getLogger(__name__)
+  ```
 
 # Correct
+
 try:
     risky_operation()
 except ValueError as e:
@@ -80,11 +90,12 @@ except ValueError as e:
     raise
 
 # Incorrect - Don't do this
+
 except ValueError as e:
     print(f"Error: {e}")  # ❌ No print statements
     pass  # ❌ No silent failures
-```
 
+```
 - [ ] **Use `%s` formatting in logger calls, not f-strings** - Django convention; avoids formatting strings that may never be emitted:
 ```python
 # Correct
@@ -95,25 +106,31 @@ logger.error(f"Operation failed for key {key}: {err}")
 ```
 
 - [ ] **Appropriate log levels** used:
+
   - `logger.error()` - For errors that affect functionality
   - `logger.warning()` - For recoverable issues
   - `logger.info()` - For important operational events
   - `logger.debug()` - For detailed troubleshooting info
 
 - [ ] **Include context** in log messages - User ID, tenant, operation details
+
 - [ ] **Use exc_info=True** for exceptions to capture stack traces
+
 - [ ] **No silent failures** - All exceptions are logged or re-raised appropriately
 
 ### JavaScript Exception Handling
+
 - [ ] **Use djust debug system** for client-side errors:
-```javascript
-// Correct - Use djust error reporting
-window.djust.reportError('Operation failed', error);
+
+  ```javascript
+  // Correct - Use djust error reporting
+  window.djust.reportError('Operation failed', error);
+  ```
 
 // Incorrect
 console.error(error); // ❌ Won't be captured in production
-```
 
+```
 ## 📖 Documentation Requirements
 
 ### Code Documentation
@@ -279,3 +296,4 @@ This ensures review decisions are durable, searchable, and not lost in GitHub co
 ---
 
 **Remember:** This checklist ensures djust maintains high quality, security, and performance standards. Every item serves a purpose in creating reliable, maintainable software.
+```

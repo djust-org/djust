@@ -63,6 +63,10 @@ _EVENT_HANDLER_LIKE_NAMES = re.compile(
     r"^(handle_|on_|toggle_|select_|update_|delete_|create_|add_|remove_|save_|cancel_|submit_|close_|open_)"
 )
 
+_SERVICE_INSTANCE_KEYWORDS = re.compile(r"(Service|Client|Session|API|Connection)", re.IGNORECASE)
+
+_DJ_VIEW_RE = re.compile(r"data-djust-view")
+
 
 def _check_tailwind_cdn_in_production(errors):
     """Check for Tailwind CDN usage in production (performance issue)."""
@@ -737,7 +741,131 @@ def check_liveviews(app_configs, **kwargs):
                 )
             )
 
+        # V007 -- event handler missing **kwargs
+        for name, method in cls.__dict__.items():
+            if not callable(method):
+                continue
+            if not is_event_handler(method):
+                continue
+            # Unwrap decorators to get original function
+            inner = method
+            for _attempt in range(10):
+                inner = getattr(inner, "__wrapped__", None) or getattr(inner, "func", None)
+                if inner is None:
+                    break
+            sig_target = inner if inner is not None else method
+            try:
+                sig = inspect.signature(sig_target)
+            except (ValueError, TypeError):
+                continue
+            has_var_keyword = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            )
+            if not has_var_keyword:
+                method_file = ""
+                method_line = None
+                try:
+                    method_file = inspect.getfile(sig_target)
+                    method_line = inspect.getsourcelines(sig_target)[1]
+                except (OSError, TypeError):
+                    pass
+                errors.append(
+                    DjustWarning(
+                        "%s.%s() event handler missing **kwargs in signature." % (cls_label, name),
+                        hint="Add **kwargs to the event handler signature to receive event parameters.",
+                        id="djust.V007",
+                        fix_hint=(
+                            "Add `**kwargs` to the `%s` method signature in `%s`."
+                            % (name, method_file or cls_label)
+                        ),
+                        file_path=method_file,
+                        line_number=method_line,
+                    )
+                )
+
+    # V006 -- service instance in mount() (AST-based scan of project files)
+    _check_service_instances_in_mount(errors)
+
     return errors
+
+
+def _check_service_instances_in_mount(errors):
+    """V006: Detect service/client/session instantiation in mount() methods via AST."""
+    app_dirs = _get_project_app_dirs()
+    if not app_dirs:
+        return
+
+    for filepath in _iter_python_files(app_dirs):
+        tree, source_lines = _parse_python_file(filepath)
+        if tree is None:
+            continue
+
+        relpath = os.path.relpath(filepath)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+
+            # Find mount() methods inside class definitions
+            for item in node.body:
+                if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if item.name != "mount":
+                    continue
+
+                # Walk the mount body looking for self.X = SomeService(...)
+                for stmt in ast.walk(item):
+                    if not isinstance(stmt, ast.Assign):
+                        continue
+                    for target in stmt.targets:
+                        if not isinstance(target, ast.Attribute):
+                            continue
+                        if not (isinstance(target.value, ast.Name) and target.value.id == "self"):
+                            continue
+                        # Check if the value is a Call whose function name
+                        # contains service-like keywords
+                        if not isinstance(stmt.value, ast.Call):
+                            continue
+                        call_name = _get_call_name(stmt.value)
+                        if call_name and _SERVICE_INSTANCE_KEYWORDS.search(call_name):
+                            if not _has_noqa(source_lines, stmt.lineno, "V006"):
+                                errors.append(
+                                    DjustWarning(
+                                        "%s:%d -- Service instance '%s' assigned in mount(). "
+                                        "Service instances cannot be serialized."
+                                        % (relpath, stmt.lineno, target.attr),
+                                        hint=(
+                                            "Use a helper method pattern instead. "
+                                            "See: docs/guides/services.md"
+                                        ),
+                                        id="djust.V006",
+                                        fix_hint=(
+                                            "Move `self.%s = %s(...)` out of mount() into a "
+                                            "helper method or property at line %d in `%s`."
+                                            % (target.attr, call_name, stmt.lineno, relpath)
+                                        ),
+                                        file_path=filepath,
+                                        line_number=stmt.lineno,
+                                    )
+                                )
+
+
+def _get_call_name(call_node):
+    """Extract a human-readable name from a Call node's function."""
+    func = call_node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        # e.g., boto3.client -> "boto3.client"
+        parts = []
+        current = func
+        while isinstance(current, ast.Attribute):
+            parts.append(current.attr)
+            current = current.value
+        if isinstance(current, ast.Name):
+            parts.append(current.id)
+        return ".".join(reversed(parts))
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -909,16 +1037,22 @@ def check_templates(app_configs, **kwargs):
             )
 
         # T002 -- LiveView template missing data-djust-root
-        # Only flag if file looks like a LiveView template (has dj-click or dj-input etc.)
+        # Flag if file has dj-* directives or data-djust-view but no data-djust-root
         has_dj_attrs = re.search(r"dj-(click|input|change|submit|model)", content)
-        if has_dj_attrs and not _DJ_ROOT_RE.search(content):
+        has_djust_view = _DJ_VIEW_RE.search(content)
+        has_djust_root = _DJ_ROOT_RE.search(content)
+        if (has_dj_attrs or has_djust_view) and not has_djust_root:
             # Check if it extends a base template (in which case root is likely in the base)
             if not re.search(r"\{%\s*extends\s+", content):
                 errors.append(
-                    DjustInfo(
-                        "%s -- LiveView template may be missing 'data-djust-root' attribute."
-                        % relpath,
-                        hint="Add data-djust-root to the root element of your LiveView template.",
+                    DjustWarning(
+                        "%s -- LiveView template missing 'data-djust-root' attribute. "
+                        "Without data-djust-root, djust cannot identify the root element "
+                        "for DOM patching." % relpath,
+                        hint=(
+                            "Add data-djust-root to the root element of your LiveView template. "
+                            'Example: <div data-djust-root data-djust-view="myapp.views.MyView">'
+                        ),
                         id="djust.T002",
                         fix_hint=(
                             "Add `data-djust-root` attribute to the root element "
@@ -970,7 +1104,53 @@ def check_templates(app_configs, **kwargs):
                 )
             )
 
+        # T005 -- data-djust-view and data-djust-root on different elements
+        if has_djust_view and has_djust_root:
+            _check_view_root_same_element(content, relpath, filepath, errors)
+
     return errors
+
+
+def _check_view_root_same_element(content, relpath, filepath, errors):
+    """T005: Detect when data-djust-view and data-djust-root are on different elements."""
+    # Use regex to find HTML tags and check if both attributes co-occur
+    # Find all tags that have either attribute
+    tag_re = re.compile(r"<[a-zA-Z][^>]*>", re.DOTALL)
+    has_combined_tag = False
+    has_view_only = False
+    has_root_only = False
+    view_only_lineno = None
+    for match in tag_re.finditer(content):
+        tag = match.group(0)
+        tag_has_view = "data-djust-view" in tag
+        tag_has_root = "data-djust-root" in tag
+        if tag_has_view and tag_has_root:
+            has_combined_tag = True
+            break
+        if tag_has_view and not tag_has_root:
+            has_view_only = True
+            if view_only_lineno is None:
+                view_only_lineno = content[: match.start()].count("\n") + 1
+        if tag_has_root and not tag_has_view:
+            has_root_only = True
+
+    if has_view_only and has_root_only and not has_combined_tag:
+        errors.append(
+            DjustWarning(
+                "%s -- data-djust-view and data-djust-root are on different elements." % relpath,
+                hint=(
+                    "data-djust-view and data-djust-root must be on the same root element. "
+                    'Example: <div data-djust-root data-djust-view="myapp.views.MyView">'
+                ),
+                id="djust.T005",
+                fix_hint=(
+                    "Move data-djust-view and data-djust-root onto the same element "
+                    "in `%s`." % relpath
+                ),
+                file_path=filepath,
+                line_number=view_only_lineno,
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
