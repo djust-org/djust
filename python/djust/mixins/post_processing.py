@@ -242,6 +242,7 @@ class PostProcessingMixin:
             window.DJUST_LOADING_GROUPING_CLASSES = {loading_classes_js};
             // Enable debug logging for client-dev.js (development only)
             window.djustDebug = {str(settings.DEBUG).lower()};
+            window.DEBUG_MODE = {str(settings.DEBUG).lower()};
         </script>
         {debug_info_script}
         """
