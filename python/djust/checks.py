@@ -260,12 +260,48 @@ def _iter_js_files(directories):
 
 
 def _parse_python_file(filepath):
-    """Return AST tree for a Python file, or None on parse failure."""
+    """Return (AST tree, source_lines) for a Python file, or (None, []) on failure.
+
+    source_lines is 1-indexed: source_lines[0] is unused, source_lines[1] is line 1.
+    """
     try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
-            return ast.parse(fh.read(), filename=filepath)
+            source = fh.read()
+        tree = ast.parse(source, filename=filepath)
+        # Prepend empty string so source_lines[1] == first line of file
+        lines = [""] + source.splitlines()
+        return tree, lines
     except SyntaxError:
-        return None
+        return None, []
+
+
+def _has_noqa(source_lines, lineno, check_id):
+    """Return True if source line has a # noqa comment suppressing check_id.
+
+    Supports:
+        # noqa           — suppress all checks on this line
+        # noqa: Q001     — suppress specific check
+        # noqa: Q001,S002 — suppress multiple checks
+    """
+    if lineno < 1 or lineno >= len(source_lines):
+        return False
+    line = source_lines[lineno]
+    # Find # noqa in the line
+    idx = line.find("# noqa")
+    if idx == -1:
+        return False
+    rest = line[idx + 6 :].strip()
+    if not rest:
+        return True  # bare # noqa — suppress everything
+    if rest.startswith(":"):
+        # Split on comma, take first whitespace-delimited token from each
+        # to handle trailing comments like "# noqa: Q001 — reason here"
+        codes = []
+        for part in rest[1:].split(","):
+            token = part.strip().split()[0] if part.strip() else ""
+            codes.append(token)
+        return check_id in codes
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -718,7 +754,7 @@ def check_security(app_configs, **kwargs):
         return errors
 
     for filepath in _iter_python_files(app_dirs):
-        tree = _parse_python_file(filepath)
+        tree, source_lines = _parse_python_file(filepath)
         if tree is None:
             continue
 
@@ -736,7 +772,9 @@ def check_security(app_configs, **kwargs):
 
                 if func_name == "mark_safe" and node.args:
                     arg = node.args[0]
-                    if isinstance(arg, ast.JoinedStr):
+                    if isinstance(arg, ast.JoinedStr) and not _has_noqa(
+                        source_lines, node.lineno, "S001"
+                    ):
                         errors.append(
                             DjustError(
                                 "%s:%d -- mark_safe() with f-string is a XSS risk."
@@ -775,7 +813,9 @@ def check_security(app_configs, **kwargs):
                             )
                             if "csrf" in doc.lower():
                                 has_justification = True
-                        if not has_justification:
+                        if not has_justification and not _has_noqa(
+                            source_lines, deco.lineno, "S002"
+                        ):
                             errors.append(
                                 DjustWarning(
                                     "%s:%d -- @csrf_exempt without justification."
@@ -795,7 +835,11 @@ def check_security(app_configs, **kwargs):
             # S003 -- bare except: pass
             if isinstance(node, ast.ExceptHandler):
                 if node.type is None:  # bare except
-                    if len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
+                    if (
+                        len(node.body) == 1
+                        and isinstance(node.body[0], ast.Pass)
+                        and not _has_noqa(source_lines, node.lineno, "S003")
+                    ):
                         errors.append(
                             DjustWarning(
                                 "%s:%d -- bare 'except: pass' swallows all exceptions."
@@ -943,7 +987,7 @@ def check_code_quality(app_configs, **kwargs):
         return errors
 
     for filepath in _iter_python_files(app_dirs):
-        tree = _parse_python_file(filepath)
+        tree, source_lines = _parse_python_file(filepath)
         if tree is None:
             continue
 
@@ -954,19 +998,20 @@ def check_code_quality(app_configs, **kwargs):
             if isinstance(node, ast.Call):
                 func = node.func
                 if isinstance(func, ast.Name) and func.id == "print":
-                    errors.append(
-                        DjustInfo(
-                            "%s:%d -- print() statement found." % (relpath, node.lineno),
-                            hint="Use logging module instead of print() in production code.",
-                            id="djust.Q001",
-                            fix_hint=(
-                                "Replace `print(...)` with `logger.info(...)` "
-                                "at line %d in `%s`." % (node.lineno, relpath)
-                            ),
-                            file_path=filepath,
-                            line_number=node.lineno,
+                    if not _has_noqa(source_lines, node.lineno, "Q001"):
+                        errors.append(
+                            DjustInfo(
+                                "%s:%d -- print() statement found." % (relpath, node.lineno),
+                                hint="Use logging module instead of print() in production code.",
+                                id="djust.Q001",
+                                fix_hint=(
+                                    "Replace `print(...)` with `logger.info(...)` "
+                                    "at line %d in `%s`." % (node.lineno, relpath)
+                                ),
+                                file_path=filepath,
+                                line_number=node.lineno,
+                            )
                         )
-                    )
 
             # Q002 -- f-string in logger calls
             if isinstance(node, ast.Call):
@@ -987,7 +1032,9 @@ def check_code_quality(app_configs, **kwargs):
                     elif isinstance(receiver, ast.Attribute) and receiver.attr in ("logger", "log"):
                         is_logger = True
                     if is_logger and node.args:
-                        if isinstance(node.args[0], ast.JoinedStr):
+                        if isinstance(node.args[0], ast.JoinedStr) and not _has_noqa(
+                            source_lines, node.lineno, "Q002"
+                        ):
                             errors.append(
                                 DjustWarning(
                                     "%s:%d -- f-string in logger call." % (relpath, node.lineno),
