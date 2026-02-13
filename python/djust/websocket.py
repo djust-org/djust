@@ -659,6 +659,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_error(_safe_error(error_msg, "View not found"))
             return
 
+        # Security: Validate that the class is actually a LiveView
+        from .live_view import LiveView
+
+        if not (isinstance(view_class, type) and issubclass(view_class, LiveView)):
+            error_msg = (
+                f"Security: {view_path} is not a LiveView subclass. "
+                f"Only LiveView classes can be mounted via WebSocket."
+            )
+            logger.error(error_msg)
+            await self.send_error(_safe_error(error_msg, "Invalid view class"))
+            return
+
         # Instantiate the view
         try:
             self.view_instance = view_class()
