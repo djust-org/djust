@@ -83,7 +83,7 @@ function _createHookInstance(hookDef, el) {
     const instance = Object.create(hookDef);
 
     instance.el = el;
-    instance.viewName = el.closest('[data-djust-view]')?.getAttribute('data-djust-view') || '';
+    instance.viewName = el.closest('[dj-view]')?.getAttribute('dj-view') || '';
 
     // pushEvent: send a custom event to the server
     instance.pushEvent = function(event, payload = {}) {

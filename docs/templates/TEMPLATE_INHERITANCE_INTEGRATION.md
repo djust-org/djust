@@ -31,9 +31,9 @@ Updated `resolve_template_inheritance()` to use the new `djust_templates::inheri
 #### Bug Fixes
 
 1. **Fixed regex in `_extract_liveview_root_with_wrapper()` (line ~769)**
-   - **Problem**: Pattern required `data-djust-root` to be first attribute
-   - **Fix**: Changed from `r"<div\s+data-djust-root[^>]*>"` to `r"<div[^>]*data-djust-root[^>]*>"`
-   - **Impact**: Now works with `<div class="container" data-djust-root ...>`
+   - **Problem**: Pattern required `dj-root` to be first attribute
+   - **Fix**: Changed from `r"<div\s+dj-root[^>]*>"` to `r"<div[^>]*dj-root[^>]*>"`
+   - **Impact**: Now works with `<div class="container" dj-root ...>`
 
 2. **Fixed regex in `_extract_liveview_content()` (line ~722)**
    - **Problem**: Same regex issue as above

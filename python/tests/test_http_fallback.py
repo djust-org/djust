@@ -22,7 +22,7 @@ from djust.decorators import event_handler
 class CounterView(LiveView):
     """Simple test view for HTTP fallback protocol testing."""
 
-    template = """<div data-djust-root>
+    template = """<div dj-root>
     <span class="count">{{ count }}</span>
     <button dj-click="increment">+</button>
     <button dj-click="set_count" data-count="10">Set 10</button>
@@ -417,7 +417,7 @@ class TestHTTPFallbackSecurityUndecorated:
         """Public methods without @event_handler are blocked via POST."""
 
         class UnsafeView(LiveView):
-            template = "<div data-djust-root>{{ data }}</div>"
+            template = "<div dj-root>{{ data }}</div>"
 
             def mount(self, request, **kwargs):
                 self.data = "safe"

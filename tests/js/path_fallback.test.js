@@ -41,7 +41,7 @@ describe('getNodeByPath - path fallback with whitespace nodes (#198)', () => {
 
     beforeEach(() => {
         root = document.createElement('div');
-        root.setAttribute('data-djust-root', '');
+        root.setAttribute('dj-root', '');
         document.body.appendChild(root);
     });
 

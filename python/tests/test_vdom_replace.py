@@ -16,7 +16,7 @@ from django.contrib.sessions.middleware import SessionMiddleware
 class ReplaceContainerView(LiveView):
     """View with a data-djust-replace container that switches content."""
 
-    template = """<div data-djust-root>
+    template = """<div dj-root>
     <div data-djust-replace id="messages">
         {% if show_messages %}
             <p>Message 1</p>
@@ -118,7 +118,7 @@ def test_replace_patch_order_removes_before_inserts():
 class ReplaceWithSiblingView(LiveView):
     """View with a data-djust-replace container that has a sibling element."""
 
-    template = """<div data-djust-root>
+    template = """<div dj-root>
     <div data-djust-replace id="messages">
         {% if show_messages %}
             <p>Message 1</p>

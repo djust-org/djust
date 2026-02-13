@@ -17,13 +17,13 @@ const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf
  * Create a JSDOM environment with a LiveView container.
  * @param {object} opts
  * @param {boolean} opts.useWebSocket - value for DJUST_USE_WEBSOCKET (default: undefined)
- * @param {boolean} opts.lazy - add data-djust-lazy attribute (default: false)
+ * @param {boolean} opts.lazy - add dj-lazy attribute (default: false)
  */
 function createDom({ useWebSocket, lazy = false } = {}) {
-    const lazyAttr = lazy ? ' data-djust-lazy' : '';
+    const lazyAttr = lazy ? ' dj-lazy' : '';
     const dom = new JSDOM(
         '<!DOCTYPE html><html><body>' +
-        `<div data-djust-root data-liveview-root data-djust-view="test.View"${lazyAttr}>` +
+        `<div dj-root dj-liveview-root dj-view="test.View"${lazyAttr}>` +
         '<p>content</p>' +
         '</div></body></html>',
         { url: 'http://localhost', runScripts: 'dangerously' }

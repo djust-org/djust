@@ -74,7 +74,7 @@ function getFetchCalls(dom) {
 describe('dj-poll', () => {
     it('should set liveviewPollBound flag on element', () => {
         const dom = createTestEnv(
-            '<div data-djust-view="app.PollView"><div dj-poll="refresh"></div></div>'
+            '<div dj-view="app.PollView"><div dj-poll="refresh"></div></div>'
         );
         initClient(dom);
 
@@ -84,7 +84,7 @@ describe('dj-poll', () => {
 
     it('should store interval ID on element', () => {
         const dom = createTestEnv(
-            '<div data-djust-view="app.PollView"><div dj-poll="refresh"></div></div>'
+            '<div dj-view="app.PollView"><div dj-poll="refresh"></div></div>'
         );
         initClient(dom);
 
@@ -96,7 +96,7 @@ describe('dj-poll', () => {
         // We can't easily verify the exact ms value without mocking,
         // but we verify the element is bound and has an interval ID
         const dom = createTestEnv(
-            '<div data-djust-view="app.PollView"><div dj-poll="check" dj-poll-interval="2000"></div></div>'
+            '<div dj-view="app.PollView"><div dj-poll="check" dj-poll-interval="2000"></div></div>'
         );
         initClient(dom);
 
@@ -107,7 +107,7 @@ describe('dj-poll', () => {
 
     it('should fire poll event via HTTP fallback with _skipLoading', async () => {
         const dom = createTestEnv(
-            '<div data-djust-view="app.PollView"><div dj-poll="refresh" dj-poll-interval="100"></div></div>'
+            '<div dj-view="app.PollView"><div dj-poll="refresh" dj-poll-interval="100"></div></div>'
         );
         initClient(dom);
 
@@ -125,7 +125,7 @@ describe('dj-poll', () => {
 
     it('should skip poll when document is hidden', async () => {
         const dom = createTestEnv(
-            '<div data-djust-view="app.PollView"><div dj-poll="refresh" dj-poll-interval="100"></div></div>'
+            '<div dj-view="app.PollView"><div dj-poll="refresh" dj-poll-interval="100"></div></div>'
         );
         initClient(dom);
 
@@ -153,7 +153,7 @@ describe('dj-poll', () => {
 
     it('should clean up and re-bind poll after clearing', () => {
         const dom = createTestEnv(
-            '<div data-djust-view="app.PollView"><div dj-poll="refresh"></div></div>'
+            '<div dj-view="app.PollView"><div dj-poll="refresh"></div></div>'
         );
         initClient(dom);
 
@@ -176,7 +176,7 @@ describe('dj-poll', () => {
 
     it('should extract data-* params and include them in poll requests', async () => {
         const dom = createTestEnv(
-            '<div data-djust-view="app.PollView"><div dj-poll="refresh" dj-poll-interval="100" data-room-id:int="42"></div></div>'
+            '<div dj-view="app.PollView"><div dj-poll="refresh" dj-poll-interval="100" data-room-id:int="42"></div></div>'
         );
         initClient(dom);
 
@@ -189,7 +189,7 @@ describe('dj-poll', () => {
 
     it('should not create interval for elements without dj-poll', () => {
         const dom = createTestEnv(
-            '<div data-djust-view="app.MyView"><button dj-click="do_thing">Click</button></div>'
+            '<div dj-view="app.MyView"><button dj-click="do_thing">Click</button></div>'
         );
         initClient(dom);
 

@@ -265,8 +265,8 @@ class TestGetBestPracticesExpanded:
         assert "templates" in result
         assert "required_attributes" in result["templates"]
         attrs = result["templates"]["required_attributes"]
-        assert "data-djust-view" in attrs["attributes"][0]
-        assert "data-djust-root" in attrs["attributes"][1]
+        assert "dj-view" in attrs["attributes"][0]
+        assert "dj-root" in attrs["attributes"][1]
 
     def test_has_event_handler_signature_section(self, mcp_server):
         result = _call_tool(mcp_server, "get_best_practices")
@@ -299,7 +299,7 @@ class TestGetBestPracticesExpanded:
         result = _call_tool(mcp_server, "get_best_practices")
         pitfalls = result["common_pitfalls"]
         root_pitfall = next(p for p in pitfalls if p["id"] == 2)
-        assert "data-djust-root" in root_pitfall["problem"]
+        assert "dj-root" in root_pitfall["problem"]
 
     def test_original_sections_preserved(self, mcp_server):
         result = _call_tool(mcp_server, "get_best_practices")

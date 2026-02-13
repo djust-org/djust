@@ -82,7 +82,7 @@ class ComponentRenderingView(LiveView):
     """Test view that uses components in context"""
 
     template = """
-    <div data-djust-root>
+    <div dj-root>
         {{ component }}
         {{ live_component }}
         {{ navbar }}

@@ -3,7 +3,7 @@
 {% block title %}{{ tenant.user.get_full_name }} - Tenant Details{% endblock %}
 
 {% block content %}
-<div class="py-6" data-djust-root data-djust-view="djust_rentals.views.tenants.TenantDetailView">
+<div class="py-6" dj-root dj-view="djust_rentals.views.tenants.TenantDetailView">
   <div class="container mx-auto px-4 max-w-6xl">
     {% if error_message %}
     <div class="bg-destructive/10 border border-destructive text-destructive-foreground px-4 py-3 rounded-lg mb-6">

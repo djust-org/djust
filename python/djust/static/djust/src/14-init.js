@@ -1,15 +1,15 @@
 
-// Auto-stamp data-djust-root and data-liveview-root on [data-djust-view]
-// elements so developers only need to write data-djust-view (#258).
+// Auto-stamp dj-root and dj-liveview-root on [dj-view]
+// elements so developers only need to write dj-view (#258).
 // Extracted as a helper so both djustInit() and reinitLiveViewForTurboNav() can call it.
 function autoStampRootAttributes() {
-    const allContainers = document.querySelectorAll('[data-djust-view]');
+    const allContainers = document.querySelectorAll('[dj-view]');
     allContainers.forEach(container => {
-        if (!container.hasAttribute('data-djust-root')) {
-            container.setAttribute('data-djust-root', '');
+        if (!container.hasAttribute('dj-root')) {
+            container.setAttribute('dj-root', '');
         }
-        if (!container.hasAttribute('data-liveview-root')) {
-            container.setAttribute('data-liveview-root', '');
+        if (!container.hasAttribute('dj-liveview-root')) {
+            container.setAttribute('dj-liveview-root', '');
         }
     });
     return allContainers;
@@ -22,21 +22,21 @@ function djustInit() {
     // Initialize lazy hydration manager
     lazyHydrationManager.init();
 
-    // Auto-stamp root attributes on all [data-djust-view] elements
+    // Auto-stamp root attributes on all [dj-view] elements
     const allContainers = autoStampRootAttributes();
 
     if (allContainers.length === 0) {
         if (globalThis.djustDebug) console.error(
             '[LiveView] No containers found! Your template root element needs:\n' +
-            '  data-djust-view="app.views.MyView"\n' +
-            'Example: <div data-djust-view="myapp.views.DashboardView">'
+            '  dj-view="app.views.MyView"\n' +
+            'Example: <div dj-view="myapp.views.DashboardView">'
         );
     } else {
         if (globalThis.djustDebug) console.log(`[LiveView] Found ${allContainers.length} containers`);
     }
 
-    const lazyContainers = document.querySelectorAll('[data-djust-view][data-djust-lazy]');
-    const eagerContainers = document.querySelectorAll('[data-djust-view]:not([data-djust-lazy])');
+    const lazyContainers = document.querySelectorAll('[dj-view][dj-lazy]');
+    const eagerContainers = document.querySelectorAll('[dj-view]:not([dj-lazy])');
 
     // Register lazy containers with the lazy hydration manager
     lazyContainers.forEach(container => {

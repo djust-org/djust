@@ -17,7 +17,7 @@ from djust.websocket import _snapshot_assigns, _compute_changed_keys
 class CounterView(LiveView):
     """Simple view to test changed/unchanged attribute tracking."""
 
-    template = "<div data-djust-root>{{ count }}</div>"
+    template = "<div dj-root>{{ count }}</div>"
 
     def mount(self, request, **kwargs):
         self.count = 0
@@ -26,7 +26,7 @@ class CounterView(LiveView):
 class CachedDemoView(LiveView):
     """View using @lru_cache for expensive computed data."""
 
-    template = "<div data-djust-root>{{ demos }} {{ count }}</div>"
+    template = "<div dj-root>{{ demos }} {{ count }}</div>"
 
     def mount(self, request, **kwargs):
         self.count = 0
@@ -46,7 +46,7 @@ def _get_cached_demos():
 class MultiAttrView(LiveView):
     """View with multiple attributes for selective change testing."""
 
-    template = "<div data-djust-root>{{ a }} {{ b }} {{ c }}</div>"
+    template = "<div dj-root>{{ a }} {{ b }} {{ c }}</div>"
 
     def mount(self, request, **kwargs):
         self.a = "alpha"

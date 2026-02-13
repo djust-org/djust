@@ -897,15 +897,15 @@ class PaymentView(LiveView):
 - System check: `djust.V006` detects service patterns via AST analysis
 - Guide: [Working with External Services](services.md)
 
-### Missing `data-djust-root`
+### Missing `dj-root`
 
-**Problem:** LiveView template has `data-djust-view` but is missing `data-djust-root`.
+**Problem:** LiveView template has `dj-view` but is missing `dj-root`.
 
 **Why it's wrong:**
 - djust requires BOTH attributes to function:
-  - `data-djust-view`: Identifies the LiveView class (for WebSocket connection)
-  - `data-djust-root`: Marks the root element for VDOM patching
-- Missing `data-djust-root` causes confusing error: **"DJE-053: No DOM changes detected"**
+  - `dj-view`: Identifies the LiveView class (for WebSocket connection)
+  - `dj-root`: Marks the root element for VDOM patching
+- Missing `dj-root` causes confusing error: **"DJE-053: No DOM changes detected"**
 - Template renders correctly on initial load but WebSocket updates fail silently
 
 **Solution:**
@@ -913,13 +913,13 @@ Add both attributes to the same root element:
 
 ```html
 <!-- ❌ Don't do this -->
-<div data-djust-view="MyView">
+<div dj-view="MyView">
     <h1>{{ title }}</h1>
     <p>{{ content }}</p>
 </div>
 
 <!-- ✅ Do this instead -->
-<div data-djust-view="MyView" data-djust-root>
+<div dj-view="MyView" dj-root>
     <h1>{{ title }}</h1>
     <p>{{ content }}</p>
 </div>
@@ -932,7 +932,7 @@ Add both attributes to the same root element:
 {% extends "base.html" %}
 
 {% block content %}
-<div data-djust-view="MyView" data-djust-root>
+<div dj-view="MyView" dj-root>
     <!-- CRITICAL: Both attributes on the SAME element -->
     <h1>{{ title }}</h1>
     {% block inner %}{% endblock %}
@@ -941,7 +941,7 @@ Add both attributes to the same root element:
 ```
 
 **Related:**
-- System check: `djust.T002` detects missing `data-djust-root` (Warning severity)
+- System check: `djust.T002` detects missing `dj-root` (Warning severity)
 - System check: `djust.T005` detects when attributes are on different elements
 - Guide: [Template Requirements](template-requirements.md)
 - Error code: [DJE-053](error-codes.md#dje-053-no-dom-changes)
@@ -1233,7 +1233,7 @@ When building a djust LiveView:
 
 - [ ] Declare state with `state(default=...)` at the class level
 - [ ] Never store service instances in state — use helper methods instead
-- [ ] Add both `data-djust-view` and `data-djust-root` to template root element
+- [ ] Add both `dj-view` and `dj-root` to template root element
 - [ ] Use `@event_handler` on all event handlers
 - [ ] Include `**kwargs` in all event handlers
 - [ ] Provide default values for all handler parameters

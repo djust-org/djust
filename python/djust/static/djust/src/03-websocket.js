@@ -223,9 +223,9 @@ class LiveViewWebSocket {
                     if (hasDataDjAttrs) {
                         console.log('[LiveView] Hydrating DOM with data-dj-id attributes for reliable patching');
                     }
-                    let container = document.querySelector('[data-djust-view]');
+                    let container = document.querySelector('[dj-view]');
                     if (!container) {
-                        container = document.querySelector('[data-djust-root]');
+                        container = document.querySelector('[dj-root]');
                     }
                     if (container) {
                         container.innerHTML = data.html;
@@ -259,7 +259,7 @@ class LiveViewWebSocket {
                     window.location.reload();
                     break;
                 }
-                const newRoot = doc.querySelector('[data-djust-root]') || doc.body;
+                const newRoot = doc.querySelector('[dj-root]') || doc.body;
                 morphChildren(liveviewRoot, newRoot);
                 clientVdomVersion = data.version;
                 initReactCounters();
@@ -456,14 +456,14 @@ class LiveViewWebSocket {
 
     autoMount() {
         // Look for container with view path
-        let container = document.querySelector('[data-djust-view]');
+        let container = document.querySelector('[dj-view]');
         if (!container) {
-            // Fallback: look for data-djust-root with data-djust-view attribute
-            container = document.querySelector('[data-djust-root][data-djust-view]');
+            // Fallback: look for dj-root with dj-view attribute
+            container = document.querySelector('[dj-root][dj-view]');
         }
 
         if (container) {
-            const viewPath = container.dataset.djustView;
+            const viewPath = container.dataset.djView;
             if (viewPath) {
                 // OPTIMIZATION: Check if content was already rendered by HTTP GET
                 // We still send mount message (server needs to initialize session),

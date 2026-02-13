@@ -111,7 +111,7 @@ class ContactView(DraftModeMixin, FormMixin, LiveView):
 
 ```html
 <!-- Template needs draft attributes on root -->
-<div data-djust-root
+<div dj-root
      data-draft-enabled="{{ draft_enabled }}"
      data-draft-key="{{ draft_key }}">
     <input name="name" data-draft="true" />
@@ -571,7 +571,7 @@ class LiveChatView(DraftModeMixin, LiveView):
 </head>
 <body>
     <div class="chat-container"
-         data-djust-root
+         dj-root
          data-draft-enabled="{{ draft_enabled }}"
          data-draft-key="{{ draft_key }}">
 

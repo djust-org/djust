@@ -865,7 +865,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         html
                     )
 
-                    # Extract innerHTML of [data-djust-root]
+                    # Extract innerHTML of [dj-root]
                     html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
 
             elif self.use_actors and self.actor_handle:
@@ -899,7 +899,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Strip comments and normalize whitespace to match Rust VDOM parser
                 html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
 
-                # Extract innerHTML of [data-djust-root] for WebSocket client
+                # Extract innerHTML of [dj-root] for WebSocket client
                 # Client expects just the content to insert into existing container
                 html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
 
@@ -1360,7 +1360,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # Only send full HTML if patches is None (not just falsy)
                     if patches is not None and patch_list is not None:
                         # Detect 0-change diffs: event handler modified state outside
-                        # the <div data-djust-root> boundary (e.g. in base.html while
+                        # the <div dj-root> boundary (e.g. in base.html while
                         # VDOM root is in the child template).
                         if len(patch_list) == 0 and version > 1:
                             _template = (
@@ -1372,8 +1372,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 "Template: %s. "
                                 "Debugging steps: "
                                 "(1) Ensure the modified state variable is rendered inside "
-                                "<div data-djust-root> in your template. "
-                                "(2) Check that your template has the data-djust-root attribute "
+                                "<div dj-root> in your template. "
+                                "(2) Check that your template has the dj-root attribute "
                                 "on the outermost container div. "
                                 "(3) If this event only updates client-side state, use "
                                 "push_event + _skip_render = True instead. "
@@ -1444,7 +1444,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 "VDOM diff returned no patches — this may "
                                 "cause event listeners and DOM state to be lost. "
                                 "Debugging steps: "
-                                "(1) Verify your template has <div data-djust-root> wrapping "
+                                "(1) Verify your template has <div dj-root> wrapping "
                                 "all dynamic content. "
                                 "(2) If this event only updates client-side state, use "
                                 "push_event + _skip_render = True instead. "

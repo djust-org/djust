@@ -38,7 +38,7 @@ class CacheDemoView(LiveView):
     """
 
     template = """
-    <div data-djust-root class="container mt-5">
+    <div dj-root class="container mt-5">
         <div class="row">
             <div class="col-md-10 offset-md-1">
                 <div class="card">

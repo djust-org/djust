@@ -158,7 +158,7 @@ describe('innerHTML hydration preserves newlines', () => {
         // Simulate the exact WebSocket message flow
         const jsonMessage = JSON.stringify({
             type: 'mount',
-            html: '<div data-djust-root><pre><code>def foo():\n    return 42</code></pre></div>'
+            html: '<div dj-root><pre><code>def foo():\n    return 42</code></pre></div>'
         });
 
         // Parse JSON (this should convert \\n to \n)
@@ -166,7 +166,7 @@ describe('innerHTML hydration preserves newlines', () => {
 
         // Verify JSON parsing preserved the newline
         expect(data.html).toContain('\n');
-        expect(data.html).toBe('<div data-djust-root><pre><code>def foo():\n    return 42</code></pre></div>');
+        expect(data.html).toBe('<div dj-root><pre><code>def foo():\n    return 42</code></pre></div>');
 
         // Now set innerHTML like the client does
         const container = document.createElement('div');
@@ -238,13 +238,13 @@ describe('_stampDjIds', () => {
 
     afterEach(() => {
         // Clean up any containers added to body
-        const container = document.querySelector('[data-djust-root]');
+        const container = document.querySelector('[dj-root]');
         if (container) container.remove();
     });
 
     it('should stamp data-dj-id attributes onto existing DOM elements', () => {
         const container = document.createElement('div');
-        container.setAttribute('data-djust-root', '');
+        container.setAttribute('dj-root', '');
         container.innerHTML = '<main><div><span>Hello</span></div></main>';
         document.body.appendChild(container);
 
@@ -258,7 +258,7 @@ describe('_stampDjIds', () => {
 
     it('should preserve whitespace in code blocks while stamping IDs', () => {
         const container = document.createElement('div');
-        container.setAttribute('data-djust-root', '');
+        container.setAttribute('dj-root', '');
         container.innerHTML = '<pre><code><span class="w">\u00a0\u00a0\u00a0\u00a0</span><span class="k">return</span></code></pre>';
         const originalText = container.querySelector('code').textContent;
         document.body.appendChild(container);
@@ -274,7 +274,7 @@ describe('_stampDjIds', () => {
 
     it('should handle mismatched child counts gracefully', () => {
         const container = document.createElement('div');
-        container.setAttribute('data-djust-root', '');
+        container.setAttribute('dj-root', '');
         container.innerHTML = '<div><span>A</span><span>B</span><span>C</span></div>';
         document.body.appendChild(container);
 
@@ -289,7 +289,7 @@ describe('_stampDjIds', () => {
 
     it('should bail out on tag-name mismatch', () => {
         const container = document.createElement('div');
-        container.setAttribute('data-djust-root', '');
+        container.setAttribute('dj-root', '');
         container.innerHTML = '<div><span>A</span></div>';
         document.body.appendChild(container);
 
@@ -303,7 +303,7 @@ describe('_stampDjIds', () => {
 
     it('should handle no container in DOM gracefully', () => {
         // Remove any existing containers
-        const existing = document.querySelector('[data-djust-root]');
+        const existing = document.querySelector('[dj-root]');
         if (existing) existing.remove();
 
         // Should not throw

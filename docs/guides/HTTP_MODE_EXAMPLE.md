@@ -91,7 +91,7 @@ class CounterView(LiveView):
     <title>Counter (HTTP Mode)</title>
 </head>
 <body>
-    <div data-djust-root>
+    <div dj-root>
         <h1>Counter: {{ count }}</h1>
         <button dj-click="increment">+</button>
         <button dj-click="decrement">-</button>

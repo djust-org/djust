@@ -869,11 +869,11 @@ BEST_PRACTICES = {
                 "the VDOM diffing engine to function correctly."
             ),
             "attributes": [
-                "data-djust-view: Identifies the view class for WebSocket routing",
-                "data-djust-root: Marks the root element for VDOM patching scope",
+                "dj-view: Identifies the view class for WebSocket routing",
+                "dj-root: Marks the root element for VDOM patching scope",
             ],
             "example": (
-                '<div data-djust-view="{{ view_name }}" data-djust-root>\n'
+                '<div dj-view="{{ view_name }}" dj-root>\n'
                 "  <!-- your template content -->\n"
                 "</div>"
             ),
@@ -914,14 +914,14 @@ BEST_PRACTICES = {
         },
         {
             "id": 2,
-            "problem": "Missing data-djust-root attribute on template root element",
+            "problem": "Missing dj-root attribute on template root element",
             "why": (
-                "The VDOM diffing engine needs data-djust-root to identify the patch scope. "
+                "The VDOM diffing engine needs dj-root to identify the patch scope. "
                 "Without it, DOM updates silently fail or produce incorrect diffs."
             ),
             "solution": (
-                "Add both data-djust-view and data-djust-root to the outermost element: "
-                '<div data-djust-view="{{ view_name }}" data-djust-root>'
+                "Add both dj-view and dj-root to the outermost element: "
+                '<div dj-view="{{ view_name }}" dj-root>'
             ),
             "related_doc": "docs/guides/template-requirements.md",
         },

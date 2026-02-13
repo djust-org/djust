@@ -735,7 +735,7 @@ Lazy hydration is a client-side optimization that defers WebSocket connections u
 Instead of establishing WebSocket connections for all LiveView elements on page load, lazy hydration:
 
 1. Renders static HTML immediately (fast initial paint)
-2. Observes elements with `data-djust-lazy` attribute
+2. Observes elements with `dj-lazy` attribute
 3. Triggers hydration when the specified condition is met
 4. Establishes WebSocket connection only when needed
 
@@ -751,22 +751,22 @@ Instead of establishing WebSocket connections for all LiveView elements on page 
 
 ```html
 <!-- Viewport-based (default) - hydrates when scrolled into view -->
-<div data-djust-view="comments" data-djust-lazy>
+<div dj-view="comments" dj-lazy>
     <div class="skeleton">Loading comments...</div>
 </div>
 
 <!-- Click-based - hydrates on first interaction -->
-<div data-djust-view="editor" data-djust-lazy="click">
+<div dj-view="editor" dj-lazy="click">
     <button>Click to edit</button>
 </div>
 
 <!-- Hover-based - hydrates when mouse enters -->
-<div data-djust-view="preview" data-djust-lazy="hover">
+<div dj-view="preview" dj-lazy="hover">
     <span>Hover for details</span>
 </div>
 
 <!-- Idle-based - hydrates during browser idle time -->
-<div data-djust-view="analytics" data-djust-lazy="idle">
+<div dj-view="analytics" dj-lazy="idle">
     <div>Loading analytics...</div>
 </div>
 ```
@@ -790,15 +790,15 @@ class DashboardView(LiveView):
 
     template_string = """
         <!-- Critical: Loads immediately -->
-        <div data-djust-view="summary">{{ summary.render }}</div>
+        <div dj-view="summary">{{ summary.render }}</div>
 
         <!-- Hybrid component with lazy hydration -->
-        <div data-djust-view="recent_orders" data-djust-lazy>
+        <div dj-view="recent_orders" dj-lazy>
             {{ orders_skeleton }}
         </div>
 
         <!-- Rust component (fast rendering) with lazy hydration -->
-        <div data-djust-view="notifications" data-djust-lazy="hover">
+        <div dj-view="notifications" dj-lazy="hover">
             {{ notification_badges }}
         </div>
     """

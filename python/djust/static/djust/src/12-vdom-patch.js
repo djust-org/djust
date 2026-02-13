@@ -876,8 +876,8 @@ function applyDjUpdateElements(existingRoot, newRoot) {
  */
 function _stampDjIds(serverHtml, container) {
     if (!container) {
-        container = document.querySelector('[data-djust-view]') ||
-                    document.querySelector('[data-djust-root]');
+        container = document.querySelector('[dj-view]') ||
+                    document.querySelector('[dj-root]');
     }
     if (!container) return;
 

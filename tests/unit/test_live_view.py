@@ -106,10 +106,10 @@ class TestTemplateInheritance:
             "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>"
         )
 
-        # Create child template with data-djust-root div
+        # Create child template with dj-root div
         child_template = templates_dir / "child.html"
         child_template.write_text(
-            "{% extends 'base.html' %}{% block content %}<div data-djust-root><div>{$ message $}</div></div>{% endblock %}"
+            "{% extends 'base.html' %}{% block content %}<div dj-root><div>{$ message $}</div></div>{% endblock %}"
         )
 
         # Test that get_template() extracts liveview-root from resolved template
@@ -125,7 +125,7 @@ class TestTemplateInheritance:
         assert "<body>" not in result
         assert "<html>" not in result
         # Should contain the liveview-root div and child content
-        assert "data-djust-root" in result
+        assert "dj-root" in result
         assert "<div>{$ message $}</div>" in result
         # Should NOT contain Django template tags
         assert "{% extends" not in result

@@ -26,7 +26,7 @@ This implementation addresses the top 8 issues identified from real-world usage 
     - Specific template file name
     - Numbered debugging steps
     - Link to `python manage.py check --tag djust`
-    - Hint about missing `data-djust-root`
+    - Hint about missing `dj-root`
 
 **Tests**: 35 new tests in `tests/unit/test_state_serialization.py`
 
@@ -56,13 +56,13 @@ This implementation addresses the top 8 issues identified from real-world usage 
    - Warning severity
 
 3. **T005: Template Structure Validation**
-   - Detects when `data-djust-view` and `data-djust-root` are on different elements
+   - Detects when `dj-view` and `dj-root` are on different elements
    - Regex-based template parsing
    - Warning severity
 
 4. **T002 Enhancement**
    - Changed from Info to Warning severity
-   - Now also triggers when `data-djust-view` present but `data-djust-root` missing
+   - Now also triggers when `dj-view` present but `dj-root` missing
    - Improved error message mentions "DOM patching"
 
 **Tests**: 16 new tests in `python/tests/test_checks.py`
@@ -90,7 +90,7 @@ This implementation addresses the top 8 issues identified from real-world usage 
 2. **`docs/guides/template-requirements.md`** (7KB)
    - Both required attributes explained
    - What each attribute does (WebSocket connection vs VDOM diffing)
-   - Common error: missing data-djust-root causes DJE-053
+   - Common error: missing dj-root causes DJE-053
    - Template inheritance patterns
    - Validation via `manage.py check --tag djust`
    - Examples: minimal, with inheritance, multiple LiveViews
@@ -128,7 +128,7 @@ This implementation addresses the top 8 issues identified from real-world usage 
 
 2. **Expanded Common Pitfalls** (5 new major issues added)
    - Service instances in state → helper method pattern
-   - Missing data-djust-root → add to template
+   - Missing dj-root → add to template
    - ASGI configuration issues → use ProtocolTypeRouter
    - Missing WhiteNoise with Daphne → add middleware
    - Search without debouncing → use @debounce(0.5)
@@ -237,7 +237,7 @@ This implementation addresses the top 8 issues identified from real-world usage 
 
 ### Quantitative Goals
 - ✅ 80%+ of service instance issues caught by V006
-- ✅ 90%+ of missing data-djust-root caught by T002/T005
+- ✅ 90%+ of missing dj-root caught by T002/T005
 - ✅ 95%+ of missing **kwargs caught by V007
 - ✅ Zero test regressions (1567 passing)
 

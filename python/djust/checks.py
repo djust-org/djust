@@ -65,7 +65,7 @@ _EVENT_HANDLER_LIKE_NAMES = re.compile(
 
 _SERVICE_INSTANCE_KEYWORDS = re.compile(r"(Service|Client|Session|API|Connection)", re.IGNORECASE)
 
-_DJ_VIEW_RE = re.compile(r"data-djust-view")
+_DJ_VIEW_RE = re.compile(r"dj-view")
 
 
 def _check_manual_client_js(errors):
@@ -900,7 +900,7 @@ def check_security(app_configs, **kwargs):
 _DEPRECATED_ATTR_RE = re.compile(
     r"@(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave)="
 )
-_DJ_ROOT_RE = re.compile(r"data-djust-root")
+_DJ_ROOT_RE = re.compile(r"dj-root")
 _INCLUDE_RE = re.compile(r"\{%\s*include\s+")
 _LIVEVIEW_CONTENT_RE = re.compile(r"\{\{\s*liveview_content\s*\|\s*safe\s*\}\}")
 _DOC_DJUST_EVENT_RE = re.compile(r"""document\s*\.\s*addEventListener\s*\(\s*['"]djust:""")
@@ -942,8 +942,8 @@ def check_templates(app_configs, **kwargs):
                 )
             )
 
-        # T002 -- LiveView template missing data-djust-root
-        # Flag if file has dj-* directives or data-djust-view but no data-djust-root
+        # T002 -- LiveView template missing dj-root
+        # Flag if file has dj-* directives or dj-view but no dj-root
         has_dj_attrs = re.search(r"dj-(click|input|change|submit|model)", content)
         has_djust_view = _DJ_VIEW_RE.search(content)
         has_djust_root = _DJ_ROOT_RE.search(content)
@@ -952,17 +952,16 @@ def check_templates(app_configs, **kwargs):
             if not re.search(r"\{%\s*extends\s+", content):
                 errors.append(
                     DjustWarning(
-                        "%s -- LiveView template missing 'data-djust-root' attribute. "
-                        "Without data-djust-root, djust cannot identify the root element "
+                        "%s -- LiveView template missing 'dj-root' attribute. "
+                        "Without dj-root, djust cannot identify the root element "
                         "for DOM patching." % relpath,
                         hint=(
-                            "Add data-djust-root to the root element of your LiveView template. "
-                            'Example: <div data-djust-root data-djust-view="myapp.views.MyView">'
+                            "Add dj-root to the root element of your LiveView template. "
+                            'Example: <div dj-root dj-view="myapp.views.MyView">'
                         ),
                         id="djust.T002",
                         fix_hint=(
-                            "Add `data-djust-root` attribute to the root element "
-                            "in `%s`." % relpath
+                            "Add `dj-root` attribute to the root element " "in `%s`." % relpath
                         ),
                         file_path=filepath,
                     )
@@ -1010,7 +1009,7 @@ def check_templates(app_configs, **kwargs):
                 )
             )
 
-        # T005 -- data-djust-view and data-djust-root on different elements
+        # T005 -- dj-view and dj-root on different elements
         if has_djust_view and has_djust_root:
             _check_view_root_same_element(content, relpath, filepath, errors)
 
@@ -1018,7 +1017,7 @@ def check_templates(app_configs, **kwargs):
 
 
 def _check_view_root_same_element(content, relpath, filepath, errors):
-    """T005: Detect when data-djust-view and data-djust-root are on different elements."""
+    """T005: Detect when dj-view and dj-root are on different elements."""
     # Use regex to find HTML tags and check if both attributes co-occur
     # Find all tags that have either attribute
     tag_re = re.compile(r"<[a-zA-Z][^>]*>", re.DOTALL)
@@ -1028,8 +1027,8 @@ def _check_view_root_same_element(content, relpath, filepath, errors):
     view_only_lineno = None
     for match in tag_re.finditer(content):
         tag = match.group(0)
-        tag_has_view = "data-djust-view" in tag
-        tag_has_root = "data-djust-root" in tag
+        tag_has_view = "dj-view" in tag
+        tag_has_root = "dj-root" in tag
         if tag_has_view and tag_has_root:
             has_combined_tag = True
             break
@@ -1043,16 +1042,13 @@ def _check_view_root_same_element(content, relpath, filepath, errors):
     if has_view_only and has_root_only and not has_combined_tag:
         errors.append(
             DjustWarning(
-                "%s -- data-djust-view and data-djust-root are on different elements." % relpath,
+                "%s -- dj-view and dj-root are on different elements." % relpath,
                 hint=(
-                    "data-djust-view and data-djust-root must be on the same root element. "
-                    'Example: <div data-djust-root data-djust-view="myapp.views.MyView">'
+                    "dj-view and dj-root must be on the same root element. "
+                    'Example: <div dj-root dj-view="myapp.views.MyView">'
                 ),
                 id="djust.T005",
-                fix_hint=(
-                    "Move data-djust-view and data-djust-root onto the same element "
-                    "in `%s`." % relpath
-                ),
+                fix_hint=("Move dj-view and dj-root onto the same element " "in `%s`." % relpath),
                 file_path=filepath,
                 line_number=view_only_lineno,
             )

@@ -91,7 +91,7 @@ class TestStartApp:
         template = tmp_cwd / "dashboard" / "templates" / "dashboard" / "index.html"
         assert template.exists()
         content = template.read_text()
-        assert 'data-djust-view="dashboard.views.DashboardView"' in content
+        assert 'dj-view="dashboard.views.DashboardView"' in content
 
     def test_creates_urls(self, tmp_cwd):
         args = types.SimpleNamespace(name="dashboard")

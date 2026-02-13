@@ -331,7 +331,7 @@ INDEX_HTML = """\
 
 {%% block content %%}
 {%% csrf_token %%}
-<div data-djust-root data-djust-view="%(app_name)s.views.%(view_class)s">
+<div dj-root dj-view="%(app_name)s.views.%(view_class)s">
 
     <!-- Stats bar -->
     <div class="flex items-center gap-4 mb-6">
@@ -752,7 +752,7 @@ SCHEMA_LIST_HTML = """\
 
 {%% block content %%}
 {%% csrf_token %%}
-<div data-djust-root data-djust-view="%(app_name)s.views.%(view_class)s">
+<div dj-root dj-view="%(app_name)s.views.%(view_class)s">
 
     <h1 class="text-2xl font-bold text-white mb-6">%(model_display)s</h1>
 

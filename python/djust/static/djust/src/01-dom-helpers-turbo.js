@@ -89,9 +89,9 @@ function reinitLiveViewForTurboNav() {
     autoStampRootAttributes();
 
     // Find all LiveView containers in the new content
-    const allContainers = document.querySelectorAll('[data-djust-view]');
-    const lazyContainers = document.querySelectorAll('[data-djust-view][data-djust-lazy]');
-    const eagerContainers = document.querySelectorAll('[data-djust-view]:not([data-djust-lazy])');
+    const allContainers = document.querySelectorAll('[dj-view]');
+    const lazyContainers = document.querySelectorAll('[dj-view][dj-lazy]');
+    const eagerContainers = document.querySelectorAll('[dj-view]:not([dj-lazy])');
 
     if (globalThis.djustDebug) console.log(`[LiveView:TurboNav] Found ${allContainers.length} containers (${lazyContainers.length} lazy, ${eagerContainers.length} eager)`);
 

@@ -24,7 +24,7 @@ class TemplateMixin:
         Supports template inheritance via {% extends %} and {% block %} tags.
         Templates are resolved using Rust template inheritance for performance.
 
-        For templates with inheritance, extracts only [data-djust-root] content
+        For templates with inheritance, extracts only [dj-root] content
         for VDOM tracking to avoid tracking the entire document.
         """
         if self.template:
@@ -251,13 +251,13 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
     def _extract_liveview_content(self, html: str) -> str:
         """
-        Extract the inner content of [data-djust-root] from full HTML.
+        Extract the inner content of [dj-root] from full HTML.
 
         This ensures the HTML sent over WebSocket matches what the client expects:
-        just the content to insert into the existing [data-djust-root] container.
+        just the content to insert into the existing [dj-root] container.
         """
-        # Find the opening tag for [data-djust-root]
-        opening_match = re.search(r"<div\s+[^>]*data-djust-root[^>]*>", html, re.IGNORECASE)
+        # Find the opening tag for [dj-root]
+        opening_match = re.search(r"<div\s+[^>]*dj-root[^>]*>", html, re.IGNORECASE)
 
         if not opening_match:
             return html
@@ -291,9 +291,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
     def _extract_liveview_root_with_wrapper(self, template: str) -> str:
         """
-        Extract the <div data-djust-root>...</div> section from a template (WITH the wrapper div).
+        Extract the <div dj-root>...</div> section from a template (WITH the wrapper div).
         """
-        opening_match = re.search(r"<div\s+[^>]*data-djust-root[^>]*>", template, re.IGNORECASE)
+        opening_match = re.search(r"<div\s+[^>]*dj-root[^>]*>", template, re.IGNORECASE)
 
         if not opening_match:
             return template
@@ -328,9 +328,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
     def _extract_liveview_template_content(self, template: str) -> str:
         """
-        Extract the innerHTML of [data-djust-root] from a TEMPLATE (not rendered HTML).
+        Extract the innerHTML of [dj-root] from a TEMPLATE (not rendered HTML).
         """
-        opening_match = re.search(r"<div\s+[^>]*data-djust-root[^>]*>", template, re.IGNORECASE)
+        opening_match = re.search(r"<div\s+[^>]*dj-root[^>]*>", template, re.IGNORECASE)
 
         if not opening_match:
             return template
@@ -363,9 +363,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
     def _strip_liveview_root_in_html(self, html: str) -> str:
         """
-        Strip comments and whitespace from [data-djust-root] div in full HTML page.
+        Strip comments and whitespace from [dj-root] div in full HTML page.
         """
-        opening_match = re.search(r"<div\s+[^>]*data-djust-root[^>]*>", html, re.IGNORECASE)
+        opening_match = re.search(r"<div\s+[^>]*dj-root[^>]*>", html, re.IGNORECASE)
 
         if not opening_match:
             return html
@@ -470,7 +470,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         Render the view and compute diff from last render.
 
         Args:
-            extract_liveview_root: If True, extract innerHTML of [data-djust-root]
+            extract_liveview_root: If True, extract innerHTML of [dj-root]
 
         Returns:
             Tuple of (html, patches_json, version)
@@ -506,7 +506,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         if extract_liveview_root:
             html = self._extract_liveview_content(html)
-            logger.debug("[LiveView] Extracted [data-djust-root] content (%d chars)", len(html))
+            logger.debug("[LiveView] Extracted [dj-root] content (%d chars)", len(html))
 
         logger.debug(
             "[LiveView] Rust returned: version=%d, patches=%s",

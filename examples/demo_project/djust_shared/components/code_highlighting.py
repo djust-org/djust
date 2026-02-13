@@ -79,7 +79,7 @@ class CodeHighlightingSetup(Component):
         }});
 
         // Observe the LiveView root for changes
-        const liveviewRoot = document.querySelector('[data-djust-root]');
+        const liveviewRoot = document.querySelector('[dj-root]');
         if (liveviewRoot) {{
             observer.observe(liveviewRoot, {{
                 childList: true,

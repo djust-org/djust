@@ -11,7 +11,7 @@ const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf
 function createEnv(bodyHtml = '') {
     const dom = new JSDOM(
         `<!DOCTYPE html><html><body>
-            <div data-djust-root data-djust-view="test">
+            <div dj-root dj-view="test">
                 ${bodyHtml}
             </div>
         </body></html>`,
@@ -32,7 +32,7 @@ function createEnv(bodyHtml = '') {
 }
 
 const HOOK_HTML = `
-    <div dj-hook="CursorOverlay" data-djust-view="test" style="position:relative;">
+    <div dj-hook="CursorOverlay" dj-view="test" style="position:relative;">
         <textarea id="editor" style="font-family:monospace; font-size:14px; padding:10px;">Hello world</textarea>
     </div>
 `;

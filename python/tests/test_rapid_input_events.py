@@ -21,7 +21,7 @@ from django.contrib.sessions.middleware import SessionMiddleware
 class SliderTestView(LiveView):
     """Test view with a slider-like input."""
 
-    template = """<div data-djust-root>
+    template = """<div dj-root>
     <div class="slider-container">
         <span class="value-display">{{ value }}</span>
         <input type="range" min="0" max="100" value="{{ value }}">

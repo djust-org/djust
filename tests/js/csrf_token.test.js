@@ -15,7 +15,7 @@ function createEnv({ formToken, cookie } = {}) {
 
     const dom = new JSDOM(
         `<!DOCTYPE html><html><body>
-            <div data-djust-root>
+            <div dj-root>
                 ${formInput}
                 <button dj-click="my_action">Click</button>
             </div>

@@ -129,9 +129,9 @@ Version 0.2.0 includes several breaking changes to improve API consistency. Foll
 
 | Before | After |
 |--------|-------|
-| `data-liveview-root` | `data-djust-root` |
-| `data-live-view` | `data-djust-view` |
-| `data-live-lazy` | `data-djust-lazy` |
+| `dj-liveview-root` | `dj-root` |
+| `data-live-view` | `dj-view` |
+| `data-live-lazy` | `dj-lazy` |
 | `data-dj` | `data-dj-id` |
 
 **Migration:** Update any custom JavaScript or templates that reference these attributes.

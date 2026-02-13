@@ -12,7 +12,7 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[Deployment Guide](guides/DEPLOYMENT.md)** - Deploy djust to production
 - **[HTTP Mode Example](guides/HTTP_MODE_EXAMPLE.md)** - Use djust without WebSockets
 - **[MCP Server](guides/mcp-server.md)** - AI assistant integration via Model Context Protocol
-- **[Template Requirements](guides/template-requirements.md)** - Required template attributes (data-djust-view, data-djust-root)
+- **[Template Requirements](guides/template-requirements.md)** - Required template attributes (dj-view, dj-root)
 - **[Working with External Services](guides/services.md)** - AWS, REST APIs, Redis integration patterns
 - **[Error Code Reference](guides/error-codes.md)** - Complete error code guide with fixes
 

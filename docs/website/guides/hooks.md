@@ -92,7 +92,7 @@ window.djust.hooks = {
 | Property | Type | Description |
 |----------|------|-------------|
 | `this.el` | `HTMLElement` | The DOM element with `dj-hook`. Updated automatically on patches. |
-| `this.viewName` | `string` | LiveView name from closest `[data-djust-view]` ancestor. |
+| `this.viewName` | `string` | LiveView name from closest `[dj-view]` ancestor. |
 
 ### Methods
 

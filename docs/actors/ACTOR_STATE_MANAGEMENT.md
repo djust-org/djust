@@ -3014,7 +3014,7 @@ class CounterActorView(LiveView):
 **Template:**
 ```html
 <!-- demo_app/templates/counter.html -->
-<div data-djust-root>
+<div dj-root>
     <h1>Counter: {{ count }}</h1>
     <button dj-click="increment">+</button>
     <button dj-click="decrement">-</button>
@@ -3057,7 +3057,7 @@ class ChatActorView(LiveView):
 **Template:**
 ```html
 <!-- demo_app/templates/chat.html -->
-<div data-djust-root>
+<div dj-root>
     <div class="messages">
         {% for msg in messages %}
         <div class="message">

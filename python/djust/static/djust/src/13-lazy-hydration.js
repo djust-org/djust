@@ -11,11 +11,11 @@
  * for pages with below-fold LiveView components.
  *
  * Usage:
- *   <div data-djust-view="my_view" data-djust-lazy>
+ *   <div dj-view="my_view" dj-lazy>
  *     <!-- Content loads when element scrolls into view -->
  *   </div>
  *
- *   <div data-djust-view="my_view" data-djust-lazy="click">
+ *   <div dj-view="my_view" dj-lazy="click">
  *     <!-- Content loads on first user interaction -->
  *   </div>
  *
@@ -75,7 +75,7 @@ const lazyHydrationManager = {
 
     // Register an element for lazy hydration
     register(element) {
-        const lazyMode = element.getAttribute('data-djust-lazy') || 'viewport';
+        const lazyMode = element.getAttribute('dj-lazy') || 'viewport';
 
         switch (lazyMode) {
             case 'click':
@@ -116,7 +116,7 @@ const lazyHydrationManager = {
 
     // Hydrate a single element
     hydrateElement(element) {
-        const elementId = element.id || element.getAttribute('data-djust-view');
+        const elementId = element.id || element.getAttribute('dj-view');
 
         // Prevent double hydration
         if (this.hydratedElements.has(elementId)) {
@@ -124,9 +124,9 @@ const lazyHydrationManager = {
         }
         this.hydratedElements.add(elementId);
 
-        const viewPath = element.getAttribute('data-djust-view');
+        const viewPath = element.getAttribute('dj-view');
         if (!viewPath) {
-            console.warn('[LiveView:lazy] Element missing data-djust-view attribute', element);
+            console.warn('[LiveView:lazy] Element missing dj-view attribute', element);
             return;
         }
 
@@ -186,7 +186,7 @@ const lazyHydrationManager = {
         liveViewWS.mount(viewPath, urlParams);
 
         // Remove lazy attribute to indicate hydration complete
-        element.removeAttribute('data-djust-lazy');
+        element.removeAttribute('dj-lazy');
         element.setAttribute('data-live-hydrated', 'true');
 
         // Bind events to the newly hydrated content
@@ -195,12 +195,12 @@ const lazyHydrationManager = {
 
     // Check if an element is lazily loaded
     isLazy(element) {
-        return element.hasAttribute('data-djust-lazy');
+        return element.hasAttribute('dj-lazy');
     },
 
     // Force hydrate all lazy elements (useful for testing or SPA navigation)
     hydrateAll() {
-        document.querySelectorAll('[data-djust-lazy]').forEach(el => {
+        document.querySelectorAll('[dj-lazy]').forEach(el => {
             this.hydrateElement(el);
         });
     }

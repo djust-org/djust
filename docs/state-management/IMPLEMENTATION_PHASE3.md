@@ -445,7 +445,7 @@ class OptimisticTodoView(LiveView):
     """
 
     template_string = """
-    <div data-djust-root class="container mt-5">
+    <div dj-root class="container mt-5">
         <div class="card">
             <div class="card-header">
                 <h3>Optimistic Updates Demo - Todo List</h3>
@@ -517,7 +517,7 @@ class OptimisticCounterView(LiveView):
     """
 
     template_string = """
-    <div data-djust-root class="container mt-5">
+    <div dj-root class="container mt-5">
         <div class="card">
             <div class="card-header">
                 <h3>Optimistic Updates - Counter with Validation</h3>

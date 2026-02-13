@@ -125,7 +125,7 @@ class RequestMixin:
             try:
                 wrapper = loader.get_template(self.wrapper_template)
                 html = wrapper.render({"liveview_content": liveview_content}, request)
-                html = html.replace("<div data-djust-root></div>", liveview_content)
+                html = html.replace("<div dj-root></div>", liveview_content)
             except Exception as e:
                 logger.error(
                     "Failed to render wrapper_template '%s': %s",
@@ -163,11 +163,9 @@ class RequestMixin:
             "vdom_ms": round(t_init_rust + t_sync + t_render_diff, 2),
         }
 
-        # Inject view path into data-djust-root for WebSocket mounting
+        # Inject view path into dj-root for WebSocket mounting
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
-        html = html.replace(
-            "<div data-djust-root>", f'<div data-djust-root data-djust-view="{view_path}">'
-        )
+        html = html.replace("<div dj-root>", f'<div dj-root dj-view="{view_path}">')
 
         # Inject LiveView client script
         html = self._inject_client_script(html)
