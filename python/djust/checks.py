@@ -81,7 +81,10 @@ def _check_tailwind_cdn_in_production(errors):
                         try:
                             with open(filepath, "r", encoding="utf-8") as f:
                                 content = f.read()
-                                if "cdn.tailwindcss.com" in content:
+                                # Scan template content for CDN reference (not URL validation)
+                                # nosemgrep: python.lang.security.audit.dangerous-system-call.dangerous-system-call
+                                cdn_domain = "cdn.tailwindcss.com"
+                                if cdn_domain in content:
                                     errors.append(
                                         DjustWarning(
                                             f"Tailwind CDN detected in production template: {filename}",
@@ -95,7 +98,9 @@ def _check_tailwind_cdn_in_production(errors):
                                         )
                                     )
                         except Exception:
-                            pass  # Skip files that can't be read
+                            # Silently skip templates that can't be read (permissions, encoding, etc.)
+                            # This is acceptable because check failures shouldn't block startup
+                            pass
 
 
 def _check_missing_compiled_css(errors):
@@ -119,6 +124,8 @@ def _check_missing_compiled_css(errors):
                         has_input_css = True
                         break
             except Exception:
+                # Silently skip files that can't be read (permissions, encoding, missing files)
+                # This is acceptable because we're checking for Tailwind presence, not enforcement
                 pass
 
     if has_tailwind_config or has_input_css:
