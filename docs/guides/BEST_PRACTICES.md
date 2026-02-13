@@ -1096,58 +1096,6 @@ Remove the manual script tag. djust handles it automatically:
 
 System check `djust.C012` detects this automatically via `python manage.py check`.
 
-### Tailwind CDN in Production
-
-**Problem:** Using `<script src="https://cdn.tailwindcss.com"></script>` in production.
-
-**Why it's wrong:**
-- Slow: ~300KB uncompressed, blocks rendering
-- Console warnings about JIT compilation in browser
-- No tree-shaking (includes all utilities, even unused ones)
-- Production performance impact
-
-**Solution:**
-Compile CSS before deployment:
-
-```bash
-# One-command setup
-python manage.py djust_setup_css tailwind --minify
-
-# Or manually
-npx tailwindcss -i static/css/input.css -o static/css/output.css --minify
-```
-
-Then in your template:
-```html
-<!-- ❌ Don't do this in production -->
-<script src="https://cdn.tailwindcss.com"></script>
-
-<!-- ✅ Do this instead -->
-<link rel="stylesheet" href="{% static 'css/output.css' %}">
-```
-
-System check `djust.C010` warns about CDN usage in production automatically.
-
-### Missing Compiled CSS
-
-**Problem:** Deploying to production without compiling CSS.
-
-**Why it's wrong:**
-- Dev fallback (Tailwind CDN) doesn't work in production
-- Unstyled pages
-- Missing utility classes
-
-**Solution:**
-Always compile CSS before deployment:
-
-```bash
-python manage.py djust_setup_css tailwind --minify
-git add static/css/output.css
-git commit -m "feat: add compiled CSS"
-```
-
-System check `djust.C011` warns if Tailwind is configured but `output.css` is missing.
-
 ### Converting QuerySets to Lists
 
 **Problem:** Converting QuerySets to lists with `list()` or slicing with `[:]`.
