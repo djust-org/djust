@@ -352,6 +352,179 @@ class TestS004DebugAllowedHosts:
         assert len(s004) == 0
 
 
+class TestC010TailwindCdnInProduction:
+    """C010 -- Tailwind CDN detected in production templates."""
+
+    def test_c010_detects_cdn_in_production(self, tmp_path, settings):
+        """C010 fires when Tailwind CDN is in base template and DEBUG=False."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "base.html").write_text(
+            '<html><head><script src="https://cdn.tailwindcss.com"></script></head></html>'
+        )
+        settings.DEBUG = False
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c010 = [e for e in errors if e.id == "djust.C010"]
+        assert len(c010) == 1
+        assert "Tailwind CDN" in c010[0].msg
+        assert "base.html" in c010[0].msg
+
+    def test_c010_does_not_fire_in_development(self, tmp_path, settings):
+        """C010 should not fire when DEBUG=True (development mode)."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "base.html").write_text(
+            '<html><head><script src="https://cdn.tailwindcss.com"></script></head></html>'
+        )
+        settings.DEBUG = True
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c010 = [e for e in errors if e.id == "djust.C010"]
+        assert len(c010) == 0
+
+    def test_c010_passes_with_compiled_css(self, tmp_path, settings):
+        """C010 should not fire when compiled CSS is used instead of CDN."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "base.html").write_text(
+            '<html><head><link rel="stylesheet" href="/static/css/output.css"></head></html>'
+        )
+        settings.DEBUG = False
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c010 = [e for e in errors if e.id == "djust.C010"]
+        assert len(c010) == 0
+
+
+class TestC011MissingCompiledCss:
+    """C011 -- Tailwind configured but compiled CSS not found."""
+
+    def test_c011_detects_missing_output_css_dev(self, tmp_path, settings, monkeypatch):
+        """C011 fires as Info when Tailwind configured but output.css missing in dev."""
+        # Create tailwind.config.js
+        config_file = tmp_path / "tailwind.config.js"
+        config_file.write_text("module.exports = { content: ['./templates/**/*.html'] }")
+
+        # Create static dir with input.css but no output.css
+        static_dir = tmp_path / "static" / "css"
+        static_dir.mkdir(parents=True)
+        (static_dir / "input.css").write_text("@import 'tailwindcss';")
+
+        monkeypatch.chdir(tmp_path)
+        settings.DEBUG = True
+        settings.STATICFILES_DIRS = [str(tmp_path / "static")]
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c011 = [e for e in errors if e.id == "djust.C011"]
+        assert len(c011) == 1
+        assert "output.css not found" in c011[0].msg
+
+    def test_c011_detects_missing_output_css_production(self, tmp_path, settings, monkeypatch):
+        """C011 fires as Warning when Tailwind configured but output.css missing in production."""
+        # Create tailwind.config.js
+        config_file = tmp_path / "tailwind.config.js"
+        config_file.write_text("module.exports = { content: ['./templates/**/*.html'] }")
+
+        # Create static dir with input.css but no output.css
+        static_dir = tmp_path / "static" / "css"
+        static_dir.mkdir(parents=True)
+        (static_dir / "input.css").write_text("@import 'tailwindcss';")
+
+        monkeypatch.chdir(tmp_path)
+        settings.DEBUG = False
+        settings.STATICFILES_DIRS = [str(tmp_path / "static")]
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c011 = [e for e in errors if e.id == "djust.C011"]
+        assert len(c011) == 1
+        assert "output.css not found" in c011[0].msg
+
+    def test_c011_passes_when_output_exists(self, tmp_path, settings, monkeypatch):
+        """C011 should not fire when output.css exists."""
+        # Create tailwind.config.js
+        config_file = tmp_path / "tailwind.config.js"
+        config_file.write_text("module.exports = { content: ['./templates/**/*.html'] }")
+
+        # Create static dir with both input.css and output.css
+        static_dir = tmp_path / "static" / "css"
+        static_dir.mkdir(parents=True)
+        (static_dir / "input.css").write_text("@import 'tailwindcss';")
+        (static_dir / "output.css").write_text("/* compiled css */")
+
+        monkeypatch.chdir(tmp_path)
+        settings.DEBUG = False
+        settings.STATICFILES_DIRS = [str(tmp_path / "static")]
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c011 = [e for e in errors if e.id == "djust.C011"]
+        assert len(c011) == 0
+
+    def test_c011_passes_when_tailwind_not_configured(self, tmp_path, settings, monkeypatch):
+        """C011 should not fire when Tailwind is not configured."""
+        # No tailwind.config.js, no input.css
+        monkeypatch.chdir(tmp_path)
+        settings.DEBUG = False
+        settings.STATICFILES_DIRS = []
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c011 = [e for e in errors if e.id == "djust.C011"]
+        assert len(c011) == 0
+
+
 class TestC012ManualClientJs:
     """C012 -- Manual client.js loading in base templates."""
 
