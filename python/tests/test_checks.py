@@ -1163,10 +1163,10 @@ class TestT001DeprecatedAtSyntax:
 
 
 class TestT002MissingDjustRoot:
-    """T002 -- LiveView template missing data-djust-root."""
+    """T002 -- LiveView template missing dj-root."""
 
     def test_t002_dj_attrs_no_root(self, tmp_path, settings):
-        """T002 fires for template with dj-click but no data-djust-root and no extends."""
+        """T002 fires for template with dj-click but no dj-root and no extends."""
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
         (tpl_dir / "no_root.html").write_text('<div><button dj-click="go">Go</button></div>')
@@ -1182,14 +1182,14 @@ class TestT002MissingDjustRoot:
         errors = check_templates(None)
         t002 = [e for e in errors if e.id == "djust.T002"]
         assert len(t002) == 1
-        assert "data-djust-root" in t002[0].msg
+        assert "dj-root" in t002[0].msg
 
     def test_t002_passes_with_root(self, tmp_path, settings):
-        """T002 should not fire when data-djust-root is present."""
+        """T002 should not fire when dj-root is present."""
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
         (tpl_dir / "has_root.html").write_text(
-            '<div data-djust-root><button dj-click="go">Go</button></div>'
+            '<div dj-root><button dj-click="go">Go</button></div>'
         )
         settings.TEMPLATES = [
             {
@@ -1881,21 +1881,19 @@ class TestV007EventHandlerSignature:
 
 
 # ---------------------------------------------------------------------------
-# T005 -- Template structure validation (data-djust-view / data-djust-root)
+# T005 -- Template structure validation (dj-view / dj-root)
 # ---------------------------------------------------------------------------
 
 
 class TestT005ViewRootSameElement:
-    """T005 -- data-djust-view and data-djust-root on different elements."""
+    """T005 -- dj-view and dj-root on different elements."""
 
     def test_t005_detects_different_elements(self, tmp_path, settings):
-        """T005 fires when data-djust-view and data-djust-root are on different elements."""
+        """T005 fires when dj-view and dj-root are on different elements."""
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
         (tpl_dir / "bad.html").write_text(
-            "<div data-djust-root>\n"
-            '  <div data-djust-view="myapp.views.MyView">content</div>\n'
-            "</div>"
+            "<div dj-root>\n" '  <div dj-view="myapp.views.MyView">content</div>\n' "</div>"
         )
         settings.TEMPLATES = [
             {
@@ -1916,7 +1914,7 @@ class TestT005ViewRootSameElement:
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
         (tpl_dir / "good.html").write_text(
-            '<div data-djust-root data-djust-view="myapp.views.MyView">content</div>'
+            '<div dj-root dj-view="myapp.views.MyView">content</div>'
         )
         settings.TEMPLATES = [
             {
@@ -1932,11 +1930,11 @@ class TestT005ViewRootSameElement:
         assert len(t005) == 0
 
     def test_t005_passes_no_view_attr(self, tmp_path, settings):
-        """T005 should not fire when data-djust-view is not present."""
+        """T005 should not fire when dj-view is not present."""
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
         (tpl_dir / "no_view.html").write_text(
-            '<div data-djust-root><button dj-click="go">Go</button></div>'
+            '<div dj-root><button dj-click="go">Go</button></div>'
         )
         settings.TEMPLATES = [
             {
@@ -1953,12 +1951,12 @@ class TestT005ViewRootSameElement:
 
 
 # ---------------------------------------------------------------------------
-# T002 enhanced -- Warning severity and data-djust-view detection
+# T002 enhanced -- Warning severity and dj-view detection
 # ---------------------------------------------------------------------------
 
 
 class TestT002Enhanced:
-    """T002 enhanced -- Warning severity and data-djust-view without root."""
+    """T002 enhanced -- Warning severity and dj-view without root."""
 
     def test_t002_is_warning_severity(self, tmp_path, settings):
         """T002 should be Warning severity (not Info)."""
@@ -1981,11 +1979,11 @@ class TestT002Enhanced:
         assert isinstance(t002[0], DjustWarning)
 
     def test_t002_detects_djust_view_without_root(self, tmp_path, settings):
-        """T002 fires when data-djust-view is present but data-djust-root is missing."""
+        """T002 fires when dj-view is present but dj-root is missing."""
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
         (tpl_dir / "view_no_root.html").write_text(
-            '<div data-djust-view="myapp.views.MyView">content</div>'
+            '<div dj-view="myapp.views.MyView">content</div>'
         )
         settings.TEMPLATES = [
             {
@@ -1999,7 +1997,7 @@ class TestT002Enhanced:
         errors = check_templates(None)
         t002 = [e for e in errors if e.id == "djust.T002"]
         assert len(t002) == 1
-        assert "data-djust-root" in t002[0].msg
+        assert "dj-root" in t002[0].msg
 
     def test_t002_improved_message(self, tmp_path, settings):
         """T002 message should mention DOM patching."""

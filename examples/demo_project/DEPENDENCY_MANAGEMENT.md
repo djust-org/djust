@@ -463,7 +463,7 @@ Your template must override the `extra_css` and `extra_js` blocks:
 
 <!-- Your content -->
 {% block content %}
-    <div data-djust-root>
+    <div dj-root>
         {{ code|safe }}
         {{ chart|safe }}
     </div>

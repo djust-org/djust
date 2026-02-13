@@ -85,7 +85,7 @@ DJUST_PWA = {
         'APP_SHELL': {
             'ENABLED': True,
             'SHELL_URL': '/shell/',        # Endpoint serving shell-only HTML
-            'CONTENT_SELECTOR': '[data-djust-root]',
+            'CONTENT_SELECTOR': '[dj-root]',
             'EXCLUDE_URLS': ['/admin/', '/api/'],
         }
     }
@@ -334,7 +334,7 @@ User navigates to /demos/pwa/, then clicks Back:
 ```javascript
 // Client-side: snapshot DOM state before navigation
 window.addEventListener('beforeunload', () => {
-  const root = document.querySelector('[data-djust-root]');
+  const root = document.querySelector('[dj-root]');
   if (root) {
     navigator.serviceWorker?.controller?.postMessage({
       type: 'cache-vdom',
@@ -349,7 +349,7 @@ window.addEventListener('beforeunload', () => {
 ### djust-Specific Benefits
 
 - djust's VDOM diffing engine can efficiently diff the cached state against the fresh server state — only applying minimal patches
-- `[data-djust-root]` provides a clean boundary for what to cache
+- `[dj-root]` provides a clean boundary for what to cache
 - Works naturally with the `djust_id` keying system for stable diffs
 
 ---

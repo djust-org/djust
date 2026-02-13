@@ -196,8 +196,8 @@ describe('extractTypedParams', () => {
 
         it('should skip data-djust* attributes', () => {
             const el = createElement({
-                'data-djust-view': 'myapp.MyView',
-                'data-djust-root': '',
+                'dj-view': 'myapp.MyView',
+                'dj-root': '',
                 'data-name': 'visible',
             });
             const params = extractTypedParams(el);

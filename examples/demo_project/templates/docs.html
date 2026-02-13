@@ -523,7 +523,7 @@ class CounterView(LiveView):
 {&#37; extends "base.html" &#37;}
 
 {&#37; block content &#37;}
-&lt;div data-djust-root&gt;
+&lt;div dj-root&gt;
     &lt;h1&gt;Count: &#123;&#123; count &#125;&#125;&lt;/h1&gt;
     &#123;&#123; increment_btn.render &#125;&#125;
 
@@ -568,7 +568,7 @@ urlpatterns = [
                 <ul>
                     <li><strong>LiveView</strong> - Server-side class managing page state and events</li>
                     <li><strong>Components</strong> - Reusable UI elements (buttons, alerts, forms, etc.)</li>
-                    <li><strong>Templates</strong> - Django templates with <code>data-djust-root</code></li>
+                    <li><strong>Templates</strong> - Django templates with <code>dj-root</code></li>
                     <li><strong>Events</strong> - User interactions (@click, @submit, @change)</li>
                     <li><strong>State</strong> - Python attributes automatically synced to templates</li>
                     <li><strong>VDOM</strong> - Rust-powered diffing for efficient updates</li>
@@ -869,7 +869,7 @@ class ContactFormView(LiveView):
                 <pre><code class="language-html">&lt;!-- templates/contact.html --&gt;
 {&#37; load djust &#37;}
 
-&lt;div data-djust-root&gt;
+&lt;div dj-root&gt;
     &lt;form dj-submit="handle_submit"&gt;
         {&#37; auto_form form framework="bootstrap5" &#37;}
 
@@ -928,11 +928,11 @@ class ContactFormView(LiveView):
                 <h2>Templates</h2>
 
                 <h3>LiveView Root Element</h3>
-                <p>All LiveView templates must have a root element with <code>data-djust-root</code>:</p>
+                <p>All LiveView templates must have a root element with <code>dj-root</code>:</p>
                 <pre><code class="language-html">{&#37; extends "base.html" &#37;}
 
 {&#37; block content &#37;}
-&lt;div data-djust-root&gt;
+&lt;div dj-root&gt;
     &lt;!-- Your LiveView content here --&gt;
     &lt;h1&gt;&#123;&#123; title &#125;&#125;&lt;/h1&gt;
     &lt;p&gt;&#123;&#123; message &#125;&#125;&lt;/p&gt;
@@ -1159,7 +1159,7 @@ class ProfileView(LiveView):
         ]</code></pre>
 
                 <pre><code class="language-html">&lt;!-- templates/profile.html --&gt;
-&lt;div data-djust-root&gt;
+&lt;div dj-root&gt;
     &lt;h1&gt;Suggested Users&lt;/h1&gt;
     &lt;div class="row"&gt;
         {&#37; for card in user_cards &#37;}

@@ -13,6 +13,7 @@ from .context import ContextMixin
 from .rust_bridge import RustBridgeMixin
 from .handlers import HandlerMixin
 from .request import RequestMixin
+from .post_processing import PostProcessingMixin
 from .model_binding import ModelBindingMixin
 from .push_events import PushEventMixin
 from .navigation import NavigationMixin
@@ -30,5 +31,6 @@ __all__ = [
     "ModelBindingMixin",
     "PushEventMixin",
     "NavigationMixin",
+    "PostProcessingMixin",
     "StreamingMixin",
 ]

@@ -1,99 +1,114 @@
 # Template Requirements
 
-Every djust LiveView template needs two attributes on its root element. This guide explains what they are, why both are required, and how to fix common mistakes.
+Every djust LiveView template needs the `dj-view` attribute to identify the LiveView class. The VDOM root is automatically inferred from the `dj-view` element in most cases.
 
 ---
 
 ## Required Attributes
 
-A LiveView template's root element must have **both** of these attributes:
+### Simple Case (99% of templates)
+
+Just add `dj-view` to your root element:
 
 ```html
-<div data-djust-view="myapp.views.CounterView" data-djust-root>
-    <!-- Your template content here -->
+<div dj-view="myapp.views.CounterView">
+    <p>Count: {{ count }}</p>
+    <button dj-click="increment">+1</button>
+</div>
+```
+
+The element with `dj-view` automatically becomes the VDOM root. No additional attributes needed.
+
+### Advanced Case (1% of templates)
+
+Only use explicit `dj-root` when you need to exclude wrapper elements from VDOM diffing:
+
+```html
+<div dj-view="myapp.views.CounterView">
+    <header class="static-metadata">
+        <!-- This is OUTSIDE the VDOM root -->
+        <span>Connected to CounterView</span>
+    </header>
+
+    <div dj-root>
+        <!-- Only THIS section gets VDOM updates -->
+        <p>Count: {{ count }}</p>
+        <button dj-click="increment">+1</button>
+    </div>
 </div>
 ```
 
 | Attribute | Required | Purpose |
 |-----------|----------|---------|
-| `data-djust-view` | Yes | Identifies the LiveView class for the WebSocket connection |
-| `data-djust-root` | Yes | Marks the root element for VDOM diffing |
+| `dj-view` | ✅ Yes | Identifies the LiveView class for the WebSocket connection |
+| `dj-root` | ❌ Optional | Explicitly marks VDOM root (auto-inferred from `dj-view` if omitted) |
 
 ---
 
 ## What Each Attribute Does
 
-### `data-djust-view`
+### `dj-view` (Required)
 
 This attribute tells djust's client JavaScript which LiveView class to connect to over WebSocket.
 
 ```html
-<div data-djust-view="myapp.views.CounterView">
+<div dj-view="myapp.views.CounterView">
 ```
 
 When the page loads, the client JS finds this attribute, reads the view class path, and opens a WebSocket connection to mount that view. Without it, no WebSocket connection is established and the page behaves like a static HTML page.
 
 The value must be the **full Python import path** to the LiveView class (e.g., `myapp.views.CounterView`).
 
-### `data-djust-root`
+**Important**: The element with `dj-view` is automatically the VDOM root unless you explicitly add `dj-root` elsewhere.
 
-This attribute marks the root element of the VDOM tree. When an event handler updates state and triggers a re-render, djust:
+### `dj-root` (Optional)
+
+This attribute explicitly marks the root element of the VDOM tree. When an event handler updates state and triggers a re-render, djust:
 
 1. Renders the template on the server with the new state
 2. Diffs the new HTML against the old HTML using the Rust VDOM engine
 3. Sends only the changed patches to the client
 4. Applies the patches to the DOM
 
-The VDOM engine needs to know which element is the root to diff against. That element is the one with `data-djust-root`.
+**You rarely need this attribute.** Only use it when:
+- You have static wrapper elements that should not be diffed (performance optimization)
+- You need to exclude metadata or navigation from the update boundary
 
-```html
-<div data-djust-view="myapp.views.CounterView" data-djust-root>
-    <p>Count: {{ count }}</p>
-    <button dj-click="increment">+1</button>
-</div>
-```
+In 99% of cases, just use `dj-view` and let the framework infer the root automatically.
 
 ---
 
-## Why Both Are Needed
+## Common Patterns
 
-| Without | What Happens |
-|---------|-------------|
-| Missing `data-djust-view` | No WebSocket connection. Page is static HTML. Clicks on `dj-click` buttons do nothing. |
-| Missing `data-djust-root` | WebSocket connects, events fire, state updates on server. But the client cannot apply patches to the DOM. You will see **DJE-053: No DOM changes** warnings in the server logs. |
-
-Both are required for the full reactive cycle: events -> server state change -> VDOM diff -> DOM patches.
-
----
-
-## Common Error: Missing `data-djust-root`
-
-This is the most common template mistake. The symptom: clicking buttons fires events (you can see WebSocket traffic in browser DevTools), but the UI never updates. In your server logs, you will see:
-
-```
-WARNING [djust] Event 'increment' on CounterView produced no DOM changes (DJE-053).
-The modified state may be outside <div data-djust-root>.
-```
-
-**Wrong** -- missing `data-djust-root`:
+### Pattern 1: Simple View (Recommended)
 
 ```html
-<!-- WRONG: missing data-djust-root -->
-<div data-djust-view="myapp.views.CounterView">
+<div dj-view="myapp.views.CounterView">
     <p>Count: {{ count }}</p>
     <button dj-click="increment">+1</button>
 </div>
 ```
 
-**Correct**:
+**When to use**: Almost always. The entire element updates on state changes.
+
+### Pattern 2: Explicit Root (Rare)
 
 ```html
-<!-- CORRECT: both attributes present -->
-<div data-djust-view="myapp.views.CounterView" data-djust-root>
-    <p>Count: {{ count }}</p>
-    <button dj-click="increment">+1</button>
+<div dj-view="myapp.views.DashboardView">
+    <nav class="sidebar">
+        <!-- Static navigation, never changes -->
+        <ul>...</ul>
+    </nav>
+
+    <div dj-root>
+        <!-- Only dashboard content updates -->
+        <h1>{{ title }}</h1>
+        <p>{{ content }}</p>
+    </div>
 </div>
 ```
+
+**When to use**: Only when profiling shows wrapper diffing is expensive, or when you have large static sections that never change.
 
 ---
 
@@ -122,13 +137,13 @@ The base template provides the overall page structure. It does **not** need djus
 
 ### LiveView template (`counter.html`)
 
-The LiveView template extends the base and puts both attributes on its root element inside the `content` block:
+The LiveView template extends the base and puts `dj-view` on its root element inside the `content` block:
 
 ```html
 {% extends "base.html" %}
 
 {% block content %}
-<div data-djust-view="myapp.views.CounterView" data-djust-root>
+<div dj-view="myapp.views.CounterView">
     <h1>Counter</h1>
     <p>Count: {{ count }}</p>
     <button dj-click="increment">+1</button>
@@ -138,14 +153,14 @@ The LiveView template extends the base and puts both attributes on its root elem
 
 ### Important: State outside the VDOM root
 
-Only content **inside** the `data-djust-root` element is tracked by the VDOM. If your event handler modifies state that is rendered in `base.html` (outside the root), the VDOM diff will not detect the change.
+Only content **inside** the VDOM root is tracked by the VDOM. If your event handler modifies state that is rendered in `base.html` (outside the root), the VDOM diff will not detect the change.
 
 **Wrong** -- state rendered outside the root:
 
 ```html
 <!-- base.html -->
 <body>
-    <!-- This is OUTSIDE data-djust-root -- VDOM cannot update it -->
+    <!-- This is OUTSIDE dj-view -- VDOM cannot update it -->
     <nav>
         {% if show_admin_menu %}
             <a href="/admin">Admin</a>
@@ -173,12 +188,10 @@ Relevant checks:
 
 | Check ID | What It Detects |
 |----------|-----------------|
-| `djust.T002` | LiveView template missing `data-djust-root` attribute |
+| `djust.T002` | LiveView template missing `dj-view` or `dj-root` attribute |
 | `djust.T001` | Deprecated `@click` syntax (should be `dj-click`) |
 | `djust.T003` | Wrapper template using `{% include %}` instead of `{{ liveview_content\|safe }}` |
 | `djust.T004` | `document.addEventListener` for djust events (should be `window`) |
-
-The T002 check looks for templates that contain `dj-click`, `dj-input`, `dj-change`, `dj-submit`, or `dj-model` attributes but are missing `data-djust-root`. Templates that use `{% extends %}` are excluded from this check since the root is typically in a parent template.
 
 ---
 
@@ -187,7 +200,7 @@ The T002 check looks for templates that contain `dj-click`, `dj-input`, `dj-chan
 ### Minimal LiveView Template
 
 ```html
-<div data-djust-view="myapp.views.HelloView" data-djust-root>
+<div dj-view="myapp.views.HelloView">
     <p>Hello, {{ name }}!</p>
     <input dj-model="name" type="text" placeholder="Enter your name">
 </div>
@@ -199,7 +212,7 @@ The T002 check looks for templates that contain `dj-click`, `dj-input`, `dj-chan
 {% extends "base.html" %}
 
 {% block content %}
-<div data-djust-view="myapp.views.TodoView" data-djust-root>
+<div dj-view="myapp.views.TodoView">
     <h2>Todo List</h2>
     <ul>
         {% for item in items %}
@@ -221,17 +234,17 @@ The T002 check looks for templates that contain `dj-click`, `dj-input`, `dj-chan
 
 ### Multiple LiveViews on One Page
 
-Each LiveView needs its own root element with both attributes:
+Each LiveView needs its own root element with `dj-view`:
 
 ```html
 {% extends "base.html" %}
 
 {% block content %}
-<div data-djust-view="myapp.views.HeaderView" data-djust-root>
+<div dj-view="myapp.views.HeaderView">
     <h1>Dashboard for {{ user.username }}</h1>
 </div>
 
-<div data-djust-view="myapp.views.MetricsView" data-djust-root>
+<div dj-view="myapp.views.MetricsView">
     <p>Active users: {{ active_count }}</p>
 </div>
 {% endblock %}

@@ -24,7 +24,7 @@ class TestFormView(FormMixin, LiveView):
 
     form_class = TestForm
     template = """
-    <div data-djust-root>
+    <div dj-root>
         <form dj-submit="submit_form">
             <input type="text" name="first_name" value="{{ form_data.first_name }}" />
             <input type="text" name="last_name" value="{{ form_data.last_name }}" />
@@ -332,7 +332,7 @@ class TestFormWithInitialValues:
 
         class ViewWithInitial(FormMixin, LiveView):
             form_class = FormWithInitial
-            template = "<div data-djust-root>{{ form_data.name }}</div>"
+            template = "<div dj-root>{{ form_data.name }}</div>"
 
         view = ViewWithInitial()
         view.get(get_request)
@@ -351,7 +351,7 @@ class TestFormWithInitialValues:
 
         class ViewWithInitial(FormMixin, LiveView):
             form_class = FormWithInitial
-            template = "<div data-djust-root>{{ form_data.name }}</div>"
+            template = "<div dj-root>{{ form_data.name }}</div>"
 
         view = ViewWithInitial()
         view.get(get_request)

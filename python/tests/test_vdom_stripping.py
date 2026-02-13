@@ -109,7 +109,7 @@ class TestVDOMBaselineAlignment:
     def test_template_stripped_before_baseline(self):
         """Test that template stripping preserves structure while removing comments"""
         view = TestLiveView()
-        html = """<div data-djust-root>
+        html = """<div dj-root>
             <!-- Component Comment -->
             <nav>Content</nav>
         </div>"""
@@ -121,7 +121,7 @@ class TestVDOMBaselineAlignment:
         assert "Component Comment" not in stripped
         # Content preserved (whitespace collapsed)
         assert "<nav>Content</nav>" in stripped
-        assert "data-djust-root" in stripped
+        assert "dj-root" in stripped
 
     def test_template_stripping_idempotent(self):
         """Test that stripping is idempotent (multiple calls produce same result)"""

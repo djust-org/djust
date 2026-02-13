@@ -446,18 +446,18 @@ class PublicCounterView(LiveView):
 
 ---
 
-### T002: Missing data-djust-root
+### T002: Missing dj-root
 
 **Severity**: Info
 
-**What causes it**: A template contains djust directives (`dj-click`, `dj-input`, `dj-change`, `dj-submit`, `dj-model`) but no element has the `data-djust-root` attribute. The check skips templates that use `{% extends %}` since the root may be in a parent template.
+**What causes it**: A template contains djust directives (`dj-click`, `dj-input`, `dj-change`, `dj-submit`, `dj-model`) but no element has the `dj-root` attribute. The check skips templates that use `{% extends %}` since the root may be in a parent template.
 
 **What you see**: Events fire but the DOM never updates. Server logs show DJE-053 warnings.
 
-**Fix**: Add `data-djust-root` to the root element of your LiveView template:
+**Fix**: Add `dj-root` to the root element of your LiveView template:
 
 ```html
-<div data-djust-view="myapp.views.MyView" data-djust-root>
+<div dj-view="myapp.views.MyView" dj-root>
     <!-- content -->
 </div>
 ```
@@ -645,28 +645,28 @@ These errors appear in server logs during WebSocket communication and VDOM diffi
 
 **Severity**: Warning
 
-**What causes it**: An event handler modified state and triggered a re-render, but the VDOM diff produced zero patches. This usually means the modified state is rendered **outside** the `data-djust-root` element (e.g., in `base.html`).
+**What causes it**: An event handler modified state and triggered a re-render, but the VDOM diff produced zero patches. This usually means the modified state is rendered **outside** the `dj-root` element (e.g., in `base.html`).
 
 **What you see**: In server logs:
 
 ```
 WARNING [djust] Event 'toggle_sidebar' on DashboardView produced no DOM changes (DJE-053).
-The modified state may be outside <div data-djust-root>.
+The modified state may be outside <div dj-root>.
 ```
 
 The page does not update even though the event handler ran and changed state.
 
 **Common causes**:
 
-1. **State rendered outside the VDOM root**: The `{% if show_panel %}` block is in `base.html` while `data-djust-root` is in the child template.
-2. **Missing `data-djust-root`**: The attribute is not on any element, so the VDOM has no root to diff against.
+1. **State rendered outside the VDOM root**: The `{% if show_panel %}` block is in `base.html` while `dj-root` is in the child template.
+2. **Missing `dj-root`**: The attribute is not on any element, so the VDOM has no root to diff against.
 3. **Event handler changes state that does not affect the template**: The handler updates a variable that is not used in the template.
 
 **Fix**:
 
-1. Move the affected template code inside the `data-djust-root` element
+1. Move the affected template code inside the `dj-root` element
 2. Use `push_event` for UI state changes that live outside the VDOM root
-3. Check that `data-djust-root` is present on the root element
+3. Check that `dj-root` is present on the root element
 
 **Related**: [Template Requirements Guide](template-requirements.md)
 

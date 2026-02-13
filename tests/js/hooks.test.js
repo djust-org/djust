@@ -11,7 +11,7 @@ const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf
 function createEnv(bodyHtml = '') {
     const dom = new JSDOM(
         `<!DOCTYPE html><html><body>
-            <div data-djust-root>
+            <div dj-root>
                 ${bodyHtml}
             </div>
         </body></html>`,
@@ -34,7 +34,7 @@ function createEnv(bodyHtml = '') {
 describe('hooks', () => {
     describe('mountHooks', () => {
         it('calls mounted() on hook elements', () => {
-            const { window, document } = createEnv('<div dj-hook="MyHook" data-djust-view="test"></div>');
+            const { window, document } = createEnv('<div dj-hook="MyHook" dj-view="test"></div>');
             const mountedFn = vi.fn();
 
             window.djust.hooks = {
@@ -47,7 +47,7 @@ describe('hooks', () => {
         });
 
         it('does not remount already mounted hooks', () => {
-            const { window, document } = createEnv('<div dj-hook="MyHook" data-djust-view="test"></div>');
+            const { window, document } = createEnv('<div dj-hook="MyHook" dj-view="test"></div>');
             const mountedFn = vi.fn();
 
             window.djust.hooks = {
@@ -61,7 +61,7 @@ describe('hooks', () => {
         });
 
         it('sets el property on hook instance', () => {
-            const { window, document } = createEnv('<div dj-hook="MyHook" data-djust-view="test"></div>');
+            const { window, document } = createEnv('<div dj-hook="MyHook" dj-view="test"></div>');
             let instanceEl = null;
 
             window.djust.hooks = {
@@ -79,7 +79,7 @@ describe('hooks', () => {
 
     describe('updateHooks', () => {
         it('calls updated() for existing hook elements', () => {
-            const { window, document } = createEnv('<div dj-hook="MyHook" data-djust-view="test"></div>');
+            const { window, document } = createEnv('<div dj-hook="MyHook" dj-view="test"></div>');
             const updatedFn = vi.fn();
 
             window.djust.hooks = {
@@ -95,7 +95,7 @@ describe('hooks', () => {
         });
 
         it('calls destroyed() for removed elements', () => {
-            const { window, document } = createEnv('<div dj-hook="MyHook" data-djust-view="test"></div>');
+            const { window, document } = createEnv('<div dj-hook="MyHook" dj-view="test"></div>');
             const destroyedFn = vi.fn();
 
             window.djust.hooks = {
@@ -116,7 +116,7 @@ describe('hooks', () => {
         });
 
         it('mounts new elements added after initial mount', () => {
-            const { window, document } = createEnv('<div id="container" data-djust-view="test"></div>');
+            const { window, document } = createEnv('<div id="container" dj-view="test"></div>');
             const mountedFn = vi.fn();
 
             window.djust.hooks = {
@@ -140,7 +140,7 @@ describe('hooks', () => {
 
     describe('notifyHooksDisconnected', () => {
         it('calls disconnected() on all active hooks', () => {
-            const { window, document } = createEnv('<div dj-hook="MyHook" data-djust-view="test"></div>');
+            const { window, document } = createEnv('<div dj-hook="MyHook" dj-view="test"></div>');
             const disconnectedFn = vi.fn();
 
             window.djust.hooks = {
@@ -156,7 +156,7 @@ describe('hooks', () => {
 
     describe('notifyHooksReconnected', () => {
         it('calls reconnected() on all active hooks', () => {
-            const { window, document } = createEnv('<div dj-hook="MyHook" data-djust-view="test"></div>');
+            const { window, document } = createEnv('<div dj-hook="MyHook" dj-view="test"></div>');
             const reconnectedFn = vi.fn();
 
             window.djust.hooks = {
@@ -172,7 +172,7 @@ describe('hooks', () => {
 
     describe('dispatchPushEventToHooks', () => {
         it('delivers events to hooks that registered handleEvent', () => {
-            const { window, document } = createEnv('<div dj-hook="MyHook" data-djust-view="test"></div>');
+            const { window, document } = createEnv('<div dj-hook="MyHook" dj-view="test"></div>');
             const receivedPayloads = [];
 
             window.djust.hooks = {
@@ -193,7 +193,7 @@ describe('hooks', () => {
         });
 
         it('does not deliver events to hooks without matching handler', () => {
-            const { window, document } = createEnv('<div dj-hook="MyHook" data-djust-view="test"></div>');
+            const { window, document } = createEnv('<div dj-hook="MyHook" dj-view="test"></div>');
             const receivedPayloads = [];
 
             window.djust.hooks = {
@@ -216,8 +216,8 @@ describe('hooks', () => {
     describe('destroyAllHooks', () => {
         it('calls destroyed() on all hooks and clears activeHooks', () => {
             const { window, document } = createEnv(`
-                <div dj-hook="HookA" data-djust-view="test"></div>
-                <div dj-hook="HookB" data-djust-view="test"></div>
+                <div dj-hook="HookA" dj-view="test"></div>
+                <div dj-hook="HookB" dj-view="test"></div>
             `);
             const destroyedA = vi.fn();
             const destroyedB = vi.fn();
@@ -240,7 +240,7 @@ describe('hooks', () => {
 
     describe('_activeHooks', () => {
         it('tracks mounted hook instances', () => {
-            const { window, document } = createEnv('<div dj-hook="MyHook" data-djust-view="test"></div>');
+            const { window, document } = createEnv('<div dj-hook="MyHook" dj-view="test"></div>');
 
             window.djust.hooks = {
                 MyHook: { mounted() {} },
@@ -259,7 +259,7 @@ describe('hooks', () => {
 
     describe('pushEvent API', () => {
         it('instance has pushEvent method', () => {
-            const { window, document } = createEnv('<div dj-hook="MyHook" data-djust-view="test"></div>');
+            const { window, document } = createEnv('<div dj-hook="MyHook" dj-view="test"></div>');
             let hasPushEvent = false;
 
             window.djust.hooks = {
@@ -273,7 +273,7 @@ describe('hooks', () => {
         });
 
         it('sends params (not data) in the WS message', () => {
-            const { window, document } = createEnv('<div dj-hook="MyHook" data-djust-view="test"></div>');
+            const { window, document } = createEnv('<div dj-hook="MyHook" dj-view="test"></div>');
             const sentMessages = [];
             let hookInstance = null;
 

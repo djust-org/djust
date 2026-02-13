@@ -13,7 +13,7 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
     beforeEach(() => {
         dom = new JSDOM(
             `<!DOCTYPE html><html><body>
-                <div data-djust-root="true" id="root">
+                <div dj-root="true" id="root">
                     <button dj-click="delete_todo(1)" data-dj-id="b1">Delete 1</button>
                     <button dj-click="delete_todo(2)" data-dj-id="b2">Delete 2</button>
                 </div>

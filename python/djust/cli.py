@@ -620,7 +620,7 @@ class {class_name}(LiveView):
     # template
     _write(
         os.path.join(template_dir, "index.html"),
-        f"""<div data-djust-view="{name}.views.{class_name}">
+        f"""<div dj-view="{name}.views.{class_name}">
   <h1>{name.replace("_", " ").title()}</h1>
   <p>Count: {{{{ count }}}}</p>
   <button dj-click="increment">+</button>

@@ -23,7 +23,7 @@ PANEL_MARKER = 'class="panel"'
 class ConditionalContentView(LiveView):
     """Test view with conditional content that can be shown/hidden."""
 
-    template = """<div data-djust-root>
+    template = """<div dj-root>
     <div class="container">
         <button dj-click="toggle_panel">Toggle</button>
         {% if show_panel %}
@@ -184,7 +184,7 @@ def test_conditional_content_with_whitespace():
         """Test view with whitespace around conditional content."""
 
         # Note the blank line between </button> and {% if %}
-        template = """<div data-djust-root>
+        template = """<div dj-root>
     <div class="model-config">
         <button dj-click="toggle">Toggle</button>
 
@@ -252,7 +252,7 @@ def test_conditional_content_with_conditional_class():
         """Test view with conditional class on button + conditional sibling."""
 
         # Matches djust_chat's model-config structure more closely
-        template = """<div data-djust-root>
+        template = """<div dj-root>
     <div class="model-config">
         <button
             class="btn btn--icon {% if show_panel %}btn--active{% endif %}"
@@ -340,7 +340,7 @@ def test_conditional_content_with_svg_icon():
     class SvgIconView(LiveView):
         """Test view with SVG icon inside toggle button."""
 
-        template = """<div data-djust-root>
+        template = """<div dj-root>
     <div class="model-config">
         <button
             class="btn btn--icon {% if show_panel %}btn--active{% endif %}"
@@ -427,7 +427,7 @@ def test_multiple_sibling_conditionals():
     class MultipleSiblingConditionalsView(LiveView):
         """Test view with multiple sibling conditional blocks."""
 
-        template = """<div data-djust-root>
+        template = """<div dj-root>
     <main class="chat-main">
         <header class="chat-header">
             <div class="header__controls">
@@ -537,13 +537,13 @@ def test_deeply_nested_conditional():
     """Test conditional content in deeply nested structure.
 
     This mimics djust_chat's actual nesting:
-    div[data-djust-root] > main > header > div.controls > div.model-config > {% if %}
+    div[dj-root] > main > header > div.controls > div.model-config > {% if %}
     """
 
     class DeeplyNestedView(LiveView):
         """Test view with deeply nested conditional."""
 
-        template = """<div data-djust-root>
+        template = """<div dj-root>
     <main class="chat-main">
         <header class="chat-header">
             <div class="chat-header__controls">

@@ -11,7 +11,7 @@ const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf
 function createEnv(bodyHtml = '') {
     const dom = new JSDOM(
         `<!DOCTYPE html><html><body>
-            <div data-djust-root>
+            <div dj-root>
                 ${bodyHtml}
             </div>
         </body></html>`,

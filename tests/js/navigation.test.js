@@ -11,7 +11,7 @@ const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf
 function createEnv(bodyHtml = '') {
     const dom = new JSDOM(
         `<!DOCTYPE html><html><body>
-            <div data-djust-root>
+            <div dj-root>
                 ${bodyHtml}
             </div>
         </body></html>`,
@@ -136,15 +136,15 @@ describe('navigation', () => {
                 '/items/': 'myapp.views.ItemListView',
             };
 
-            // Remove any data-djust-view containers
-            const containers = window.document.querySelectorAll('[data-djust-view]');
-            containers.forEach(c => c.removeAttribute('data-djust-view'));
+            // Remove any dj-view containers
+            const containers = window.document.querySelectorAll('[dj-view]');
+            containers.forEach(c => c.removeAttribute('dj-view'));
 
             expect(window.djust.navigation.resolveViewPath('/unknown/')).toBeNull();
         });
 
-        it('falls back to data-djust-view attribute', () => {
-            const { window, document } = createEnv('<div data-djust-view="myapp.views.CurrentView"></div>');
+        it('falls back to dj-view attribute', () => {
+            const { window, document } = createEnv('<div dj-view="myapp.views.CurrentView"></div>');
 
             window.djust._routeMap = {};
 

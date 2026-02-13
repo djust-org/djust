@@ -291,7 +291,7 @@ Mismatch between browser DOM and Rust VDOM root elements when using Django templ
 
 **Browser DOM** (from GET response):
 ```html
-<div data-djust-root>
+<div dj-root>
     <!-- Hero Section -->
     <div class="hero-section">...
 ```
@@ -302,15 +302,15 @@ Mismatch between browser DOM and Rust VDOM root elements when using Django templ
 <div class="hero-section">...
 ```
 
-The browser had the `<div data-djust-root>` wrapper div, but Rust's VDOM didn't. This caused VDOM diffing to fail because the root elements didn't match, forcing the system to fall back to sending full HTML.
+The browser had the `<div dj-root>` wrapper div, but Rust's VDOM didn't. This caused VDOM diffing to fail because the root elements didn't match, forcing the system to fall back to sending full HTML.
 
 ## Solution
-Ensured Rust template includes the same `<div data-djust-root>` wrapper that the browser sees:
+Ensured Rust template includes the same `<div dj-root>` wrapper that the browser sees:
 
 ### 1. Updated Content Template
 `examples/demo_project/templates/kitchen_sink_content.html`:
 ```html
-<div data-djust-root>
+<div dj-root>
     <!-- Hero Section -->
     <div class="hero-section">
         ...
@@ -323,26 +323,26 @@ Modified `python/djust/live_view.py:290` to inject content without double-wrappi
 
 **Before:**
 ```python
-html = html.replace('<div data-djust-root></div>',
-                   f'<div data-djust-root>{liveview_content}</div>')
+html = html.replace('<div dj-root></div>',
+                   f'<div dj-root>{liveview_content}</div>')
 ```
 
 **After:**
 ```python
-# Note: liveview_content already includes <div data-djust-root>...</div>
-html = html.replace('<div data-djust-root></div>', liveview_content)
+# Note: liveview_content already includes <div dj-root>...</div>
+html = html.replace('<div dj-root></div>', liveview_content)
 ```
 
 ## Verification
 After the fix:
-- ✅ Only ONE `<div data-djust-root>` in the DOM
+- ✅ Only ONE `<div dj-root>` in the DOM
 - ✅ Browser DOM and Rust VDOM have identical root structure
 - ✅ VDOM patches can be calculated correctly
 - ✅ Variables render with actual values (`Button click count: 0`)
 - ✅ Components render correctly with Bootstrap classes and event handlers
 
 ## Files Modified
-- `examples/demo_project/templates/kitchen_sink_content.html` - Added `<div data-djust-root>` wrapper
+- `examples/demo_project/templates/kitchen_sink_content.html` - Added `<div dj-root>` wrapper
 - `python/djust/live_view.py:290` - Updated GET handler to not double-wrap
 
 ## Testing
@@ -357,13 +357,13 @@ To verify patches are working:
 This fix establishes the proper pattern for using Django template wrappers with LiveView:
 
 **Rust Content Template (`*_content.html`):**
-- Must include `<div data-djust-root>` wrapper
+- Must include `<div dj-root>` wrapper
 - Contains all reactive content
 - Uses `{{ var }}` syntax (Rust template)
 
 **Django Wrapper Template (`*_page.html`):**
 - Extends `base.html` for layout/nav/styles
-- Contains placeholder `<div data-djust-root></div>`
+- Contains placeholder `<div dj-root></div>`
 - Replaced with Rust content during GET request
 
 **GET Handler:**
@@ -400,7 +400,7 @@ The Rust VDOM parser (`crates/djust_vdom/src/parser.rs`) filters out:
 
 **Example Rust VDOM structure:**
 ```
-div[data-djust-root]
+div[dj-root]
   [0] <nav>          ← First element child
   [1] <button>       ← Second element child
   [2] <section>      ← Third element child
@@ -414,7 +414,7 @@ The browser DOM includes ALL nodes:
 
 **Example Browser DOM structure:**
 ```
-div[data-djust-root]
+div[dj-root]
   [0] #text (whitespace)
   [1] <!-- Navbar Component -->
   [2] #text (whitespace)
@@ -437,7 +437,7 @@ div[data-djust-root]
 Running DOM inspection in the browser:
 
 ```javascript
-let root = document.querySelector('[data-djust-root]');
+let root = document.querySelector('[dj-root]');
 console.log('Total children:', root.childNodes.length);  // 17
 console.log('Child 0:', root.childNodes[0]);  // #text
 console.log('Child 1:', root.childNodes[1]);  // <!-- Navbar Component -->
@@ -544,7 +544,7 @@ html, patches, version = await sync_to_async(self.view_instance.render_with_diff
 # Strip comments and normalize whitespace to match Rust VDOM parser
 html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
 
-# Extract innerHTML of [data-djust-root] for WebSocket client
+# Extract innerHTML of [dj-root] for WebSocket client
 html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
 ```
 
@@ -569,7 +569,7 @@ Updated `python/djust/websocket.py` lines 326-330:
 # No patches - send full HTML update for views with dynamic templates
 # Strip comments and whitespace to match Rust VDOM parser
 html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
-# Extract innerHTML to avoid nesting <div data-djust-root> divs
+# Extract innerHTML to avoid nesting <div dj-root> divs
 html_content = await sync_to_async(self.view_instance._extract_liveview_content)(html)
 ```
 
@@ -584,7 +584,7 @@ The `get_template()` method ensures proper structure:
 4. Ensures server VDOM baseline matches client DOM from the start
 
 The `_extract_liveview_root_with_wrapper()` method (lines 489-549):
-1. Finds `<div data-djust-root...>` opening tag
+1. Finds `<div dj-root...>` opening tag
 2. Counts nested divs to find matching closing tag
 3. Returns the wrapper div AND its content (not just innerHTML)
 
@@ -723,7 +723,7 @@ Template (with comments)
    - Catches edge cases where dynamic content might add comments
 
 4. **Template Extraction** (`get_template()`):
-   - Extracts `[data-djust-root]` div WITH wrapper
+   - Extracts `[dj-root]` div WITH wrapper
    - Strips extracted content before Rust VDOM baseline created
    - Ensures server VDOM and client VDOM track same root element
    - Enables `getNodeByPath([])` to work correctly

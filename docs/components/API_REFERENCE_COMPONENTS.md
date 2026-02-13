@@ -780,27 +780,27 @@ Lazy hydration defers the WebSocket connection until:
 
 ### Usage
 
-Add the `data-djust-lazy` attribute to any LiveView element:
+Add the `dj-lazy` attribute to any LiveView element:
 
 ```html
 <!-- Hydrate when element enters viewport (default) -->
-<div data-djust-view="my_view" data-djust-lazy>
+<div dj-view="my_view" dj-lazy>
     <!-- Static placeholder content -->
     <div class="skeleton">Loading...</div>
 </div>
 
 <!-- Hydrate on first click -->
-<div data-djust-view="my_view" data-djust-lazy="click">
+<div dj-view="my_view" dj-lazy="click">
     <button>Click to activate</button>
 </div>
 
 <!-- Hydrate on hover -->
-<div data-djust-view="my_view" data-djust-lazy="hover">
+<div dj-view="my_view" dj-lazy="hover">
     <span>Hover to load details</span>
 </div>
 
 <!-- Hydrate when browser is idle -->
-<div data-djust-view="my_view" data-djust-lazy="idle">
+<div dj-view="my_view" dj-lazy="idle">
     <!-- Low-priority content -->
 </div>
 ```
@@ -860,26 +860,26 @@ window.djust.lazyHydration.hydrateAll();
 
 ```html
 <!-- Critical widget - loads immediately -->
-<div data-djust-view="sales_summary">
+<div dj-view="sales_summary">
     {{ sales_data }}
 </div>
 
 <!-- Below-fold widgets - lazy loaded -->
-<div data-djust-view="recent_orders" data-djust-lazy>
+<div dj-view="recent_orders" dj-lazy>
     <div class="widget-skeleton">
         <div class="skeleton-line"></div>
         <div class="skeleton-line"></div>
     </div>
 </div>
 
-<div data-djust-view="inventory_alerts" data-djust-lazy>
+<div dj-view="inventory_alerts" dj-lazy>
     <div class="widget-skeleton">Loading alerts...</div>
 </div>
 
 <!-- Click-to-expand section -->
 <details>
     <summary>Advanced Analytics</summary>
-    <div data-djust-view="analytics_chart" data-djust-lazy="click">
+    <div dj-view="analytics_chart" dj-lazy="click">
         <p>Click to load chart...</p>
     </div>
 </details>

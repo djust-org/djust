@@ -149,7 +149,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 window.location.reload();
                 return false;
             }
-            const newRoot = doc.querySelector('[data-djust-root]') || doc.body;
+            const newRoot = doc.querySelector('[dj-root]') || doc.body;
 
             // Handle dj-update="append|prepend|ignore" for efficient list updates
             // This preserves existing DOM elements and only adds/updates new content
@@ -170,7 +170,7 @@ function handleServerResponse(data, eventName, triggerElement) {
         // Handle form reset
         if (data.reset_form) {
             if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
-            const form = document.querySelector('[data-djust-root] form');
+            const form = document.querySelector('[dj-root] form');
             if (form) form.reset();
         }
 

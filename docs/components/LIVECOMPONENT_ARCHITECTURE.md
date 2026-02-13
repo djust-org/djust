@@ -155,7 +155,7 @@ self.pagination = PaginationComponent(total=100, per_page=10)
 │                   Browser (Client)                            │
 │  ┌────────────────────────────────────────────────────────┐  │
 │  │  DOM Tree                                              │  │
-│  │    <div data-djust-root>                           │  │
+│  │    <div dj-root>                           │  │
 │  │      <h1>Counter: 5</h1>                              │  │
 │  │      <span class="badge">5</span>  ← Simple Component │  │
 │  │      <div data-livecomponent-id="tabs_abc123">        │  │
@@ -244,7 +244,7 @@ This creates **separate VDOM trees**:
 
 ```
 Parent VDOM Tree #1:
-  Element(div, data-djust-root)
+  Element(div, dj-root)
     ├─ Element(h1)
     │   └─ Text("Counter: 5")
     └─ Element(div, data-livecomponent-id="tabs")  ← Boundary marker

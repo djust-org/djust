@@ -120,11 +120,11 @@
             }
         }
 
-        // Fallback: check the current container's data-djust-view
+        // Fallback: check the current container's dj-view
         // (only works for live_patch, not cross-view navigation)
-        const container = document.querySelector('[data-djust-view]');
+        const container = document.querySelector('[dj-view]');
         if (container) {
-            return container.dataset.djustView;
+            return container.getAttribute('dj-view');
         }
 
         return null;

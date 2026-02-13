@@ -52,7 +52,7 @@ class TestLiveViewInclude:
 
         class MyView(LiveView):
             template = """
-            <div data-djust-root>
+            <div dj-root>
                 {% include "_header.html" %}
                 <main>{{ content }}</main>
             </div>
@@ -76,7 +76,7 @@ class TestLiveViewInclude:
 
         class MyView(LiveView):
             template = """
-            <div data-djust-root>
+            <div dj-root>
                 {% include "_header.html" %}
                 {% include "_footer.html" %}
             </div>
@@ -220,7 +220,7 @@ class TestUnsupportedTagWarning:
 
         class MyView(LiveView):
             template = """
-            <div data-djust-root>
+            <div dj-root>
                 {% spaceless %}content{% endspaceless %}
             </div>
             """

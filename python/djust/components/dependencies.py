@@ -82,7 +82,7 @@ DEPENDENCY_REGISTRY: Dict[str, Dependency] = {
             });
         });
 
-        const liveviewRoot = document.querySelector('[data-djust-root]');
+        const liveviewRoot = document.querySelector('[dj-root]');
         if (liveviewRoot) {
             observer.observe(liveviewRoot, {
                 childList: true,

@@ -15,7 +15,7 @@ const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf
 function createDom() {
     const dom = new JSDOM(
         '<!DOCTYPE html><html><body>' +
-        '<div data-djust-root data-liveview-root data-djust-view="test.View">' +
+        '<div dj-root dj-liveview-root dj-view="test.View">' +
         '<p id="content">original</p>' +
         '</div></body></html>',
         { url: 'http://localhost', runScripts: 'dangerously' }
@@ -75,12 +75,12 @@ describe('VDOM patch failure recovery', () => {
             const ws = dom.window.djust.liveViewInstance;
             expect(ws).toBeDefined();
 
-            const root = dom.window.document.querySelector('[data-djust-root]');
+            const root = dom.window.document.querySelector('[dj-root]');
             expect(root.querySelector('#content').textContent).toBe('original');
 
             ws.handleMessage({
                 type: 'html_recovery',
-                html: '<div data-djust-root><p id="content">recovered</p></div>',
+                html: '<div dj-root><p id="content">recovered</p></div>',
                 version: 5,
             });
 
@@ -92,12 +92,12 @@ describe('VDOM patch failure recovery', () => {
             await new Promise(r => setTimeout(r, 10));
 
             const ws = dom.window.djust.liveViewInstance;
-            const root = dom.window.document.querySelector('[data-djust-root]');
+            const root = dom.window.document.querySelector('[dj-root]');
             const originalP = root.querySelector('#content');
 
             ws.handleMessage({
                 type: 'html_recovery',
-                html: '<div data-djust-root><p id="content">updated</p></div>',
+                html: '<div dj-root><p id="content">updated</p></div>',
                 version: 2,
             });
 
@@ -112,11 +112,11 @@ describe('VDOM patch failure recovery', () => {
             await new Promise(r => setTimeout(r, 10));
 
             const ws = dom.window.djust.liveViewInstance;
-            const root = dom.window.document.querySelector('[data-djust-root]');
+            const root = dom.window.document.querySelector('[dj-root]');
 
             ws.handleMessage({
                 type: 'html_recovery',
-                html: '<div data-djust-root><p id="content">kept</p><span id="new">added</span></div>',
+                html: '<div dj-root><p id="content">kept</p><span id="new">added</span></div>',
                 version: 3,
             });
 
@@ -136,7 +136,7 @@ describe('VDOM patch failure recovery', () => {
             // Simulate receiving a mount response to initialize version
             ws.handleMessage({
                 type: 'html_recovery',
-                html: '<div data-djust-root><p>init</p></div>',
+                html: '<div dj-root><p>init</p></div>',
                 version: 1,
             });
 
@@ -164,12 +164,12 @@ describe('VDOM patch failure recovery', () => {
             await new Promise(r => setTimeout(r, 10));
 
             const ws = dom.window.djust.liveViewInstance;
-            const root = dom.window.document.querySelector('[data-djust-root]');
+            const root = dom.window.document.querySelector('[dj-root]');
 
             // 1. Initialize with html_recovery
             ws.handleMessage({
                 type: 'html_recovery',
-                html: '<div data-djust-root><p id="content">v1</p></div>',
+                html: '<div dj-root><p id="content">v1</p></div>',
                 version: 1,
             });
             expect(root.querySelector('#content').textContent).toBe('v1');
@@ -189,7 +189,7 @@ describe('VDOM patch failure recovery', () => {
             // 3. Server responds with html_recovery
             ws.handleMessage({
                 type: 'html_recovery',
-                html: '<div data-djust-root><p id="content">v2-recovered</p></div>',
+                html: '<div dj-root><p id="content">v2-recovered</p></div>',
                 version: 2,
             });
 

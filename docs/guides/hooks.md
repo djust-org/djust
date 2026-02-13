@@ -106,7 +106,7 @@ Both registries are merged, with `window.djust.hooks` taking precedence.
 | Property | Type | Description |
 |----------|------|-------------|
 | `this.el` | `HTMLElement` | The DOM element with `dj-hook`. Updated automatically if the element is replaced during a patch. |
-| `this.viewName` | `string` | The LiveView name from the closest `[data-djust-view]` ancestor. |
+| `this.viewName` | `string` | The LiveView name from the closest `[dj-view]` ancestor. |
 
 ### Hook Instance Methods
 

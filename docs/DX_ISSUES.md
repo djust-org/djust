@@ -42,7 +42,7 @@ Each issue should lead to either: a better error message, a `djust_checks` syste
 **Severity**: High — causes page mangle (full HTML replacement)
 **Status**: Fixed in framework
 
-**What happens**: When an event handler modifies state that's rendered outside `<div data-djust-root>` (e.g., in `base.html` while VDOM root is in `content.html`), the Rust VDOM diff returns 0 patches. Previously, both "first render" and "0 changes" returned `None`, so Python fell through to sending full HTML — which mangled the page.
+**What happens**: When an event handler modifies state that's rendered outside `<div dj-root>` (e.g., in `base.html` while VDOM root is in `content.html`), the Rust VDOM diff returns 0 patches. Previously, both "first render" and "0 changes" returned `None`, so Python fell through to sending full HTML — which mangled the page.
 
 **How developer encounters it**: Template inheritance with state split between base template and child template. Event handler updates state used in the base template (outside the VDOM root). Page visually breaks on interaction.
 
@@ -54,7 +54,7 @@ Each issue should lead to either: a better error message, a `djust_checks` syste
 
 ---
 
-## DX-004: State outside `data-djust-root` causes silent DOM mangle
+## DX-004: State outside `dj-root` causes silent DOM mangle
 
 **Severity**: High — page breaks with no clear error
 **Status**: Mitigated (runtime warning added)
@@ -66,7 +66,7 @@ Each issue should lead to either: a better error message, a `djust_checks` syste
 **Resolution**:
 - **Runtime warning**: Python now logs a warning when 0-patch diff is detected (DX-003 fix)
 - **Recommended pattern**: Use `push_event` for UI state that's outside the VDOM root
-- **Future**: Consider a V0xx check that inspects `get_context_data()` keys vs variables inside `data-djust-root`
+- **Future**: Consider a V0xx check that inspects `get_context_data()` keys vs variables inside `dj-root`
 - **Docs**: Should prominently document the "VDOM root boundary" concept
 
 ---

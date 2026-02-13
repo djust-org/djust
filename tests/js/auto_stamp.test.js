@@ -1,8 +1,8 @@
 /**
- * Tests for #258: Auto-stamp data-djust-root and data-liveview-root
- * on elements that only have data-djust-view.
+ * Tests for #258: Auto-stamp dj-root and dj-liveview-root
+ * on elements that only have dj-view.
  *
- * Verifies that developers only need to write data-djust-view="..."
+ * Verifies that developers only need to write dj-view="..."
  * and the client auto-adds the other attributes at init time.
  */
 
@@ -65,53 +65,53 @@ async function createDom(containerHTML) {
     return dom;
 }
 
-describe('#258: Auto-stamp root attributes on data-djust-view elements', () => {
-    it('adds data-djust-root to element with only data-djust-view', async () => {
+describe('#258: Auto-stamp root attributes on dj-view elements', () => {
+    it('adds dj-root to element with only dj-view', async () => {
         const dom = await createDom(
-            '<div data-djust-view="test.views.MyView"><p>hi</p></div>'
+            '<div dj-view="test.views.MyView"><p>hi</p></div>'
         );
-        const el = dom.window.document.querySelector('[data-djust-view]');
-        expect(el.hasAttribute('data-djust-root')).toBe(true);
+        const el = dom.window.document.querySelector('[dj-view]');
+        expect(el.hasAttribute('dj-root')).toBe(true);
     });
 
-    it('adds data-liveview-root to element with only data-djust-view', async () => {
+    it('adds dj-liveview-root to element with only dj-view', async () => {
         const dom = await createDom(
-            '<div data-djust-view="test.views.MyView"><p>hi</p></div>'
+            '<div dj-view="test.views.MyView"><p>hi</p></div>'
         );
-        const el = dom.window.document.querySelector('[data-djust-view]');
-        expect(el.hasAttribute('data-liveview-root')).toBe(true);
+        const el = dom.window.document.querySelector('[dj-view]');
+        expect(el.hasAttribute('dj-liveview-root')).toBe(true);
     });
 
     it('does not duplicate attributes if already present', async () => {
         const dom = await createDom(
-            '<div data-djust-root data-liveview-root data-djust-view="test.views.MyView"><p>hi</p></div>'
+            '<div dj-root dj-liveview-root dj-view="test.views.MyView"><p>hi</p></div>'
         );
-        const el = dom.window.document.querySelector('[data-djust-view]');
-        expect(el.hasAttribute('data-djust-root')).toBe(true);
-        expect(el.hasAttribute('data-liveview-root')).toBe(true);
+        const el = dom.window.document.querySelector('[dj-view]');
+        expect(el.hasAttribute('dj-root')).toBe(true);
+        expect(el.hasAttribute('dj-liveview-root')).toBe(true);
     });
 
     it('stamps multiple containers independently', async () => {
         const dom = await createDom(
-            '<div data-djust-view="test.views.ViewA"><p>A</p></div>' +
-            '<div data-djust-view="test.views.ViewB"><p>B</p></div>'
+            '<div dj-view="test.views.ViewA"><p>A</p></div>' +
+            '<div dj-view="test.views.ViewB"><p>B</p></div>'
         );
-        const els = dom.window.document.querySelectorAll('[data-djust-view]');
+        const els = dom.window.document.querySelectorAll('[dj-view]');
         expect(els.length).toBe(2);
         els.forEach(el => {
-            expect(el.hasAttribute('data-djust-root')).toBe(true);
-            expect(el.hasAttribute('data-liveview-root')).toBe(true);
+            expect(el.hasAttribute('dj-root')).toBe(true);
+            expect(el.hasAttribute('dj-liveview-root')).toBe(true);
         });
     });
 
-    it('getLiveViewRoot() returns data-djust-view element', async () => {
+    it('getLiveViewRoot() returns dj-view element', async () => {
         const dom = await createDom(
-            '<div data-djust-view="test.views.MyView"><p>hi</p></div>'
+            '<div dj-view="test.views.MyView"><p>hi</p></div>'
         );
-        const root = dom.window.document.querySelector('[data-djust-view]');
+        const root = dom.window.document.querySelector('[dj-view]');
         expect(root).not.toBeNull();
-        expect(root.getAttribute('data-djust-view')).toBe('test.views.MyView');
+        expect(root.getAttribute('dj-view')).toBe('test.views.MyView');
         // After auto-stamping, it should also have the other attributes
-        expect(root.hasAttribute('data-djust-root')).toBe(true);
+        expect(root.hasAttribute('dj-root')).toBe(true);
     });
 });
