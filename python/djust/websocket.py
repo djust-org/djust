@@ -57,9 +57,10 @@ def _snapshot_assigns(view_instance):
     """
     import copy
 
+    _static_skip = set(getattr(view_instance, "static_assigns", []))
     snapshot = {}
     for k, v in view_instance.__dict__.items():
-        if k.startswith("_"):
+        if k.startswith("_") or k in _static_skip:
             continue
         if isinstance(v, _IMMUTABLE_TYPES):
             snapshot[k] = v

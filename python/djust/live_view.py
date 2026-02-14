@@ -143,6 +143,12 @@ class LiveView(
     # Example: {'messages': [], 'feed_items': [], 'notifications': []}
     temporary_assigns: Dict[str, Any] = {}
 
+    # Render optimization: assigns sent to Rust only on first render.
+    # Rust retains them via state merging (update_state extends, not replaces).
+    # Use for large, unchanging context (pre-rendered HTML, static config).
+    # Pair with dj-update="ignore" on the template element for full optimization.
+    static_assigns: List[str] = []
+
     # Authentication & authorization
     login_required: Optional[bool] = None  # True = must be authenticated
     permission_required: Optional[Union[str, List[str]]] = None  # Django permission string(s)

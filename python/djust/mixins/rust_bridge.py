@@ -164,3 +164,9 @@ class RustBridgeMixin:
             self._rust_view.update_state(json_compatible_context)
             if safe_keys:
                 self._rust_view.mark_safe_keys(safe_keys)
+
+            # Mark static assigns as sent — subsequent syncs will skip them
+            if getattr(self, "static_assigns", None) and not getattr(
+                self, "_static_assigns_sent", False
+            ):
+                self._static_assigns_sent = True
