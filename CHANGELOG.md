@@ -7,26 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Server-side template processing now auto-infers dj-root from dj-view** — All template extraction methods (`_extract_liveview_content`, `_extract_liveview_root_with_wrapper`, `_extract_liveview_template_content`, `_strip_liveview_root_in_html`) now fall back to `[dj-view]` when `[dj-root]` is not present, matching the client-side `autoStampRootAttributes()` behavior introduced in PR #297. This fixes a bug where templates with only `dj-view` (no explicit `dj-root`) would fail to render correctly. ([#300](https://github.com/djust-org/djust/issues/300))
-- **Client-side autoMount now correctly reads dj-view attribute** — Fixed `autoMount()` to use `getAttribute('dj-view')` instead of `container.dataset.djView`. The `dataset` API reads `data-*` attributes, but `dj-view` is not a data attribute, causing the attribute to be missed. ([#300](https://github.com/djust-org/djust/issues/300))
-- **System check T002 downgraded from WARNING to INFO** — Since `dj-root` is now optional and auto-inferred from `dj-view` (per PR #297), the T002 check is now informational rather than a warning. The message now clarifies that auto-inference is working correctly. ([#300](https://github.com/djust-org/djust/issues/300))
-
-### Security
-
-- **Pre-Release Security Audit Process** — Comprehensive security infrastructure to prevent vulnerabilities like the mount handler RCE (Issue #298) from reaching production. Includes 259 new security tests (Python + Rust) covering parameter injection, file upload attacks, URL injection, and XSS prevention across all contexts. Three GitHub workflows provide automated security scanning (bandit, safety, cargo-audit, npm audit, CodeQL), hot spot detection (auto-labels PRs touching security-sensitive code), and CI security test job requiring 85% coverage for security-sensitive modules. New pre-release security audit template with 7-phase checklist ensures comprehensive review before each release. Documentation updates establish mandatory security gates and review requirements for changes to hot spot files.
-
-## [0.3.0rc6] - 2026-02-12
+## [0.3.0] - 2026-02-14
 
 ### Added
+
+- **`dj-confirm` attribute** — Declarative confirmation dialogs for event handlers. Add `dj-confirm="Are you sure?"` to any `dj-click` element to show a browser confirmation dialog before dispatching the event. ([#302](https://github.com/djust-org/djust/pull/302))
 
 - **CSS Framework Support** — Comprehensive Tailwind CSS integration with three-part system: (1) System checks (`djust.C010`, `djust.C011`, `djust.C012`) automatically warn about Tailwind CDN in production, missing compiled CSS, and manual `client.js` loading. (2) Graceful fallback auto-injects Tailwind CDN in development mode when `output.css` is missing. (3) CLI helper command `python manage.py djust_setup_css tailwind` creates `input.css` with Tailwind v4 syntax, auto-detects template directories, finds Tailwind CLI, and builds CSS with optional `--watch` and `--minify` flags. Eliminates duplicate client.js race conditions and guides developers toward production-ready setup.
 
 ### Fixed
 
+- **Server-side template processing now auto-infers dj-root from dj-view** — All template extraction methods (`_extract_liveview_content`, `_extract_liveview_root_with_wrapper`, `_extract_liveview_template_content`, `_strip_liveview_root_in_html`) now fall back to `[dj-view]` when `[dj-root]` is not present, matching the client-side `autoStampRootAttributes()` behavior introduced in PR #297. This fixes a bug where templates with only `dj-view` (no explicit `dj-root`) would fail to render correctly. ([#300](https://github.com/djust-org/djust/issues/300))
+- **Client-side autoMount now correctly reads dj-view attribute** — Fixed `autoMount()` to use `getAttribute('dj-view')` instead of `container.dataset.djView`. The `dataset` API reads `data-*` attributes, but `dj-view` is not a data attribute, causing the attribute to be missed. ([#300](https://github.com/djust-org/djust/issues/300))
+- **System check T002 downgraded from WARNING to INFO** — Since `dj-root` is now optional and auto-inferred from `dj-view` (per PR #297), the T002 check is now informational rather than a warning. The message now clarifies that auto-inference is working correctly. ([#300](https://github.com/djust-org/djust/issues/300))
 - **Duplicate client.js loading race condition** — djust now automatically detects and warns (via `djust.C012` system check) when base or layout templates manually include `<script src="{% static 'djust/client.js' %}">`. Since the framework auto-injects `client.js`, manual loading causes double-initialization and console warnings. The check provides clear guidance to remove manual script tags.
 - **Tailwind CDN in production** — New `djust.C010` system check warns when Tailwind CDN (`cdn.tailwindcss.com`) is detected in production templates (`DEBUG=False`). Provides actionable guidance to compile CSS with `djust_setup_css` command or Tailwind CLI. Prevents slow CDN performance and console warnings in production.
+
+### Security
+
+- **Pre-Release Security Audit Process** — Comprehensive security infrastructure to prevent vulnerabilities like the mount handler RCE (Issue #298) from reaching production. Includes 259 new security tests (Python + Rust) covering parameter injection, file upload attacks, URL injection, and XSS prevention across all contexts. Three GitHub workflows provide automated security scanning (bandit, safety, cargo-audit, npm audit, CodeQL), hot spot detection (auto-labels PRs touching security-sensitive code), and CI security test job requiring 85% coverage for security-sensitive modules. New pre-release security audit template with 7-phase checklist ensures comprehensive review before each release. Documentation updates establish mandatory security gates and review requirements for changes to hot spot files.
+
+### Dependencies
+
+- Bump happy-dom from 20.5.3 to 20.6.1 ([#289](https://github.com/djust-org/djust/pull/289))
+- Bump tempfile from 3.24.0 to 3.25.0 ([#288](https://github.com/djust-org/djust/pull/288))
 
 ## [0.3.0rc5] - 2026-02-11
 
@@ -356,8 +360,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bug fixes and stability improvements
 
-[Unreleased]: https://github.com/djust-org/djust/compare/v0.3.0rc4...HEAD
-[0.3.0rc4]: https://github.com/djust-org/djust/compare/v0.2.2...v0.3.0rc4
+[Unreleased]: https://github.com/djust-org/djust/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/djust-org/djust/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/djust-org/djust/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/djust-org/djust/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/djust-org/djust/compare/v0.2.0a2...v0.2.0
