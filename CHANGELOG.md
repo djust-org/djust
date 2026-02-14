@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-02-14
+
+### Changed
+
+- **3.8x faster rendering for large pages** — Optimized `get_context_data()` by replacing `dir(self)` iteration (~300 inherited Django View attributes, ~50ms) with targeted `__dict__` + MRO walk (<1ms). Added `dj-update="ignore"` optimization to Rust VDOM diff engine, skipping subtrees the client won't patch (240ms → 17ms). Combined with template-level optimizations, reduces event roundtrip from ~160ms to ~42ms on pages with large static content.
+
 ## [0.3.0] - 2026-02-14
 
 ### Added
