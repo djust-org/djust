@@ -43,6 +43,11 @@ pub fn sync_ids(old: &VNode, new: &mut VNode) {
         }
     }
 
+    // Skip subtrees the client won't patch (dj-update="ignore")
+    if old.attrs.get("dj-update").map(|v| v.as_str()) == Some("ignore") {
+        return;
+    }
+
     // Check for data-djust-replace: children were fully replaced, don't sync
     let should_replace = old.attrs.contains_key("data-djust-replace")
         || new.attrs.contains_key("data-djust-replace");
@@ -140,6 +145,13 @@ pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
         old.djust_id,
         new.djust_id
     );
+
+    // Skip diffing subtrees marked with dj-update="ignore" — the client
+    // won't patch them, so generating patches is wasted work.
+    if old.attrs.get("dj-update").map(|v| v.as_str()) == Some("ignore") {
+        vdom_trace!("SKIP dj-update=ignore subtree at path={:?}", path);
+        return patches;
+    }
 
     // If tags differ, replace the whole node
     if old.tag != new.tag {

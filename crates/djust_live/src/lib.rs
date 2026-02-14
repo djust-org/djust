@@ -190,14 +190,9 @@ impl RustLiveViewBackend {
         let html = template_arc.render_with_loader(&context, &loader)?;
 
         // Parse new HTML to VDOM
-        // IMPORTANT: Use parse_html() only for the FIRST render (resets ID counter to 0).
-        // For subsequent renders, use parse_html_continue() to ensure newly inserted
-        // elements get unique IDs that don't collide with existing elements in the DOM.
         let mut new_vdom = if self.last_vdom.is_some() {
-            // Subsequent render: continue ID sequence to avoid collisions
             parse_html_continue(&html)
         } else {
-            // First render: reset ID counter to start fresh
             parse_html(&html)
         }
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -206,25 +201,19 @@ impl RustLiveViewBackend {
         let patches =
             if let Some(old_vdom) = &self.last_vdom {
                 let patches = diff(old_vdom, &new_vdom);
-                // Sync old IDs to new VDOM for matched elements, so that last_vdom
-                // retains IDs matching the client DOM (which keeps old IDs for
-                // unchanged elements). Without this, IDs drift apart on each render.
                 sync_ids(old_vdom, &mut new_vdom);
                 if !patches.is_empty() {
                     Some(serde_json::to_string(&patches).map_err(|e| {
                         PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
                     })?)
                 } else {
-                    // 0-change diff: return explicit empty array so Python can
-                    // distinguish "no changes" from "first render" (which is None).
                     Some("[]".to_string())
                 }
             } else {
-                // First render — no previous VDOM to diff against
                 None
             };
 
-        // Serialize VDOM back to HTML with data-dj-id attributes for reliable patch targeting
+        // Serialize VDOM back to HTML with data-dj-id attributes
         let hydrated_html = new_vdom.to_html();
 
         self.last_vdom = Some(new_vdom);

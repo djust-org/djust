@@ -62,38 +62,57 @@ class ContextMixin:
         if getattr(self, "_static_assigns_sent", False):
             _static_skip = set(getattr(self, "static_assigns", []))
 
-        # Add all non-private attributes as context
-        for key in dir(self):
-            if not key.startswith("_"):
-                if key in _static_skip:
-                    continue
-                try:
-                    value = getattr(self, key)
-                    if not callable(value):
-                        if isinstance(value, (Component, LiveComponent)):
-                            if isinstance(value, LiveComponent):
-                                self._register_component(value)
-                            context[key] = value
-                        else:
-                            import types
-                            from django.http import HttpRequest
+        # Collect non-private, non-callable attributes as context.
+        #
+        # Two sources:
+        #   1. Instance attributes (self.__dict__) — set in mount(), event handlers, etc.
+        #   2. Class-level attributes from user's view class(es) — class Foo(LiveView): x = 1
+        #
+        # We avoid dir(self) which traverses the ENTIRE MRO including Django's
+        # View hierarchy (~300 inherited attrs, ~50ms overhead from getattr calls
+        # triggering descriptors).
+        import types
+        from django.http import HttpRequest
 
-                            if isinstance(
-                                value,
-                                (
-                                    types.FunctionType,
-                                    types.MethodType,
-                                    types.ModuleType,
-                                    type,
-                                    types.BuiltinFunctionType,
-                                    HttpRequest,
-                                ),
-                            ):
-                                pass
-                            else:
-                                context[key] = value
-                except (AttributeError, TypeError):
-                    continue
+        _SKIP_TYPES = (
+            types.FunctionType,
+            types.MethodType,
+            types.ModuleType,
+            type,
+            types.BuiltinFunctionType,
+            HttpRequest,
+        )
+
+        # Build set of all candidate keys: instance attrs + user class attrs.
+        # Walk MRO up to (but not including) ContextMixin and its bases —
+        # these are framework classes whose attrs are never template context.
+        _seen = set()
+        _framework_bases = set()
+        for base in ContextMixin.__mro__:
+            _framework_bases.add(base)
+
+        _all_items = list(self.__dict__.items())
+        for cls in type(self).__mro__:
+            if cls in _framework_bases:
+                break
+            for key, value in vars(cls).items():
+                if key not in _seen and key not in self.__dict__:
+                    _seen.add(key)
+                    _all_items.append((key, value))
+
+        for key, value in _all_items:
+            if key.startswith("_"):
+                continue
+            if key in _static_skip:
+                continue
+            if callable(value):
+                continue
+            if isinstance(value, (Component, LiveComponent)):
+                if isinstance(value, LiveComponent):
+                    self._register_component(value)
+                context[key] = value
+            elif not isinstance(value, _SKIP_TYPES):
+                context[key] = value
 
         # JIT auto-serialization for QuerySets and Models
         jit_serialized_keys = set()
