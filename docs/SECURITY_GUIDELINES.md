@@ -13,6 +13,8 @@ This document outlines security best practices for contributing to djust. Follow
 7. [Multi-Tenant Security](#multi-tenant-security)
 8. [PWA / Offline Sync Security](#pwa--offline-sync-security)
 9. [Security Testing](#security-testing)
+10. [Pre-Release Security Audit](#pre-release-security-audit)
+11. [Security Hot Spot Files](#security-hot-spot-files)
 
 ---
 
@@ -697,6 +699,139 @@ Run fuzz tests alongside your regular test suite:
 ```bash
 pytest -k "TestAllViews" -v
 ```
+
+---
+
+## Pre-Release Security Audit
+
+Every release of djust must pass a security audit before publication. This process is enforced by the `pre-release-security-audit.yml` GitHub Actions workflow, which runs automatically on release branches and tags.
+
+### Audit Stages
+
+The pre-release audit consists of five stages, each of which must pass before proceeding:
+
+#### Stage 1: Automated Scanning
+
+Automated tools run against the full codebase:
+
+| Tool | Scope | What It Checks |
+|------|-------|----------------|
+| Bandit | Python | Common security anti-patterns (eval, exec, hardcoded passwords) |
+| Safety | Python dependencies | Known CVEs in installed packages |
+| cargo audit | Rust dependencies | Known CVEs in Cargo crate dependencies |
+| npm audit | JavaScript dependencies | Known CVEs in npm packages |
+| Semgrep | Cross-language | Custom rules in `.semgrep/` (XSS patterns, banned APIs) |
+| detect-secrets | All files | Accidentally committed credentials or API keys |
+
+These scans must produce zero high-severity findings. Medium-severity findings require documented justification to proceed.
+
+#### Stage 2: Manual Code Review of Hot Spots
+
+All [security hot spot files](#security-hot-spot-files) must be manually reviewed by a maintainer, regardless of whether they changed in the release. The reviewer verifies:
+
+- No regressions in input validation or escaping
+- Auth checks are enforced at both view and handler levels
+- Rate limiting configuration is appropriate
+- Error responses do not leak internal details
+
+#### Stage 3: Integration Security Testing
+
+Run the dedicated security test suites:
+
+```bash
+# Parameter injection tests
+pytest python/tests/test_security.py -v
+
+# Mount validation tests
+pytest python/tests/test_security_mount_validation.py -v
+
+# Fuzz testing across all views
+pytest -k "LiveViewSmokeTest" -v
+
+# Rust XSS prevention tests
+cargo test -p djust_templates -- xss
+```
+
+All tests must pass with zero failures.
+
+#### Stage 4: Configuration Review
+
+Verify production-safe defaults:
+
+- [ ] `event_security` defaults to `"strict"`
+- [ ] `DEBUG` is not hardcoded to `True` anywhere
+- [ ] Rate limit defaults are reasonable (100 req/s sustained, 20 burst)
+- [ ] `max_message_size` is set (default: 64KB)
+- [ ] `max_connections_per_ip` is set (default: 10)
+- [ ] CSRF protection is enabled on all non-WebSocket endpoints
+- [ ] Template auto-escaping is enabled by default in the Rust engine
+
+#### Stage 5: Sign-Off
+
+The release requires sign-off from at least one maintainer who has:
+
+1. Reviewed the automated scan results
+2. Completed the manual hot spot review
+3. Verified all security tests pass
+4. Confirmed no open security issues affect the release
+
+Sign-off is recorded in the GitHub release notes and the security audit issue created by the workflow.
+
+### Audit Issue Template
+
+Each pre-release audit creates a GitHub issue from `.github/SECURITY_AUDIT_TEMPLATE.md`. This issue tracks completion of all audit stages and serves as a permanent record. The issue must be closed (all items checked) before the release is published.
+
+### Skipping the Audit
+
+The audit **cannot** be skipped. Documentation-only releases (changes limited to `.md` files with no code changes) still run automated scans but may skip the manual review stages with maintainer approval noted in the audit issue.
+
+---
+
+## Security Hot Spot Files
+
+Certain files in the codebase have elevated security impact. Changes to these files require additional review scrutiny and trigger the `security-review` label on pull requests.
+
+### Hot Spot File List
+
+| File | Security Concern |
+|------|-----------------|
+| `python/djust/websocket.py` | WebSocket event dispatch, message handling, connection lifecycle |
+| `python/djust/security.py` | Core security utilities (safe_setattr, sanitize_for_log, error responses) |
+| `python/djust/auth.py` | Authentication and authorization enforcement |
+| `python/djust/decorators.py` | @event_handler allowlist, @permission_required, @rate_limit |
+| `python/djust/live_view.py` | State management, context exposure, mount lifecycle |
+| `python/djust/uploads.py` | File upload handling (binary WebSocket frames) |
+| `python/djust/config.py` | Security-related configuration defaults |
+| `python/djust/routing.py` | URL routing and session management |
+| `python/djust/templatetags/` | Template tags that may use mark_safe() |
+| `python/djust/tenants/` | Multi-tenant isolation boundaries |
+| `crates/djust_templates/src/renderer.rs` | Template rendering, auto-escaping, safe filter handling |
+| `crates/djust_templates/src/filters.rs` | Filter implementations (safe_output_filters list) |
+| `crates/djust_vdom/` | VDOM diffing (attribute injection vectors) |
+| `python/djust/static/djust/` | Client-side JavaScript (XSS surface) |
+
+### Review Requirements for Hot Spot Changes
+
+When a PR modifies any hot spot file:
+
+1. **Automatic labeling** -- The PR workflow adds a `security-review` label and posts a reminder comment listing which hot spot files were changed.
+
+2. **Mandatory security reviewer** -- At least one reviewer with security expertise must approve the PR. Standard code review approval alone is not sufficient.
+
+3. **Expanded testing** -- The PR must include or reference:
+   - Targeted tests for the specific security property affected
+   - Fuzz test results (`LiveViewSmokeTest`) if the change affects rendering or event handling
+   - Manual verification that banned patterns were not introduced
+
+4. **Documentation** -- If the change alters security behavior (e.g., new escaping rules, changed auth flow), update this document and the [Code Review Checklist](#code-review-checklist).
+
+### Adding New Hot Spot Files
+
+When introducing a new file that handles untrusted input, authentication, or security-sensitive operations:
+
+1. Add it to the hot spot list above
+2. Update `.github/workflows/` to include the new path in the detection pattern
+3. Add a comment in the PR explaining why the file is security-sensitive
 
 ---
 

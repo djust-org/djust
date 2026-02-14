@@ -1,0 +1,321 @@
+name: Pre-Release Security Audit
+
+# Runs comprehensive security scans before each release.
+# Triggered manually or automatically when a release tag is pushed.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version being audited (e.g., 0.3.0)'
+        required: false
+        type: string
+      create_issue:
+        description: 'Create a tracking issue from audit results'
+        required: false
+        default: true
+        type: boolean
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  issues: write
+  security-events: write
+
+concurrency:
+  group: security-audit
+  cancel-in-progress: false
+
+jobs:
+  # --- Python security scanning ---
+  python-security:
+    name: Python Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Install security tools
+        run: uv pip install bandit safety pip-audit
+
+      - name: Run Bandit (full scan, no skips)
+        id: bandit
+        run: |
+          echo "## Bandit Results" > bandit-report.md
+          echo '```' >> bandit-report.md
+          uv run bandit -r python/djust/ -ll -f txt 2>&1 | tee -a bandit-report.md || true
+          echo '```' >> bandit-report.md
+
+          # Also produce JSON for machine-readable output
+          uv run bandit -r python/djust/ -ll -f json -o bandit-results.json || true
+
+      - name: Run Safety (dependency vulnerabilities)
+        id: safety
+        run: |
+          echo "## Safety Results" > safety-report.md
+          echo '```' >> safety-report.md
+          uv run safety check --full-report 2>&1 | tee -a safety-report.md || true
+          echo '```' >> safety-report.md
+
+      - name: Run pip-audit
+        id: pip_audit
+        run: |
+          echo "## pip-audit Results" > pip-audit-report.md
+          echo '```' >> pip-audit-report.md
+          uv run pip-audit 2>&1 | tee -a pip-audit-report.md || true
+          echo '```' >> pip-audit-report.md
+
+      - name: Upload Python security reports
+        uses: actions/upload-artifact@v6
+        with:
+          name: python-security-reports
+          path: |
+            bandit-report.md
+            bandit-results.json
+            safety-report.md
+            pip-audit-report.md
+
+  # --- Rust security scanning ---
+  rust-security:
+    name: Rust Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo-audit
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: ${{ runner.os }}-cargo-audit-0.21
+
+      - name: Install cargo-audit
+        run: command -v cargo-audit || cargo install cargo-audit
+
+      - name: Run cargo-audit
+        id: cargo_audit
+        run: |
+          echo "## cargo-audit Results" > cargo-audit-report.md
+          echo '```' >> cargo-audit-report.md
+          cargo audit 2>&1 | tee -a cargo-audit-report.md || true
+          echo '```' >> cargo-audit-report.md
+
+          # JSON output for machine parsing
+          cargo audit --json > cargo-audit-results.json 2>/dev/null || true
+
+      - name: Run clippy with security-relevant lints
+        run: |
+          # Set up Python for PyO3
+          sudo apt-get update && sudo apt-get install -y python3-dev
+          export PYO3_PYTHON=$(which python3)
+
+          echo "## Clippy Security Lints" > clippy-report.md
+          echo '```' >> clippy-report.md
+          cargo clippy -- \
+            -W clippy::all \
+            -D clippy::correctness \
+            -D clippy::suspicious \
+            -W clippy::complexity \
+            2>&1 | tee -a clippy-report.md || true
+          echo '```' >> clippy-report.md
+
+      - name: Upload Rust security reports
+        uses: actions/upload-artifact@v6
+        with:
+          name: rust-security-reports
+          path: |
+            cargo-audit-report.md
+            cargo-audit-results.json
+            clippy-report.md
+
+  # --- JavaScript security scanning ---
+  js-security:
+    name: JavaScript Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run npm audit
+        id: npm_audit
+        run: |
+          echo "## npm audit Results" > npm-audit-report.md
+          echo '```' >> npm-audit-report.md
+          npm audit --json > npm-audit-results.json 2>/dev/null || true
+          npm audit 2>&1 | tee -a npm-audit-report.md || true
+          echo '```' >> npm-audit-report.md
+
+      - name: Run ESLint with security plugin
+        run: |
+          echo "## ESLint Security Results" > eslint-report.md
+          echo '```' >> eslint-report.md
+          npm run lint 2>&1 | tee -a eslint-report.md || true
+          echo '```' >> eslint-report.md
+
+      - name: Upload JS security reports
+        uses: actions/upload-artifact@v6
+        with:
+          name: js-security-reports
+          path: |
+            npm-audit-report.md
+            npm-audit-results.json
+            eslint-report.md
+
+  # --- CodeQL analysis ---
+  codeql:
+    name: CodeQL Deep Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      matrix:
+        language: [python, javascript]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}/pre-release"
+
+  # --- Aggregate results and create tracking issue ---
+  audit-summary:
+    name: Audit Summary
+    needs: [python-security, rust-security, js-security, codeql]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all reports
+        uses: actions/download-artifact@v7
+        with:
+          path: reports
+          merge-multiple: true
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          else
+            echo "version=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate summary report
+        id: summary
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          REPORT="audit-summary.md"
+
+          cat > "$REPORT" << 'HEADER'
+          # Pre-Release Security Audit Summary
+          HEADER
+          echo "**Version:** ${VERSION}" >> "$REPORT"
+          echo "**Date:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$REPORT"
+          echo "**Run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> "$REPORT"
+          echo "" >> "$REPORT"
+
+          echo "## Job Results" >> "$REPORT"
+          echo "" >> "$REPORT"
+          echo "| Scanner | Status |" >> "$REPORT"
+          echo "|---------|--------|" >> "$REPORT"
+          echo "| Python Security (bandit, safety, pip-audit) | ${{ needs.python-security.result }} |" >> "$REPORT"
+          echo "| Rust Security (cargo-audit, clippy) | ${{ needs.rust-security.result }} |" >> "$REPORT"
+          echo "| JavaScript Security (npm audit, eslint) | ${{ needs.js-security.result }} |" >> "$REPORT"
+          echo "| CodeQL Analysis | ${{ needs.codeql.result }} |" >> "$REPORT"
+          echo "" >> "$REPORT"
+
+          # Append individual reports if they exist
+          echo "## Detailed Reports" >> "$REPORT"
+          echo "" >> "$REPORT"
+          for f in reports/*.md; do
+            if [ -f "$f" ]; then
+              cat "$f" >> "$REPORT"
+              echo "" >> "$REPORT"
+            fi
+          done
+
+          # Write to GitHub step summary
+          cat "$REPORT" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create tracking issue
+        if: >-
+          (inputs.create_issue == true || inputs.create_issue == '') &&
+          github.event_name != 'push'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const version = '${{ steps.version.outputs.version }}';
+
+            // Read the audit template
+            let body = '';
+            try {
+              body = fs.readFileSync('.github/SECURITY_AUDIT_TEMPLATE.md', 'utf8');
+            } catch (e) {
+              body = '## Security Audit\nNo template found. See workflow artifacts for scan results.';
+            }
+
+            // Replace version placeholder
+            body = body.replace(/\{\{VERSION\}\}/g, version);
+
+            // Append automated scan results
+            let summary = '';
+            try {
+              summary = fs.readFileSync('audit-summary.md', 'utf8');
+            } catch (e) {
+              summary = 'Automated scan summary not available. Check workflow artifacts.';
+            }
+            body += '\n\n---\n\n## Automated Scan Results\n\n' + summary;
+
+            const { data: issue } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Security Audit: v${version}`,
+              body: body,
+              labels: ['security', 'audit', 'release']
+            });
+
+            core.notice(`Created security audit issue: ${issue.html_url}`);
+
+      - name: Upload full audit report
+        uses: actions/upload-artifact@v6
+        with:
+          name: security-audit-report
+          path: audit-summary.md

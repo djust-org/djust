@@ -175,6 +175,19 @@ console.error(error); // ❌ Won't be captured in production
 - [ ] **Privacy considerations** - PII handling follows regulations
 - [ ] **Secure defaults** - New features are secure by default
 
+### Security Hot Spot Changes
+
+If the PR modifies any file listed in [Security Hot Spot Files](SECURITY_GUIDELINES.md#security-hot-spot-files), the following additional requirements apply:
+
+- [ ] **Hot spot files identified** - PR description lists which hot spot files are changed and why
+- [ ] **Security reviewer assigned** - At least one reviewer with security expertise must approve (standard code review alone is not sufficient)
+- [ ] **Targeted security tests included** - New or updated tests that exercise the specific security property affected by the change
+- [ ] **Fuzz tests pass** - `LiveViewSmokeTest` runs clean if the change affects rendering, event dispatch, or state management
+- [ ] **Banned patterns verified** - Confirmed no [banned patterns](SECURITY_GUIDELINES.md#banned-patterns) were introduced
+- [ ] **Security documentation updated** - If the change alters security behavior (escaping rules, auth flow, rate limiting), `SECURITY_GUIDELINES.md` is updated
+
+**Hot spot files include:** `websocket.py`, `security.py`, `auth.py`, `decorators.py`, `live_view.py`, `uploads.py`, `config.py`, `routing.py`, `templatetags/`, `tenants/`, `renderer.rs`, `filters.rs`, `djust_vdom/`, `static/djust/`. See [SECURITY_GUIDELINES.md](SECURITY_GUIDELINES.md#security-hot-spot-files) for the full list and rationale.
+
 ## ⚡ Performance Review
 
 ### Template & VDOM
@@ -264,6 +277,8 @@ console.error(error); // ❌ Won't be captured in production
 - Placeholder/stub implementations shipped as production code (e.g., `return True`, hardcoded fake data)
 - Untracked files that tests depend on are missing from the PR
 - Comments indicate incomplete code ("simulate", "would be implemented", "for now")
+- Changes to [security hot spot files](SECURITY_GUIDELINES.md#security-hot-spot-files) without a security-qualified reviewer approval
+- Hot spot file changes without targeted security tests covering the affected property
 
 ## 📋 Reviewer Responsibility
 
