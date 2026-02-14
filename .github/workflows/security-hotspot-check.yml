@@ -1,0 +1,194 @@
+name: Security Hot Spot Check
+
+# Detects changes to security-sensitive files in PRs, auto-labels them,
+# and posts a reminder comment requesting additional review.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  detect-hotspots:
+    name: Detect Security Hot Spots
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Get changed files
+        id: changed
+        run: |
+          # Get list of changed files in this PR
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          FILES=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null || git diff --name-only HEAD~1)
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Check for security hot spots
+        id: hotspots
+        run: |
+          CHANGED_FILES="${{ steps.changed.outputs.files }}"
+          HOTSPOT_FILES=""
+          HOTSPOT_CATEGORIES=""
+
+          # --- Authentication & Authorization ---
+          AUTH_PATTERN="python/djust/auth\.py|python/djust/websocket\.py|python/djust/decorators\.py"
+          AUTH_MATCHES=$(echo "$CHANGED_FILES" | grep -E "$AUTH_PATTERN" || true)
+          if [ -n "$AUTH_MATCHES" ]; then
+            HOTSPOT_FILES="${HOTSPOT_FILES}${AUTH_MATCHES}"$'\n'
+            HOTSPOT_CATEGORIES="${HOTSPOT_CATEGORIES}- **Authentication & Authorization**: auth.py, websocket.py, decorators.py"$'\n'
+          fi
+
+          # --- Template Rendering & XSS ---
+          XSS_PATTERN="crates/djust_templates/|crates/djust_vdom/|python/djust/templatetags/"
+          XSS_MATCHES=$(echo "$CHANGED_FILES" | grep -E "$XSS_PATTERN" || true)
+          if [ -n "$XSS_MATCHES" ]; then
+            HOTSPOT_FILES="${HOTSPOT_FILES}${XSS_MATCHES}"$'\n'
+            HOTSPOT_CATEGORIES="${HOTSPOT_CATEGORIES}- **Template Rendering / XSS Prevention**: Rust template engine, VDOM, template tags"$'\n'
+          fi
+
+          # --- State Management & Serialization ---
+          STATE_PATTERN="python/djust/live_view\.py|python/djust/component\.py|python/djust/state\.py"
+          STATE_MATCHES=$(echo "$CHANGED_FILES" | grep -E "$STATE_PATTERN" || true)
+          if [ -n "$STATE_MATCHES" ]; then
+            HOTSPOT_FILES="${HOTSPOT_FILES}${STATE_MATCHES}"$'\n'
+            HOTSPOT_CATEGORIES="${HOTSPOT_CATEGORIES}- **State Management**: LiveView, component, or state serialization changes"$'\n'
+          fi
+
+          # --- File Uploads ---
+          UPLOAD_PATTERN="python/djust/uploads\.py"
+          UPLOAD_MATCHES=$(echo "$CHANGED_FILES" | grep -E "$UPLOAD_PATTERN" || true)
+          if [ -n "$UPLOAD_MATCHES" ]; then
+            HOTSPOT_FILES="${HOTSPOT_FILES}${UPLOAD_MATCHES}"$'\n'
+            HOTSPOT_CATEGORIES="${HOTSPOT_CATEGORIES}- **File Uploads**: upload handling and validation"$'\n'
+          fi
+
+          # --- Client JavaScript ---
+          JS_PATTERN="python/djust/static/djust/.*\.js$"
+          JS_MATCHES=$(echo "$CHANGED_FILES" | grep -E "$JS_PATTERN" || true)
+          if [ -n "$JS_MATCHES" ]; then
+            HOTSPOT_FILES="${HOTSPOT_FILES}${JS_MATCHES}"$'\n'
+            HOTSPOT_CATEGORIES="${HOTSPOT_CATEGORIES}- **Client JavaScript**: changes to the browser-side runtime"$'\n'
+          fi
+
+          # --- Configuration & Security Settings ---
+          CONFIG_PATTERN="python/djust/config\.py|python/djust/checks\.py"
+          CONFIG_MATCHES=$(echo "$CHANGED_FILES" | grep -E "$CONFIG_PATTERN" || true)
+          if [ -n "$CONFIG_MATCHES" ]; then
+            HOTSPOT_FILES="${HOTSPOT_FILES}${CONFIG_MATCHES}"$'\n'
+            HOTSPOT_CATEGORIES="${HOTSPOT_CATEGORIES}- **Configuration / Security Checks**: config or system check changes"$'\n'
+          fi
+
+          # --- Multi-tenancy ---
+          TENANT_PATTERN="python/djust/tenants/"
+          TENANT_MATCHES=$(echo "$CHANGED_FILES" | grep -E "$TENANT_PATTERN" || true)
+          if [ -n "$TENANT_MATCHES" ]; then
+            HOTSPOT_FILES="${HOTSPOT_FILES}${TENANT_MATCHES}"$'\n'
+            HOTSPOT_CATEGORIES="${HOTSPOT_CATEGORIES}- **Multi-tenancy**: tenant isolation and routing"$'\n'
+          fi
+
+          # --- Routing ---
+          ROUTING_PATTERN="python/djust/routing\.py"
+          ROUTING_MATCHES=$(echo "$CHANGED_FILES" | grep -E "$ROUTING_PATTERN" || true)
+          if [ -n "$ROUTING_MATCHES" ]; then
+            HOTSPOT_FILES="${HOTSPOT_FILES}${ROUTING_MATCHES}"$'\n'
+            HOTSPOT_CATEGORIES="${HOTSPOT_CATEGORIES}- **Routing**: URL routing and live_session configuration"$'\n'
+          fi
+
+          # Set outputs
+          if [ -n "$HOTSPOT_FILES" ]; then
+            echo "found=true" >> $GITHUB_OUTPUT
+            echo "categories<<EOF" >> $GITHUB_OUTPUT
+            echo "$HOTSPOT_CATEGORIES" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Add security-review label
+        if: steps.hotspots.outputs.found == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Ensure the label exists
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'security-review'
+              });
+            } catch (e) {
+              if (e.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: 'security-review',
+                  color: 'd93f0b',
+                  description: 'PR touches security-sensitive code and needs additional review'
+                });
+              }
+            }
+
+            // Add the label to the PR
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['security-review']
+            });
+
+      - name: Post review reminder comment
+        if: steps.hotspots.outputs.found == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const categories = `${{ steps.hotspots.outputs.categories }}`;
+            const marker = '<!-- security-hotspot-check -->';
+
+            // Check if we already posted a comment (avoid duplicates on push events)
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+
+            const body = `${marker}
+            ## Security Review Required
+
+            This PR modifies security-sensitive files. Please ensure the following areas receive additional review:
+
+            ${categories}
+
+            ### Review Checklist
+
+            - [ ] Changes do not introduce XSS vulnerabilities (no \`mark_safe(f'...')\`)
+            - [ ] Authentication/authorization checks are not weakened
+            - [ ] Input validation is maintained or improved
+            - [ ] No secrets or sensitive data exposed in state
+            - [ ] Existing security tests still pass
+            - [ ] New security tests added for changed behavior
+
+            See [SECURITY_GUIDELINES.md](../blob/main/docs/SECURITY_GUIDELINES.md) for full security review criteria.`;
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
