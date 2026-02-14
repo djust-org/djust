@@ -1043,8 +1043,10 @@ def check_templates(app_configs, **kwargs):
                 )
             )
 
-        # T002 -- LiveView template missing dj-root
-        # Flag if file has dj-* directives or dj-view but no dj-root
+        # T002 -- LiveView template missing dj-root (informational)
+        # Since PR #297, dj-root is auto-inferred from dj-view on both
+        # client (autoStampRootAttributes) and server (template.py fallback).
+        # This is now an INFO-level hint rather than a warning.
         has_dj_attrs = re.search(r"dj-(click|input|change|submit|model)", content)
         has_djust_view = _DJ_VIEW_RE.search(content)
         has_djust_root = _DJ_ROOT_RE.search(content)
@@ -1052,18 +1054,14 @@ def check_templates(app_configs, **kwargs):
             # Check if it extends a base template (in which case root is likely in the base)
             if not re.search(r"\{%\s*extends\s+", content):
                 errors.append(
-                    DjustWarning(
-                        "%s -- LiveView template missing 'dj-root' attribute. "
-                        "Without dj-root, djust cannot identify the root element "
-                        "for DOM patching." % relpath,
+                    DjustInfo(
+                        "%s -- LiveView template does not have explicit 'dj-root' attribute. "
+                        "This is OK — dj-root is auto-inferred from dj-view." % relpath,
                         hint=(
-                            "Add dj-root to the root element of your LiveView template. "
-                            'Example: <div dj-root dj-view="myapp.views.MyView">'
+                            "You can optionally add dj-root for clarity: "
+                            '<div dj-root dj-view="myapp.views.MyView">'
                         ),
                         id="djust.T002",
-                        fix_hint=(
-                            "Add `dj-root` attribute to the root element " "in `%s`." % relpath
-                        ),
                         file_path=filepath,
                     )
                 )

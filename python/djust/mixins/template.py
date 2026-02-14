@@ -255,9 +255,14 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         This ensures the HTML sent over WebSocket matches what the client expects:
         just the content to insert into the existing [dj-root] container.
+
+        Falls back to [dj-view] if [dj-root] is not present, since dj-root
+        is auto-inferred from dj-view (see PR #297).
         """
-        # Find the opening tag for [dj-root]
+        # Find the opening tag for [dj-root], falling back to [dj-view]
         opening_match = re.search(r"<div\s+[^>]*dj-root[^>]*>", html, re.IGNORECASE)
+        if not opening_match:
+            opening_match = re.search(r"<div\s+[^>]*dj-view[^>]*>", html, re.IGNORECASE)
 
         if not opening_match:
             return html
@@ -292,8 +297,13 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
     def _extract_liveview_root_with_wrapper(self, template: str) -> str:
         """
         Extract the <div dj-root>...</div> section from a template (WITH the wrapper div).
+
+        Falls back to [dj-view] if [dj-root] is not present, since dj-root
+        is auto-inferred from dj-view (see PR #297).
         """
         opening_match = re.search(r"<div\s+[^>]*dj-root[^>]*>", template, re.IGNORECASE)
+        if not opening_match:
+            opening_match = re.search(r"<div\s+[^>]*dj-view[^>]*>", template, re.IGNORECASE)
 
         if not opening_match:
             return template
@@ -329,8 +339,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
     def _extract_liveview_template_content(self, template: str) -> str:
         """
         Extract the innerHTML of [dj-root] from a TEMPLATE (not rendered HTML).
+
+        Falls back to [dj-view] if [dj-root] is not present.
         """
         opening_match = re.search(r"<div\s+[^>]*dj-root[^>]*>", template, re.IGNORECASE)
+        if not opening_match:
+            opening_match = re.search(r"<div\s+[^>]*dj-view[^>]*>", template, re.IGNORECASE)
 
         if not opening_match:
             return template
@@ -364,8 +378,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
     def _strip_liveview_root_in_html(self, html: str) -> str:
         """
         Strip comments and whitespace from [dj-root] div in full HTML page.
+
+        Falls back to [dj-view] if [dj-root] is not present.
         """
         opening_match = re.search(r"<div\s+[^>]*dj-root[^>]*>", html, re.IGNORECASE)
+        if not opening_match:
+            opening_match = re.search(r"<div\s+[^>]*dj-view[^>]*>", html, re.IGNORECASE)
 
         if not opening_match:
             return html

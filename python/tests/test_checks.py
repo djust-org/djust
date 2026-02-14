@@ -2132,7 +2132,7 @@ class TestT002Enhanced:
     """T002 enhanced -- Warning severity and dj-view without root."""
 
     def test_t002_is_warning_severity(self, tmp_path, settings):
-        """T002 should be Warning severity (not Info)."""
+        """T002 should be Info severity (since dj-root is now auto-inferred from dj-view)."""
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
         (tpl_dir / "no_root.html").write_text('<div><button dj-click="go">Go</button></div>')
@@ -2143,13 +2143,13 @@ class TestT002Enhanced:
             }
         ]
 
-        from djust.checks import check_templates, DjustWarning
+        from djust.checks import check_templates, DjustInfo
 
         errors = check_templates(None)
         t002 = [e for e in errors if e.id == "djust.T002"]
         assert len(t002) == 1
-        # Verify it is a DjustWarning (not DjustInfo)
-        assert isinstance(t002[0], DjustWarning)
+        # Verify it is a DjustInfo (since PR #297, dj-root is auto-inferred)
+        assert isinstance(t002[0], DjustInfo)
 
     def test_t002_detects_djust_view_without_root(self, tmp_path, settings):
         """T002 fires when dj-view is present but dj-root is missing."""
@@ -2173,7 +2173,7 @@ class TestT002Enhanced:
         assert "dj-root" in t002[0].msg
 
     def test_t002_improved_message(self, tmp_path, settings):
-        """T002 message should mention DOM patching."""
+        """T002 message should mention auto-inferred dj-root."""
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
         (tpl_dir / "no_root.html").write_text('<div><button dj-click="go">Go</button></div>')
@@ -2189,4 +2189,4 @@ class TestT002Enhanced:
         errors = check_templates(None)
         t002 = [e for e in errors if e.id == "djust.T002"]
         assert len(t002) == 1
-        assert "DOM patching" in t002[0].msg
+        assert "auto-inferred" in t002[0].msg
