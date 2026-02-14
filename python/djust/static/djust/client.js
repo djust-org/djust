@@ -1786,6 +1786,18 @@ function extractTypedParams(element) {
 // Export for global access
 window.djust = window.djust || {};
 window.djust.extractTypedParams = extractTypedParams;
+/**
+ * Check if element has dj-confirm and show confirmation dialog.
+ * @param {HTMLElement} element - Element with potential dj-confirm attribute
+ * @returns {boolean} - true if confirmed or no dialog needed, false if cancelled
+ */
+function checkDjConfirm(element) {
+    const confirmMsg = element.getAttribute('dj-confirm');
+    if (confirmMsg && !window.confirm(confirmMsg)) {
+        return false; // User cancelled
+    }
+    return true; // Proceed
+}
 
 function bindLiveViewEvents() {
     // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
@@ -1812,8 +1824,7 @@ function bindLiveViewEvents() {
                 e.preventDefault();
 
                 // dj-confirm: show confirmation dialog before sending event
-                const confirmMsg = element.getAttribute('dj-confirm');
-                if (confirmMsg && !window.confirm(confirmMsg)) {
+                if (!checkDjConfirm(element)) {
                     return; // User cancelled
                 }
 
@@ -1887,6 +1898,12 @@ function bindLiveViewEvents() {
             element.dataset.liveviewSubmitBound = 'true';
             element.addEventListener('submit', async (e) => {
                 e.preventDefault();
+
+                // dj-confirm: show confirmation dialog before sending event
+                if (!checkDjConfirm(e.target)) {
+                    return; // User cancelled
+                }
+
                 const formData = new FormData(e.target);
                 const params = Object.fromEntries(formData.entries());
 
@@ -1956,6 +1973,11 @@ function bindLiveViewEvents() {
             const parsedChange = parseEventHandler(changeHandler);
 
             const changeHandlerFn = async (e) => {
+                // dj-confirm: show confirmation dialog before sending event
+                if (!checkDjConfirm(element)) {
+                    return; // User cancelled
+                }
+
                 const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
                 const params = buildFormEventParams(e.target, value);
 
@@ -2009,6 +2031,11 @@ function bindLiveViewEvents() {
             }
 
             const handler = async (e) => {
+                // dj-confirm: show confirmation dialog before sending event
+                if (!checkDjConfirm(element)) {
+                    return; // User cancelled
+                }
+
                 const params = buildFormEventParams(e.target, e.target.value);
                 if (parsedInput.args.length > 0) {
                     params._args = parsedInput.args;
@@ -2033,6 +2060,11 @@ function bindLiveViewEvents() {
             element.dataset.liveviewBlurBound = 'true';
             const parsedBlur = parseEventHandler(blurHandler);
             element.addEventListener('blur', async (e) => {
+                // dj-confirm: show confirmation dialog before sending event
+                if (!checkDjConfirm(element)) {
+                    return; // User cancelled
+                }
+
                 const params = buildFormEventParams(e.target, e.target.value);
                 if (parsedBlur.args.length > 0) {
                     params._args = parsedBlur.args;
@@ -2047,6 +2079,11 @@ function bindLiveViewEvents() {
             element.dataset.liveviewFocusBound = 'true';
             const parsedFocus = parseEventHandler(focusHandler);
             element.addEventListener('focus', async (e) => {
+                // dj-confirm: show confirmation dialog before sending event
+                if (!checkDjConfirm(element)) {
+                    return; // User cancelled
+                }
+
                 const params = buildFormEventParams(e.target, e.target.value);
                 if (parsedFocus.args.length > 0) {
                     params._args = parsedFocus.args;
@@ -2072,6 +2109,11 @@ function bindLiveViewEvents() {
                         if (requiredKey === 'escape' && e.key !== 'Escape') return;
                         if (requiredKey === 'space' && e.key !== ' ') return;
                         // Add more key mappings as needed
+                    }
+
+                    // dj-confirm: show confirmation dialog before sending event
+                    if (!checkDjConfirm(element)) {
+                        return; // User cancelled
                     }
 
                     const fieldName = getFieldName(e.target);
