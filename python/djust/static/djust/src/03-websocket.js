@@ -463,7 +463,7 @@ class LiveViewWebSocket {
         }
 
         if (container) {
-            const viewPath = container.dataset.djView;
+            const viewPath = container.getAttribute('dj-view');
             if (viewPath) {
                 // OPTIMIZATION: Check if content was already rendered by HTTP GET
                 // We still send mount message (server needs to initialize session),
