@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Server-side template processing now auto-infers dj-root from dj-view** — All template extraction methods (`_extract_liveview_content`, `_extract_liveview_root_with_wrapper`, `_extract_liveview_template_content`, `_strip_liveview_root_in_html`) now fall back to `[dj-view]` when `[dj-root]` is not present, matching the client-side `autoStampRootAttributes()` behavior introduced in PR #297. This fixes a bug where templates with only `dj-view` (no explicit `dj-root`) would fail to render correctly. ([#300](https://github.com/djust-org/djust/issues/300))
+- **Client-side autoMount now correctly reads dj-view attribute** — Fixed `autoMount()` to use `getAttribute('dj-view')` instead of `container.dataset.djView`. The `dataset` API reads `data-*` attributes, but `dj-view` is not a data attribute, causing the attribute to be missed. ([#300](https://github.com/djust-org/djust/issues/300))
+- **System check T002 downgraded from WARNING to INFO** — Since `dj-root` is now optional and auto-inferred from `dj-view` (per PR #297), the T002 check is now informational rather than a warning. The message now clarifies that auto-inference is working correctly. ([#300](https://github.com/djust-org/djust/issues/300))
+
 ### Security
 
 - **Pre-Release Security Audit Process** — Comprehensive security infrastructure to prevent vulnerabilities like the mount handler RCE (Issue #298) from reaching production. Includes 259 new security tests (Python + Rust) covering parameter injection, file upload attacks, URL injection, and XSS prevention across all contexts. Three GitHub workflows provide automated security scanning (bandit, safety, cargo-audit, npm audit, CodeQL), hot spot detection (auto-labels PRs touching security-sensitive code), and CI security test job requiring 85% coverage for security-sensitive modules. New pre-release security audit template with 7-phase checklist ensures comprehensive review before each release. Documentation updates establish mandatory security gates and review requirements for changes to hot spot files.
