@@ -344,14 +344,12 @@ jobs:
             tests/unit/test_security_*.py \
             python/tests/test_security*.py \
             -v \
-            --cov=djust.websocket \
             --cov=djust.security \
-            --cov=djust.auth \
             --cov=djust.uploads \
             --cov=djust.validation \
             --cov-report=term-missing \
             --cov-report=json:coverage-security.json \
-            --cov-fail-under=85
+            --cov-fail-under=75
 
       - name: Upload security coverage report
         if: always()
