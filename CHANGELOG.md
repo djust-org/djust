@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Pre-Release Security Audit Process** — Comprehensive security infrastructure to prevent vulnerabilities like the mount handler RCE (Issue #298) from reaching production. Includes 259 new security tests (Python + Rust) covering parameter injection, file upload attacks, URL injection, and XSS prevention across all contexts. Three GitHub workflows provide automated security scanning (bandit, safety, cargo-audit, npm audit, CodeQL), hot spot detection (auto-labels PRs touching security-sensitive code), and CI security test job requiring 85% coverage for security-sensitive modules. New pre-release security audit template with 7-phase checklist ensures comprehensive review before each release. Documentation updates establish mandatory security gates and review requirements for changes to hot spot files.
+
 ## [0.3.0rc6] - 2026-02-12
 
 ### Added
