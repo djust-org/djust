@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2rc1] - 2026-02-15
+
 ### Fixed
 
 - **Form data lost on `dj-submit`** — Client-only properties (`_targetElement`, `_optimisticUpdateId`, `_skipLoading`, `_djTargetSelector`) are now stripped from event params before serialization. Previously, `HTMLFormElement` references in params corrupted the JSON payload, overwriting form field data with the element's indexed children. ([#308](https://github.com/djust-org/djust/issues/308))
