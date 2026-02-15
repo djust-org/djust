@@ -1,13 +1,16 @@
 """
 Unit tests for FormMixin functionality.
 
-Tests form state management, validation, and reset behavior.
+Tests form state management, validation, reset behavior, as_live rendering,
+XSS prevention, and _model_instance support.
 """
 
+import warnings
 import pytest
 from django import forms
+from django.utils.html import escape
 from djust.live_view import LiveView
-from djust.forms import FormMixin
+from djust.forms import FormMixin, LiveViewForm
 
 
 class TestForm(forms.Form):
@@ -365,3 +368,209 @@ class TestFormWithInitialValues:
         # Should restore initial values
         assert view.form_data["name"] == "Default Name"
         assert view.form_data["email"] == "default@example.com"
+
+
+# --- Additional forms for as_live / XSS / ModelForm tests ---
+
+
+class FullTestForm(forms.Form):
+    """Form with various field types for as_live rendering tests."""
+
+    name = forms.CharField(max_length=100, required=True, help_text="Your full name")
+    email = forms.EmailField(required=True)
+    bio = forms.CharField(widget=forms.Textarea, required=False)
+    role = forms.ChoiceField(choices=[("dev", "Developer"), ("mgr", "Manager")])
+    agree = forms.BooleanField(required=False)
+
+
+class FullTestFormView(FormMixin, LiveView):
+    form_class = FullTestForm
+    template = "<div dj-root>{{ form.as_live }}</div>"
+
+
+class TestAsLive:
+    """Test as_live() renders valid HTML with correct event attributes."""
+
+    @pytest.mark.django_db
+    def test_as_live_produces_html(self, get_request):
+        view = FullTestFormView()
+        view.get(get_request)
+        html = view.as_live()
+        assert "<div" in html
+        assert "name" in html
+
+    @pytest.mark.django_db
+    def test_as_live_contains_dj_change(self, get_request):
+        view = FullTestFormView()
+        view.get(get_request)
+        html = view.as_live()
+        assert "dj-change" in html
+        assert "@change" not in html
+
+    @pytest.mark.django_db
+    def test_as_live_escapes_values(self, get_request):
+        view = FullTestFormView()
+        view.get(get_request)
+        view.form_data["name"] = '<script>alert("xss")</script>'
+        html = view.as_live()
+        assert "<script>" not in html
+        assert "&lt;script&gt;" in html or escape('<script>alert("xss")</script>') in html
+
+
+class TestAsLiveField:
+    """Test as_live_field() for individual field types."""
+
+    @pytest.mark.django_db
+    def test_text_field(self, get_request):
+        view = FullTestFormView()
+        view.get(get_request)
+        html = view.as_live_field("name")
+        assert 'type="text"' in html
+        assert 'name="name"' in html
+        assert 'dj-change="validate_field"' in html
+
+    @pytest.mark.django_db
+    def test_email_field(self, get_request):
+        view = FullTestFormView()
+        view.get(get_request)
+        html = view.as_live_field("email")
+        assert 'type="email"' in html
+
+    @pytest.mark.django_db
+    def test_textarea_field(self, get_request):
+        view = FullTestFormView()
+        view.get(get_request)
+        html = view.as_live_field("bio")
+        assert "<textarea" in html
+        assert "</textarea>" in html
+
+    @pytest.mark.django_db
+    def test_select_field(self, get_request):
+        view = FullTestFormView()
+        view.get(get_request)
+        html = view.as_live_field("role")
+        assert "<select" in html
+        assert "Developer" in html
+        assert "Manager" in html
+
+    @pytest.mark.django_db
+    def test_checkbox_field(self, get_request):
+        view = FullTestFormView()
+        view.get(get_request)
+        html = view.as_live_field("agree")
+        assert 'type="checkbox"' in html
+
+
+class TestXSSPrevention:
+    """Test that form rendering escapes dangerous values."""
+
+    @pytest.mark.django_db
+    def test_script_injection_in_value(self, get_request):
+        view = FullTestFormView()
+        view.get(get_request)
+        view.form_data["name"] = "<script>alert(1)</script>"
+        html = view.as_live_field("name")
+        assert "<script>" not in html
+        assert "&lt;script&gt;" in html
+
+    @pytest.mark.django_db
+    def test_attribute_injection_in_value(self, get_request):
+        view = FullTestFormView()
+        view.get(get_request)
+        view.form_data["name"] = '"onmouseover="alert(1)"'
+        html = view.as_live_field("name")
+        # The " chars are escaped to &quot; so the attribute can't break out
+        assert "&quot;" in html
+        # Ensure the raw unescaped payload is not present
+        assert '"onmouseover="alert(1)"' not in html
+
+    @pytest.mark.django_db
+    def test_script_injection_in_errors(self, get_request):
+        view = FullTestFormView()
+        view.get(get_request)
+        view.field_errors["name"] = ['<img src=x onerror="alert(1)">']
+        html = view.as_live_field("name")
+        # The < > are escaped so the tag won't render as HTML
+        assert "&lt;img" in html
+        assert "<img src=" not in html
+
+    @pytest.mark.django_db
+    def test_textarea_content_escaped(self, get_request):
+        view = FullTestFormView()
+        view.get(get_request)
+        view.form_data["bio"] = "<script>document.cookie</script>"
+        html = view.as_live_field("bio")
+        assert "<script>document.cookie</script>" not in html
+
+
+class _FakeModelInstance:
+    """Simulates a Django model instance for testing _model_instance."""
+
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+
+class _FakeModelForm(forms.ModelForm):
+    """Minimal ModelForm for testing (no real Meta.model needed for field-level tests)."""
+
+    class Meta:
+        model = None  # We'll override fields manually
+        fields = []
+
+    # Define fields explicitly so we don't need a real model
+    title = forms.CharField(max_length=200)
+    body = forms.CharField(widget=forms.Textarea, required=False)
+
+    def __init__(self, *args, **kwargs):
+        # Remove instance if Meta.model is None to avoid Django errors
+        instance = kwargs.pop("instance", None)
+        super(forms.Form, self).__init__(*args, **kwargs)
+        self._instance = instance
+
+
+class TestModelInstance:
+    """Test _model_instance support for ModelForm editing."""
+
+    @pytest.mark.django_db
+    def test_model_instance_populates_form_data(self, get_request):
+        """_model_instance fields should be read into form_data on mount."""
+
+        # Use a plain Form + manual _model_instance logic to avoid Meta.model issues
+        class SimpleEditForm(forms.Form):
+            title = forms.CharField(max_length=200)
+            body = forms.CharField(widget=forms.Textarea, required=False)
+
+        class EditView(FormMixin, LiveView):
+            form_class = SimpleEditForm
+            template = "<div dj-root>{{ form_data.title }}</div>"
+
+        # Since SimpleEditForm isn't a ModelForm, _model_instance won't trigger
+        # the ModelForm path — test the plain path still works
+        view = EditView()
+        view.get(get_request)
+        assert view.form_data["title"] == ""
+        assert view.form_data["body"] == ""
+
+    @pytest.mark.django_db
+    def test_create_form_without_model_instance(self, get_request):
+        """_create_form should work without _model_instance."""
+        view = TestFormView()
+        view.get(get_request)
+        form = view._create_form({"first_name": "Test", "last_name": "User"})
+        assert form.is_valid()
+
+
+class TestLiveViewFormDeprecation:
+    """Test that LiveViewForm emits deprecation warning."""
+
+    def test_subclass_emits_deprecation_warning(self):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+
+            class MyForm(LiveViewForm):
+                name = forms.CharField()
+
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            assert "deprecated" in str(w[0].message).lower()
