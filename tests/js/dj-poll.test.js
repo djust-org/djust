@@ -105,7 +105,7 @@ describe('dj-poll', () => {
         expect(el._djustPollIntervalId).toBeDefined();
     });
 
-    it('should fire poll event via HTTP fallback with _skipLoading', async () => {
+    it('should fire poll event via HTTP fallback without internal props', async () => {
         const dom = createTestEnv(
             '<div dj-view="app.PollView"><div dj-poll="refresh" dj-poll-interval="100"></div></div>'
         );
@@ -120,7 +120,9 @@ describe('dj-poll', () => {
         const calls = getFetchCalls(dom);
         expect(calls.length).toBeGreaterThanOrEqual(1);
         expect(calls[0].eventName).toBe('refresh');
-        expect(calls[0].body._skipLoading).toBe(true);
+        // _skipLoading is a client-only flag used for loading indicators;
+        // it should NOT be sent to the server
+        expect(calls[0].body._skipLoading).toBeUndefined();
     });
 
     it('should skip poll when document is hidden', async () => {
