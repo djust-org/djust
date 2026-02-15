@@ -72,14 +72,14 @@ function getFetchCalls(dom) {
 }
 
 describe('dj-poll', () => {
-    it('should set liveviewPollBound flag on element', () => {
+    it('should bind poll on element (interval ID set)', () => {
         const dom = createTestEnv(
             '<div dj-view="app.PollView"><div dj-poll="refresh"></div></div>'
         );
         initClient(dom);
 
         const el = dom.window.document.querySelector('[dj-poll]');
-        expect(el.dataset.liveviewPollBound).toBe('true');
+        expect(el._djustPollIntervalId).toBeDefined();
     });
 
     it('should store interval ID on element', () => {
@@ -101,7 +101,6 @@ describe('dj-poll', () => {
         initClient(dom);
 
         const el = dom.window.document.querySelector('[dj-poll]');
-        expect(el.dataset.liveviewPollBound).toBe('true');
         expect(el._djustPollIntervalId).toBeDefined();
     });
 
@@ -153,27 +152,29 @@ describe('dj-poll', () => {
         expect(getFetchCalls(dom).length).toBeGreaterThanOrEqual(1);
     });
 
-    it('should clean up and re-bind poll after clearing', () => {
+    it('should bind poll on a new element inserted into the DOM', () => {
         const dom = createTestEnv(
             '<div dj-view="app.PollView"><div dj-poll="refresh"></div></div>'
         );
         initClient(dom);
 
-        const el = dom.window.document.querySelector('[dj-poll]');
-        const firstId = el._djustPollIntervalId;
+        const oldEl = dom.window.document.querySelector('[dj-poll]');
+        const firstId = oldEl._djustPollIntervalId;
         expect(firstId).toBeDefined();
 
-        // Simulate cleanup
-        dom.window.clearInterval(firstId);
-        delete el.dataset.liveviewPollBound;
+        // Simulate replacing with a new DOM node (e.g., after a morph)
+        const newEl = dom.window.document.createElement('div');
+        newEl.setAttribute('dj-poll', 'refresh');
+        oldEl.parentNode.replaceChild(newEl, oldEl);
 
-        // Re-bind
+        // Clean up old interval
+        dom.window.clearInterval(firstId);
+
+        // Re-bind should pick up the new element
         dom.window.djust.bindLiveViewEvents();
 
-        expect(el.dataset.liveviewPollBound).toBe('true');
-        expect(el._djustPollIntervalId).toBeDefined();
-        // Should be a different interval ID
-        expect(el._djustPollIntervalId).not.toBe(firstId);
+        expect(newEl._djustPollIntervalId).toBeDefined();
+        expect(newEl._djustPollIntervalId).not.toBe(firstId);
     });
 
     it('should extract data-* params and include them in poll requests', async () => {
@@ -197,6 +198,5 @@ describe('dj-poll', () => {
 
         const el = dom.window.document.querySelector('button');
         expect(el._djustPollIntervalId).toBeUndefined();
-        expect(el.dataset.liveviewPollBound).toBeUndefined();
     });
 });

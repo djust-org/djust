@@ -183,7 +183,9 @@ describe('extractTypedParams', () => {
     });
 
     describe('Internal attribute skipping', () => {
-        it('should skip data-liveview* attributes', () => {
+        it('should skip data-liveview* attributes (defensive filter)', () => {
+            // These attrs are no longer set by the client (WeakMap is used instead),
+            // but the filter remains as a defensive measure.
             const el = createElement({
                 'data-liveview-click-bound': 'true',
                 'data-name': 'visible',

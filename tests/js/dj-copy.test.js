@@ -118,7 +118,7 @@ describe('dj-copy', () => {
         expect(defaultPrevented).toBe(true);
     });
 
-    it('does not re-bind if already bound (liveviewCopyBound flag)', () => {
+    it('does not re-bind if already bound (WeakMap prevents double-bind)', () => {
         const { window, document } = createEnv(
             '<button dj-copy="text">Copy</button>'
         );
