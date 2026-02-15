@@ -200,7 +200,7 @@ describe('morphElement', () => {
         expect(existing.hasAttribute('data-x')).toBe(false);
     });
 
-    it('preserves data-liveview binding flags', () => {
+    it('removes stale data-liveview attrs not present in desired element', () => {
         const existing = document.createElement('button');
         existing.setAttribute('dj-click', 'handler');
         existing.dataset.liveviewClickBound = 'true';
@@ -211,8 +211,10 @@ describe('morphElement', () => {
 
         morphElement(existing, desired);
 
-        // Binding flag should be preserved
-        expect(existing.dataset.liveviewClickBound).toBe('true');
+        // data-liveview-click-bound should be removed (not in desired)
+        expect(existing.dataset.liveviewClickBound).toBeUndefined();
+        // dj-click should be preserved (present in desired)
+        expect(existing.getAttribute('dj-click')).toBe('handler');
     });
 
     it('skips dj-update="ignore" elements', () => {

@@ -41,22 +41,29 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
         window.eval(clientCode);
     });
 
-    it('createNodeFromVNode sets data-liveview-click-bound on dj-click elements', () => {
+    it('createNodeFromVNode binds click handler on dj-click elements', () => {
         const elem = window.djust.createNodeFromVNode({
             tag: 'button',
             attrs: { 'dj-click': 'delete_todo(1)', 'data-dj-id': 'b2' },
             children: [{ tag: '', attrs: {}, children: [], text: 'Delete' }],
         });
-        expect(elem.dataset.liveviewClickBound).toBe('true');
+        // WeakMap tracks binding internally; verify bindLiveViewEvents won't double-bind
+        let addEventCount = 0;
+        const origAddEvent = elem.addEventListener.bind(elem);
+        elem.addEventListener = function(type, ...args) {
+            if (type === 'click') addEventCount++;
+            return origAddEvent(type, ...args);
+        };
+        window.djust.bindLiveViewEvents();
+        expect(addEventCount).toBe(0);
     });
 
-    it('bindLiveViewEvents skips elements already marked as bound', () => {
+    it('bindLiveViewEvents skips elements already bound via WeakMap', () => {
         const newBtn = window.djust.createNodeFromVNode({
             tag: 'button',
             attrs: { 'dj-click': 'delete_todo(1)', 'data-dj-id': 'b2' },
             children: [{ tag: '', attrs: {}, children: [], text: 'Delete' }],
         });
-        expect(newBtn.dataset.liveviewClickBound).toBe('true');
 
         const root = window.document.getElementById('root');
         root.querySelector('[data-dj-id="b1"]').replaceWith(newBtn);
@@ -72,15 +79,33 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
         expect(addEventCount).toBe(0);
     });
 
-    it('sets bound flag for other event types (submit, change)', () => {
+    it('binds handlers for other event types (submit, change) without double-binding', () => {
         const form = window.djust.createNodeFromVNode({
             tag: 'form', attrs: { 'dj-submit': 'save' }, children: [],
         });
         const input = window.djust.createNodeFromVNode({
             tag: 'input', attrs: { 'dj-change': 'validate', type: 'text', name: 'email' }, children: [],
         });
-        expect(form.dataset.liveviewSubmitBound).toBe('true');
-        expect(input.dataset.liveviewChangeBound).toBe('true');
+        // Verify attributes are set correctly
+        expect(form.getAttribute('dj-submit')).toBe('save');
+        expect(input.getAttribute('dj-change')).toBe('validate');
+
+        // Verify calling bindLiveViewEvents doesn't double-bind
+        let submitCount = 0;
+        const origFormAdd = form.addEventListener.bind(form);
+        form.addEventListener = function(type, ...args) {
+            if (type === 'submit') submitCount++;
+            return origFormAdd(type, ...args);
+        };
+        let changeCount = 0;
+        const origInputAdd = input.addEventListener.bind(input);
+        input.addEventListener = function(type, ...args) {
+            if (type === 'change') changeCount++;
+            return origInputAdd(type, ...args);
+        };
+        window.djust.bindLiveViewEvents();
+        expect(submitCount).toBe(0);
+        expect(changeCount).toBe(0);
     });
 
     it('createNodeFromVNode sets dj-click as DOM attribute', () => {
@@ -91,7 +116,6 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
         });
         expect(btn.getAttribute('dj-click')).toBe('delete_todo(2)');
         expect(btn.getAttribute('data-dj-id')).toBe('b2');
-        expect(btn.dataset.liveviewClickBound).toBe('true');
     });
 
     it('click handler reads updated dj-click attribute after SetAttribute patch', () => {
@@ -101,8 +125,7 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
         const root = window.document.getElementById('root');
         const btn = root.querySelector('[data-dj-id="b1"]');
 
-        // bindLiveViewEvents runs on init; btn should already be bound
-        expect(btn.dataset.liveviewClickBound).toBe('true');
+        // bindLiveViewEvents runs on init; btn should already be bound via WeakMap
         expect(btn.getAttribute('dj-click')).toBe('delete_todo(1)');
 
         // Simulate SetAttribute patch changing the handler
