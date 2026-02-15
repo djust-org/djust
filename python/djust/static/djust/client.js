@@ -2411,9 +2411,7 @@ async function handleEvent(eventName, params = {}) {
     // and would corrupt the params payload (e.g., HTMLElement objects serialize
     // as objects with numeric-indexed children that clobber form field data).
     const triggerElement = params._targetElement;
-    const optimisticUpdateId = params._optimisticUpdateId;
     const skipLoading = params._skipLoading;
-    const djTargetSelector = params._djTargetSelector;
 
     // Build clean server params (strip underscore-prefixed internal properties)
     const serverParams = {};
