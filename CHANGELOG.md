@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Form data lost on `dj-submit`** — Client-only properties (`_targetElement`, `_optimisticUpdateId`, `_skipLoading`, `_djTargetSelector`) are now stripped from event params before serialization. Previously, `HTMLFormElement` references in params corrupted the JSON payload, overwriting form field data with the element's indexed children. ([#308](https://github.com/djust-org/djust/issues/308))
+- **`@change` → `dj-change` in form adapters** — All three framework adapters (Bootstrap 5, Tailwind, Plain) rendered `@change="validate_field"` instead of `dj-change="validate_field"`, causing real-time field validation to silently fail. ([#310](https://github.com/djust-org/djust/pull/310))
+- **`EmailField` rendered as `type="text"`** — `_get_field_type()` checked `CharField` before `EmailField` (which inherits from `CharField`), so email fields never got `type="email"`. Reordered the isinstance checks. ([#310](https://github.com/djust-org/djust/pull/310))
+
+### Security
+
+- **XSS in `FormMixin.render_field()`** — Removed `render_field()`, `_render_field_widget()`, and `_attrs_to_string()` from `FormMixin`. These methods used f-strings with no escaping to build HTML, allowing stored XSS via form field values. Use `as_live()` / `as_live_field()` (which delegate to framework adapters with proper `escape()`) instead. ([#310](https://github.com/djust-org/djust/pull/310))
+- **Textarea content not escaped in adapters** — `_render_input()` passed raw textarea values to `_build_tag()` content without `escape()`. Added `escape(str(value))` for textarea content. ([#310](https://github.com/djust-org/djust/pull/310))
+
+### Changed
+
+- **Framework adapters deduplicated** — Created `BaseAdapter` with all shared rendering logic. `Bootstrap5Adapter`, `TailwindAdapter`, and `PlainAdapter` reduced from ~200 lines each to ~10 lines of class attributes. `frameworks.py` reduced from ~657 to ~349 lines. ([#310](https://github.com/djust-org/djust/pull/310))
+- **`_model_instance` support for ModelForm editing** — `FormMixin.mount()` now reads field values from `_model_instance` if set and the form is a `ModelForm`. `_create_form()` passes `instance=` to the form constructor. ([#310](https://github.com/djust-org/djust/pull/310))
+
+### Deprecated
+
+- **`LiveViewForm`** — Emits `DeprecationWarning` on subclass. Adds no functionality over `django.forms.Form`. Will be removed in 0.4. ([#310](https://github.com/djust-org/djust/pull/310))
+
+### Removed
+
+- **`FormMixin.render_field()`** — Insecure (XSS via f-strings) and duplicated adapter logic. Use `as_live_field()` instead. ([#310](https://github.com/djust-org/djust/pull/310))
+- **`form_field()` function** — Dead code, never called. Removed from `forms.py` and `__all__`. ([#310](https://github.com/djust-org/djust/pull/310))
 
 ## [0.3.1] - 2026-02-14
 

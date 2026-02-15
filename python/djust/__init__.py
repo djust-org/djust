@@ -22,7 +22,7 @@ from .decorators import (
 )
 from .auth import LoginRequiredMixin, PermissionRequiredMixin
 from .react import react_components, register_react_component, ReactMixin
-from .forms import FormMixin, LiveViewForm, form_field
+from .forms import FormMixin, LiveViewForm
 from .drafts import DraftModeMixin
 from .push import push_to_view, apush_to_view
 from .presence import PresenceMixin, LiveCursorMixin, PresenceManager, CursorTracker
@@ -205,7 +205,6 @@ __all__ = [
     "ReactMixin",
     "FormMixin",
     "LiveViewForm",
-    "form_field",
     "DraftModeMixin",
     "push_to_view",
     "apush_to_view",
