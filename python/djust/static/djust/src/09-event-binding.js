@@ -392,6 +392,10 @@ function bindLiveViewEvents() {
             element._djustPollVisibilityHandler = visHandler;
         }
     });
+
+    // Re-scan dj-loading attributes after DOM updates so dynamically
+    // added elements (e.g. inside modals) get registered.
+    globalLoadingManager.scanAndRegister();
 }
 
 // Helper: Debounce function

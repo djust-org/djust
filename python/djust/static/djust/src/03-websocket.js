@@ -319,9 +319,13 @@ class LiveViewWebSocket {
 
             case 'noop':
                 // Server acknowledged event but no DOM changes needed (auto-detected
-                // or explicit _skip_render). Just clear loading state.
+                // or explicit _skip_render). Clear loading state unless async pending.
                 if (this.lastEventName) {
-                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    if (!data.async_pending) {
+                        globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    } else if (globalThis.djustDebug) {
+                        console.log('[LiveView] Keeping loading state — async work pending');
+                    }
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }

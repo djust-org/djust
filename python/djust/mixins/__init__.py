@@ -17,6 +17,7 @@ from .post_processing import PostProcessingMixin
 from .model_binding import ModelBindingMixin
 from .push_events import PushEventMixin
 from .navigation import NavigationMixin
+from .async_work import AsyncWorkMixin
 from ..streaming import StreamingMixin
 
 __all__ = [
@@ -33,4 +34,5 @@ __all__ = [
     "NavigationMixin",
     "PostProcessingMixin",
     "StreamingMixin",
+    "AsyncWorkMixin",
 ]

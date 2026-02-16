@@ -179,8 +179,17 @@ function handleServerResponse(data, eventName, triggerElement) {
             window.djustDebugPanel.processDebugInfo(data._debug);
         }
 
-        // Stop loading state
-        globalLoadingManager.stopLoading(eventName, triggerElement);
+        // Stop loading state (unless server has async work pending)
+        // For async completion responses, data.event_name identifies which
+        // loading state to clear (since lastEventName was already consumed).
+        const loadingEventName = eventName || data.event_name;
+        if (!data.async_pending) {
+            if (loadingEventName) {
+                globalLoadingManager.stopLoading(loadingEventName, triggerElement);
+            }
+        } else if (globalThis.djustDebug) {
+            console.log('[LiveView] Keeping loading state — async work pending');
+        }
         return true;
 
     } catch (error) {

@@ -141,9 +141,10 @@ function reinitLiveViewForTurboNav() {
     }
 
     // Clean up existing poll intervals before re-binding
-    document.querySelectorAll('[dj-poll]').forEach(el => {
+    document.querySelectorAll('[data-liveview-poll-bound]').forEach(el => {
         if (el._djustPollIntervalId) clearInterval(el._djustPollIntervalId);
         if (el._djustPollVisibilityHandler) document.removeEventListener('visibilitychange', el._djustPollVisibilityHandler);
+        delete el.dataset.liveviewPollBound;
     });
 
     // Re-bind events
@@ -335,8 +336,17 @@ function handleServerResponse(data, eventName, triggerElement) {
             window.djustDebugPanel.processDebugInfo(data._debug);
         }
 
-        // Stop loading state
-        globalLoadingManager.stopLoading(eventName, triggerElement);
+        // Stop loading state (unless server has async work pending)
+        // For async completion responses, data.event_name identifies which
+        // loading state to clear (since lastEventName was already consumed).
+        const loadingEventName = eventName || data.event_name;
+        if (!data.async_pending) {
+            if (loadingEventName) {
+                globalLoadingManager.stopLoading(loadingEventName, triggerElement);
+            }
+        } else if (globalThis.djustDebug) {
+            console.log('[LiveView] Keeping loading state — async work pending');
+        }
         return true;
 
     } catch (error) {
@@ -666,9 +676,13 @@ class LiveViewWebSocket {
 
             case 'noop':
                 // Server acknowledged event but no DOM changes needed (auto-detected
-                // or explicit _skip_render). Just clear loading state.
+                // or explicit _skip_render). Clear loading state unless async pending.
                 if (this.lastEventName) {
-                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    if (!data.async_pending) {
+                        globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    } else if (globalThis.djustDebug) {
+                        console.log('[LiveView] Keeping loading state — async work pending');
+                    }
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
@@ -1798,29 +1812,6 @@ function checkDjConfirm(element) {
     return true; // Proceed
 }
 
-// Track which DOM nodes have actually had event handlers attached.
-// WeakMap<Element, Set<string>> — keys are live DOM nodes, values are
-// sets of handler types already bound (e.g. 'click', 'submit').
-// Unlike data attributes, WeakMap entries are automatically invalidated
-// when a DOM node is replaced (cloned/morphed) because the new node
-// is a different object.  This prevents stale data-liveview-*-bound
-// attributes from blocking re-binding after VDOM patches.
-const _boundHandlers = new WeakMap();
-
-function _isHandlerBound(element, type) {
-    const set = _boundHandlers.get(element);
-    return set ? set.has(type) : false;
-}
-
-function _markHandlerBound(element, type) {
-    let set = _boundHandlers.get(element);
-    if (!set) {
-        set = new Set();
-        _boundHandlers.set(element, set);
-    }
-    set.add(type);
-}
-
 function bindLiveViewEvents() {
     // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
     if (window.djust.uploads) {
@@ -1837,8 +1828,8 @@ function bindLiveViewEvents() {
     allElements.forEach(element => {
         // Handle dj-click events
         const clickHandler = element.getAttribute('dj-click');
-        if (clickHandler && !_isHandlerBound(element, 'click')) {
-            _markHandlerBound(element, 'click');
+        if (clickHandler && !element.dataset.liveviewClickBound) {
+            element.dataset.liveviewClickBound = 'true';
             // Parse handler string to extract function name and arguments
             const parsed = parseEventHandler(clickHandler);
 
@@ -1899,8 +1890,8 @@ function bindLiveViewEvents() {
         }
 
         // Handle dj-copy — client-side clipboard copy (no server round-trip)
-        if (element.getAttribute('dj-copy') && !_isHandlerBound(element, 'copy')) {
-            _markHandlerBound(element, 'copy');
+        if (element.getAttribute('dj-copy') && !element.dataset.liveviewCopyBound) {
+            element.dataset.liveviewCopyBound = 'true';
             element.addEventListener('click', function(e) {
                 e.preventDefault();
                 // Read attribute at click time (not bind time) so morph updates take effect
@@ -1916,8 +1907,8 @@ function bindLiveViewEvents() {
 
         // Handle dj-submit events on forms
         const submitHandler = element.getAttribute('dj-submit');
-        if (submitHandler && !_isHandlerBound(element, 'submit')) {
-            _markHandlerBound(element, 'submit');
+        if (submitHandler && !element.dataset.liveviewSubmitBound) {
+            element.dataset.liveviewSubmitBound = 'true';
             element.addEventListener('submit', async (e) => {
                 e.preventDefault();
 
@@ -1989,8 +1980,8 @@ function bindLiveViewEvents() {
 
         // Handle dj-change events
         const changeHandler = element.getAttribute('dj-change');
-        if (changeHandler && !_isHandlerBound(element, 'change')) {
-            _markHandlerBound(element, 'change');
+        if (changeHandler && !element.dataset.liveviewChangeBound) {
+            element.dataset.liveviewChangeBound = 'true';
             // Parse handler string to extract function name and arguments
             const parsedChange = parseEventHandler(changeHandler);
 
@@ -2034,8 +2025,8 @@ function bindLiveViewEvents() {
 
         // Handle dj-input events (with smart debouncing/throttling)
         const inputHandler = element.getAttribute('dj-input');
-        if (inputHandler && !_isHandlerBound(element, 'input')) {
-            _markHandlerBound(element, 'input');
+        if (inputHandler && !element.dataset.liveviewInputBound) {
+            element.dataset.liveviewInputBound = 'true';
             // Parse handler string to extract function name and arguments
             const parsedInput = parseEventHandler(inputHandler);
 
@@ -2078,8 +2069,8 @@ function bindLiveViewEvents() {
 
         // Handle dj-blur events
         const blurHandler = element.getAttribute('dj-blur');
-        if (blurHandler && !_isHandlerBound(element, 'blur')) {
-            _markHandlerBound(element, 'blur');
+        if (blurHandler && !element.dataset.liveviewBlurBound) {
+            element.dataset.liveviewBlurBound = 'true';
             const parsedBlur = parseEventHandler(blurHandler);
             element.addEventListener('blur', async (e) => {
                 // dj-confirm: show confirmation dialog before sending event
@@ -2097,8 +2088,8 @@ function bindLiveViewEvents() {
 
         // Handle dj-focus events
         const focusHandler = element.getAttribute('dj-focus');
-        if (focusHandler && !_isHandlerBound(element, 'focus')) {
-            _markHandlerBound(element, 'focus');
+        if (focusHandler && !element.dataset.liveviewFocusBound) {
+            element.dataset.liveviewFocusBound = 'true';
             const parsedFocus = parseEventHandler(focusHandler);
             element.addEventListener('focus', async (e) => {
                 // dj-confirm: show confirmation dialog before sending event
@@ -2117,8 +2108,8 @@ function bindLiveViewEvents() {
         // Handle dj-keydown / dj-keyup events
         ['keydown', 'keyup'].forEach(eventType => {
             const keyHandler = element.getAttribute(`dj-${eventType}`);
-            if (keyHandler && !_isHandlerBound(element, eventType)) {
-                _markHandlerBound(element, eventType);
+            if (keyHandler && !element.dataset[`liveview${eventType}Bound`]) {
+                element.dataset[`liveview${eventType}Bound`] = 'true';
 
                 const keyHandlerFn = async (e) => {
                     // Check for key modifiers (e.g. dj-keydown.enter)
@@ -2179,8 +2170,8 @@ function bindLiveViewEvents() {
 
         // Handle dj-poll — declarative polling
         const pollHandler = element.getAttribute('dj-poll');
-        if (pollHandler && !_isHandlerBound(element, 'poll')) {
-            _markHandlerBound(element, 'poll');
+        if (pollHandler && !element.dataset.liveviewPollBound) {
+            element.dataset.liveviewPollBound = 'true';
             const parsed = parseEventHandler(pollHandler);
             const interval = parseInt(element.getAttribute('dj-poll-interval'), 10) || 5000;
             const pollParams = extractTypedParams(element);
@@ -2202,6 +2193,10 @@ function bindLiveViewEvents() {
             element._djustPollVisibilityHandler = visHandler;
         }
     });
+
+    // Re-scan dj-loading attributes after DOM updates so dynamically
+    // added elements (e.g. inside modals) get registered.
+    globalLoadingManager.scanAndRegister();
 }
 
 // Helper: Debounce function
@@ -2298,21 +2293,38 @@ const globalLoadingManager = {
 
     // Scan and register all elements with dj-loading attributes
     scanAndRegister() {
+        // Clean up entries for elements no longer in the DOM (e.g. after morphdom/patches)
+        this.registeredElements.forEach((_config, element) => {
+            if (!element.isConnected) {
+                this.registeredElements.delete(element);
+            }
+        });
+
         // Use targeted attribute selectors for better performance on large pages
         const selectors = [
             '[dj-loading\\.disable]',
             '[dj-loading\\.show]',
             '[dj-loading\\.hide]',
-            '[dj-loading\\.class]'
+            '[dj-loading\\.class]',
+            '[dj-loading\\.for]'
         ].join(',');
 
         const loadingElements = document.querySelectorAll(selectors);
         loadingElements.forEach(element => {
-            // Find the associated event from dj-click, dj-submit, etc.
-            const eventAttr = Array.from(element.attributes).find(
-                attr => attr.name.startsWith('dj-') && !attr.name.startsWith('dj-loading')
-            );
-            const eventName = eventAttr ? eventAttr.value : null;
+            // Skip elements already registered — preserves originalState captured
+            // before loading started (client-side loading modifies DOM styles,
+            // and re-registering would capture the loading state as "original")
+            if (this.registeredElements.has(element)) return;
+            // Determine associated event name:
+            // 1. Explicit: dj-loading.for="event_name" (works on any element)
+            // 2. Implicit: from the element's own dj-click, dj-submit, etc.
+            let eventName = element.getAttribute('dj-loading.for');
+            if (!eventName) {
+                const eventAttr = Array.from(element.attributes).find(
+                    attr => attr.name.startsWith('dj-') && !attr.name.startsWith('dj-loading')
+                );
+                eventName = eventAttr ? eventAttr.value : null;
+            }
             if (eventName) {
                 this.register(element, eventName);
             }
@@ -2902,15 +2914,10 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                     const parsed = parseEventHandler(elem.getAttribute(djAttrKey));
 
                     e.preventDefault();
-                    let params = {};
+                    const params = {};
 
-                    // For submit events, collect FormData from the form
-                    if (eventType === 'submit') {
-                        const formData = new FormData(e.target);
-                        params = Object.fromEntries(formData.entries());
-                    }
                     // For form element events (change, input, blur, focus), extract value
-                    else if (['change', 'input', 'blur', 'focus'].includes(eventType)) {
+                    if (['change', 'input', 'blur', 'focus'].includes(eventType)) {
                         const target = e.target;
                         params.value = target.type === 'checkbox' ? target.checked : target.value;
                         params.field = target.name || target.id || null;
@@ -2945,17 +2952,13 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                     }
 
                     handleEvent(parsed.name, params);
-
-                    // Reset form after submit (matches bindLiveViewEvents behavior)
-                    if (eventType === 'submit') {
-                        e.target.reset();
-                    }
                 });
                 // Set the dj-* attribute on the DOM so SetAttribute patches
                 // can update it and bindLiveViewEvents can re-read it.
                 elem.setAttribute(key, value);
                 // Mark as bound so bindLiveViewEvents() won't add a duplicate listener
-                _markHandlerBound(elem, eventType);
+                const boundKey = `liveview${eventType.charAt(0).toUpperCase() + eventType.slice(1)}Bound`;
+                elem.dataset[boundKey] = 'true';
             } else {
                 if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
                     elem.value = value;
@@ -3235,6 +3238,8 @@ function morphElement(existing, desired) {
     for (let i = existing.attributes.length - 1; i >= 0; i--) {
         const name = existing.attributes[i].name;
         if (!desired.hasAttribute(name)) {
+            // Preserve djust internal event-binding flags to prevent duplicate listeners
+            if (name.startsWith('data-liveview')) continue;
             existing.removeAttribute(name);
         }
     }
