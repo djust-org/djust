@@ -335,8 +335,17 @@ function handleServerResponse(data, eventName, triggerElement) {
             window.djustDebugPanel.processDebugInfo(data._debug);
         }
 
-        // Stop loading state
-        globalLoadingManager.stopLoading(eventName, triggerElement);
+        // Stop loading state (unless server has async work pending)
+        // For async completion responses, data.event_name identifies which
+        // loading state to clear (since lastEventName was already consumed).
+        const loadingEventName = eventName || data.event_name;
+        if (!data.async_pending) {
+            if (loadingEventName) {
+                globalLoadingManager.stopLoading(loadingEventName, triggerElement);
+            }
+        } else if (globalThis.djustDebug) {
+            console.log('[LiveView] Keeping loading state — async work pending');
+        }
         return true;
 
     } catch (error) {
@@ -666,9 +675,13 @@ class LiveViewWebSocket {
 
             case 'noop':
                 // Server acknowledged event but no DOM changes needed (auto-detected
-                // or explicit _skip_render). Just clear loading state.
+                // or explicit _skip_render). Clear loading state unless async pending.
                 if (this.lastEventName) {
-                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    if (!data.async_pending) {
+                        globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    } else if (globalThis.djustDebug) {
+                        console.log('[LiveView] Keeping loading state — async work pending');
+                    }
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
@@ -1803,8 +1816,8 @@ function checkDjConfirm(element) {
 // sets of handler types already bound (e.g. 'click', 'submit').
 // Unlike data attributes, WeakMap entries are automatically invalidated
 // when a DOM node is replaced (cloned/morphed) because the new node
-// is a different object.  This prevents stale data-liveview-*-bound
-// attributes from blocking re-binding after VDOM patches.
+// is a different object.  This prevents stale binding flags from
+// blocking re-binding after VDOM patches.
 const _boundHandlers = new WeakMap();
 
 function _isHandlerBound(element, type) {
@@ -2202,6 +2215,10 @@ function bindLiveViewEvents() {
             element._djustPollVisibilityHandler = visHandler;
         }
     });
+
+    // Re-scan dj-loading attributes after DOM updates so dynamically
+    // added elements (e.g. inside modals) get registered.
+    globalLoadingManager.scanAndRegister();
 }
 
 // Helper: Debounce function
@@ -2298,21 +2315,38 @@ const globalLoadingManager = {
 
     // Scan and register all elements with dj-loading attributes
     scanAndRegister() {
+        // Clean up entries for elements no longer in the DOM (e.g. after morphdom/patches)
+        this.registeredElements.forEach((_config, element) => {
+            if (!element.isConnected) {
+                this.registeredElements.delete(element);
+            }
+        });
+
         // Use targeted attribute selectors for better performance on large pages
         const selectors = [
             '[dj-loading\\.disable]',
             '[dj-loading\\.show]',
             '[dj-loading\\.hide]',
-            '[dj-loading\\.class]'
+            '[dj-loading\\.class]',
+            '[dj-loading\\.for]'
         ].join(',');
 
         const loadingElements = document.querySelectorAll(selectors);
         loadingElements.forEach(element => {
-            // Find the associated event from dj-click, dj-submit, etc.
-            const eventAttr = Array.from(element.attributes).find(
-                attr => attr.name.startsWith('dj-') && !attr.name.startsWith('dj-loading')
-            );
-            const eventName = eventAttr ? eventAttr.value : null;
+            // Skip elements already registered — preserves originalState captured
+            // before loading started (client-side loading modifies DOM styles,
+            // and re-registering would capture the loading state as "original")
+            if (this.registeredElements.has(element)) return;
+            // Determine associated event name:
+            // 1. Explicit: dj-loading.for="event_name" (works on any element)
+            // 2. Implicit: from the element's own dj-click, dj-submit, etc.
+            let eventName = element.getAttribute('dj-loading.for');
+            if (!eventName) {
+                const eventAttr = Array.from(element.attributes).find(
+                    attr => attr.name.startsWith('dj-') && !attr.name.startsWith('dj-loading')
+                );
+                eventName = eventAttr ? eventAttr.value : null;
+            }
             if (eventName) {
                 this.register(element, eventName);
             }
@@ -2902,15 +2936,10 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                     const parsed = parseEventHandler(elem.getAttribute(djAttrKey));
 
                     e.preventDefault();
-                    let params = {};
+                    const params = {};
 
-                    // For submit events, collect FormData from the form
-                    if (eventType === 'submit') {
-                        const formData = new FormData(e.target);
-                        params = Object.fromEntries(formData.entries());
-                    }
                     // For form element events (change, input, blur, focus), extract value
-                    else if (['change', 'input', 'blur', 'focus'].includes(eventType)) {
+                    if (['change', 'input', 'blur', 'focus'].includes(eventType)) {
                         const target = e.target;
                         params.value = target.type === 'checkbox' ? target.checked : target.value;
                         params.field = target.name || target.id || null;
@@ -2945,11 +2974,6 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                     }
 
                     handleEvent(parsed.name, params);
-
-                    // Reset form after submit (matches bindLiveViewEvents behavior)
-                    if (eventType === 'submit') {
-                        e.target.reset();
-                    }
                 });
                 // Set the dj-* attribute on the DOM so SetAttribute patches
                 // can update it and bindLiveViewEvents can re-read it.

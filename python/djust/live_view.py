@@ -23,6 +23,7 @@ from .session_utils import (  # noqa: F401
 )
 
 from .mixins import (
+    AsyncWorkMixin,
     StreamsMixin,
     StreamingMixin,
     TemplateMixin,
@@ -69,6 +70,7 @@ class LiveView(
     ModelBindingMixin,
     PushEventMixin,
     NavigationMixin,
+    AsyncWorkMixin,
     View,
 ):
     """

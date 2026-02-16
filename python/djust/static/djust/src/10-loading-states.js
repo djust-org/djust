@@ -51,21 +51,38 @@ const globalLoadingManager = {
 
     // Scan and register all elements with dj-loading attributes
     scanAndRegister() {
+        // Clean up entries for elements no longer in the DOM (e.g. after morphdom/patches)
+        this.registeredElements.forEach((_config, element) => {
+            if (!element.isConnected) {
+                this.registeredElements.delete(element);
+            }
+        });
+
         // Use targeted attribute selectors for better performance on large pages
         const selectors = [
             '[dj-loading\\.disable]',
             '[dj-loading\\.show]',
             '[dj-loading\\.hide]',
-            '[dj-loading\\.class]'
+            '[dj-loading\\.class]',
+            '[dj-loading\\.for]'
         ].join(',');
 
         const loadingElements = document.querySelectorAll(selectors);
         loadingElements.forEach(element => {
-            // Find the associated event from dj-click, dj-submit, etc.
-            const eventAttr = Array.from(element.attributes).find(
-                attr => attr.name.startsWith('dj-') && !attr.name.startsWith('dj-loading')
-            );
-            const eventName = eventAttr ? eventAttr.value : null;
+            // Skip elements already registered — preserves originalState captured
+            // before loading started (client-side loading modifies DOM styles,
+            // and re-registering would capture the loading state as "original")
+            if (this.registeredElements.has(element)) return;
+            // Determine associated event name:
+            // 1. Explicit: dj-loading.for="event_name" (works on any element)
+            // 2. Implicit: from the element's own dj-click, dj-submit, etc.
+            let eventName = element.getAttribute('dj-loading.for');
+            if (!eventName) {
+                const eventAttr = Array.from(element.attributes).find(
+                    attr => attr.name.startsWith('dj-') && !attr.name.startsWith('dj-loading')
+                );
+                eventName = eventAttr ? eventAttr.value : null;
+            }
             if (eventName) {
                 this.register(element, eventName);
             }

@@ -184,15 +184,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 }
             )
 
-    async def _send_noop(self) -> None:
+    async def _send_noop(self, async_pending: bool = False) -> None:
         """
         Send a lightweight noop acknowledgment to the client.
 
         Tells the client the event was processed but no DOM update is needed.
         The client clears loading state (spinners, disabled buttons) without
         touching the DOM.
+
+        Args:
+            async_pending: If True, tells the client to keep loading state active
+                because a start_async() callback is running in the background.
         """
-        await self.send_json({"type": "noop"})
+        msg: Dict[str, Any] = {"type": "noop"}
+        if async_pending:
+            msg["async_pending"] = True
+        await self.send_json(msg)
 
     async def _flush_navigation(self) -> None:
         """
@@ -281,6 +288,69 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         response.update(context)
         await self.send_json(response)
 
+    async def _dispatch_async_work(self) -> None:
+        """
+        Check if the handler scheduled background work via start_async().
+
+        If _async_pending is set, spawn the callback as an asyncio task
+        so it runs after the current response is sent to the client.
+        When the callback completes, re-render and send updated patches.
+        """
+        if not self.view_instance:
+            return
+        pending = getattr(self.view_instance, "_async_pending", None)
+        if not pending:
+            return
+        self.view_instance._async_pending = None
+        callback, args, kwargs = pending
+        # Pass the event name so the completion response can tell the client
+        # which loading state to clear.
+        event_name = getattr(self, "_current_event_name", None)
+        asyncio.ensure_future(self._run_async_work(callback, args, kwargs, event_name=event_name))
+
+    async def _run_async_work(self, callback, args, kwargs, event_name=None) -> None:
+        """
+        Execute a start_async callback in a thread, then re-render the view.
+
+        This runs after the initial response has been sent (with loading state).
+        When the callback completes, render_with_diff is called and the result
+        is sent to the client, completing the loading cycle.
+
+        Args:
+            event_name: The event that triggered this async work. Included in
+                the response so the client can clear the correct loading state.
+        """
+        try:
+            await sync_to_async(callback)(*args, **kwargs)
+
+            # Re-render and send patches (mirrors the server_push path)
+            if hasattr(self.view_instance, "_sync_state_to_rust"):
+                await sync_to_async(self.view_instance._sync_state_to_rust)()
+
+            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+
+            if patches is not None:
+                patch_list = json.loads(patches) if patches else []
+                await self._send_update(patches=patch_list, version=version, event_name=event_name)
+            else:
+                # Full HTML fallback
+                html_stripped, html_content = await sync_to_async(
+                    lambda h: (
+                        self.view_instance._strip_comments_and_whitespace(h),
+                        self.view_instance._extract_liveview_content(
+                            self.view_instance._strip_comments_and_whitespace(h)
+                        ),
+                    )
+                )(html)
+                await self._send_update(html=html_content, version=version, event_name=event_name)
+
+            await self._flush_push_events()
+        except Exception:
+            logger.exception(
+                "[djust] Error in start_async callback on %s",
+                self.view_instance.__class__.__name__ if self.view_instance else "?",
+            )
+
     async def _send_update(
         self,
         patches: Optional[list] = None,
@@ -294,6 +364,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         file_path: Optional[str] = None,
         event_name: Optional[str] = None,
         broadcast: bool = False,
+        async_pending: bool = False,
     ) -> None:
         """
         Send a patch or full HTML update to the client.
@@ -342,6 +413,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         response["file"] = file_path
                 if broadcast:
                     response["broadcast"] = True
+                if async_pending:
+                    response["async_pending"] = True
+                if event_name:
+                    response["event_name"] = event_name
                 self._attach_debug_payload(response, event_name, performance)
                 await self.send_json(response)
                 await self._flush_push_events()
@@ -358,6 +433,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 response["reset_form"] = True
             if cache_request_id:
                 response["cache_request_id"] = cache_request_id
+            if async_pending:
+                response["async_pending"] = True
+            if event_name:
+                response["event_name"] = event_name
             self._attach_debug_payload(response, event_name)
             await self.send_json(response)
             await self._flush_push_events()
@@ -972,6 +1051,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         timing = {}  # Keep for backward compatibility
 
         event_name = data.get("event")
+        self._current_event_name = event_name  # For _dispatch_async_work
         params = data.get("params", {})
 
         # Extract cache request ID if present (for @cache decorator)
@@ -1207,8 +1287,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                         if skip_render:
                             self.view_instance._skip_render = False
+                            has_async = (
+                                getattr(self.view_instance, "_async_pending", None) is not None
+                            )
                             await self._flush_push_events()
-                            await self._send_noop()
+                            await self._send_noop(async_pending=has_async)
+                            if has_async:
+                                await self._dispatch_async_work()
                             return
 
                         # Get updated HTML and patches with tracking
@@ -1302,6 +1387,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if should_reset_form:
                     # Clear the flag
                     self.view_instance._should_reset_form = False
+
+                # Detect async work scheduled by start_async() — tell client
+                # to keep loading state active until the background callback
+                # sends its own update.
+                has_async = getattr(self.view_instance, "_async_pending", None) is not None
 
                 # Embedded child view: send scoped HTML update
                 if is_embedded_child and view_id:
@@ -1434,6 +1524,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             timing=timing,
                             performance=perf_summary,
                             event_name=event_name,
+                            async_pending=has_async,
                         )
                     else:
                         # patches=None means VDOM diff failed or was skipped - send full HTML
@@ -1508,7 +1599,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             cache_request_id=cache_request_id,
                             reset_form=should_reset_form,
                             event_name=event_name,
+                            async_pending=has_async,
                         )
+
+                # Check for async work scheduled by start_async()
+                await self._dispatch_async_work()
 
             except Exception as e:
                 view_class_name = (

@@ -404,8 +404,7 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
                 // can update it and bindLiveViewEvents can re-read it.
                 elem.setAttribute(key, value);
                 // Mark as bound so bindLiveViewEvents() won't add a duplicate listener
-                const boundKey = `liveview${eventType.charAt(0).toUpperCase() + eventType.slice(1)}Bound`;
-                elem.dataset[boundKey] = 'true';
+                _markHandlerBound(elem, eventType);
             } else {
                 if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
                     elem.value = value;
@@ -685,8 +684,6 @@ function morphElement(existing, desired) {
     for (let i = existing.attributes.length - 1; i >= 0; i--) {
         const name = existing.attributes[i].name;
         if (!desired.hasAttribute(name)) {
-            // Preserve djust internal event-binding flags to prevent duplicate listeners
-            if (name.startsWith('data-liveview')) continue;
             existing.removeAttribute(name);
         }
     }
