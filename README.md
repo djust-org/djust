@@ -535,6 +535,92 @@ class ProductSearchView(LiveView):
 - 🔄 **[Migration Guide](docs/STATE_MANAGEMENT_MIGRATION.md)** - Convert JavaScript to Python
 - ⚖️ **[Framework Comparison](docs/STATE_MANAGEMENT_COMPARISON.md)** - vs Phoenix LiveView & Laravel Livewire
 
+### 🧭 Navigation Patterns
+
+djust provides three navigation mechanisms for building multi-view applications without full page reloads:
+
+#### When to Use What
+
+| Scenario | Use | Why |
+|----------|-----|-----|
+| Filter/sort/paginate within same view | `dj-patch` / `live_patch()` | No remount, URL stays bookmarkable |
+| Navigate to a different LiveView | `dj-navigate` / `live_redirect()` | Same WebSocket, no page reload |
+| Link to non-LiveView page | Standard `<a href>` | Full page load needed |
+
+#### ⚠️ Anti-Pattern: Don't Use `dj-click` for Navigation
+
+This is one of the most common mistakes when building multi-view djust apps:
+
+**❌ Wrong** — using `dj-click` to trigger a handler that calls `live_redirect()`:
+
+```python
+# Anti-pattern: Don't use dj-click for navigation
+@event_handler()
+def go_to_item(self, item_id, **kwargs):
+    self.live_redirect(f"/items/{item_id}/")
+```
+
+```html
+<!-- Wrong: Forces a round-trip through WebSocket for navigation -->
+<button dj-click="go_to_item" dj-value-item_id="{{ item.id }}">View</button>
+```
+
+**✅ Right** — using `dj-navigate` directly:
+
+```html
+<!-- Right: Client navigates directly, no extra server round-trip -->
+<a dj-navigate="/items/{{ item.id }}/">View Item</a>
+```
+
+**Why it matters:** `dj-click` sends a WebSocket message to the server, the server processes the handler, then sends back a navigate command — an unnecessary round-trip. `dj-navigate` handles navigation client-side immediately, making it faster and more efficient.
+
+**Exception:** Use `live_redirect()` in a handler when navigation is *conditional* (e.g., redirect after form validation):
+
+```python
+@event_handler()
+def submit_form(self, **kwargs):
+    if self.form.is_valid():
+        self.form.save()
+        self.live_redirect("/success/")  # OK: Conditional navigation
+    else:
+        # Stay on form to show errors
+        pass
+```
+
+#### Quick Example: Multi-View App
+
+```python
+from djust import LiveView
+from djust.mixins.navigation import NavigationMixin
+from djust.decorators import event_handler
+
+class ProductListView(NavigationMixin, LiveView):
+    template_string = """
+    <!-- Filter within same view: use dj-patch -->
+    <a dj-patch="?category=electronics">Electronics</a>
+    <a dj-patch="?category=books">Books</a>
+
+    <div>
+        {% for product in products %}
+            <!-- Navigate to different view: use dj-navigate -->
+            <a dj-navigate="/products/{{ product.id }}/">{{ product.name }}</a>
+        {% endfor %}
+    </div>
+    """
+
+    def mount(self, request, **kwargs):
+        self.category = "all"
+        self.products = []
+
+    def handle_params(self, params, uri):
+        """Called when URL changes via dj-patch or browser back/forward"""
+        self.category = params.get("category", "all")
+        self.products = Product.objects.filter(category=self.category)
+```
+
+**Learn More:**
+- 📖 **[Navigation Guide](docs/guides/navigation.md)** - Complete API reference (`live_patch()`, `live_redirect()`, `handle_params()`)
+
 ### Developer Tooling
 
 #### Debug Panel
@@ -657,16 +743,20 @@ djust/
 ### Running Tests
 
 ```bash
-# Rust tests
-cargo test
+# All tests (Python + Rust + JavaScript)
+make test
 
-# Python tests
-pytest
+# Individual test suites
+make test-python       # Python tests
+make test-rust         # Rust tests
+make test-js           # JavaScript tests
 
-# Integration tests
-cd examples/demo_project
-python manage.py test
+# Specific tests
+pytest tests/unit/test_live_view.py
+cargo test --workspace --exclude djust_live
 ```
+
+For comprehensive testing documentation, see **[Testing Guide](docs/TESTING.md)**.
 
 ### Building Documentation
 
