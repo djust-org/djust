@@ -117,10 +117,9 @@ function reinitLiveViewForTurboNav() {
     }
 
     // Clean up existing poll intervals before re-binding
-    document.querySelectorAll('[data-liveview-poll-bound]').forEach(el => {
+    document.querySelectorAll('[dj-poll]').forEach(el => {
         if (el._djustPollIntervalId) clearInterval(el._djustPollIntervalId);
         if (el._djustPollVisibilityHandler) document.removeEventListener('visibilitychange', el._djustPollVisibilityHandler);
-        delete el.dataset.liveviewPollBound;
     });
 
     // Re-bind events

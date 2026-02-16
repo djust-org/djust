@@ -11,6 +11,29 @@ function checkDjConfirm(element) {
     return true; // Proceed
 }
 
+// Track which DOM nodes have actually had event handlers attached.
+// WeakMap<Element, Set<string>> — keys are live DOM nodes, values are
+// sets of handler types already bound (e.g. 'click', 'submit').
+// Unlike data attributes, WeakMap entries are automatically invalidated
+// when a DOM node is replaced (cloned/morphed) because the new node
+// is a different object.  This prevents stale binding flags from
+// blocking re-binding after VDOM patches.
+const _boundHandlers = new WeakMap();
+
+function _isHandlerBound(element, type) {
+    const set = _boundHandlers.get(element);
+    return set ? set.has(type) : false;
+}
+
+function _markHandlerBound(element, type) {
+    let set = _boundHandlers.get(element);
+    if (!set) {
+        set = new Set();
+        _boundHandlers.set(element, set);
+    }
+    set.add(type);
+}
+
 function bindLiveViewEvents() {
     // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
     if (window.djust.uploads) {
@@ -27,8 +50,8 @@ function bindLiveViewEvents() {
     allElements.forEach(element => {
         // Handle dj-click events
         const clickHandler = element.getAttribute('dj-click');
-        if (clickHandler && !element.dataset.liveviewClickBound) {
-            element.dataset.liveviewClickBound = 'true';
+        if (clickHandler && !_isHandlerBound(element, 'click')) {
+            _markHandlerBound(element, 'click');
             // Parse handler string to extract function name and arguments
             const parsed = parseEventHandler(clickHandler);
 
@@ -89,8 +112,8 @@ function bindLiveViewEvents() {
         }
 
         // Handle dj-copy — client-side clipboard copy (no server round-trip)
-        if (element.getAttribute('dj-copy') && !element.dataset.liveviewCopyBound) {
-            element.dataset.liveviewCopyBound = 'true';
+        if (element.getAttribute('dj-copy') && !_isHandlerBound(element, 'copy')) {
+            _markHandlerBound(element, 'copy');
             element.addEventListener('click', function(e) {
                 e.preventDefault();
                 // Read attribute at click time (not bind time) so morph updates take effect
@@ -106,8 +129,8 @@ function bindLiveViewEvents() {
 
         // Handle dj-submit events on forms
         const submitHandler = element.getAttribute('dj-submit');
-        if (submitHandler && !element.dataset.liveviewSubmitBound) {
-            element.dataset.liveviewSubmitBound = 'true';
+        if (submitHandler && !_isHandlerBound(element, 'submit')) {
+            _markHandlerBound(element, 'submit');
             element.addEventListener('submit', async (e) => {
                 e.preventDefault();
 
@@ -179,8 +202,8 @@ function bindLiveViewEvents() {
 
         // Handle dj-change events
         const changeHandler = element.getAttribute('dj-change');
-        if (changeHandler && !element.dataset.liveviewChangeBound) {
-            element.dataset.liveviewChangeBound = 'true';
+        if (changeHandler && !_isHandlerBound(element, 'change')) {
+            _markHandlerBound(element, 'change');
             // Parse handler string to extract function name and arguments
             const parsedChange = parseEventHandler(changeHandler);
 
@@ -224,8 +247,8 @@ function bindLiveViewEvents() {
 
         // Handle dj-input events (with smart debouncing/throttling)
         const inputHandler = element.getAttribute('dj-input');
-        if (inputHandler && !element.dataset.liveviewInputBound) {
-            element.dataset.liveviewInputBound = 'true';
+        if (inputHandler && !_isHandlerBound(element, 'input')) {
+            _markHandlerBound(element, 'input');
             // Parse handler string to extract function name and arguments
             const parsedInput = parseEventHandler(inputHandler);
 
@@ -268,8 +291,8 @@ function bindLiveViewEvents() {
 
         // Handle dj-blur events
         const blurHandler = element.getAttribute('dj-blur');
-        if (blurHandler && !element.dataset.liveviewBlurBound) {
-            element.dataset.liveviewBlurBound = 'true';
+        if (blurHandler && !_isHandlerBound(element, 'blur')) {
+            _markHandlerBound(element, 'blur');
             const parsedBlur = parseEventHandler(blurHandler);
             element.addEventListener('blur', async (e) => {
                 // dj-confirm: show confirmation dialog before sending event
@@ -287,8 +310,8 @@ function bindLiveViewEvents() {
 
         // Handle dj-focus events
         const focusHandler = element.getAttribute('dj-focus');
-        if (focusHandler && !element.dataset.liveviewFocusBound) {
-            element.dataset.liveviewFocusBound = 'true';
+        if (focusHandler && !_isHandlerBound(element, 'focus')) {
+            _markHandlerBound(element, 'focus');
             const parsedFocus = parseEventHandler(focusHandler);
             element.addEventListener('focus', async (e) => {
                 // dj-confirm: show confirmation dialog before sending event
@@ -307,8 +330,8 @@ function bindLiveViewEvents() {
         // Handle dj-keydown / dj-keyup events
         ['keydown', 'keyup'].forEach(eventType => {
             const keyHandler = element.getAttribute(`dj-${eventType}`);
-            if (keyHandler && !element.dataset[`liveview${eventType}Bound`]) {
-                element.dataset[`liveview${eventType}Bound`] = 'true';
+            if (keyHandler && !_isHandlerBound(element, eventType)) {
+                _markHandlerBound(element, eventType);
 
                 const keyHandlerFn = async (e) => {
                     // Check for key modifiers (e.g. dj-keydown.enter)
@@ -369,8 +392,8 @@ function bindLiveViewEvents() {
 
         // Handle dj-poll — declarative polling
         const pollHandler = element.getAttribute('dj-poll');
-        if (pollHandler && !element.dataset.liveviewPollBound) {
-            element.dataset.liveviewPollBound = 'true';
+        if (pollHandler && !_isHandlerBound(element, 'poll')) {
+            _markHandlerBound(element, 'poll');
             const parsed = parseEventHandler(pollHandler);
             const interval = parseInt(element.getAttribute('dj-poll-interval'), 10) || 5000;
             const pollParams = extractTypedParams(element);

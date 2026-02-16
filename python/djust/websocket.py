@@ -306,8 +306,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Pass the event name so the completion response can tell the client
         # which loading state to clear.
         event_name = getattr(self, "_current_event_name", None)
-        import asyncio
-
         asyncio.ensure_future(self._run_async_work(callback, args, kwargs, event_name=event_name))
 
     async def _run_async_work(self, callback, args, kwargs, event_name=None) -> None:
