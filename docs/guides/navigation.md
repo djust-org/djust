@@ -214,6 +214,89 @@ class DashboardView(NavigationMixin, LiveView):
 
 ## Best Practices
 
+### ⚠️ Anti-Pattern: Don't Use `dj-click` for Navigation
+
+This is **the most common mistake** when building multi-view djust apps. Using `dj-click` to trigger a handler that immediately calls `live_redirect()` creates an unnecessary round-trip.
+
+**❌ Wrong** — using `dj-click` to trigger a handler that calls `live_redirect()`:
+
+```python
+# Anti-pattern: Handler does nothing but navigate
+@event_handler()
+def go_to_item(self, item_id, **kwargs):
+    self.live_redirect(f"/items/{item_id}/")  # Wasteful round-trip!
+```
+
+```html
+<!-- Wrong: Forces WebSocket round-trip just to navigate -->
+<button dj-click="go_to_item" dj-value-item_id="{{ item.id }}">View</button>
+```
+
+**What actually happens:**
+1. User clicks button → Client sends WebSocket message (50-100ms)
+2. Server receives message, processes handler (10-50ms)
+3. Server responds with `live_redirect` command (50-100ms)
+4. Client finally navigates to new view
+
+**Total: 110-250ms** + handler processing time
+
+**✅ Right** — using `dj-navigate` directly:
+
+```html
+<!-- Right: Client navigates immediately, no server round-trip -->
+<a dj-navigate="/items/{{ item.id }}/">View Item</a>
+```
+
+**What happens:**
+1. User clicks link → Client navigates directly
+
+**Total: ~10ms** (just DOM updates)
+
+**Why it matters:**
+- **Performance:** 10-20x faster navigation
+- **Network efficiency:** Saves WebSocket bandwidth
+- **User experience:** Instant response, no loading indicators needed
+- **Simplicity:** Less code, fewer moving parts
+
+#### When to Use `live_redirect()` in Handlers
+
+Use handlers for navigation only when navigation depends on **server-side logic or validation**:
+
+**✅ Conditional navigation after form validation:**
+
+```python
+@event_handler()
+def submit_form(self, **kwargs):
+    if self.form.is_valid():
+        self.form.save()
+        self.live_redirect("/success/")  # OK: Conditional on validation
+    else:
+        # Stay on form to show errors
+        pass
+```
+
+**✅ Navigation based on auth/permissions:**
+
+```python
+@event_handler()
+def view_sensitive_data(self, **kwargs):
+    if not self.request.user.has_perm('app.view_sensitive'):
+        self.live_redirect("/access-denied/")  # OK: Auth check required
+        return
+    self.show_sensitive = True
+```
+
+**✅ Navigation after async operations:**
+
+```python
+@event_handler()
+async def create_and_view_item(self, name, **kwargs):
+    item = await Item.objects.acreate(name=name, owner=self.request.user)
+    self.live_redirect(f"/items/{item.id}/")  # OK: Navigate to newly created item
+```
+
+**Common theme:** The handler does **meaningful work** before navigating. If your handler only calls `live_redirect()`, use `dj-navigate` instead.
+
 ### When to Use Patch vs Redirect
 
 | Use `live_patch()` when... | Use `live_redirect()` when... |

@@ -170,6 +170,46 @@ class SearchView(NavigationMixin, LiveView):
 
 ## Best Practices
 
+### ⚠️ Anti-Pattern: Don't Use `dj-click` for Navigation
+
+This is **the most common mistake** when building multi-view djust apps. Using `dj-click` to trigger a handler that immediately calls `live_redirect()` creates an unnecessary round-trip.
+
+**❌ Wrong** — using `dj-click` to trigger a handler that calls `live_redirect()`:
+
+```python
+# Anti-pattern: Handler does nothing but navigate
+@event_handler()
+def go_to_item(self, item_id, **kwargs):
+    self.live_redirect(f"/items/{item_id}/")  # Wasteful round-trip!
+```
+
+```html
+<!-- Wrong: Forces WebSocket round-trip just to navigate -->
+<button dj-click="go_to_item" dj-value-item_id="{{ item.id }}">View</button>
+```
+
+**✅ Right** — using `dj-navigate` directly:
+
+```html
+<!-- Right: Client navigates immediately, no server round-trip -->
+<a dj-navigate="/items/{{ item.id }}/">View Item</a>
+```
+
+**Why it matters:** Direct navigation is 10-20x faster (~10ms vs 110-250ms), saves WebSocket bandwidth, and provides instant user feedback.
+
+#### When to Use `live_redirect()` in Handlers
+
+Use handlers for navigation only when navigation depends on **server-side logic**:
+
+- **Conditional navigation** after form validation
+- **Navigation based on** auth/permissions checks
+- **Navigation after** async operations (creating records, API calls)
+- **Multi-step wizard** logic with conditional flow
+
+**Common theme:** The handler does **meaningful work** before navigating. If your handler only calls `live_redirect()`, use `dj-navigate` instead.
+
+### URL Design Best Practices
+
 - Use query params for filter/sort/page state that should be shareable and bookmarkable.
 - Use `replace=True` for transient state changes (e.g., intermediate typing) to avoid polluting browser history.
 - Always implement `handle_params()` to restore state from URL -- this ensures deep links and browser back/forward work correctly.
