@@ -6,6 +6,7 @@ Used for property status, maintenance priority, lease status, etc.
 """
 
 from djust.components.base import Component
+from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from typing import Optional
 
@@ -93,14 +94,18 @@ class StatusBadge(Component):
         # Get color classes
         color_class = self.COLOR_CLASSES.get(self.color, self.COLOR_CLASSES['gray'])
 
-        # Icon HTML
+        # Icon HTML (icon is framework-controlled, safe to use in f-string)
         icon_html = ""
         if self.icon:
             icon_html = f'<i data-lucide="{self.icon}" class="w-3 h-3"></i>'
 
-        return mark_safe(f'''
-        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border {color_class}">
-            {icon_html}
-            {self.label}
-        </span>
-        ''')
+        # Use format_html to properly escape the label (which may contain user input)
+        return format_html(
+            '<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border {}">'
+            '{}'
+            '{}'
+            '</span>',
+            color_class,
+            mark_safe(icon_html),  # icon_html is safe (framework-controlled)
+            self.label  # label is auto-escaped by format_html
+        )

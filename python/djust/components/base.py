@@ -478,9 +478,10 @@ class LiveComponent(ABC):
 
         # Use inline template if available (with Rust acceleration and Django fallback)
         if self.template:
+            from django.utils.html import format_html
             html = _render_template_with_fallback(self.template, context)
-            # Wrap with component ID for LiveComponent tracking
-            return mark_safe(f'<div data-component-id="{self.component_id}">{html}</div>')
+            # Wrap with component ID for LiveComponent tracking (html is already safe from template engine)
+            return format_html('<div data-component-id="{}">{}</div>', self.component_id, mark_safe(html))
 
         # Fall back to template_name (file-based template)
         if self.template_name:
