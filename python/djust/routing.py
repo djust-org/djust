@@ -9,6 +9,7 @@ and emitting a client-side route map for live_redirect navigation.
 from typing import Any, List, Optional
 
 from django.urls import URLPattern, path
+from django.urls.resolvers import RegexPattern, RoutePattern
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
@@ -85,15 +86,24 @@ def live_session(
 
     for pattern in patterns:
         # Get the original route string
-        route_str = (
-            pattern.pattern.regex.pattern
-            if hasattr(pattern.pattern, "regex")
-            else str(pattern.pattern)
-        )
+        # Use isinstance() to differentiate between RoutePattern (path()) and RegexPattern (re_path())
+        # RoutePattern._route and RegexPattern._regex are the raw strings without anchors/suffixes
+        # This matches Django Channels' approach and has been stable since Django 2.0
+        if isinstance(pattern.pattern, RegexPattern):
+            route_str = pattern.pattern._regex
+            # Regex patterns may have ^ and $ anchors
+            clean_route = route_str.lstrip("^").rstrip("$")
+        elif isinstance(pattern.pattern, RoutePattern):
+            route_str = pattern.pattern._route
+            # RoutePattern._route doesn't have anchors, use as-is
+            clean_route = route_str
+        else:
+            # Fallback for custom pattern classes
+            route_str = str(pattern.pattern)
+            clean_route = route_str.lstrip("^").rstrip("$")
 
         # Build the full URL path
         # Django path patterns use <type:name> syntax
-        clean_route = route_str.lstrip("^").rstrip("$")
         full_path = f"{prefix}/{clean_route}".replace("//", "/")
 
         # Extract the view class path for the route map
