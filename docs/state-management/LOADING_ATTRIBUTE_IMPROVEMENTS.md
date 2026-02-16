@@ -63,28 +63,17 @@ LIVEVIEW_CONFIG = {
 
 ## Nice-to-Have Enhancements
 
-### 1. Custom Event Names
+### ~~1. Custom Event Names~~ → NOW IMPLEMENTED!
 
-Allow explicit event name targeting for more flexible grouping:
+**Status**: ✅ **IMPLEMENTED** via `dj-loading.for` attribute
 
 ```html
-<!-- Current: Relies on parent container grouping -->
-<div class="d-flex">
-    <button dj-click="save_article">Save</button>
-    <div dj-loading.show>Saving...</div>
-</div>
-
-<!-- Future: Explicit event targeting -->
+<!-- Explicit event targeting with dj-loading.for -->
 <button dj-click="save_article">Save</button>
-<div dj-loading.show="save_article">Saving...</div>
+<div dj-loading.show dj-loading.for="save_article" style="display:none">Saving...</div>
 ```
 
-**Benefits**:
-- More flexible element placement
-- No requirement for grouping containers
-- Clearer intent in templates
-
-**Complexity**: Medium - requires parsing event names from attributes
+See the [Loading States guide](../website/guides/loading-states.md) for full documentation.
 
 ### 2. Loading Delays
 
@@ -204,7 +193,7 @@ Add CSS animation support for smoother transitions:
 
 ### Low Priority
 5. **TypeScript definitions** - Nice developer experience
-6. **Custom event names** - Advanced use case
+6. ~~**Custom event names**~~ - ✅ **DONE** (`dj-loading.for`)
 7. **Animation support** - Polish
 
 ## Contributing
