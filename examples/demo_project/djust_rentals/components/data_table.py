@@ -6,6 +6,7 @@ Used for property lists, tenant lists, lease lists, maintenance lists, etc.
 """
 
 from djust.components.base import Component
+from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
 from typing import List, Dict, Any, Optional
 
@@ -57,17 +58,19 @@ class DataTable(Component):
 
         # If no rows, show empty state
         if not self.rows:
-            return mark_safe(f'''
+            return format_html('''
             <div class="bg-card border border-border rounded-lg p-12 text-center">
                 <i data-lucide="inbox" class="w-12 h-12 mx-auto mb-4 text-muted-foreground"></i>
-                <p class="text-muted-foreground text-lg">{self.empty_message}</p>
+                <p class="text-muted-foreground text-lg">{}</p>
             </div>
-            ''')
+            ''', self.empty_message)
 
         # Build table headers
         header_cells = []
         for header in self.headers:
-            header_cells.append(f'<th class="px-4 py-3 text-left text-sm font-medium text-muted-foreground">{header}</th>')
+            header_cells.append(
+                format_html('<th class="px-4 py-3 text-left text-sm font-medium text-muted-foreground">{}</th>', header)
+            )
 
         # Build table rows
         row_html_list = []
@@ -83,27 +86,30 @@ class DataTable(Component):
             cells = []
             for header in self.headers:
                 cell_value = row.get(header, "")
-                cells.append(f'<td class="px-4 py-3 text-sm text-card-foreground">{cell_value}</td>')
+                # Escape cell value to prevent XSS
+                cells.append(
+                    format_html('<td class="px-4 py-3 text-sm text-card-foreground">{}</td>', cell_value)
+                )
 
-            row_html_list.append(f'''
-            <tr class="{' '.join(row_classes)}">
-                {''.join(cells)}
-            </tr>
-            ''')
+            row_html_list.append(
+                format_html(
+                    '<tr class="{}">{}</tr>',
+                    ' '.join(row_classes),
+                    mark_safe(''.join(str(cell) for cell in cells))
+                )
+            )
 
-        return mark_safe(f'''
-        <div class="bg-card border border-border rounded-lg overflow-hidden">
+        return format_html(
+            '''<div class="bg-card border border-border rounded-lg overflow-hidden">
             <div class="overflow-x-auto">
                 <table class="w-full">
                     <thead class="bg-muted/30 border-b border-border">
-                        <tr>
-                            {''.join(header_cells)}
-                        </tr>
+                        <tr>{}</tr>
                     </thead>
-                    <tbody>
-                        {''.join(row_html_list)}
-                    </tbody>
+                    <tbody>{}</tbody>
                 </table>
             </div>
-        </div>
-        ''')
+        </div>''',
+            mark_safe(''.join(str(cell) for cell in header_cells)),
+            mark_safe(''.join(str(row) for row in row_html_list))
+        )
