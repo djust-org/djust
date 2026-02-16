@@ -665,3 +665,103 @@ class TestSmokeTestMixin:
         instance = self._make_mixin_instance()
         # No handlers means nothing to fuzz -- should pass
         instance.test_fuzz_xss()
+
+    @patch("djust.testing.LiveViewTestClient")
+    @patch("djust.testing._get_handlers")
+    @patch("djust.testing._discover_views")
+    def test_fuzz_handlers_succeed_detects_handler_exceptions(
+        self, mock_discover, mock_handlers, mock_client_cls
+    ):
+        """test_fuzz_handlers_succeed should detect when handlers raise exceptions."""
+        view_cls = MagicMock(__name__="FailingView", __module__="myapp.views")
+        mock_discover.return_value = [view_cls]
+        mock_handlers.return_value = {
+            "save": {
+                "params": [{"name": "data", "type": "str", "required": True}],
+                "accepts_kwargs": False,
+            }
+        }
+
+        mock_client = MagicMock()
+        # Handler raised exception — send_event catches it and returns success=False
+        mock_client.send_event.return_value = {
+            "success": False,
+            "error": "ValueError: invalid data format",
+            "state_before": {},
+            "state_after": {},
+            "duration_ms": 0.5,
+        }
+        mock_client_cls.return_value = mock_client
+
+        instance = self._make_mixin_instance()
+        with pytest.raises(AssertionError, match="Handler exceptions from fuzz input"):
+            instance.test_fuzz_handlers_succeed()
+
+    @patch("djust.testing.LiveViewTestClient")
+    @patch("djust.testing._get_handlers")
+    @patch("djust.testing._discover_views")
+    def test_fuzz_handlers_succeed_passes_when_handlers_graceful(
+        self, mock_discover, mock_handlers, mock_client_cls
+    ):
+        """test_fuzz_handlers_succeed should pass when handlers handle all input gracefully."""
+        view_cls = MagicMock(__name__="GracefulView", __module__="myapp.views")
+        mock_discover.return_value = [view_cls]
+        mock_handlers.return_value = {
+            "update": {
+                "params": [{"name": "value", "type": "int", "required": True}],
+                "accepts_kwargs": False,
+            }
+        }
+
+        mock_client = MagicMock()
+        # Handler succeeded or validation failed gracefully (success=True)
+        mock_client.send_event.return_value = {
+            "success": True,
+            "error": None,
+            "state_before": {},
+            "state_after": {},
+            "duration_ms": 0.3,
+        }
+        mock_client_cls.return_value = mock_client
+
+        instance = self._make_mixin_instance()
+        # Should not raise
+        instance.test_fuzz_handlers_succeed()
+
+    @patch("djust.testing.LiveViewTestClient")
+    @patch("djust.testing._get_handlers")
+    @patch("djust.testing._discover_views")
+    def test_fuzz_handlers_succeed_ignores_validation_errors(
+        self, mock_discover, mock_handlers, mock_client_cls
+    ):
+        """Validation errors (success=False but no exception) should be acceptable."""
+        view_cls = MagicMock(__name__="ValidatedView", __module__="myapp.views")
+        mock_discover.return_value = [view_cls]
+        mock_handlers.return_value = {
+            "process": {
+                "params": [{"name": "count", "type": "int", "required": True}],
+                "accepts_kwargs": False,
+            }
+        }
+
+        mock_client = MagicMock()
+        # Validation failed gracefully — no error message means validation rejection
+        mock_client.send_event.return_value = {
+            "success": False,
+            "error": None,  # No error = validation failure, not exception
+            "state_before": {},
+            "state_after": {},
+            "duration_ms": 0.1,
+        }
+        mock_client_cls.return_value = mock_client
+
+        instance = self._make_mixin_instance()
+        # Should not raise — validation failures are acceptable
+        instance.test_fuzz_handlers_succeed()
+
+    @patch("djust.testing._discover_views")
+    def test_fuzz_handlers_succeed_skips_when_fuzz_false(self, mock_discover):
+        mock_discover.return_value = [MagicMock(__name__="V", __module__="app.views")]
+        instance = self._make_mixin_instance(fuzz=False)
+        # Should return immediately without error
+        instance.test_fuzz_handlers_succeed()
