@@ -227,6 +227,141 @@ class TestLiveSession:
         assert "myapp.views.DashboardView" in result
         assert "<script>" in result
 
+    def test_live_session_path_pattern_preserves_route(self):
+        """Regression: path() patterns should not extract regex with \\Z suffix."""
+        routing = _import_routing()
+        from django.urls import path
+
+        class FakeView:
+            @classmethod
+            def as_view(cls):
+                def view(request):
+                    pass
+
+                view.view_class = cls
+                return view
+
+        FakeView.__module__ = "myapp.views"
+        FakeView.__qualname__ = "FakeView"
+
+        patterns = routing.live_session(
+            "/app",
+            [
+                path("kanban/", FakeView.as_view(), name="kanban"),
+            ],
+        )
+
+        assert len(patterns) == 1
+        # The pattern route should be "app/kanban/" not "app/kanban/\Z"
+        pattern_str = str(patterns[0].pattern)
+        assert pattern_str == "app/kanban/"
+        # Should not contain regex anchors
+        assert "\\Z" not in pattern_str
+        assert "\\A" not in pattern_str
+
+    def test_live_session_path_with_params(self):
+        """path() with parameters should convert to JS route format."""
+        routing = _import_routing()
+        from django.urls import path
+
+        class ItemView:
+            @classmethod
+            def as_view(cls):
+                def view(request, id):
+                    pass
+
+                view.view_class = cls
+                return view
+
+        ItemView.__module__ = "myapp.views"
+        ItemView.__qualname__ = "ItemView"
+
+        routing.live_session(
+            "/app",
+            [
+                path("items/<int:id>/", ItemView.as_view(), name="item_detail"),
+            ],
+            session_name="test_params",
+        )
+
+        # Check route map has JS-friendly format
+        entries = routing.live_session._route_maps["test_params"]
+        assert len(entries) == 1
+        js_path, view_path = entries[0]
+        # Should be /app/items/:id/ not /app/items/<int:id>/
+        assert js_path == "/app/items/:id/"
+        assert view_path == "myapp.views.ItemView"
+
+    def test_live_session_re_path_pattern(self):
+        """re_path() should work correctly with regex patterns."""
+        routing = _import_routing()
+        from django.urls import re_path
+
+        class ArchiveView:
+            @classmethod
+            def as_view(cls):
+                def view(request, year):
+                    pass
+
+                view.view_class = cls
+                return view
+
+        ArchiveView.__module__ = "myapp.views"
+        ArchiveView.__qualname__ = "ArchiveView"
+
+        patterns = routing.live_session(
+            "/app",
+            [
+                re_path(r"^archive/(?P<year>\d{4})/$", ArchiveView.as_view(), name="archive"),
+            ],
+        )
+
+        assert len(patterns) == 1
+        # The pattern should have the prefix and cleaned regex
+        pattern_str = str(patterns[0].pattern)
+        # Should be a valid regex pattern with the prefix
+        assert "archive" in pattern_str
+
+    def test_live_session_route_actually_resolves(self):
+        """Generated patterns should be resolvable by Django's URL resolver."""
+        routing = _import_routing()
+        from django.urls import path
+
+        class TestView:
+            @classmethod
+            def as_view(cls):
+                def view(request):
+                    return "test"
+
+                view.view_class = cls
+                return view
+
+        TestView.__module__ = "myapp.views"
+        TestView.__qualname__ = "TestView"
+
+        patterns = routing.live_session(
+            "/app",
+            [
+                path("test/", TestView.as_view(), name="test"),
+            ],
+        )
+
+        # Verify the pattern is created correctly
+        assert len(patterns) == 1
+        assert patterns[0].name == "test"
+
+        # Use Django's reverse to verify the pattern works
+        from django.urls.resolvers import URLResolver, RoutePattern
+
+        # Create a temporary resolver for testing
+        resolver = URLResolver(RoutePattern(""), None)
+        resolver.url_patterns = patterns
+
+        # The pattern should match the expected URL
+        match = resolver.resolve("app/test/")
+        assert match is not None
+        assert match.url_name == "test"
+
 
 # ============================================================================
 # WebSocket consumer integration tests

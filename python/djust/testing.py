@@ -902,8 +902,9 @@ class LiveViewSmokeTest:
     What it tests:
         - test_smoke_render: Each view mounts and renders without exceptions
         - test_smoke_queries: Each render stays within max_queries
-        - test_fuzz_handlers: XSS payloads don't appear unescaped in output
-        - test_fuzz_type_confusion: Wrong-type params don't cause unhandled crashes
+        - test_fuzz_xss: XSS payloads don't appear unescaped in output
+        - test_fuzz_no_unhandled_crash: Fuzz payloads don't escape send_event()
+        - test_fuzz_handlers_succeed: Handlers handle all fuzz input gracefully (no exceptions)
     """
 
     # Override in subclass
@@ -1024,7 +1025,11 @@ class LiveViewSmokeTest:
             )
 
     def test_fuzz_no_unhandled_crash(self):
-        """Fuzz payloads don't cause unhandled exceptions (500s in production)."""
+        """Fuzz payloads don't cause unhandled exceptions that escape send_event().
+
+        This test catches exceptions that completely bypass the handler execution
+        (e.g., errors in mount() or render() itself).
+        """
         if not self.fuzz:
             return
 
@@ -1054,4 +1059,47 @@ class LiveViewSmokeTest:
             raise AssertionError(
                 f"Unhandled crashes from fuzz input ({len(crashes)}):\n"
                 + "\n".join(f"  - {e}" for e in crashes)
+            )
+
+    def test_fuzz_handlers_succeed(self):
+        """Fuzz payloads should be handled gracefully by handlers (no success=False).
+
+        Unlike test_fuzz_no_unhandled_crash which only catches exceptions that escape
+        send_event(), this test checks that handlers properly handle fuzz input without
+        raising exceptions. Handlers that fail return {"success": False}, indicating
+        a bug in validation or error handling.
+        """
+        if not self.fuzz:
+            return
+
+        failures = []
+        views = self._get_views()
+
+        for view_class in views:
+            view_name = f"{view_class.__module__}.{view_class.__name__}"
+            handlers = _get_handlers(view_class)
+            if not handlers:
+                continue
+
+            for handler_name, handler_meta in handlers.items():
+                for desc, fuzz_params in _make_fuzz_params(handler_meta):
+                    try:
+                        client = self._make_client(view_class)
+                        result = client.send_event(handler_name, **fuzz_params)
+
+                        # Check if handler raised an exception (success=False with error)
+                        if not result["success"] and result.get("error"):
+                            failures.append(
+                                f"{view_name}.{handler_name} [{desc}]: {result['error']}"
+                            )
+                    except Exception:
+                        # Exceptions that escape mount/send_event are caught by
+                        # test_fuzz_no_unhandled_crash — we only care about handler
+                        # errors here (success=False).
+                        pass
+
+        if failures:
+            raise AssertionError(
+                f"Handler exceptions from fuzz input ({len(failures)}):\n"
+                + "\n".join(f"  - {e}" for e in failures)
             )

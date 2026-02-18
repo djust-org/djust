@@ -460,5 +460,7 @@ function clearOptimisticState(eventName) {
     }
 }
 
-// Export for testing
+// Export for testing and for createNodeFromVNode to mark VDOM-created elements as bound
 window.djust.bindLiveViewEvents = bindLiveViewEvents;
+window.djust._isHandlerBound = _isHandlerBound;
+window.djust._markHandlerBound = _markHandlerBound;

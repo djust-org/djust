@@ -734,6 +734,18 @@ class DjustTemplate:
                 template_dirs,
                 safe_keys or None,
             )
+
+            # In DEBUG mode, inject data-dj-src attributes for template source mapping.
+            # This adds the template filename to opening HTML element tags, enabling
+            # the djust-browser-mcp find_by_template tool to link DOM elements back
+            # to their source templates.
+            from django.conf import settings
+
+            if getattr(settings, "DEBUG", False) and self.origin:
+                template_name = getattr(self.origin, "template_name", None)
+                if template_name:
+                    html = self._inject_source_mapping(html, template_name)
+
             return SafeString(html)
         except Exception as e:
             # Provide helpful error message with template location
@@ -752,6 +764,34 @@ class DjustTemplate:
                 ) from e
 
             raise Exception(f"Error rendering template{origin_info}: {error_msg}") from e
+
+    # Regex to match opening HTML element tags (not comments, not closing tags, not doctypes)
+    _OPENING_TAG_RE = re.compile(
+        r"<([a-zA-Z][a-zA-Z0-9]*)"  # Tag name
+        r"(\s|>|/>)",  # Followed by whitespace, >, or />
+    )
+
+    def _inject_source_mapping(self, html: str, template_name: str) -> str:
+        """
+        Inject data-dj-src attributes into opening HTML element tags.
+
+        Only adds to root-level elements (depth 0) to avoid excessive bloat.
+        The attribute value is the template filename (e.g., "dashboard.html").
+
+        This enables the djust-browser-mcp find_by_template tool to link
+        DOM elements back to their source template files.
+        """
+        # Escape the template name for use in HTML attributes
+        safe_name = template_name.replace('"', "&quot;")
+        attr = f' data-dj-src="{safe_name}"'
+
+        # Add data-dj-src to the first opening tag only (root element).
+        # This avoids bloating every element while still enabling template lookup.
+        return self._OPENING_TAG_RE.sub(
+            lambda m: f"<{m.group(1)}{attr}{m.group(2)}",
+            html,
+            count=1,  # Only first match
+        )
 
     def _get_context_processor(self, processor_path: str):
         """Import and return a context processor function."""

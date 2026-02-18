@@ -6,6 +6,7 @@ Used at the top of every page for navigation and context.
 """
 
 from djust.components.base import Component
+from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from typing import List, Dict, Optional
 
@@ -51,12 +52,12 @@ class PageHeader(Component):
         # Icon HTML
         icon_html = ""
         if self.icon:
-            icon_html = f'<i data-lucide="{self.icon}" class="w-10 h-10 text-primary mr-3"></i>'
+            icon_html = format_html('<i data-lucide="{}" class="w-10 h-10 text-primary mr-3"></i>', self.icon)
 
         # Subtitle HTML
         subtitle_html = ""
         if self.subtitle:
-            subtitle_html = f'<p class="text-muted-foreground text-lg">{self.subtitle}</p>'
+            subtitle_html = format_html('<p class="text-muted-foreground text-lg">{}</p>', self.subtitle)
 
         # Actions HTML
         actions_html = ""
@@ -76,30 +77,34 @@ class PageHeader(Component):
                 else:  # primary
                     btn_class = "bg-primary text-primary-foreground hover:bg-primary/90"
 
-                buttons.append(f'''
-                <a href="{url}"
+                buttons.append(format_html(
+                    '''<a href="{}"
                    data-djust-navigate
-                   class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors {btn_class}">
-                    <i data-lucide="{icon}" class="w-4 h-4"></i>
-                    <span>{label}</span>
-                </a>
-                ''')
+                   class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors {}">
+                    <i data-lucide="{}" class="w-4 h-4"></i>
+                    <span>{}</span>
+                </a>''',
+                    url, btn_class, icon, label
+                ))
 
-            actions_html = f'''
-            <div class="flex items-center gap-3">
-                {"".join(buttons)}
-            </div>
-            '''
+            actions_html = format_html(
+                '<div class="flex items-center gap-3">{}</div>',
+                mark_safe(''.join(str(btn) for btn in buttons))
+            )
 
-        return mark_safe(f'''
-        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+        return format_html(
+            '''<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
             <div class="flex items-center">
-                {icon_html}
+                {}
                 <div>
-                    <h1 class="text-4xl font-bold text-card-foreground mb-1">{self.title}</h1>
-                    {subtitle_html}
+                    <h1 class="text-4xl font-bold text-card-foreground mb-1">{}</h1>
+                    {}
                 </div>
             </div>
-            {actions_html}
-        </div>
-        ''')
+            {}
+        </div>''',
+            mark_safe(icon_html),
+            self.title,
+            mark_safe(subtitle_html),
+            mark_safe(actions_html)
+        )

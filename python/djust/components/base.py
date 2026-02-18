@@ -471,6 +471,7 @@ class LiveComponent(ABC):
         if not self._mounted:
             raise RuntimeError("Cannot render unmounted component")
 
+        from django.utils.html import format_html
         from django.utils.safestring import mark_safe
 
         context = self.get_context_data()
@@ -480,7 +481,12 @@ class LiveComponent(ABC):
         if self.template:
             html = _render_template_with_fallback(self.template, context)
             # Wrap with component ID for LiveComponent tracking
-            return mark_safe(f'<div data-component-id="{self.component_id}">{html}</div>')
+            # Use format_html to safely escape component_id, mark template output as safe
+            return format_html(
+                '<div data-component-id="{}">{}</div>',
+                self.component_id,
+                mark_safe(html),  # html is already safe from template rendering
+            )
 
         # Fall back to template_name (file-based template)
         if self.template_name:

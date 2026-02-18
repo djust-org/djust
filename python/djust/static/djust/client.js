@@ -2260,8 +2260,10 @@ function clearOptimisticState(eventName) {
     }
 }
 
-// Export for testing
+// Export for testing and for createNodeFromVNode to mark VDOM-created elements as bound
 window.djust.bindLiveViewEvents = bindLiveViewEvents;
+window.djust._isHandlerBound = _isHandlerBound;
+window.djust._markHandlerBound = _markHandlerBound;
 
 // Global Loading Manager (Phase 5)
 // Handles dj-loading.disable, dj-loading.class, dj-loading.show, dj-loading.hide attributes
@@ -2910,81 +2912,25 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
 
     if (vnode.attrs) {
         for (const [key, value] of Object.entries(vnode.attrs)) {
+            // Set all attributes on the element (including dj-* attributes).
+            // For dj-* event attributes, bind the event listener immediately and
+            // mark as bound in the WeakMap to prevent bindLiveViewEvents() from
+            // adding duplicate listeners. This ensures VDOM-inserted elements
+            // are properly bound without double-binding.
+            if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
+                elem.value = value;
+            }
+            elem.setAttribute(key, value);
+
+            // Bind dj-* event handlers for VDOM-created elements
             if (key.startsWith('dj-')) {
-                // Parse attribute name to extract event type and modifiers
-                // e.g., "dj-keydown.enter" -> eventType: "keydown", modifiers: ["enter"]
-                const attrParts = key.substring(3).split('.');
-                const eventType = attrParts[0];
-                const modifiers = attrParts.slice(1);
-
-                // Store the dj-* attribute key so the listener can re-read it
-                // at event time. This avoids stale closure args when SetAttribute
-                // patches update the attribute value after initial binding.
-                const djAttrKey = key;
-                elem.addEventListener(eventType, (e) => {
-                    // Handle key modifiers for keydown/keyup events
-                    if ((eventType === 'keydown' || eventType === 'keyup') && modifiers.length > 0) {
-                        const requiredKey = modifiers[0];
-                        if (requiredKey === 'enter' && e.key !== 'Enter') return;
-                        if (requiredKey === 'escape' && e.key !== 'Escape') return;
-                        if (requiredKey === 'space' && e.key !== ' ') return;
-                        if (requiredKey === 'tab' && e.key !== 'Tab') return;
-                    }
-
-                    // Re-parse handler from DOM attribute at event time to pick up
-                    // any changes made by SetAttribute patches since binding.
-                    const parsed = parseEventHandler(elem.getAttribute(djAttrKey));
-
-                    e.preventDefault();
-                    const params = {};
-
-                    // For form element events (change, input, blur, focus), extract value
-                    if (['change', 'input', 'blur', 'focus'].includes(eventType)) {
-                        const target = e.target;
-                        params.value = target.type === 'checkbox' ? target.checked : target.value;
-                        params.field = target.name || target.id || null;
-                    } else {
-                        // For other events, extract data-* attributes (but skip internal ones)
-                        Array.from(elem.attributes).forEach(attr => {
-                            if (attr.name.startsWith('data-') &&
-                                !attr.name.startsWith('data-liveview') &&
-                                !attr.name.startsWith('data-djust') &&
-                                attr.name !== 'data-dj-id') {
-                                const paramKey = attr.name.substring(5).replace(/-/g, '_');
-                                // Prevent prototype pollution attacks
-                                if (!UNSAFE_KEYS.includes(paramKey)) {
-                                    params[paramKey] = attr.value;
-                                }
-                            }
-                        });
-                    }
-
-                    // Add positional arguments from handler syntax if present
-                    if (parsed.args.length > 0) {
-                        params._args = parsed.args;
-                    }
-
-                    // Pass target element for optimistic updates (Phase 3)
-                    params._targetElement = e.currentTarget;
-
-                    // Check if event is from a component
-                    const componentId = getComponentId(elem);
-                    if (componentId) {
-                        params.component_id = componentId;
-                    }
-
-                    handleEvent(parsed.name, params);
-                });
-                // Set the dj-* attribute on the DOM so SetAttribute patches
-                // can update it and bindLiveViewEvents can re-read it.
-                elem.setAttribute(key, value);
-                // Mark as bound so bindLiveViewEvents() won't add a duplicate listener
-                _markHandlerBound(elem, eventType);
-            } else {
-                if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
-                    elem.value = value;
+                const eventType = key.substring(3); // e.g., 'dj-click' -> 'click'
+                // Only bind standard djust events, skip special attributes like dj-root, dj-view, dj-model, etc.
+                const EVENT_TYPES = ['click', 'submit', 'change', 'input', 'blur', 'focus', 'keydown', 'keyup'];
+                if (EVENT_TYPES.includes(eventType)) {
+                    // Mark as bound immediately to prevent bindLiveViewEvents() from re-binding
+                    window.djust._markHandlerBound(elem, eventType);
                 }
-                elem.setAttribute(key, value);
             }
         }
     }
@@ -3468,6 +3414,11 @@ function _stampDjIds(serverHtml, container) {
         if (djId) {
             domNode.setAttribute('data-dj-id', djId);
         }
+        // Also stamp data-dj-src (template source mapping) if present
+        const djSrc = serverNode.getAttribute('data-dj-src');
+        if (djSrc) {
+            domNode.setAttribute('data-dj-src', djSrc);
+        }
 
         // Walk children in parallel (element nodes only)
         const domChildren = Array.from(domNode.children);
@@ -3681,8 +3632,9 @@ function applySinglePatch(patch) {
 
             case 'RemoveAttr':
                 // Never remove dj-* event handler attributes — defense in depth
-                // against VDOM path mismatches from conditional rendering
-                if (patch.key && patch.key.startsWith('dj-')) {
+                // against VDOM path mismatches from conditional rendering.
+                // Also preserve data-dj-src (template source mapping).
+                if (patch.key && (patch.key.startsWith('dj-') || patch.key === 'data-dj-src')) {
                     break;
                 }
                 node.removeAttribute(patch.key);
