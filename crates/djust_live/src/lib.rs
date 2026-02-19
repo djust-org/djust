@@ -423,7 +423,9 @@ fn render_template(template_source: String, context: HashMap<String, Value>) -> 
     };
 
     let ctx = Context::from_dict(context);
-    Ok(template_arc.render(&ctx)?)
+    let result = template_arc.render(&ctx)?;
+    // Strip VDOM placeholder comments in standalone rendering
+    Ok(result.replace("<!--dj-if-->", ""))
 }
 
 /// Fast template rendering with template directories for {% include %} support
