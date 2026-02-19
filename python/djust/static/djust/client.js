@@ -2913,25 +2913,17 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
     if (vnode.attrs) {
         for (const [key, value] of Object.entries(vnode.attrs)) {
             // Set all attributes on the element (including dj-* attributes).
-            // For dj-* event attributes, bind the event listener immediately and
-            // mark as bound in the WeakMap to prevent bindLiveViewEvents() from
-            // adding duplicate listeners. This ensures VDOM-inserted elements
-            // are properly bound without double-binding.
+            // Event listeners for dj-* attributes are attached by bindLiveViewEvents()
+            // after patches are applied, which already uses _markHandlerBound to
+            // prevent double-binding on subsequent calls.
             if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
                 elem.value = value;
             }
             elem.setAttribute(key, value);
 
-            // Bind dj-* event handlers for VDOM-created elements
-            if (key.startsWith('dj-')) {
-                const eventType = key.substring(3); // e.g., 'dj-click' -> 'click'
-                // Only bind standard djust events, skip special attributes like dj-root, dj-view, dj-model, etc.
-                const EVENT_TYPES = ['click', 'submit', 'change', 'input', 'blur', 'focus', 'keydown', 'keyup'];
-                if (EVENT_TYPES.includes(eventType)) {
-                    // Mark as bound immediately to prevent bindLiveViewEvents() from re-binding
-                    window.djust._markHandlerBound(elem, eventType);
-                }
-            }
+            // Note: dj-* event listeners are attached by bindLiveViewEvents() after
+            // patch application. Do NOT pre-mark elements here — that would prevent
+            // bindLiveViewEvents() from ever attaching the listener.
         }
     }
 
