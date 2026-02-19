@@ -516,7 +516,9 @@ def check_configuration(app_configs, **kwargs):
 
             login_req = getattr(cls, "login_required", None)
             perm_req = getattr(cls, "permission_required", None)
-            if login_req or perm_req:
+            # Check if auth has been addressed (True/False) vs unaddressed (None).
+            # login_required = False means "intentionally public", so skip warning.
+            if login_req is not None or perm_req is not None:
                 continue  # View has auth configured
 
             # Check if check_permissions is overridden
@@ -539,7 +541,10 @@ def check_configuration(app_configs, **kwargs):
             exposed = _extract_exposed_state(cls)
             if exposed:
                 cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
-                cls_file = inspect.getfile(cls) if hasattr(cls, "__module__") else ""
+                try:
+                    cls_file = inspect.getfile(cls) if hasattr(cls, "__module__") else ""
+                except (OSError, TypeError):
+                    cls_file = ""
                 try:
                     cls_line = inspect.getsourcelines(cls)[1]
                 except (OSError, TypeError):

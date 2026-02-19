@@ -1040,6 +1040,111 @@ class TestV005AllowedModules:
 
 
 # ---------------------------------------------------------------------------
+# Security checks - LiveView authentication (S005)
+# ---------------------------------------------------------------------------
+
+
+class TestS005UnauthenticatedViews:
+    """S005 -- LiveView exposes state without authentication."""
+
+    def test_s005_fires_when_auth_not_addressed(self):
+        """S005 fires when neither login_required nor permission_required is set."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.checks import check_configuration
+
+        def mount(self, request, **kwargs):
+            self.user_data = {"email": "test@example.com"}
+
+        cls = type(
+            "UnauthView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "test.html",
+                "mount": mount,
+            },
+        )
+
+        try:
+            errors = check_configuration(None)
+            s005 = [e for e in errors if e.id == "djust.S005"]
+            assert any("UnauthView" in e.msg for e in s005)
+        finally:
+            del cls
+            _force_gc()
+
+    def test_s005_suppressed_with_login_required_true(self):
+        """S005 should not fire when login_required = True."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.checks import check_configuration
+
+        def mount(self, request, **kwargs):
+            self.user_data = {"email": "test@example.com"}
+
+        cls = type(
+            "AuthRequiredView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "test.html",
+                "mount": mount,
+                "login_required": True,
+            },
+        )
+
+        try:
+            errors = check_configuration(None)
+            s005 = [e for e in errors if e.id == "djust.S005"]
+            assert not any("AuthRequiredView" in e.msg for e in s005)
+        finally:
+            del cls
+            _force_gc()
+
+    def test_s005_suppressed_with_login_required_false(self):
+        """S005 should not fire when login_required = False (intentionally public)."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.checks import check_configuration
+
+        def mount(self, request, **kwargs):
+            self.public_data = {"version": "1.0"}
+
+        cls = type(
+            "PublicView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "test.html",
+                "mount": mount,
+                "login_required": False,  # Intentionally public
+            },
+        )
+
+        try:
+            errors = check_configuration(None)
+            s005 = [e for e in errors if e.id == "djust.S005"]
+            # After the fix, this should pass
+            assert not any("PublicView" in e.msg for e in s005)
+        finally:
+            del cls
+            _force_gc()
+
+
+# ---------------------------------------------------------------------------
 # Security checks (S001-S003) -- AST-based
 # ---------------------------------------------------------------------------
 
