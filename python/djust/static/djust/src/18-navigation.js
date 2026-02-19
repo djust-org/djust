@@ -13,9 +13,13 @@
      * after a handler calls live_patch() or live_redirect().
      */
     function handleNavigation(data) {
-        if (data.type === 'live_patch') {
+        // Use data.action (set by server alongside type:"navigation") to distinguish
+        // live_patch from live_redirect. Falls back to data.type for any legacy messages
+        // that were sent without an action field.
+        const action = data.action || data.type;
+        if (action === 'live_patch') {
             handleLivePatch(data);
-        } else if (data.type === 'live_redirect') {
+        } else if (action === 'live_redirect') {
             handleLiveRedirect(data);
         }
     }
@@ -189,7 +193,7 @@
                 // Update browser URL
                 const newUrl = new URL(window.location.href);
                 newUrl.search = url.search;
-                if (url.pathname !== '/' && patchValue.startsWith('/')) {
+                if (patchValue.startsWith('/')) {
                     newUrl.pathname = url.pathname;
                 }
                 window.history.pushState({ djust: true }, '', newUrl.toString());

@@ -275,7 +275,12 @@ class TestNavigationWebSocket:
 
         consumer_instance.send_json.assert_called_once()
         call_data = consumer_instance.send_json.call_args[0][0]
-        assert call_data["type"] == "live_patch"
+        # type must be "navigation" so the client-side switch `case "navigation":`
+        # fires and handleNavigation() is invoked (issue #307 BUG 2).
+        assert call_data["type"] == "navigation"
+        # action carries the nav sub-type so handleNavigation() can dispatch
+        # to handleLivePatch vs handleLiveRedirect.
+        assert call_data["action"] == "live_patch"
         assert call_data["params"] == {"page": 2}
 
     @pytest.mark.asyncio
@@ -330,8 +335,13 @@ class TestNavigationWebSocket:
         assert consumer_instance.send_json.call_count == 2
         first = consumer_instance.send_json.call_args_list[0][0][0]
         second = consumer_instance.send_json.call_args_list[1][0][0]
-        assert first["type"] == "live_patch"
-        assert second["type"] == "live_redirect"
+        # Both messages must carry type="navigation" so the client routes them
+        # correctly (issue #307 BUG 2).
+        assert first["type"] == "navigation"
+        assert second["type"] == "navigation"
+        # action carries the nav sub-type for handleNavigation() dispatch.
+        assert first["action"] == "live_patch"
+        assert second["action"] == "live_redirect"
         assert second["path"] == "/b/"
 
 
@@ -380,3 +390,71 @@ class TestHandleParams:
         view.handle_params({"category": "books"}, "/items/?category=books")
         assert view.category == "books"
         assert view.page == 1  # default
+
+
+# ============================================================================
+# Regression tests — issue #307
+# ============================================================================
+
+
+@pytest.mark.skipif(not HAS_CHANNELS, reason="channels not installed")
+class TestIssue307Regressions:
+    """Regression tests for issue #307 navigation bugs."""
+
+    # --- BUG 2: server-side messages must be routed to handleNavigation() ---
+
+    @pytest.mark.asyncio
+    async def test_flush_navigation_type_is_navigation_not_live_patch(self):
+        """
+        Regression: _flush_navigation must send type='navigation' so the
+        client-side switch `case 'navigation':` fires.  Before the fix,
+        **cmd overwrote 'type': 'navigation' with 'type': 'live_patch',
+        causing the message to be silently dropped.
+        """
+        from djust.websocket import LiveViewConsumer
+        from djust.mixins.navigation import NavigationMixin
+
+        class FakeView(NavigationMixin):
+            def __init__(self):
+                self._init_navigation()
+
+        consumer_instance = LiveViewConsumer.__new__(LiveViewConsumer)
+        view = FakeView()
+        view.live_patch(params={"page": 3})
+        consumer_instance.view_instance = view
+        consumer_instance.send_json = AsyncMock()
+
+        await consumer_instance._flush_navigation()
+
+        msg = consumer_instance.send_json.call_args[0][0]
+        assert msg["type"] == "navigation", (
+            "type must be 'navigation'; got %r — client switch will not route to "
+            "handleNavigation() if this is 'live_patch' (issue #307 BUG 2)" % msg["type"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_flush_navigation_action_field_preserved(self):
+        """
+        action field must carry the nav sub-type so handleNavigation() can
+        dispatch to handleLivePatch / handleLiveRedirect after the outer
+        type is fixed to 'navigation'.
+        """
+        from djust.websocket import LiveViewConsumer
+        from djust.mixins.navigation import NavigationMixin
+
+        class FakeView(NavigationMixin):
+            def __init__(self):
+                self._init_navigation()
+
+        consumer_instance = LiveViewConsumer.__new__(LiveViewConsumer)
+        view = FakeView()
+        view.live_redirect("/dashboard/")
+        consumer_instance.view_instance = view
+        consumer_instance.send_json = AsyncMock()
+
+        await consumer_instance._flush_navigation()
+
+        msg = consumer_instance.send_json.call_args[0][0]
+        assert msg["type"] == "navigation"
+        assert msg["action"] == "live_redirect"
+        assert msg["path"] == "/dashboard/"

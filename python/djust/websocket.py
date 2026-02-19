@@ -214,8 +214,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         for cmd in commands:
             await self.send_json(
                 {
-                    "type": "navigation",
                     **cmd,
+                    "type": "navigation",
+                    "action": cmd["type"],
                 }
             )
 

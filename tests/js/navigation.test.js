@@ -7,6 +7,7 @@ import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
+const navSourceCode = fs.readFileSync('./python/djust/static/djust/src/18-navigation.js', 'utf-8');
 
 function createEnv(bodyHtml = '') {
     const dom = new JSDOM(
@@ -42,6 +43,52 @@ function createEnv(bodyHtml = '') {
     } catch (e) {
         // client.js may throw on missing DOM APIs
     }
+
+    return { window, dom, document: dom.window.document, historyCalls };
+}
+
+/**
+ * Create a minimal JSDOM env that loads only 18-navigation.js (not the full bundle).
+ * This allows us to inject a mock liveViewWS before the script runs, so click
+ * handler tests can exercise the actual URL-update branch without a real WS.
+ */
+function createNavSourceEnv(bodyHtml = '', liveViewWSMock = null) {
+    const dom = new JSDOM(
+        `<!DOCTYPE html><html><body>
+            <div dj-root>
+                ${bodyHtml}
+            </div>
+        </body></html>`,
+        { url: 'http://localhost:8000/test/', runScripts: 'dangerously', pretendToBeVisual: true }
+    );
+    const { window } = dom;
+    window.console = { log: () => {}, error: () => {}, warn: () => {}, debug: () => {}, info: () => {} };
+
+    const historyCalls = [];
+    const origPushState = window.history.pushState.bind(window.history);
+    const origReplaceState = window.history.replaceState.bind(window.history);
+    window.history.pushState = vi.fn((state, title, url) => {
+        historyCalls.push({ method: 'pushState', state, title, url });
+        try { origPushState(state, title, url); } catch (e) {}
+    });
+    window.history.replaceState = vi.fn((state, title, url) => {
+        historyCalls.push({ method: 'replaceState', state, title, url });
+        try { origReplaceState(state, title, url); } catch (e) {}
+    });
+
+    // Provide djust namespace and liveViewWS before loading nav code so
+    // the IIFE's free variable references resolve to these values.
+    window.eval('window.djust = { _routeMap: {} };');
+    if (liveViewWSMock !== null) {
+        window.eval('var liveViewWS = ' + JSON.stringify(null) + ';');
+        window.liveViewWS_mock = liveViewWSMock;
+        // Expose as a var so the IIFE can see it as a free variable
+        window.eval('var liveViewWS = window.liveViewWS_mock;');
+    }
+
+    try {
+        window.eval(navSourceCode);
+    } catch (e) {}
 
     return { window, dom, document: dom.window.document, historyCalls };
 }
@@ -179,6 +226,74 @@ describe('navigation', () => {
 
             const link = document.querySelector('[dj-patch]');
             expect(link.dataset.djustPatchBound).toBe('true');
+        });
+    });
+
+    describe('issue #307 regressions', () => {
+        it('BUG 1: handleNavigation dispatches to handleLivePatch when action=live_patch', () => {
+            // After the BUG 2 fix the server sends type:'navigation' + action:'live_patch'.
+            // handleNavigation must use data.action to dispatch correctly.
+            const { window, historyCalls } = createEnv();
+
+            window.djust.navigation.handleNavigation({
+                type: 'navigation',
+                action: 'live_patch',
+                path: '/items/',
+                params: { page: '5' },
+            });
+
+            expect(historyCalls.length).toBe(1);
+            expect(historyCalls[0].url).toContain('/items/');
+            expect(historyCalls[0].url).toContain('page=5');
+        });
+
+        it('BUG 1: handleNavigation dispatches to handleLiveRedirect when action=live_redirect', () => {
+            const { window, historyCalls } = createEnv('<div dj-view="myapp.views.DashboardView"></div>');
+            window.djust._routeMap = { '/dashboard/': 'myapp.views.DashboardView' };
+
+            window.djust.navigation.handleNavigation({
+                type: 'navigation',
+                action: 'live_redirect',
+                path: '/dashboard/',
+            });
+
+            // replaceState or pushState should have been called for the new path
+            expect(historyCalls.length).toBe(1);
+            expect(historyCalls[0].url).toContain('/dashboard/');
+        });
+
+        it('BUG 1 (dj-patch): clicking dj-patch="/" updates pathname to /', () => {
+            // Before the fix, url.pathname !== '/' skipped the pathname update
+            // when the target is the root path.
+            // We load the nav source file directly so liveViewWS can be injected.
+            const wsMock = { viewMounted: true, ws: { readyState: 1 }, sendMessage: () => {} };
+            const { document, historyCalls } = createNavSourceEnv(
+                '<a id="home" dj-patch="/">Home</a>',
+                wsMock
+            );
+
+            document.querySelector('[dj-root] [dj-patch]') &&
+                document.defaultView.djust.navigation.bindDirectives();
+            document.getElementById('home').click();
+
+            expect(historyCalls.length).toBe(1);
+            const pushed = new URL(historyCalls[0].url);
+            expect(pushed.pathname).toBe('/');
+        });
+
+        it('dj-patch="/some/path/" updates pathname correctly (existing behaviour)', () => {
+            const wsMock = { viewMounted: true, ws: { readyState: 1 }, sendMessage: () => {} };
+            const { document, historyCalls } = createNavSourceEnv(
+                '<a id="nav" dj-patch="/items/">Items</a>',
+                wsMock
+            );
+
+            document.defaultView.djust.navigation.bindDirectives();
+            document.getElementById('nav').click();
+
+            expect(historyCalls.length).toBe(1);
+            const pushed = new URL(historyCalls[0].url);
+            expect(pushed.pathname).toBe('/items/');
         });
     });
 
