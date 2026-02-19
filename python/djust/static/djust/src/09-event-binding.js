@@ -52,11 +52,12 @@ function bindLiveViewEvents() {
         const clickHandler = element.getAttribute('dj-click');
         if (clickHandler && !_isHandlerBound(element, 'click')) {
             _markHandlerBound(element, 'click');
-            // Parse handler string to extract function name and arguments
-            const parsed = parseEventHandler(clickHandler);
 
             const clickHandlerFn = async (e) => {
                 e.preventDefault();
+
+                // Read attribute at fire time so morphElement attribute updates take effect
+                const parsed = parseEventHandler(element.getAttribute('dj-click') || '');
 
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(element)) {

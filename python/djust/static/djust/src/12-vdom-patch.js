@@ -335,26 +335,10 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
 
     if (vnode.attrs) {
         for (const [key, value] of Object.entries(vnode.attrs)) {
-            // Set all attributes on the element (including dj-* attributes).
-            // For dj-* event attributes, bind the event listener immediately and
-            // mark as bound in the WeakMap to prevent bindLiveViewEvents() from
-            // adding duplicate listeners. This ensures VDOM-inserted elements
-            // are properly bound without double-binding.
             if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
                 elem.value = value;
             }
             elem.setAttribute(key, value);
-
-            // Bind dj-* event handlers for VDOM-created elements
-            if (key.startsWith('dj-')) {
-                const eventType = key.substring(3); // e.g., 'dj-click' -> 'click'
-                // Only bind standard djust events, skip special attributes like dj-root, dj-view, dj-model, etc.
-                const EVENT_TYPES = ['click', 'submit', 'change', 'input', 'blur', 'focus', 'keydown', 'keyup'];
-                if (EVENT_TYPES.includes(eventType)) {
-                    // Mark as bound immediately to prevent bindLiveViewEvents() from re-binding
-                    window.djust._markHandlerBound(elem, eventType);
-                }
-            }
         }
     }
 
@@ -719,7 +703,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                     if (newChild.id && !existingChildIds.has(newChild.id)) {
                         // Clone and append new child
                         existingElement.appendChild(newChild.cloneNode(true));
-                        console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
+                        if (globalThis.djustDebug) {
+                            console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
+                        }
                     }
                 }
                 break;
@@ -738,7 +724,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                     if (newChild.id && !existingChildIds.has(newChild.id)) {
                         // Clone and prepend new child
                         existingElement.insertBefore(newChild.cloneNode(true), firstExisting);
-                        console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
+                        if (globalThis.djustDebug) {
+                            console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
+                        }
                     }
                 }
                 break;
@@ -746,7 +734,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
 
             case 'ignore':
                 // Don't update this element at all
-                console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
+                if (globalThis.djustDebug) {
+                    console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
+                }
                 break;
 
             case 'replace':

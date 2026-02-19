@@ -58,7 +58,9 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
         expect(addEventCount).toBe(0);
     });
 
-    it('bindLiveViewEvents skips elements already bound via WeakMap', () => {
+    it('bindLiveViewEvents binds click handler on VDOM-inserted elements exactly once', () => {
+        // createNodeFromVNode no longer pre-marks elements; bindLiveViewEvents
+        // is responsible for binding and deduplicating via WeakMap.
         const newBtn = window.djust.createNodeFromVNode({
             tag: 'button',
             attrs: { 'dj-click': 'delete_todo(1)', 'data-dj-id': 'b2' },
@@ -75,8 +77,13 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
             return origAddEvent(type, ...args);
         };
 
+        // First call: element is in DOM and unbound — should bind it
         window.djust.bindLiveViewEvents();
-        expect(addEventCount).toBe(0);
+        expect(addEventCount).toBe(1);
+
+        // Second call: WeakMap prevents double-binding
+        window.djust.bindLiveViewEvents();
+        expect(addEventCount).toBe(1);
     });
 
     it('binds handlers for other event types (submit, change) without double-binding', () => {
