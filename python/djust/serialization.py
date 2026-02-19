@@ -344,6 +344,11 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
     - timedelta  -- ISO-8601 duration string (via ``django.utils.duration``)
     - Promise    -- str() (Django lazy translation strings)
 
+    **Non-serializable values (issue #292)**: If a value cannot be serialized,
+    this function logs a warning and falls back to str(value). Configure
+    ``strict_serialization=True`` in LIVEVIEW_CONFIG to raise TypeError instead.
+    Always emits warning logs before fallback, even when not in strict mode.
+
     Supported types:
     - None, bool, int, float, str  -- pass through
     - Decimal                      -- float()
@@ -469,5 +474,24 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
         )
         return None
 
-    # Final fallback
+    # Final fallback - warn before str() conversion
+    from .config import config
+
+    value_type = type(value).__name__
+    value_module = type(value).__module__
+    msg = (
+        f"LiveView state contains non-serializable value: {value_type} "
+        f"(from {value_module}). This will be converted to a string, "
+        f"which may cause AttributeError on deserialization. "
+        f"Consider using self._<attr> for private state, or re-initialize "
+        f"in mount()/event handlers. See: https://djust.org/docs/guides/services.md"
+    )
+
+    # Always warn, even if not in strict mode
+    logger.warning(msg)
+
+    # In strict mode, raise instead of falling back
+    if config.get("strict_serialization", False):
+        raise TypeError(msg)
+
     return str(value)

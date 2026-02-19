@@ -317,6 +317,97 @@ Or remove `LIVEVIEW_ALLOWED_MODULES` entirely to allow all modules.
 
 ---
 
+### V006: Service instance in mount()
+
+**Severity**: Warning
+
+**What causes it**: AST analysis detected an assignment in `mount()` that instantiates a class whose name contains keywords like "Service", "Client", "Session", "API", or "Connection". These are typically not JSON-serializable.
+
+**What you see**: The view works initially, but after a WebSocket reconnection or page refresh, you get `AttributeError` when trying to call methods on what is now a string representation of the object.
+
+**Fix**: Use the helper method pattern:
+
+```python
+# WRONG
+class MyView(LiveView):
+    def mount(self, request, **kwargs):
+        self.s3 = boto3.client("s3")  # Not serializable
+
+# CORRECT
+class MyView(LiveView):
+    def _get_s3(self):
+        return boto3.client("s3")
+
+    def mount(self, request, **kwargs):
+        s3 = self._get_s3()  # Temporary variable, not stored in state
+        # Use s3 here to fetch data
+```
+
+Or suppress if you know the object is serializable:
+
+```python
+self.api_client = MySerializableClient()  # noqa: V006
+```
+
+**Related**: [Working with External Services](services.md)
+
+---
+
+### V007: Event handler missing **kwargs
+
+**Severity**: Warning
+
+**What causes it**: An `@event_handler` decorated method does not include `**kwargs` in its signature. Event handlers receive all event parameters from the client, and without `**kwargs`, extra parameters will cause errors.
+
+**Fix**:
+
+```python
+# WRONG - will fail if client sends unexpected parameters
+@event_handler()
+def search(self, query: str = ""):
+    self.results = search(query)
+
+# CORRECT
+@event_handler()
+def search(self, query: str = "", **kwargs):
+    self.results = search(query)
+```
+
+---
+
+### V008: Non-primitive type in mount()
+
+**Severity**: Info
+
+**What causes it**: AST analysis detected an assignment in `mount()` that instantiates a non-primitive type (not `list`, `dict`, `set`, `tuple`, `str`, `int`, `float`, `bool`). This may indicate a non-serializable object being stored in LiveView state.
+
+**What you see**: Similar to V006, but catches a broader range of types. You may see runtime warnings about non-serializable values, or `AttributeError` after deserialization.
+
+**Fix**: If the type is not JSON-serializable, use a private variable or helper method:
+
+```python
+# WRONG
+class MyView(LiveView):
+    def mount(self, request, **kwargs):
+        self.processor = DataProcessor()  # May not be serializable
+
+# CORRECT - private variable
+class MyView(LiveView):
+    def mount(self, request, **kwargs):
+        self._processor = DataProcessor()  # Private, not serialized
+
+# OR - if it IS serializable, suppress the check
+class MyView(LiveView):
+    def mount(self, request, **kwargs):
+        self.config = MySerializableConfig()  # noqa: V008
+```
+
+V008 is broader than V006 and will flag any custom class instantiation, not just service-like names. This helps catch subtle serialization bugs early.
+
+**Related**: [Working with External Services](services.md)
+
+---
+
 ## Security Errors (S0xx)
 
 ### S001: mark_safe() with f-string

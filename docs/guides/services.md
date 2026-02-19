@@ -219,30 +219,65 @@ These types will raise `TypeError` if stored as public state:
 
 ## Detection and Debugging
 
-### System Check: V006
+### System Checks: V006 and V008
 
-djust's system checks can detect service instances stored in state. Run:
+djust provides two static checks to catch non-serializable state at development time:
 
 ```bash
 python manage.py check --tag djust
 ```
 
-If a LiveView stores something that looks like a service instance (class names containing "Service", "Client", "Session", "API", or "Connection"), you will see:
+**V006** detects service-like instances (class names containing "Service", "Client", "Session", "API", or "Connection"):
 
 ```
 (djust.V006) MyView.api_client looks like a service instance stored in state.
     HINT: Service instances are not JSON-serializable. Use a helper method instead.
 ```
 
-### Runtime Errors
-
-If a non-serializable object makes it past the checks, you will see a `TypeError` at render time:
+**V008** (broader check, issue #292) detects any non-primitive type assignment in mount():
 
 ```
-TypeError: Object of type S3.Client is not JSON serializable
+(djust.V008) myapp/views.py:15 -- Non-primitive type 'MyServiceClass' assigned to self.service in mount().
+    Ensure this type is JSON-serializable.
+    HINT: If 'MyServiceClass' is not serializable, use self._service instead or re-initialize in event handlers.
 ```
 
-The stack trace will point to the serialization step in `websocket.py`. The fix is always the same: move the service to a private variable or a helper method.
+V008 catches a broader set of potential serialization issues beyond just service instances.
+
+### Runtime Warnings and Errors
+
+**Default behavior (strict_serialization=False):**
+
+When a non-serializable object is encountered at runtime, djust logs a warning and converts it to a string as a fallback:
+
+```
+WARNING [djust.serialization] LiveView state contains non-serializable value: S3Client (from botocore.client).
+This will be converted to a string, which may cause AttributeError on deserialization.
+Consider using self._<attr> for private state, or re-initialize in mount()/event handlers.
+```
+
+On the next request, deserialized state will contain a string like `"<botocore.client.S3 object at 0x...>"` instead of the original service instance, causing AttributeError when you try to call methods on it.
+
+**Strict mode (strict_serialization=True):**
+
+Enable strict mode to catch these issues early during development:
+
+```python
+# settings.py
+LIVEVIEW_CONFIG = {
+    'strict_serialization': True,  # Raise TypeError instead of str() fallback
+}
+```
+
+With strict mode enabled, non-serializable values raise an immediate TypeError with an actionable error message:
+
+```
+TypeError: LiveView state contains non-serializable value: S3Client (from botocore.client).
+This will be converted to a string, which may cause AttributeError on deserialization.
+Consider using self._<attr> for private state, or re-initialize in mount()/event handlers.
+```
+
+The stack trace will point to the serialization step. The fix is always the same: move the service to a private variable or a helper method.
 
 ### Debugging Steps
 
