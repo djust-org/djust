@@ -136,18 +136,25 @@ fn render_node_with_loader<L: TemplateLoader>(
                     let mut output = String::new();
                     let mut ctx = context.clone();
 
-                    // Create an iterator, reversing if needed
-                    let iter: Box<dyn Iterator<Item = Value>> = if *reversed {
-                        Box::new(items.into_iter().rev())
+                    // Create an iterator with indices, reversing if needed
+                    let items_vec = items;
+                    let indices_and_items: Vec<(usize, Value)> = if *reversed {
+                        items_vec
+                            .into_iter()
+                            .enumerate()
+                            .rev()
+                            .collect()
                     } else {
-                        Box::new(items.into_iter())
+                        items_vec.into_iter().enumerate().collect()
                     };
 
-                    for item in iter {
+                    for (index, item) in indices_and_items {
                         // Handle tuple unpacking: {% for a, b in items %}
                         if var_names.len() == 1 {
                             // Single variable: {% for item in items %}
                             ctx.set(var_names[0].clone(), item);
+                            // Track loop mapping for safe key resolution
+                            ctx.set_loop_mapping(var_names[0].clone(), iterable.clone(), index);
                         } else {
                             // Multiple variables: {% for key, value in items %}
                             // Expect item to be a list/tuple
@@ -173,6 +180,11 @@ fn render_node_with_loader<L: TemplateLoader>(
                             }
                         }
                         output.push_str(&render_nodes_with_loader(nodes, &ctx, loader)?);
+                    }
+
+                    // Clear loop mappings after the loop
+                    for var_name in var_names {
+                        ctx.clear_loop_mapping(var_name);
                     }
 
                     Ok(output)
