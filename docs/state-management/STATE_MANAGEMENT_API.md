@@ -66,9 +66,10 @@ djust's State Management API provides Python-only abstractions for common client
 | `@cache(ttl)` | Same query repeated | 60-300s | +0.7 KB |
 | `@client_state(keys)` | Multi-component coordination | N/A | +0.6 KB |
 | `@permission_required(perm)` | Restrict handler to permitted users | Delete, admin | +0 KB |
+| `@background` | Long-running operations | API calls, AI, file processing | +0 KB |
 | `DraftModeMixin` | Long forms, text editors | Auto-save | +0.9 KB |
 
-**Total bundle size: 7.1 KB** (vs Phoenix ~30 KB, Livewire ~50 KB)
+**Total bundle size: 7.7 KB** (vs Phoenix ~30 KB, Livewire ~50 KB)
 
 ### Quick Decision Matrix
 
@@ -93,6 +94,9 @@ djust's State Management API provides Python-only abstractions for common client
 
 ❓ Restrict handler to users with a Django permission?
    → @permission_required("myapp.delete_item")
+
+❓ Run slow work (API calls, AI) in background thread?
+   → @background or self.start_async(callback)
 
 ❓ Show loading spinner/disable button?
    → dj-loading.disable, dj-loading.show HTML attributes

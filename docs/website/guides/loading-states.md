@@ -206,6 +206,106 @@ def _do_work(self):
         self.loading = False  # Always clear loading state
 ```
 
+### The `@background` Decorator
+
+For simpler syntax, use the `@background` decorator to automatically run the entire handler in the background:
+
+```python
+from djust import LiveView
+from djust.decorators import event_handler, background
+
+
+class ContentView(LiveView):
+    template_name = "content.html"
+
+    def mount(self, request, **kwargs):
+        self.generating = False
+        self.content = ""
+        self.error = ""
+
+    @event_handler
+    @background
+    def generate_content(self, prompt: str = "", **kwargs):
+        """Entire method runs in background thread."""
+        self.generating = True
+        try:
+            self.content = call_llm(prompt)  # Slow operation
+        except Exception as e:
+            self.error = str(e)
+        finally:
+            self.generating = False
+```
+
+The `@background` decorator:
+- Automatically wraps the handler to call `start_async()` internally
+- Uses the function name as the task name (for cancellation/tracking)
+- Can be combined with other decorators like `@debounce`:
+
+```python
+@event_handler
+@debounce(wait=0.5)
+@background
+def auto_save(self, **kwargs):
+    # Debounced and runs in background
+    self.save_draft()
+```
+
+**When to use `@background` vs `start_async()`:**
+
+- Use `@background` when the **entire handler** should run in the background
+- Use `start_async()` when you need to update state **before** starting background work, or when you need multiple concurrent async tasks with different names
+
+### Task Naming and Cancellation
+
+Both `start_async()` and `@background` support named tasks for tracking and cancellation:
+
+```python
+@event_handler
+def start_export(self, **kwargs):
+    self.exporting = True
+    self.start_async(self._run_export, format="csv", name="export")
+
+def _run_export(self, format="csv"):
+    self.data = expensive_export(format)
+    self.exporting = False
+
+@event_handler
+def cancel_export(self, **kwargs):
+    self.cancel_async("export")  # Cancel the named task
+    self.exporting = False
+    self.status = "Cancelled"
+```
+
+With `@background`, the task name is automatically set to the handler's function name:
+
+```python
+@event_handler
+@background
+def generate_report(self, **kwargs):
+    # Task name is "generate_report"
+    ...
+
+@event_handler
+def cancel_report(self, **kwargs):
+    self.cancel_async("generate_report")
+```
+
+### Handling Completion or Errors
+
+Implement `handle_async_result()` to receive notifications when async tasks complete or fail:
+
+```python
+def handle_async_result(self, name: str, result=None, error=None):
+    """Called when any async task completes."""
+    if error:
+        self.error_message = f"Task {name} failed: {error}"
+        self.loading = False
+    elif name == "export":
+        self.status = "Export complete"
+```
+
+This method is optional -- if not implemented, errors are logged and the view re-renders normally when the task completes.
+
 ## Combining Both Systems
 
 The loading directives and `start_async()` are designed to work together. The key is the `async_pending` flag:

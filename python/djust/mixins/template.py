@@ -432,7 +432,6 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # Check if we have a full template from template inheritance
         if hasattr(self, "_full_template") and self._full_template:
             from djust._rust import RustLiveView
-            from django.utils.safestring import SafeString
 
             template_dirs = get_template_dirs()
             temp_rust = RustLiveView(self._full_template, template_dirs)

@@ -520,6 +520,7 @@ class ProductSearchView(LiveView):
 | `@optimistic` | Instant feedback | Counter, toggle |
 | `@cache(ttl, key_params)` | Repeated queries | Autocomplete |
 | `@client_state(keys)` | Multi-component | Dashboard filters |
+| `@background` | Long operations | AI generation, file processing |
 | `DraftModeMixin` | Auto-save forms | Contact form |
 
 **Quick Decision Matrix:**
@@ -528,6 +529,7 @@ class ProductSearchView(LiveView):
 - Need instant UI update? → `@optimistic`
 - Same query multiple times? → `@cache(ttl)`
 - Multiple components? → `@client_state([keys])`
+- Long-running work? → `@background` or `self.start_async(callback)`
 - Auto-save forms? → `DraftModeMixin`
 
 #### Learn More

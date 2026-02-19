@@ -8,7 +8,6 @@ These tests ensure that:
 """
 
 import ast
-import glob
 import subprocess
 import tempfile
 from pathlib import Path
@@ -189,7 +188,6 @@ class TestView(LiveView):
         from djust.mixins.push_events import PushEventMixin
 
         # These should be importable and have proper signatures
-        import inspect
 
         # The stubs provide type information for static analysis
         # even if the runtime implementation is dynamic

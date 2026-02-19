@@ -180,7 +180,6 @@ class RustBridgeMixin:
         if self._rust_view:
             from ..components.base import Component, LiveComponent
             from django import forms
-            from django.utils.safestring import SafeString
 
             full_context = self.get_context_data()
 

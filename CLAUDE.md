@@ -157,6 +157,41 @@ def search(self, value: str = "", **kwargs):
 - `_private` — internal state, not exposed to templates
 - `public` — auto-exposed to template context and JIT serialization
 
+### Background Work — `start_async()` and `@background`
+For long-running operations (API calls, AI generation, file processing), use `AsyncWorkMixin` (included in `LiveView` base) to flush loading state immediately and run work in background:
+
+```python
+from djust import LiveView
+from djust.decorators import event_handler, background
+
+class ReportView(LiveView):
+    @event_handler
+    def generate_report(self, **kwargs):
+        self.generating = True  # Sent to client immediately
+        self.start_async(self._do_generate)  # Runs after response sent
+
+    def _do_generate(self):
+        self.report = call_slow_api()  # Background thread
+        self.generating = False  # View re-renders when done
+
+# Or use @background decorator for automatic start_async wrapping:
+class ContentView(LiveView):
+    @event_handler
+    @background
+    def generate_content(self, prompt: str = "", **kwargs):
+        self.generating = True
+        self.content = call_llm(prompt)  # Entire handler runs in background
+        self.generating = False
+```
+
+Key features:
+- `start_async(callback, *args, **kwargs)` schedules background work with optional named tasks
+- `cancel_async(name)` cancels scheduled or running tasks
+- `handle_async_result(name, result=None, error=None)` optional callback for completion/errors
+- `@background` decorator wraps entire handler to run via `start_async()`
+- Loading states persist through background work via `async_pending` flag
+- Always catch exceptions in callbacks to prevent client stuck in loading state
+
 ## Template Filters
 
 The Rust template engine supports **all 57 Django built-in filters** in `crates/djust_templates/src/filters.rs`. HTML-producing filters (`urlize`, `urlizetrunc`, `unordered_list`) handle their own escaping internally and are listed in `safe_output_filters` in `renderer.rs` to prevent double-escaping.
