@@ -209,12 +209,12 @@ volumes:
 
 ### Session TTL Guidelines
 
-| Use Case | Recommended TTL |
-|----------|----------------|
-| E-commerce | 1-2 hours |
-| Admin dashboards | 4-8 hours |
-| Public content | 30-60 minutes |
-| Real-time apps | 15-30 minutes |
+| Use Case         | Recommended TTL |
+| ---------------- | --------------- |
+| E-commerce       | 1-2 hours       |
+| Admin dashboards | 4-8 hours       |
+| Public content   | 30-60 minutes   |
+| Real-time apps   | 15-30 minutes   |
 
 ### Cleanup for In-Memory Backend
 

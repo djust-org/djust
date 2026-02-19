@@ -32,6 +32,7 @@ class MyView(LiveView):
 ### `mount(request, **kwargs)`
 
 Called **once** when the LiveView is first loaded (HTTP request). Use this to:
+
 - Initialize state variables
 - Read URL parameters from `**kwargs`
 - Fetch initial data from the database
@@ -84,6 +85,7 @@ def handle_info(self, event, data, **kwargs):
 ## State Management
 
 State lives on `self`. Any public attribute (`self.count`) is:
+
 - Included in the template context
 - Preserved across WebSocket events
 - Re-rendered when changed

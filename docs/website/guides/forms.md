@@ -161,13 +161,13 @@ For validation on focus loss specifically, use `dj-blur`:
 
 FormMixin initializes these in `mount()`, all available in your template:
 
-| Attribute | Type | Purpose |
-|-----------|------|---------|
-| `form_data` | `dict` | Current field values (keyed by field name) |
-| `field_errors` | `dict` | Per-field errors: `{field: [errors]}` |
-| `form_errors` | `list` | Non-field errors from `clean()` |
-| `is_valid` | `bool` | Result of last `submit_form()` |
-| `form_instance` | `Form` | Current Django Form instance |
+| Attribute       | Type   | Purpose                                    |
+| --------------- | ------ | ------------------------------------------ |
+| `form_data`     | `dict` | Current field values (keyed by field name) |
+| `field_errors`  | `dict` | Per-field errors: `{field: [errors]}`      |
+| `form_errors`   | `list` | Non-field errors from `clean()`            |
+| `is_valid`      | `bool` | Result of last `submit_form()`             |
+| `form_instance` | `Form` | Current Django Form instance               |
 
 ## Displaying Errors
 
@@ -255,11 +255,11 @@ Add `dj-confirm` to show a browser confirmation before the action fires:
 
 `dj-model` syncs a field value to a Python attribute on every change. `dj-submit` collects all fields and sends them on submit.
 
-| Use Case | Approach |
-|----------|----------|
-| Search / filters / toggles | `dj-model` |
-| Data entry with validation | `dj-submit` + FormMixin |
-| Multi-field forms with save | `dj-submit` |
+| Use Case                    | Approach                |
+| --------------------------- | ----------------------- |
+| Search / filters / toggles  | `dj-model`              |
+| Data entry with validation  | `dj-submit` + FormMixin |
+| Multi-field forms with save | `dj-submit`             |
 
 Example with `dj-model` for a live filter:
 

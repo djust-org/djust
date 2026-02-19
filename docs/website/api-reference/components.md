@@ -61,9 +61,9 @@ from djust.components.base import LiveComponent
 
 ### Class Attributes
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `template` | `str` | Inline HTML template |
+| Attribute       | Type  | Description             |
+| --------------- | ----- | ----------------------- |
+| `template`      | `str` | Inline HTML template    |
 | `template_name` | `str` | Path to a template file |
 
 ### Abstract Methods (must implement)
@@ -97,6 +97,7 @@ Re-render this component and push the diff to the client. Call after changing st
 Send an event to the parent LiveView.
 
 **Parameters:**
+
 - `event_name` (`str`) — Event name string
 - `data` (`dict`) — Event payload
 

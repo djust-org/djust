@@ -59,10 +59,10 @@ def do_search(self, value: str = "", **kwargs):
 
 djust uses a naming convention to control what gets serialized:
 
-| Prefix | Example | Behavior |
-|--------|---------|----------|
-| No prefix | `self.count` | **Public** — included in template context, serialized for JIT |
-| `_` prefix | `self._items` | **Private** — internal state, not serialized |
+| Prefix     | Example       | Behavior                                                      |
+| ---------- | ------------- | ------------------------------------------------------------- |
+| No prefix  | `self.count`  | **Public** — included in template context, serialized for JIT |
+| `_` prefix | `self._items` | **Private** — internal state, not serialized                  |
 
 Use private vars for QuerySets and expensive objects. Assign them to public vars in `get_context_data()`:
 
@@ -81,16 +81,17 @@ djust uses a Rust-powered template engine that is **compatible with Django's tem
 
 Templates use `dj-*` attributes for event binding:
 
-| Attribute | Fires when | Handler receives |
-|-----------|-----------|-----------------|
-| `dj-click="handler"` | Button/element clicked | `**kwargs` |
-| `dj-input="handler"` | Input value changes (keyup) | `value=` current value |
-| `dj-change="handler"` | Input/select loses focus | `value=` current value |
-| `dj-submit="handler"` | Form submitted | All form fields as kwargs |
+| Attribute             | Fires when                  | Handler receives          |
+| --------------------- | --------------------------- | ------------------------- |
+| `dj-click="handler"`  | Button/element clicked      | `**kwargs`                |
+| `dj-input="handler"`  | Input value changes (keyup) | `value=` current value    |
+| `dj-change="handler"` | Input/select loses focus    | `value=` current value    |
+| `dj-submit="handler"` | Form submitted              | All form fields as kwargs |
 
 ## VDOM Diffing
 
 On every update, djust:
+
 1. Renders the full template in Rust (fast)
 2. Diffs the new DOM against the previous DOM in Rust (very fast)
 3. Sends only the changed patches to the client (~bytes, not full HTML)
@@ -100,6 +101,7 @@ This means complex re-renders that change one row in a 1000-row table only trans
 ## When to Use LiveView vs Standard Django Views
 
 **Use LiveView for:**
+
 - Forms with real-time validation
 - Search/filter interfaces that update as you type
 - Live dashboards, counters, feeds
@@ -108,6 +110,7 @@ This means complex re-renders that change one row in a 1000-row table only trans
 - Any UI where you'd otherwise write custom fetch/AJAX code
 
 **Use standard Django views for:**
+
 - Simple read-only pages (no interactivity)
 - REST API endpoints
 - File download/redirect responses

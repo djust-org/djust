@@ -36,6 +36,7 @@ class CounterView(LiveView):
 ```
 
 **Key rules:**
+
 - `mount()` runs once — set initial state here, not in `__init__`
 - Every event handler needs `@event_handler()` — djust blocks undecorated methods for security
 - Always accept `**kwargs` in event handlers (djust may pass extra metadata)
@@ -65,6 +66,7 @@ Create `myapp/templates/myapp/counter.html`:
 ```
 
 **Template requirements:**
+
 - `{% load djust_tags %}` and `{% djust_scripts %}` load the client JS (~5KB)
 - `dj-view="{{ dj_view_id }}"` on `<body>` connects the page to the WebSocket session
 - `dj-root` marks the reactive region — only this subtree is patched on updates

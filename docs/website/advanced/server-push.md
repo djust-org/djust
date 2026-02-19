@@ -158,12 +158,12 @@ CHANNEL_LAYERS = {
 
 Synchronous. Sends an update to all clients connected to `view_path`.
 
-| Parameter   | Type   | Description                                    |
-|-------------|--------|------------------------------------------------|
-| `view_path` | `str`  | Dotted import path of the LiveView class       |
-| `state`     | `dict` | Attribute names and values to set on the view  |
-| `handler`   | `str`  | Name of a method to call on the view           |
-| `payload`   | `dict` | Keyword arguments passed to the handler        |
+| Parameter   | Type   | Description                                   |
+| ----------- | ------ | --------------------------------------------- |
+| `view_path` | `str`  | Dotted import path of the LiveView class      |
+| `state`     | `dict` | Attribute names and values to set on the view |
+| `handler`   | `str`  | Name of a method to call on the view          |
+| `payload`   | `dict` | Keyword arguments passed to the handler       |
 
 ### `apush_to_view(view_path, *, state=None, handler=None, payload=None)`
 

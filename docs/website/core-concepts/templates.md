@@ -165,6 +165,7 @@ class HelloView(LiveView):
 ## Template Requirements (Legacy)
 
 Some older setups used `dj-view` and `dj-root` differently. The required pattern is:
+
 - `dj-view="{{ dj_view_id }}"` on the `<body>` tag (or outermost container)
 - `dj-root` on the reactive region inside
 

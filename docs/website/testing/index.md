@@ -141,6 +141,7 @@ class TestAllViews(TestCase, LiveViewSmokeTest):
 ```
 
 `LiveViewSmokeTest` auto-discovers all `LiveView` subclasses in `app_label` and:
+
 1. Mounts each view
 2. Asserts it renders without raising an exception
 3. Checks DB query counts stay under `max_queries`

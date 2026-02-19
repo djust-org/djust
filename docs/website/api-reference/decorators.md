@@ -24,6 +24,7 @@ Mark a method as callable from the client. **Required** on all event handlers �
 ```
 
 **Parameters:**
+
 - `params` (`list[str]`, optional) — Explicit list of allowed parameter names. Defaults to auto-extraction from the function signature.
 - `description` (`str`) — Human-readable description shown in the debug panel. Defaults to the method docstring.
 - `coerce_types` (`bool`, default `True`) — Automatically coerce string values from `data-*` attributes to the expected types based on type hints (`"5"` → `5` for `int`).
@@ -59,6 +60,7 @@ def raw_handler(self, value: str = "", **kwargs):
 ```
 
 **Rules:**
+
 - Always accept `**kwargs` — djust passes extra metadata
 - Always provide default values for all parameters
 - `value` is the magic parameter name for `dj-input` and `dj-change` events
@@ -75,6 +77,7 @@ Debounce event handler calls on the client side. The handler fires only after th
 ```
 
 **Parameters:**
+
 - `wait` (`float`) — Seconds to wait after the last event before firing. Default `0.3`.
 - `max_wait` (`float | None`) — Maximum seconds to wait even if events keep firing. Default `None` (unlimited).
 
@@ -107,6 +110,7 @@ Limit how often a handler fires. Useful for scroll, resize, or mouse-move events
 ```
 
 **Parameters:**
+
 - `interval` (`float`) — Minimum seconds between calls. Default `0.1`.
 - `leading` (`bool`) — Fire on the first event. Default `True`.
 - `trailing` (`bool`) — Fire on the last event after the interval. Default `True`.
@@ -155,6 +159,7 @@ Cache handler responses client-side. The response is stored in the browser index
 ```
 
 **Parameters:**
+
 - `ttl` (`int`) — Cache lifetime in seconds. Default `60`.
 - `key_params` (`list[str] | None`) — Parameter names to use as cache key. Default `[]` (caches by handler name only).
 
@@ -179,6 +184,7 @@ Share state via a client-side pub/sub bus. When specified keys change, other com
 ```
 
 **Parameters:**
+
 - `keys` (`list[str]`) — Attribute names to publish after this handler runs.
 
 **Usage:**
@@ -202,6 +208,7 @@ Set a boolean attribute to `True` while the handler is running, `False` after. U
 ```
 
 **Parameters:**
+
 - `attr` (`str`) — Name of the boolean attribute to set.
 
 **Usage:**
@@ -232,6 +239,7 @@ Check Django permissions before the handler executes. Returns an error if the us
 ```
 
 **Parameters:**
+
 - `perm` (`str | list[str]`) — Django permission string(s) (e.g., `"myapp.can_delete"`).
 
 **Usage:**

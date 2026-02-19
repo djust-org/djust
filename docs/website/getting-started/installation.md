@@ -82,7 +82,7 @@ Or add a Makefile target:
 
 ```makefile
 start:
-	uvicorn myproject.asgi:application --reload
+    uvicorn myproject.asgi:application --reload
 ```
 
 ## Building from Source

@@ -205,6 +205,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         Send any pending navigation commands (live_patch / live_redirect)
         queued by the view during handler execution.
+
+        Each message is sent with ``type="navigation"`` so the client router
+        dispatches it to ``handleNavigation()``. The original command type
+        (``"live_patch"`` or ``"live_redirect"``) is preserved in the
+        ``action`` field so the handler can branch correctly.
         """
         if not self.view_instance:
             return

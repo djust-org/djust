@@ -10,12 +10,12 @@ from djust import LiveView
 
 ### Class Attributes
 
-| Attribute | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `template_name` | `str` | — | Path to a Django template file |
-| `template` | `str` | — | Inline HTML template string |
-| `temporary_assigns` | `dict` | `{}` | State that resets to the default after each render (e.g., `{"messages": []}`) |
-| `use_actors` | `bool` | `False` | Enable actor-based state management |
+| Attribute           | Type   | Default | Description                                                                   |
+| ------------------- | ------ | ------- | ----------------------------------------------------------------------------- |
+| `template_name`     | `str`  | —       | Path to a Django template file                                                |
+| `template`          | `str`  | —       | Inline HTML template string                                                   |
+| `temporary_assigns` | `dict` | `{}`    | State that resets to the default after each render (e.g., `{"messages": []}`) |
+| `use_actors`        | `bool` | `False` | Enable actor-based state management                                           |
 
 Either `template_name` or `template` is required.
 
@@ -26,6 +26,7 @@ Either `template_name` or `template` is required.
 Called once when the page first loads (HTTP request). Initialize all state here.
 
 **Parameters:**
+
 - `request` — Django `HttpRequest`
 - `**kwargs` — URL parameters from the route (e.g., `path("<int:pk>/", ...)` passes `pk=...`)
 
@@ -63,6 +64,7 @@ def get_context_data(self, **kwargs):
 Called when URL parameters change via `live_patch()` (soft navigation without a full page reload).
 
 **Parameters:**
+
 - `params` — `dict` of current URL query parameters
 - `url` — Current URL string
 - `**kwargs` — Additional keyword arguments
@@ -81,6 +83,7 @@ def handle_params(self, params, url, **kwargs):
 Called when the server sends a message to this LiveView (e.g., from background tasks, PubSub, or `send_update()`).
 
 **Parameters:**
+
 - `event` — Event name string
 - `data` — Event payload (dict)
 - `**kwargs` — Additional metadata
@@ -186,9 +189,9 @@ class ProtectedView(LoginRequiredMixin, LiveView):
 
 ## State Conventions
 
-| Pattern | Meaning |
-|---------|---------|
-| `self.count` | Public — available in template context |
+| Pattern       | Meaning                                   |
+| ------------- | ----------------------------------------- |
+| `self.count`  | Public — available in template context    |
 | `self._items` | Private — not serialized, not in template |
 
 Private vars (underscore prefix) are useful for QuerySets and large objects that shouldn't be JIT-serialized.

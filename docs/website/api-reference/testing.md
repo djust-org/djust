@@ -15,6 +15,7 @@ LiveViewTestClient(view_class, request_factory=None, user=None)
 ```
 
 **Parameters:**
+
 - `view_class` — The `LiveView` subclass to test
 - `request_factory` — Optional Django `RequestFactory`. Creates one if not provided.
 - `user` — Optional authenticated user to attach to requests.
@@ -47,6 +48,7 @@ result = client.send_event("delete_item", item_id=5)
 ```
 
 **Parameters:**
+
 - `event_name` (`str`) — The handler method name
 - `**kwargs` — Event parameters passed to the handler
 
@@ -146,6 +148,7 @@ Compare `html` against a stored snapshot at `tests/snapshots/{name}.html`.
 On first run, saves the snapshot. Subsequent runs compare against it.
 
 **Parameters:**
+
 - `name` (`str`) — Snapshot file name (no extension)
 - `html` (`str`) — HTML to compare
 - `update` (`bool`) — If `True`, overwrites the stored snapshot
@@ -178,11 +181,11 @@ Auto-discover all `LiveView` subclasses in an app and run smoke tests.
 
 ### Class Attributes
 
-| Attribute | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `app_label` | `str` | `None` | Only test views in this Django app |
-| `max_queries` | `int` | `20` | Fail if `mount()` exceeds this many DB queries |
-| `fuzz` | `bool` | `False` | Send XSS and type-mismatch payloads to handlers |
+| Attribute     | Type   | Default | Description                                     |
+| ------------- | ------ | ------- | ----------------------------------------------- |
+| `app_label`   | `str`  | `None`  | Only test views in this Django app              |
+| `max_queries` | `int`  | `20`    | Fail if `mount()` exceeds this many DB queries  |
+| `fuzz`        | `bool` | `False` | Send XSS and type-mismatch payloads to handlers |
 
 ### Example
 
@@ -198,6 +201,7 @@ class TestAllMyAppViews(TestCase, LiveViewSmokeTest):
 ```
 
 This auto-discovers all `LiveView` subclasses in `myapp` and:
+
 1. Mounts each view
 2. Asserts it renders without raising
 3. Checks DB query counts stay under `max_queries`
@@ -214,6 +218,7 @@ Decorator that enforces performance budgets on test methods.
 ```
 
 **Parameters:**
+
 - `max_time_ms` (`int`) — Maximum milliseconds the test body may take
 - `max_queries` (`int`) — Maximum DB queries allowed
 

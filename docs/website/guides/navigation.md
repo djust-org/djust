@@ -103,7 +103,10 @@ Declarative `live_patch`. Updates the URL and sends `url_change` to the server w
 ```html
 <a dj-patch="?sort=name&order=asc">Sort by Name</a>
 <a dj-patch="/products/?category=new">New Products</a>
+<a dj-patch="/">Home (root path)</a>
 ```
+
+Patching to the root path `/` is supported and correctly updates the browser URL.
 
 ### `dj-navigate`
 

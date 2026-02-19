@@ -15,12 +15,12 @@ For **styling**, djust follows manifesto principle #7: *"Strong opinions on secu
 
 ## Two Types of Components
 
-| | Component | LiveComponent |
-|---|---|---|
-| **State** | None | Full lifecycle (mount/update/unmount) |
-| **Events** | None | `dj-click`, `dj-submit`, etc. |
-| **Rendering** | Rust-accelerated (~1-10us) | Template-based (~50-100us) |
-| **Use for** | Badges, icons, cards, status indicators | Tables with sorting, modals, tabs, forms |
+|               | Component                               | LiveComponent                            |
+| ------------- | --------------------------------------- | ---------------------------------------- |
+| **State**     | None                                    | Full lifecycle (mount/update/unmount)    |
+| **Events**    | None                                    | `dj-click`, `dj-submit`, etc.            |
+| **Rendering** | Rust-accelerated (~1-10us)              | Template-based (~50-100us)               |
+| **Use for**   | Badges, icons, cards, status indicators | Tables with sorting, modals, tabs, forms |
 
 Pick `Component` when you just need HTML output. Pick `LiveComponent` when the component needs to react to user interaction.
 
@@ -333,39 +333,39 @@ djust ships with a library of ready-to-use components. All adapt to your CSS fra
 
 ### UI Components
 
-| Component | Type | Description |
-|---|---|---|
-| `AlertComponent` | LiveComponent | Dismissible alerts with `.show()` / `.dismiss()` |
-| `BadgeComponent` | LiveComponent | Interactive badges |
-| `Badge` | Component | Stateless badges (faster) |
-| `ButtonComponent` | LiveComponent | Buttons with disable/enable |
-| `Button` | Component | Stateless buttons |
-| `CardComponent` | LiveComponent | Cards with dynamic content |
-| `Card` | Component | Stateless cards |
-| `DropdownComponent` | LiveComponent | Dropdown menus |
-| `ModalComponent` | LiveComponent | Show/hide modals programmatically |
-| `ProgressComponent` | LiveComponent | Progress bars with `.set_value()` / `.increment()` |
-| `SpinnerComponent` | LiveComponent | Loading indicators with `.show()` / `.hide()` |
-| More stateless: | Component | `Accordion`, `Avatar`, `Breadcrumb`, `ButtonGroup`, `Checkbox`, `Divider`, `Icon`, `Input`, `ListGroup`, `NavBar`, `Offcanvas`, `Pagination`, `Radio`, `Range`, `Select`, `Switch`, `Table`, `Tabs`, `TextArea`, `Toast`, `Tooltip` |
+| Component           | Type          | Description                                                                                                                                                                                                                         |
+| ------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AlertComponent`    | LiveComponent | Dismissible alerts with `.show()` / `.dismiss()`                                                                                                                                                                                    |
+| `BadgeComponent`    | LiveComponent | Interactive badges                                                                                                                                                                                                                  |
+| `Badge`             | Component     | Stateless badges (faster)                                                                                                                                                                                                           |
+| `ButtonComponent`   | LiveComponent | Buttons with disable/enable                                                                                                                                                                                                         |
+| `Button`            | Component     | Stateless buttons                                                                                                                                                                                                                   |
+| `CardComponent`     | LiveComponent | Cards with dynamic content                                                                                                                                                                                                          |
+| `Card`              | Component     | Stateless cards                                                                                                                                                                                                                     |
+| `DropdownComponent` | LiveComponent | Dropdown menus                                                                                                                                                                                                                      |
+| `ModalComponent`    | LiveComponent | Show/hide modals programmatically                                                                                                                                                                                                   |
+| `ProgressComponent` | LiveComponent | Progress bars with `.set_value()` / `.increment()`                                                                                                                                                                                  |
+| `SpinnerComponent`  | LiveComponent | Loading indicators with `.show()` / `.hide()`                                                                                                                                                                                       |
+| More stateless:     | Component     | `Accordion`, `Avatar`, `Breadcrumb`, `ButtonGroup`, `Checkbox`, `Divider`, `Icon`, `Input`, `ListGroup`, `NavBar`, `Offcanvas`, `Pagination`, `Radio`, `Range`, `Select`, `Switch`, `Table`, `Tabs`, `TextArea`, `Toast`, `Tooltip` |
 
 ### Layout Components
 
-| Component | Type | Description |
-|---|---|---|
-| `TabsComponent` | LiveComponent | Tabbed navigation with `.activate_tab()` |
-| `NavbarComponent` | LiveComponent | Navigation bars with `.set_active()` |
+| Component         | Type          | Description                              |
+| ----------------- | ------------- | ---------------------------------------- |
+| `TabsComponent`   | LiveComponent | Tabbed navigation with `.activate_tab()` |
+| `NavbarComponent` | LiveComponent | Navigation bars with `.set_active()`     |
 
 ### Data Components
 
-| Component | Type | Description |
-|---|---|---|
-| `TableComponent` | LiveComponent | Sortable data tables with `.sort_by()` |
-| `PaginationComponent` | LiveComponent | Page navigation |
+| Component             | Type          | Description                            |
+| --------------------- | ------------- | -------------------------------------- |
+| `TableComponent`      | LiveComponent | Sortable data tables with `.sort_by()` |
+| `PaginationComponent` | LiveComponent | Page navigation                        |
 
 ### Form Components
 
-| Component | Type | Description |
-|---|---|---|
+| Component          | Type          | Description                                      |
+| ------------------ | ------------- | ------------------------------------------------ |
 | `ForeignKeySelect` | LiveComponent | Django ForeignKey field with search/autocomplete |
 | `ManyToManySelect` | LiveComponent | Django M2M field with checkboxes or multi-select |
 
@@ -654,20 +654,20 @@ INSTALLED_APPS = [
 
 ### Available Components
 
-| Tag | Description |
-|---|---|
-| `{% modal %}` | Overlay dialog with backdrop blur |
-| `{% tabs %}` / `{% tab %}` | Content switching with active state |
-| `{% accordion %}` / `{% accordion_item %}` | Expandable sections |
-| `{% dropdown %}` | Toggle menu |
-| `{% toast_container %}` | Server-push notifications |
-| `{% tooltip %}` | Hover tooltip |
-| `{% progress %}` | Animated progress bar |
-| `{% badge %}` | Status indicator with optional pulse |
-| `{% card %}` | Content container |
-| `{% data_table %}` | Sortable table with pagination |
-| `{% pagination %}` | Page navigation |
-| `{% avatar %}` | User avatar with initials fallback |
+| Tag                                        | Description                          |
+| ------------------------------------------ | ------------------------------------ |
+| `{% modal %}`                              | Overlay dialog with backdrop blur    |
+| `{% tabs %}` / `{% tab %}`                 | Content switching with active state  |
+| `{% accordion %}` / `{% accordion_item %}` | Expandable sections                  |
+| `{% dropdown %}`                           | Toggle menu                          |
+| `{% toast_container %}`                    | Server-push notifications            |
+| `{% tooltip %}`                            | Hover tooltip                        |
+| `{% progress %}`                           | Animated progress bar                |
+| `{% badge %}`                              | Status indicator with optional pulse |
+| `{% card %}`                               | Content container                    |
+| `{% data_table %}`                         | Sortable table with pagination       |
+| `{% pagination %}`                         | Page navigation                      |
+| `{% avatar %}`                             | User avatar with initials fallback   |
 
 ### Customization
 
@@ -809,10 +809,10 @@ Then use theme colors in Tailwind classes:
 
 ## Choosing a Styling Approach
 
-| Approach | When to Use |
-|---|---|
-| **`djust-components` + `djust-theming`** | New projects. Style-agnostic, CSS custom properties, 132 theme combos, shadcn/ui compatible. **Recommended.** |
-| **`djust-theming` alone** | You want the design system and theme switching but prefer to write your own component HTML. |
-| **`djust-components` alone** | You want pre-built template tags but will define your own `--dj-*` CSS variables. |
-| **Core `djust.components`** | You need Rust-accelerated rendering for high-frequency components (100+ per page), or need programmatic component creation in Python. |
-| **Plain HTML** | You want full control. Use `dj-click`, `dj-submit` etc. directly on your own markup. djust has zero opinions on your HTML structure. |
+| Approach                                 | When to Use                                                                                                                           |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| **`djust-components` + `djust-theming`** | New projects. Style-agnostic, CSS custom properties, 132 theme combos, shadcn/ui compatible. **Recommended.**                         |
+| **`djust-theming` alone**                | You want the design system and theme switching but prefer to write your own component HTML.                                           |
+| **`djust-components` alone**             | You want pre-built template tags but will define your own `--dj-*` CSS variables.                                                     |
+| **Core `djust.components`**              | You need Rust-accelerated rendering for high-frequency components (100+ per page), or need programmatic component creation in Python. |
+| **Plain HTML**                           | You want full control. Use `dj-click`, `dj-submit` etc. directly on your own markup. djust has zero opinions on your HTML structure.  |
