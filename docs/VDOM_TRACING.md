@@ -35,6 +35,14 @@ When `DJUST_VDOM_TRACE=1` is set, the following information is logged:
 [VDOM TRACE] new_root: <div> id=Some("1H") children=2
 ```
 
+### 1a. Conditional Placeholder Handling (Issue #295 Fix)
+```
+[VDOM TRACE] DJ-IF PLACEHOLDER -> CONTENT: removing placeholder and inserting <div> (id=Some("2A"))
+[VDOM TRACE] CONTENT -> DJ-IF PLACEHOLDER: removing <div> and inserting placeholder
+```
+
+These traces appear when `{% if %}` blocks toggle between false (placeholder comment) and true (actual content). The diff generates `RemoveChild` + `InsertChild` patches instead of `Replace` patches to maintain semantic consistency and prevent sibling position mismatches.
+
 ### 2. Child Diffing Details
 ```
 [VDOM TRACE] diff_children: path=[1, 0, 1] parent_id=Some("2A") old_children=4 new_children=4 has_keys=false
@@ -119,6 +127,18 @@ DJUST_VDOM_TRACE=1 pytest path/to/test.py -v -s
 2. If `has_keys=true`, verify all list items have `key` attribute
 3. Check `old_keys` and `new_keys` in trace output
 4. Unkeyed children in keyed parent are diffed by relative position (not absolute index) to avoid mismatches when keyed children shift positions
+
+### 4. Conditional rendering causing wrong patches (Issue #295)
+
+**Symptom**: `{% if %}` blocks remove elements but siblings get patched incorrectly
+
+**Solution**: Fixed in issue #295. When `{% if condition %}` is false, the template engine now emits `<!--dj-if-->` placeholder comments to maintain consistent sibling positions. Look for these traces:
+
+```
+[VDOM TRACE] DJ-IF PLACEHOLDER -> CONTENT: removing placeholder and inserting <div>
+```
+
+This indicates the placeholder is being replaced with actual content when the condition becomes true.
 
 ## Understanding Paths
 
