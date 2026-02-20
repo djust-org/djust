@@ -593,6 +593,69 @@ window.addEventListener('djust:push_event', (e) => { ... });
 
 ---
 
+### T005: dj-view and dj-root on different elements
+
+**Severity**: Warning
+
+**What causes it**: A template has `dj-view` on one element and `dj-root` on a different element. These attributes must be on the same root element.
+
+**What you see**: VDOM patches may not be applied correctly, or updates fail silently.
+
+**Fix**:
+
+```html
+<!-- WRONG -- different elements -->
+<div dj-view="myapp.views.MyView">
+    <div dj-root>
+        <p>Content</p>
+    </div>
+</div>
+
+<!-- CORRECT -- same element -->
+<div dj-view="myapp.views.MyView" dj-root>
+    <p>Content</p>
+</div>
+```
+
+---
+
+### T010: dj-click used for navigation
+
+**Severity**: Warning
+
+**What causes it**: A template element uses `dj-click` together with navigation-related data attributes (`data-view`, `data-tab`, `data-page`, or `data-section`). This pattern suggests you're implementing navigation, which should use `dj-patch` instead for proper URL updates and browser history support.
+
+**What you see**: Navigation works but the browser URL doesn't update, and the back button doesn't work as expected. Users cannot bookmark or share specific views.
+
+**Fix**:
+
+```html
+<!-- WRONG -- dj-click for navigation -->
+<button dj-click="show_settings" data-view="settings">Settings</button>
+
+<!-- CORRECT -- use dj-patch for navigation -->
+<a href="?view=settings" dj-patch="handle_params">Settings</a>
+```
+
+In your LiveView, handle the URL parameter:
+
+```python
+from djust.decorators import event_handler
+
+class MyView(LiveView):
+    def mount(self, request, **kwargs):
+        self.current_view = request.GET.get('view', 'dashboard')
+
+    @event_handler()
+    def handle_params(self, **kwargs):
+        # Called when URL changes via dj-patch
+        self.current_view = self.request.GET.get('view', 'dashboard')
+```
+
+**Related**: [Navigation Guide](navigation.md)
+
+---
+
 ## Code Quality (Q0xx)
 
 ### Q001: print() statement

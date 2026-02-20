@@ -139,6 +139,8 @@ def save(self, **form_data):
 </button>
 ```
 
+For long-running operations (API calls, AI generation), use the `@background` decorator to run work in a background thread. See [Loading States & Background Work](../guides/loading-states.md) for details.
+
 ## DOM Keying for Lists
 
 When rendering lists that can reorder, add `data-key` for optimal VDOM diffing:

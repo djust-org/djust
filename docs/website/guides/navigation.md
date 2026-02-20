@@ -108,6 +108,8 @@ Declarative `live_patch`. Updates the URL and sends `url_change` to the server w
 
 Patching to the root path `/` is supported and correctly updates the browser URL.
 
+**Note**: Use `dj-patch` for navigation instead of `dj-click` when you need URL updates and browser history support. System check `djust.T010` will warn if you use `dj-click` with navigation-related data attributes like `data-view` or `data-tab`.
+
 ### `dj-navigate`
 
 Declarative `live_redirect`. Navigates to a different view over the WebSocket.

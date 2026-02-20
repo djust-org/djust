@@ -208,4 +208,5 @@ The Rust template engine supports **all 57 Django built-in filters** in `crates/
 - `CONTRIBUTING.md` — contribution guidelines
 - `QUICKSTART.md` — quick setup guide
 - `docs/STATE_MANAGEMENT_API.md` — decorator API reference
+- `docs/website/guides/loading-states.md` — loading states & background work guide
 - `DEVELOPMENT_PROCESS.md` — 9-step development process
