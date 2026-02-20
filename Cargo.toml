@@ -41,7 +41,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 pyo3-async-runtimes = { version = "0.24", features = ["tokio-runtime"] }  # PyO3 async bridge (matches pyo3 0.24)
 bincode = "2.0"  # Internal message serialization
 tokio-test = "0.4"  # Tokio testing utilities
-uuid = { version = "1.20", features = ["v4", "serde"] }  # UUID for view identification (Phase 6)
+uuid = { version = "1.21", features = ["v4", "serde"] }  # UUID for view identification (Phase 6)
 
 [profile.release]
 lto = true
