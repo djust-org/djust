@@ -13,7 +13,7 @@ window.djust = window.djust || {};
 // Prevent double execution when client.js is included in both base template
 // (for TurboNav compatibility) and injected by LiveView.
 if (window._djustClientLoaded) {
-    console.log('[LiveView] client.js already loaded, skipping duplicate initialization');
+    if (globalThis.djustDebug) console.log('[LiveView] client.js already loaded, skipping duplicate initialization');
 } else {
 window._djustClientLoaded = true;
 
