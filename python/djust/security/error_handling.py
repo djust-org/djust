@@ -259,7 +259,7 @@ def handle_exception(
             )
     else:
         # Minimal logging in production - just exception type, no stack trace
-        logger.error(f"{msg}{context}: {type(exception).__name__}")
+        logger.error("%s%s: %s", msg, context, type(exception).__name__)
 
     # Create and return safe response
     return create_safe_error_response(
