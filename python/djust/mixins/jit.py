@@ -278,7 +278,10 @@ class JITMixin:
             import traceback
 
             logger.error(
-                f"[JIT ERROR] Serialization failed for '{variable_name}': {e}\nTraceback:\n{traceback.format_exc()}"
+                "[JIT ERROR] Serialization failed for '%s': %s\nTraceback:\n%s",
+                variable_name,
+                e,
+                traceback.format_exc(),
             )
             return [normalize_django_value(obj) for obj in queryset]
 
