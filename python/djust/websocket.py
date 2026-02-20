@@ -909,6 +909,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             except Exception:
                 pass  # URL may not resolve (e.g., root "/") — that's fine
 
+            # Call lifecycle hooks that some mixins register on the HTTP path
+            # (dispatch/get/post) but that are bypassed here because we never
+            # go through Django's view dispatch.  Calling these explicitly
+            # means mixin authors don't need to know about the WebSocket path.
+            #
+            # Current hooks:
+            #   _ensure_tenant() — djust-tenants TenantMixin resolves the tenant.
+            #     Without this, self.tenant is always None in the live path even
+            #     though the SSR pre-render (HTTP) path works correctly.
+            #     See: https://github.com/djust-org/djust/issues/342
+            if hasattr(self.view_instance, "_ensure_tenant"):
+                await sync_to_async(self.view_instance._ensure_tenant)(request)
+
             # Run synchronous view operations in a thread pool
             await sync_to_async(self.view_instance.mount)(request, **mount_kwargs)
         except Exception as e:
