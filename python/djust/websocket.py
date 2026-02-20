@@ -212,10 +212,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
         commands = self.view_instance._drain_navigation()
         for cmd in commands:
+            # Promote cmd's "type" (e.g. "live_patch") to "action" so it doesn't
+            # collide with the outer message "type" key.
+            action = cmd.get("type")
+            payload = {k: v for k, v in cmd.items() if k != "type"}
             await self.send_json(
                 {
                     "type": "navigation",
-                    **cmd,
+                    "action": action,
+                    **payload,
                 }
             )
 
