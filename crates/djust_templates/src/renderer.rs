@@ -106,6 +106,10 @@ fn render_node_with_loader<L: TemplateLoader>(
 
             if condition_result {
                 render_nodes_with_loader(true_nodes, context, loader)
+            } else if false_nodes.is_empty() {
+                // Fix for DJE-053: emit a placeholder comment so VDOM diffing has a stable
+                // DOM node to target when the condition later becomes true.
+                Ok("<!--dj-if-->".to_string())
             } else {
                 render_nodes_with_loader(false_nodes, context, loader)
             }
