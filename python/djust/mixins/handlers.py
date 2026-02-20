@@ -25,7 +25,7 @@ class HandlerMixin:
             )
             return self._handler_metadata
 
-        logger.debug(f"[LiveView] Extracting handler metadata for {self.__class__.__name__}")
+        logger.debug("[LiveView] Extracting handler metadata for %s", self.__class__.__name__)
         metadata = {}
 
         for name in dir(self):

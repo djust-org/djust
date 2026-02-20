@@ -107,7 +107,7 @@ class RedisStateBackend(StateBackend):
                 f"(TTL={default_ttl}s, compression={compression_status})"
             )
         except redis.ConnectionError as e:
-            logger.error(f"Failed to connect to Redis: {e}")
+            logger.error("Failed to connect to Redis: %s", e)
             raise
 
         # Statistics tracking
@@ -152,7 +152,7 @@ class RedisStateBackend(StateBackend):
                 return NO_COMPRESSION_MARKER + data
 
         except Exception as e:
-            logger.warning(f"Compression failed, storing uncompressed: {e}")
+            logger.warning("Compression failed, storing uncompressed: %s", e)
             self._stats["uncompressed_count"] += 1
             return NO_COMPRESSION_MARKER + data
 
@@ -177,7 +177,7 @@ class RedisStateBackend(StateBackend):
             try:
                 return self._decompressor.decompress(payload)
             except Exception as e:
-                logger.error(f"Decompression failed: {e}")
+                logger.error("Decompression failed: %s", e)
                 raise
         elif marker == NO_COMPRESSION_MARKER:
             return payload
@@ -214,7 +214,7 @@ class RedisStateBackend(StateBackend):
                 return (view, timestamp)
 
             except Exception as e:
-                logger.error(f"Failed to deserialize from Redis key '{key}': {e}")
+                logger.error("Failed to deserialize from Redis key '%s': %s", key, e)
                 return None
 
     def set(self, key: str, view: RustLiveView, ttl: Optional[int] = None):
@@ -247,7 +247,7 @@ class RedisStateBackend(StateBackend):
                 self._client.setex(redis_key, ttl, data)
 
             except Exception as e:
-                logger.error(f"Failed to serialize to Redis key '{key}': {e}")
+                logger.error("Failed to serialize to Redis key '%s': %s", key, e)
                 raise
 
     def delete(self, key: str) -> bool:
@@ -321,7 +321,7 @@ class RedisStateBackend(StateBackend):
             return stats
 
         except Exception as e:
-            logger.error(f"Failed to get Redis stats: {e}")
+            logger.error("Failed to get Redis stats: %s", e)
             return {
                 "backend": "redis",
                 "error": str(e),
@@ -385,7 +385,7 @@ class RedisStateBackend(StateBackend):
 
         except Exception as e:
             latency_ms = (time.time() - start_time) * 1000
-            logger.error(f"Redis health check failed: {e}")
+            logger.error("Redis health check failed: %s", e)
 
             return {
                 "status": "unhealthy",
@@ -499,7 +499,7 @@ class RedisStateBackend(StateBackend):
             }
 
         except Exception as e:
-            logger.error(f"Failed to get Redis memory stats: {e}")
+            logger.error("Failed to get Redis memory stats: %s", e)
             return {
                 "backend": "redis",
                 "error": str(e),
