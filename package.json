@@ -16,7 +16,7 @@
     "@vitest/ui": "^4.0.18",
     "eslint": "^9.0.0",
     "eslint-plugin-security": "^3.0.0",
-    "happy-dom": "^20.6.1",
+    "happy-dom": "^20.6.3",
     "jsdom": "^26.0.0",
     "vitest": "^4.0.18"
   },
