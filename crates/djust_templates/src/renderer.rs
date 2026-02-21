@@ -111,7 +111,13 @@ fn render_node_with_loader<L: TemplateLoader>(
                 // DOM node to target when the condition later becomes true.
                 Ok("<!--dj-if-->".to_string())
             } else {
-                render_nodes_with_loader(false_nodes, context, loader)
+                // If false branch is empty, emit placeholder comment to maintain DOM structure
+                // This prevents VDOM diff from matching wrong siblings (issue #295)
+                if false_nodes.is_empty() {
+                    Ok("<!--dj-if-->".to_string())
+                } else {
+                    render_nodes_with_loader(false_nodes, context, loader)
+                }
             }
         }
 
@@ -1572,7 +1578,7 @@ mod tests {
         context.set("key".to_string(), Value::String("2".to_string()));
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "found");
 
-        // Key does not exist → empty
+        // Key does not exist → placeholder
         context.set("key".to_string(), Value::String("99".to_string()));
         // Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
@@ -1658,5 +1664,67 @@ mod tests {
         context.set("name".to_string(), Value::String("World".to_string()));
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "Hello World!");
+    }
+
+    // Tests for issue #295: VDOM diff bug with {% if %} removing elements
+
+    #[test]
+    fn test_if_false_emits_placeholder() {
+        // When {% if %} is false with no {% else %}, should emit comment placeholder
+        let tokens = tokenize("{% if show %}content{% endif %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("show".to_string(), Value::Bool(false));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "<!--dj-if-->");
+    }
+
+    #[test]
+    fn test_if_true_no_placeholder() {
+        // When {% if %} is true, should render normally without placeholder
+        let tokens = tokenize("{% if show %}content{% endif %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("show".to_string(), Value::Bool(true));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "content");
+    }
+
+    #[test]
+    fn test_if_with_else_no_placeholder() {
+        // When {% if %} has {% else %}, should not emit placeholder (else content is rendered)
+        let tokens = tokenize("{% if show %}true{% else %}false{% endif %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("show".to_string(), Value::Bool(false));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "false");
+        assert!(!result.contains("<!--dj-if-->"));
+    }
+
+    #[test]
+    fn test_if_siblings_with_placeholder() {
+        // Test that placeholder maintains sibling positions
+        let template = "<div>{% if show %}item1{% endif %}<span>item2</span></div>";
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("show".to_string(), Value::Bool(false));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "<div><!--dj-if--><span>item2</span></div>");
+    }
+
+    #[test]
+    fn test_multiple_if_blocks_with_placeholders() {
+        // Test multiple conditional blocks
+        let template = "{% if a %}A{% endif %}{% if b %}B{% endif %}{% if c %}C{% endif %}";
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("a".to_string(), Value::Bool(false));
+        context.set("b".to_string(), Value::Bool(true));
+        context.set("c".to_string(), Value::Bool(false));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "<!--dj-if-->B<!--dj-if-->");
     }
 }

@@ -2,6 +2,13 @@
 //!
 //! Generates compact `data-dj-id` IDs on each element for reliable patch targeting.
 //!
+//! ## Special Comment Handling
+//!
+//! Preserves `<!--dj-if-->` placeholder comments emitted by the template engine
+//! when `{% if %}` blocks evaluate to false. These placeholders maintain consistent
+//! sibling positions in the VDOM to prevent incorrect node matching during diff
+//! (issue #295). Regular HTML comments are filtered out.
+//!
 //! ## Debugging
 //!
 //! Set `DJUST_VDOM_TRACE=1` environment variable to enable detailed tracing
@@ -316,10 +323,23 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
             );
 
             for child in handle.children.borrow().iter() {
-                // Skip comment nodes - they are not part of the DOM that JavaScript sees
-                if matches!(child.data, NodeData::Comment { .. }) {
-                    // Debug logging disabled - too verbose
-                    // eprintln!("[Parser] Filtered comment node");
+                // Check for special placeholder comments (e.g., <!--dj-if-->)
+                // These are preserved for VDOM diffing stability (issue #295)
+                if let NodeData::Comment { ref contents } = child.data {
+                    let comment_text = contents.to_string();
+                    if comment_text == "dj-if" {
+                        // Preserve this as a comment node for VDOM diffing
+                        let comment_vnode = VNode {
+                            tag: "#comment".to_string(),
+                            attrs: HashMap::new(),
+                            children: Vec::new(),
+                            text: Some(comment_text),
+                            key: None,
+                            djust_id: None,
+                        };
+                        children.push(comment_vnode);
+                    }
+                    // Regular comments are still filtered out
                     continue;
                 }
 

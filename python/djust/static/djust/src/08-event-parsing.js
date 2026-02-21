@@ -1,7 +1,15 @@
 
+// Track which Counter containers have been initialized to prevent duplicate listeners
+// on each server response. WeakSet entries are GC'd when the container is removed.
+const _initializedCounters = new WeakSet();
+
 // Client-side React Counter component (vanilla JS implementation)
 function initReactCounters() {
     document.querySelectorAll('[data-react-component="Counter"]').forEach(container => {
+        // Skip containers already initialized — prevents N listeners after N server responses
+        if (_initializedCounters.has(container)) return;
+        _initializedCounters.add(container);
+
         const propsJson = container.dataset.reactProps;
         let props = {};
         try {

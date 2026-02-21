@@ -1459,9 +1459,17 @@ function restoreFormData(container, data) {
     }
 }
 
+// Track which Counter containers have been initialized to prevent duplicate listeners
+// on each server response. WeakSet entries are GC'd when the container is removed.
+const _initializedCounters = new WeakSet();
+
 // Client-side React Counter component (vanilla JS implementation)
 function initReactCounters() {
     document.querySelectorAll('[data-react-component="Counter"]').forEach(container => {
+        // Skip containers already initialized — prevents N listeners after N server responses
+        if (_initializedCounters.has(container)) return;
+        _initializedCounters.add(container);
+
         const propsJson = container.dataset.reactProps;
         let props = {};
         try {
@@ -1852,11 +1860,12 @@ function bindLiveViewEvents() {
         const clickHandler = element.getAttribute('dj-click');
         if (clickHandler && !_isHandlerBound(element, 'click')) {
             _markHandlerBound(element, 'click');
-            // Parse handler string to extract function name and arguments
-            const parsed = parseEventHandler(clickHandler);
 
             const clickHandlerFn = async (e) => {
                 e.preventDefault();
+
+                // Read attribute at fire time so morphElement attribute updates take effect
+                const parsed = parseEventHandler(element.getAttribute('dj-click') || '');
 
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(element)) {
@@ -3288,7 +3297,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                     if (newChild.id && !existingChildIds.has(newChild.id)) {
                         // Clone and append new child
                         existingElement.appendChild(newChild.cloneNode(true));
-                        console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
+                        if (globalThis.djustDebug) {
+                            console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
+                        }
                     }
                 }
                 break;
@@ -3307,7 +3318,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                     if (newChild.id && !existingChildIds.has(newChild.id)) {
                         // Clone and prepend new child
                         existingElement.insertBefore(newChild.cloneNode(true), firstExisting);
-                        console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
+                        if (globalThis.djustDebug) {
+                            console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
+                        }
                     }
                 }
                 break;
@@ -3315,7 +3328,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
 
             case 'ignore':
                 // Don't update this element at all
-                console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
+                if (globalThis.djustDebug) {
+                    console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
+                }
                 break;
 
             case 'replace':

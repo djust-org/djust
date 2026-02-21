@@ -2696,12 +2696,15 @@
             // prototype setter hook didn't intercept it. Use the original
             // property descriptor to read/write the raw handler and avoid
             // double-wrapping through our own setter hook.
-            const currentHandler = ws.onmessage;
-            if (currentHandler) {
-                ws.onmessage = function(event) {
-                    self._handleReceivedMessage(event);
-                    return currentHandler.call(this, event);
-                };
+            const desc = this._originalOnmessageDescriptor;
+            if (desc) {
+                const currentHandler = desc.get.call(ws);
+                if (currentHandler) {
+                    desc.set.call(ws, function(event) {
+                        self._handleReceivedMessage(event);
+                        return currentHandler.call(this, event);
+                    });
+                }
             }
 
             ws._djustDebugHooked = true;

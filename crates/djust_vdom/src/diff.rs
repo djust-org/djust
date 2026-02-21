@@ -3,6 +3,14 @@
 //! Uses a keyed diffing algorithm for efficient list updates.
 //! Includes compact djust_id (data-dj-id) in patches for O(1) client-side resolution.
 //!
+//! ## Conditional Rendering (`{% if %}`)
+//!
+//! When `{% if %}` blocks evaluate to false, the template engine emits `<!--dj-if-->`
+//! placeholder comments to maintain consistent sibling positions in the DOM. This prevents
+//! VDOM diff from incorrectly matching siblings when conditionals remove nodes (issue #295).
+//! When toggling between placeholder and actual content, the diff generates `RemoveChild` +
+//! `InsertChild` patches instead of `Replace` patches for semantic consistency.
+//!
 //! ## Debugging
 //!
 //! Set `DJUST_VDOM_TRACE=1` environment variable to enable detailed tracing
@@ -153,8 +161,81 @@ pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
         return patches;
     }
 
-    // If tags differ, replace the whole node
+    // If tags differ, replace the whole node.
+    // Special case: <!--dj-if--> placeholders (issue #295 fix) should generate
+    // RemoveChild + InsertChild instead of Replace when toggling to actual content,
+    // to maintain semantic consistency (conditionals "insert" content) and backward
+    // compatibility with code expecting InsertChild patches.
     if old.tag != new.tag {
+        // Check if old is a <!--dj-if--> placeholder and new is actual content
+        if old.is_comment()
+            && old.text.as_ref().map(|t| t == "dj-if").unwrap_or(false)
+            && !new.is_comment()
+        {
+            vdom_trace!(
+                "DJ-IF PLACEHOLDER -> CONTENT: removing placeholder and inserting <{}> (id={:?})",
+                new.tag,
+                target_id
+            );
+
+            // Extract parent path and child index from current path
+            if let Some((&child_idx, parent_path)) = path.split_last() {
+                // Get parent's djust_id from the old node's parent context
+                // Since we don't have direct access to the parent node here,
+                // we need to pass None for parent_id and let the client handle it
+                let parent_id = None; // Will be resolved by client via path traversal
+
+                // RemoveChild to remove the <!--dj-if--> placeholder
+                patches.push(Patch::RemoveChild {
+                    path: parent_path.to_vec(),
+                    d: parent_id.clone(),
+                    index: child_idx,
+                });
+
+                // InsertChild to add the actual content
+                patches.push(Patch::InsertChild {
+                    path: parent_path.to_vec(),
+                    d: parent_id,
+                    index: child_idx,
+                    node: new.clone(),
+                });
+
+                return patches;
+            }
+            // Fallback if path is empty (shouldn't happen in practice)
+        }
+
+        // Also handle the reverse: content -> placeholder (for completeness)
+        if !old.is_comment()
+            && new.is_comment()
+            && new.text.as_ref().map(|t| t == "dj-if").unwrap_or(false)
+        {
+            vdom_trace!(
+                "CONTENT -> DJ-IF PLACEHOLDER: removing <{}> and inserting placeholder",
+                old.tag
+            );
+
+            if let Some((&child_idx, parent_path)) = path.split_last() {
+                let parent_id = None;
+
+                patches.push(Patch::RemoveChild {
+                    path: parent_path.to_vec(),
+                    d: parent_id.clone(),
+                    index: child_idx,
+                });
+
+                patches.push(Patch::InsertChild {
+                    path: parent_path.to_vec(),
+                    d: parent_id,
+                    index: child_idx,
+                    node: new.clone(),
+                });
+
+                return patches;
+            }
+        }
+
+        // Standard Replace for other tag mismatches
         vdom_trace!(
             "TAG MISMATCH: replacing <{}> (id={:?}) with <{}>",
             old.tag,
@@ -193,6 +274,27 @@ pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
                     text: text.clone(),
                 });
             }
+        }
+        return patches;
+    }
+
+    // Diff comment nodes (e.g., <!--dj-if--> placeholders for issue #295).
+    // Comments are static and don't change, but we need to handle them
+    // to avoid mismatching siblings in the VDOM diff.
+    if old.is_comment() {
+        if old.text != new.text {
+            vdom_trace!(
+                "COMMENT CHANGE: path={:?} old={:?} new={:?}",
+                path,
+                old.text,
+                new.text
+            );
+            // Comments can be replaced if needed (though our placeholders are static)
+            patches.push(Patch::Replace {
+                path: path.to_vec(),
+                d: old.djust_id.clone(),
+                node: new.clone(),
+            });
         }
         return patches;
     }

@@ -51,13 +51,32 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
             attrs: { 'dj-click': 'delete_todo(1)', 'data-dj-id': 'b2' },
             children: [{ tag: '', attrs: {}, children: [], text: 'Delete' }],
         });
-
-        const root = window.document.getElementById('root');
-        root.querySelector('[data-dj-id="b1"]').replaceWith(elem);
-
+        // WeakMap tracks binding internally; verify bindLiveViewEvents won't double-bind
         let addEventCount = 0;
         const origAddEvent = elem.addEventListener.bind(elem);
         elem.addEventListener = function(type, ...args) {
+            if (type === 'click') addEventCount++;
+            return origAddEvent(type, ...args);
+        };
+        window.djust.bindLiveViewEvents();
+        expect(addEventCount).toBe(0);
+    });
+
+    it('bindLiveViewEvents binds click handler on VDOM-inserted elements exactly once', () => {
+        // createNodeFromVNode no longer pre-marks elements; bindLiveViewEvents
+        // is responsible for binding and deduplicating via WeakMap.
+        const newBtn = window.djust.createNodeFromVNode({
+            tag: 'button',
+            attrs: { 'dj-click': 'delete_todo(1)', 'data-dj-id': 'b2' },
+            children: [{ tag: '', attrs: {}, children: [], text: 'Delete' }],
+        });
+
+        const root = window.document.getElementById('root');
+        root.querySelector('[data-dj-id="b1"]').replaceWith(newBtn);
+
+        let addEventCount = 0;
+        const origAddEvent = newBtn.addEventListener.bind(newBtn);
+        newBtn.addEventListener = function(type, ...args) {
             if (type === 'click') addEventCount++;
             return origAddEvent(type, ...args);
         };
@@ -83,11 +102,13 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
             return origAddEvent(type, ...args);
         };
 
+        // First call: element may already be bound via WeakMap from client.js init
         window.djust.bindLiveViewEvents();
         const countAfterFirst = addEventCount;
 
+        // Second call: WeakMap prevents double-binding — count must not increase
         window.djust.bindLiveViewEvents();
-        expect(addEventCount).toBe(countAfterFirst); // no extra binds
+        expect(addEventCount).toBe(countAfterFirst);
     });
 
     it('binds handlers for other event types (submit, change) without double-binding', () => {
