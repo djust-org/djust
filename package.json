@@ -14,7 +14,7 @@
   "devDependencies": {
     "@vitest/coverage-v8": "^4.0.18",
     "@vitest/ui": "^4.0.18",
-    "eslint": "^9.0.0",
+    "eslint": "^10.0.0",
     "eslint-plugin-security": "^3.0.0",
     "happy-dom": "^20.6.3",
     "jsdom": "^26.0.0",
