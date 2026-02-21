@@ -1297,8 +1297,13 @@ def check_templates(app_configs, **kwargs):
         if _INCLUDE_RE.search(content) and not _LIVEVIEW_CONTENT_RE.search(content):
             # Only flag if file appears to be a wrapper (has a block named "content" or similar)
             if re.search(r"\{%\s*block\s+(content|body|main)\s*%\}", content):
-                # Check if it's actually wrapping liveview content
-                if re.search(r"liveview|live_view|djust", content, re.IGNORECASE):
+                # Check if any {% include %} path mentions liveview/live_view
+                include_paths = re.findall(r'\{%\s*include\s+["\']([^"\']+)["\']', content)
+                has_liveview_include = any(
+                    re.search(r"liveview|live_view", path, re.IGNORECASE) for path in include_paths
+                )
+                has_noqa = "{# noqa: T003 #}" in content or "{# noqa #}" in content
+                if has_liveview_include and not has_noqa:
                     errors.append(
                         DjustInfo(
                             "%s -- wrapper template may be using {%% include %%} instead of {{ liveview_content|safe }}."
