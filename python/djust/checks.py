@@ -1429,10 +1429,10 @@ def _check_view_root_same_element(content, relpath, filepath, errors):
 
 
 # Tags still unsupported by the Rust renderer (after implementing widthratio,
-# firstof, templatetag, spaceless, cycle, now in v0.3.3)
+# firstof, templatetag, spaceless, cycle, now in v0.3.3).
+# Only opening tags are matched — end tags always accompany their openers.
 _UNSUPPORTED_TAGS_RE = re.compile(
-    r"\{%\s*(ifchanged|endifchanged|regroup|endregroup|resetcycle|lorem|debug"
-    r"|filter|endfilter|autoescape|endautoescape)\b"
+    r"\{%\s*(ifchanged|regroup|resetcycle|lorem|debug|filter|autoescape)\b"
 )
 
 

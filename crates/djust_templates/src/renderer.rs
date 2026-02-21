@@ -153,9 +153,15 @@ fn render_node_with_loader<L: TemplateLoader>(
                         items_vec.into_iter().enumerate().collect()
                     };
 
+                    // Save outer cycle counter for nested loop support
+                    let saved_cycle_counter = ctx.get("__djust_cycle_counter").cloned();
+
                     for (counter, (index, item)) in indices_and_items.into_iter().enumerate() {
-                        // Set _cycle_counter for {% cycle %} tag support
-                        ctx.set("_cycle_counter".to_string(), Value::Integer(counter as i64));
+                        // Set __djust_cycle_counter for {% cycle %} tag support
+                        ctx.set(
+                            "__djust_cycle_counter".to_string(),
+                            Value::Integer(counter as i64),
+                        );
 
                         // Handle tuple unpacking: {% for a, b in items %}
                         if var_names.len() == 1 {
@@ -188,6 +194,11 @@ fn render_node_with_loader<L: TemplateLoader>(
                             }
                         }
                         output.push_str(&render_nodes_with_loader(nodes, &ctx, loader)?);
+                    }
+
+                    // Restore outer cycle counter (for nested loops)
+                    if let Some(saved) = saved_cycle_counter {
+                        ctx.set("__djust_cycle_counter".to_string(), saved);
                     }
 
                     // Clear loop mappings after the loop
@@ -388,21 +399,11 @@ fn render_node_with_loader<L: TemplateLoader>(
 
         Node::FirstOf { args } => {
             // {% firstof var1 var2 ... "fallback" %} → first truthy value
+            // Uses get_value for dotted path support (e.g., user.name)
             for arg in args {
-                let arg_trimmed = arg.trim();
-                // Check if it's a string literal
-                if (arg_trimmed.starts_with('"') && arg_trimmed.ends_with('"'))
-                    || (arg_trimmed.starts_with('\'') && arg_trimmed.ends_with('\''))
-                {
-                    // String literal fallback — always truthy
-                    let literal = &arg_trimmed[1..arg_trimmed.len() - 1];
-                    return Ok(filters::html_escape(literal));
-                }
-                // Try to resolve as variable
-                if let Some(val) = context.get(arg_trimmed) {
-                    if val.is_truthy() {
-                        return Ok(filters::html_escape(&val.to_string()));
-                    }
+                let val = get_value(arg.trim(), context)?;
+                if val.is_truthy() {
+                    return Ok(filters::html_escape(&val.to_string()));
                 }
             }
             Ok(String::new())
@@ -436,13 +437,15 @@ fn render_node_with_loader<L: TemplateLoader>(
         }
 
         Node::Cycle { values, name: _ } => {
-            // {% cycle val1 val2 ... %} → cycles through values using _cycle_counter from context
+            // {% cycle val1 val2 ... %} → cycles through values using __djust_cycle_counter
+            // Named cycles (as name) are parsed but silent references are unsupported
+            // (renderer receives &Context, can't store cycle state).
+            // Note: cycle outside a for loop always returns the first value (no counter).
             if values.is_empty() {
                 return Ok(String::new());
             }
-            // Use _cycle_counter from context (set by for loop rendering) or default to 0
             let counter = context
-                .get("_cycle_counter")
+                .get("__djust_cycle_counter")
                 .and_then(|v| match v {
                     Value::Integer(i) => Some(*i as usize),
                     _ => None,
@@ -450,17 +453,19 @@ fn render_node_with_loader<L: TemplateLoader>(
                 .unwrap_or(0);
             let idx = counter % values.len();
             let val = &values[idx];
-            // Resolve: could be a variable or a string literal
-            let val_trimmed = val.trim();
-            if (val_trimmed.starts_with('"') && val_trimmed.ends_with('"'))
-                || (val_trimmed.starts_with('\'') && val_trimmed.ends_with('\''))
-            {
-                Ok(val_trimmed[1..val_trimmed.len() - 1].to_string())
-            } else if let Some(resolved) = context.get(val_trimmed) {
-                Ok(filters::html_escape(&resolved.to_string()))
+            // Resolve via get_value for dotted path and literal support
+            let resolved = get_value(val.trim(), context)?;
+            let output = if matches!(resolved, Value::Null) {
+                // Unresolved variable — output the raw name (Django behavior)
+                filters::html_escape(val.trim())
             } else {
-                Ok(filters::html_escape(val_trimmed))
-            }
+                filters::html_escape(&resolved.to_string())
+            };
+            // Named cycles ({% cycle ... as name %}) are parsed but the name is not
+            // stored in context — the renderer receives &Context (immutable). The cycle
+            // value is still computed correctly each iteration; only the "silent reference"
+            // form ({% cycle name %} outside the cycle definition) is unsupported.
+            Ok(output)
         }
 
         Node::Now(format) => {
@@ -1365,8 +1370,52 @@ fn django_date_format(dt: &chrono::DateTime<chrono::Local>, django_fmt: &str) ->
                     result.push_str(&format!("{}:{} {}", hour, minute, ampm));
                 }
             }
+            // Week/day-of-week
+            'w' => result.push_str(&dt.format("%w").to_string()), // 0 (Sun) - 6 (Sat)
+            'W' => result.push_str(&dt.format("%V").to_string()), // ISO week number
+            'S' => {
+                // English ordinal suffix: st, nd, rd, th
+                let day = dt.format("%-d").to_string().parse::<u32>().unwrap_or(0);
+                let suffix = match day {
+                    1 | 21 | 31 => "st",
+                    2 | 22 => "nd",
+                    3 | 23 => "rd",
+                    _ => "th",
+                };
+                result.push_str(suffix);
+            }
+            't' => {
+                // Days in the month (28-31)
+                let month = dt.format("%-m").to_string().parse::<u32>().unwrap_or(1);
+                let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
+                let days = match month {
+                    1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+                    4 | 6 | 9 | 11 => 30,
+                    2 => {
+                        if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+                            29
+                        } else {
+                            28
+                        }
+                    }
+                    _ => 30,
+                };
+                result.push_str(&days.to_string());
+            }
+            'L' => {
+                // Leap year: True or False
+                let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
+                let is_leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+                result.push_str(if is_leap { "True" } else { "False" });
+            }
             // Timezone
             'e' => result.push_str(&dt.format("%Z").to_string()),
+            // ISO 8601
+            'c' => result.push_str(&dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()),
+            // RFC 2822
+            'r' => result.push_str(&dt.format("%a, %d %b %Y %H:%M:%S %z").to_string()),
+            // Unix timestamp
+            'U' => result.push_str(&dt.timestamp().to_string()),
             // Other
             'N' => result.push_str(&dt.format("%b.").to_string()), // Month abbrev AP style
             _ => result.push(c), // Pass through unrecognized chars (colons, spaces, etc.)
@@ -2084,6 +2133,45 @@ mod tests {
             result,
             "<tr class=\"row1\">a</tr><tr class=\"row2\">b</tr><tr class=\"row1\">c</tr>"
         );
+    }
+
+    #[test]
+    fn test_cycle_nested_for_loops() {
+        // Inner loop cycle should not clobber outer loop cycle
+        let tokens = tokenize(
+            "{% for x in outer %}{% cycle 'A' 'B' %}{% for y in inner %}{% cycle '1' '2' '3' %}{% endfor %}{% endfor %}"
+        ).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "outer".to_string(),
+            Value::List(vec![
+                Value::String("a".to_string()),
+                Value::String("b".to_string()),
+            ]),
+        );
+        context.set(
+            "inner".to_string(),
+            Value::List(vec![
+                Value::String("x".to_string()),
+                Value::String("y".to_string()),
+            ]),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        // Outer: A(0), B(1). Inner always: 1(0), 2(1)
+        assert_eq!(result, "A12B12");
+    }
+
+    #[test]
+    fn test_firstof_dotted_path() {
+        let tokens = tokenize("{% firstof user.name \"anonymous\" %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        let mut user = std::collections::HashMap::new();
+        user.insert("name".to_string(), Value::String("Alice".to_string()));
+        context.set("user".to_string(), Value::Object(user));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "Alice");
     }
 
     #[test]

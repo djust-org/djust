@@ -2909,7 +2909,7 @@ class TestT011UnsupportedTemplateTags:
 
         errors = check_templates(None)
         t011 = [e for e in errors if e.id == "djust.T011"]
-        assert len(t011) >= 1
+        assert len(t011) == 1
         assert "ifchanged" in t011[0].msg
 
     def test_t011_does_not_fire_for_supported_tags(self, tmp_path, settings):
