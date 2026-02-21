@@ -44,14 +44,12 @@ class LiveView(
         path: Optional[str] = None,
         replace: bool = False,
     ) -> None: ...
-
     def live_redirect(
         self,
         path: str,
         params: Optional[Dict[str, Any]] = None,
         replace: bool = False,
     ) -> None: ...
-
     def handle_params(self, params: Dict[str, Any], uri: str) -> None: ...
 
     # PushEventMixin methods
@@ -66,11 +64,8 @@ class LiveView(
         at: int = -1,
         reset: bool = False,
     ) -> Stream: ...
-
     def stream_insert(self, name: str, item: Any, at: int = -1) -> None: ...
-
     def stream_delete(self, name: str, item_or_id: Any) -> None: ...
-
     def stream_reset(self, name: str, items: Any = None) -> None: ...
 
     # StreamingMixin async methods
@@ -80,15 +75,13 @@ class LiveView(
         target: Optional[str] = None,
         html: Optional[str] = None,
     ) -> None: ...
-
-    async def stream_insert(  # type: ignore[misc]  # Overload with StreamsMixin
+    async def stream_insert(  # type: ignore[misc]  # noqa: F811  # Overload with StreamsMixin
         self,
         stream_name: str,
         html: str,
         at: str = "append",
         target: Optional[str] = None,
     ) -> None: ...
-
     async def stream_text(
         self,
         stream_name: str,
@@ -96,30 +89,25 @@ class LiveView(
         mode: str = "append",
         target: Optional[str] = None,
     ) -> None: ...
-
     async def stream_error(
         self,
         stream_name: str,
         error: str,
         target: Optional[str] = None,
     ) -> None: ...
-
     async def stream_start(
         self,
         stream_name: str,
         target: Optional[str] = None,
     ) -> None: ...
-
     async def stream_done(
         self,
         stream_name: str,
         target: Optional[str] = None,
     ) -> None: ...
-
-    async def stream_delete(  # type: ignore[misc]  # Overload with StreamsMixin
+    async def stream_delete(  # type: ignore[misc]  # noqa: F811  # Overload with StreamsMixin
         self,
         stream_name: str,
         selector: str,
     ) -> None: ...
-
     async def push_state(self) -> None: ...
