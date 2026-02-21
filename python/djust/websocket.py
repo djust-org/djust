@@ -24,7 +24,7 @@ from .websocket_utils import (
     get_handler_coerce_setting,
 )
 from .presence import PresenceManager
-from .signals import full_html_update
+from .signals import full_html_update, liveview_server_error
 
 logger = logging.getLogger(__name__)
 hotreload_logger = logging.getLogger("djust.hotreload")
@@ -108,6 +108,22 @@ def _build_context_snapshot(context, max_value_len=100):
         else:
             snapshot[key] = f"[{type(value).__name__}]"
     return snapshot
+
+
+def _emit_liveview_server_error(view_instance, error: str, context: dict) -> None:
+    """Emit the liveview_server_error signal from send_error()."""
+    if view_instance is not None:
+        view_cls = view_instance.__class__
+        view_name = f"{view_cls.__module__}.{view_cls.__qualname__}"
+    else:
+        view_cls = None
+        view_name = ""
+    liveview_server_error.send(
+        sender=view_cls,
+        error=error,
+        view_name=view_name,
+        context=context,
+    )
 
 
 def _emit_full_html_update(
@@ -212,10 +228,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
         commands = self.view_instance._drain_navigation()
         for cmd in commands:
+            # Promote cmd's "type" (e.g. "live_patch") to "action" so it doesn't
+            # collide with the outer message "type" key.
+            action = cmd.get("type")
+            payload = {k: v for k, v in cmd.items() if k != "type"}
             await self.send_json(
                 {
                     "type": "navigation",
-                    **cmd,
+                    "action": action,
+                    **payload,
                 }
             )
 
@@ -278,15 +299,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     async def send_error(self, error: str, **context) -> None:
         """
         Send an error response to the client with consistent formatting.
-
-        Args:
-            error: Human-readable error message
-            **context: Additional context to include in the response
-                (e.g., validation_details, expected_params)
+        Also emits the liveview_server_error signal for monitor integrations.
         """
         response: Dict[str, Any] = {"type": "error", "error": error}
         response.update(context)
         await self.send_json(response)
+        _emit_liveview_server_error(getattr(self, "view_instance", None), error, context)
 
     async def _dispatch_async_work(self) -> None:
         """

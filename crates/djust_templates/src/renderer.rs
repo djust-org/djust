@@ -106,6 +106,10 @@ fn render_node_with_loader<L: TemplateLoader>(
 
             if condition_result {
                 render_nodes_with_loader(true_nodes, context, loader)
+            } else if false_nodes.is_empty() {
+                // Fix for DJE-053: emit a placeholder comment so VDOM diffing has a stable
+                // DOM node to target when the condition later becomes true.
+                Ok("<!--dj-if-->".to_string())
             } else {
                 render_nodes_with_loader(false_nodes, context, loader)
             }
@@ -1424,7 +1428,8 @@ mod tests {
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "yes");
 
         context.set("b".to_string(), Value::Bool(false));
-        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+        // Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
     }
 
     #[test]
@@ -1437,7 +1442,8 @@ mod tests {
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "yes");
 
         context.set("b".to_string(), Value::Bool(false));
-        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+        // Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
     }
 
     #[test]
@@ -1453,7 +1459,8 @@ mod tests {
 
         // a truthy -> should not show
         context.set("a".to_string(), Value::List(vec![Value::Integer(1)]));
-        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+        // Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
     }
 
     #[test]
@@ -1467,7 +1474,8 @@ mod tests {
         context.set("a".to_string(), Value::Bool(false));
         context.set("b".to_string(), Value::Bool(true));
         context.set("c".to_string(), Value::Bool(false));
-        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+        // Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
 
         // a=true, b=false, c=false -> true or (false and false) -> true
         context.set("a".to_string(), Value::Bool(true));
@@ -1486,7 +1494,8 @@ mod tests {
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "yes");
 
         context.set("b".to_string(), Value::Bool(false));
-        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+        // Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
     }
 
     #[test]
@@ -1499,7 +1508,8 @@ mod tests {
         let mut context = Context::new();
         context.set("a".to_string(), Value::Bool(true));
         context.set("b".to_string(), Value::Bool(false));
-        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+        // Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
 
         // a=true, b=true -> (not true) or true -> true
         context.set("b".to_string(), Value::Bool(true));
@@ -1528,7 +1538,8 @@ mod tests {
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "found");
 
         context.set("item".to_string(), Value::String("z".to_string()));
-        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+        // Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
     }
 
     #[test]
@@ -1541,7 +1552,8 @@ mod tests {
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "found");
 
         context.set("sub".to_string(), Value::String("xyz".to_string()));
-        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+        // Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
     }
 
     #[test]
@@ -1562,7 +1574,8 @@ mod tests {
 
         // Key does not exist → empty
         context.set("key".to_string(), Value::String("99".to_string()));
-        assert_eq!(render_nodes(&nodes, &context).unwrap(), "");
+        // Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
 
         // Integer key converted to string for lookup
         context.set("key".to_string(), Value::Integer(5));
