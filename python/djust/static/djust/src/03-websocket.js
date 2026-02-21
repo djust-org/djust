@@ -323,7 +323,7 @@ class LiveViewWebSocket {
                 if (this.lastEventName) {
                     if (!data.async_pending) {
                         globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
-                    } else if (globalThis.djustDebug) {
+                    } else {
                         if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
                     }
                     this.lastEventName = null;
