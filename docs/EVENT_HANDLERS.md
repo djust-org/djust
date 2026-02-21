@@ -4,6 +4,7 @@ This guide explains how to write effective event handlers in djust LiveView appl
 
 ## Table of Contents
 
+- [The **kwargs Requirement](#the-kwargs-requirement)
 - [Parameter Naming Convention](#parameter-naming-convention)
 - [Inline Handler Arguments](#inline-handler-arguments)
 - [The @event_handler Decorator](#the-event_handler-decorator)
@@ -14,6 +15,34 @@ This guide explains how to write effective event handlers in djust LiveView appl
 - [Common Patterns](#common-patterns)
 - [Debugging Tips](#debugging-tips)
 - [Security](#security)
+
+## The **kwargs Requirement
+
+Every event handler **must** accept `**kwargs`. The djust client sends metadata parameters alongside your explicit arguments (such as `_targetElement` identifying the DOM element that triggered the event). Without `**kwargs`, your handler will reject these extra parameters with a validation error.
+
+```python
+# Wrong -- will raise a validation error at runtime
+@event_handler()
+def increment(self):
+    self.count += 1
+
+# Correct -- accepts client metadata
+@event_handler()
+def increment(self, **kwargs):
+    self.count += 1
+```
+
+This applies to all event handlers, including those with explicit parameters:
+
+```python
+@event_handler()
+def search(self, value: str = "", **kwargs):
+    self.query = value
+
+@event_handler()
+def delete_item(self, item_id: int = 0, **kwargs):
+    Item.objects.filter(id=item_id).delete()
+```
 
 ## Parameter Naming Convention
 
