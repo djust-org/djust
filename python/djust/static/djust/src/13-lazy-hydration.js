@@ -110,7 +110,7 @@ const lazyHydrationManager = {
         }
 
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[LiveView:lazy] Registered element for lazy hydration (mode: ${lazyMode})`, element);
+            console.log(`[LiveView:lazy] Registered element for lazy hydration (mode: ${lazyMode})`, element);
         }
     },
 

@@ -266,7 +266,7 @@ class LiveViewWebSocket {
                 initTodoItems();
                 bindLiveViewEvents();
                 if (globalThis.djustDebug) {
-                    if (globalThis.djustDebug) console.log('[LiveView] DOM recovered via morph, version:', data.version);
+                    console.log('[LiveView] DOM recovered via morph, version:', data.version);
                 }
                 break;
             }
