@@ -8,11 +8,15 @@ These tests ensure that:
 """
 
 import ast
+import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+_has_mypy = shutil.which("mypy") is not None
 
 
 class TestStubSyntax:
@@ -52,6 +56,7 @@ class TestStubSyntax:
         assert py_typed.exists(), "Missing py.typed marker file"
 
 
+@pytest.mark.skipif(not _has_mypy, reason="mypy not installed")
 class TestMypyIntegration:
     """Test that mypy can use the stubs for type checking."""
 
@@ -69,6 +74,8 @@ class TestMypyIntegration:
                         "--no-error-summary",
                         "--allow-untyped-defs",  # Allow test methods without type hints
                         "--disable-error-code=no-untyped-def",
+                        "--python-executable",
+                        sys.executable,
                         f.name,
                     ],
                     capture_output=True,
@@ -212,7 +219,7 @@ class TestView(LiveView):
 
             try:
                 result = subprocess.run(
-                    ["mypy", "--no-error-summary", f.name],
+                    ["mypy", "--no-error-summary", "--python-executable", sys.executable, f.name],
                     capture_output=True,
                     text=True,
                 )
