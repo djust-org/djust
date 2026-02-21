@@ -1350,6 +1350,9 @@ def check_templates(app_configs, **kwargs):
         # T010 -- dj-click used for navigation instead of dj-patch
         _check_click_for_navigation(content, relpath, filepath, errors)
 
+        # T011 -- unsupported Django template tags (not implemented in Rust renderer)
+        _check_unsupported_tags(content, relpath, filepath, errors)
+
         # T012 -- template uses dj-* event directives but missing dj-view
         if _DJ_EVENT_DIRECTIVES_RE.search(content) and not _DJ_VIEW_RE.search(content):
             # Only fire if this isn't a component template (components don't need dj-view)
@@ -1421,6 +1424,42 @@ def _check_view_root_same_element(content, relpath, filepath, errors):
                 fix_hint=("Move dj-view and dj-root onto the same element " "in `%s`." % relpath),
                 file_path=filepath,
                 line_number=view_only_lineno,
+            )
+        )
+
+
+# Tags still unsupported by the Rust renderer (after implementing widthratio,
+# firstof, templatetag, spaceless, cycle, now in v0.3.3)
+_UNSUPPORTED_TAGS_RE = re.compile(
+    r"\{%\s*(ifchanged|endifchanged|regroup|endregroup|resetcycle|lorem|debug"
+    r"|filter|endfilter|autoescape|endautoescape)\b"
+)
+
+
+def _check_unsupported_tags(content, relpath, filepath, errors):
+    """T011: Detect unsupported Django template tags in LiveView templates.
+
+    The Rust renderer silently ignores these tags, rendering an HTML comment
+    instead. This check warns developers at startup so they can use workarounds.
+    """
+    has_noqa = "{# noqa: T011 #}" in content or "{# noqa #}" in content
+    if has_noqa:
+        return
+
+    for match in _UNSUPPORTED_TAGS_RE.finditer(content):
+        tag_name = match.group(1)
+        lineno = content[: match.start()].count("\n") + 1
+        errors.append(
+            DjustWarning(
+                "%s:%d -- unsupported template tag '{%% %s %%}' will be silently "
+                "ignored by Rust renderer." % (relpath, lineno, tag_name),
+                hint=(
+                    "Pre-compute the value in your view and pass it as a context "
+                    "variable, or use a supported alternative."
+                ),
+                id="djust.T011",
+                file_path=filepath,
+                line_number=lineno,
             )
         )
 

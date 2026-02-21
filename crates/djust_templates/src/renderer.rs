@@ -5,8 +5,13 @@ use crate::inheritance::TemplateLoader;
 use crate::parser::Node;
 use djust_components::Component;
 use djust_core::{Context, DjangoRustError, Result, Value};
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::collections::HashSet;
 use std::sync::Mutex;
+
+/// Regex for {% spaceless %}: matches whitespace between > and <
+static SPACELESS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r">\s+<").unwrap());
 
 /// Track which unsupported tags we've already warned about (to avoid log spam)
 static WARNED_TAGS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
@@ -148,7 +153,10 @@ fn render_node_with_loader<L: TemplateLoader>(
                         items_vec.into_iter().enumerate().collect()
                     };
 
-                    for (index, item) in indices_and_items {
+                    for (counter, (index, item)) in indices_and_items.into_iter().enumerate() {
+                        // Set _cycle_counter for {% cycle %} tag support
+                        ctx.set("_cycle_counter".to_string(), Value::Integer(counter as i64));
+
                         // Handle tuple unpacking: {% for a, b in items %}
                         if var_names.len() == 1 {
                             // Single variable: {% for item in items %}
@@ -359,6 +367,107 @@ fn render_node_with_loader<L: TemplateLoader>(
         }
 
         Node::Comment => Ok(String::new()),
+
+        Node::WidthRatio {
+            value,
+            max_value,
+            max_width,
+        } => {
+            // {% widthratio value max_value max_width %} → round(value / max_value * max_width)
+            let val = get_value(value, context)?.to_f64().unwrap_or(0.0);
+            let max_val = get_value(max_value, context)?.to_f64().unwrap_or(0.0);
+            let max_w = get_value(max_width, context)?.to_f64().unwrap_or(0.0);
+
+            if max_val == 0.0 {
+                Ok("0".to_string())
+            } else {
+                let result = (val / max_val * max_w).round() as i64;
+                Ok(result.to_string())
+            }
+        }
+
+        Node::FirstOf { args } => {
+            // {% firstof var1 var2 ... "fallback" %} → first truthy value
+            for arg in args {
+                let arg_trimmed = arg.trim();
+                // Check if it's a string literal
+                if (arg_trimmed.starts_with('"') && arg_trimmed.ends_with('"'))
+                    || (arg_trimmed.starts_with('\'') && arg_trimmed.ends_with('\''))
+                {
+                    // String literal fallback — always truthy
+                    let literal = &arg_trimmed[1..arg_trimmed.len() - 1];
+                    return Ok(filters::html_escape(literal));
+                }
+                // Try to resolve as variable
+                if let Some(val) = context.get(arg_trimmed) {
+                    if val.is_truthy() {
+                        return Ok(filters::html_escape(&val.to_string()));
+                    }
+                }
+            }
+            Ok(String::new())
+        }
+
+        Node::TemplateTag(name) => {
+            // {% templatetag openblock %} → {%
+            let output = match name.as_str() {
+                "openblock" => "{%",
+                "closeblock" => "%}",
+                "openvariable" => "{{",
+                "closevariable" => "}}",
+                "openbrace" => "{",
+                "closebrace" => "}",
+                "opencomment" => "{#",
+                "closecomment" => "#}",
+                _ => {
+                    return Err(DjangoRustError::TemplateError(format!(
+                        "Unknown templatetag argument: '{name}'"
+                    )));
+                }
+            };
+            Ok(output.to_string())
+        }
+
+        Node::Spaceless { nodes } => {
+            // {% spaceless %}...{% endspaceless %} → remove whitespace between HTML tags
+            let content = render_nodes_with_loader(nodes, context, loader)?;
+            // Remove whitespace between > and <
+            Ok(SPACELESS_RE.replace_all(&content, "><").to_string())
+        }
+
+        Node::Cycle { values, name: _ } => {
+            // {% cycle val1 val2 ... %} → cycles through values using _cycle_counter from context
+            if values.is_empty() {
+                return Ok(String::new());
+            }
+            // Use _cycle_counter from context (set by for loop rendering) or default to 0
+            let counter = context
+                .get("_cycle_counter")
+                .and_then(|v| match v {
+                    Value::Integer(i) => Some(*i as usize),
+                    _ => None,
+                })
+                .unwrap_or(0);
+            let idx = counter % values.len();
+            let val = &values[idx];
+            // Resolve: could be a variable or a string literal
+            let val_trimmed = val.trim();
+            if (val_trimmed.starts_with('"') && val_trimmed.ends_with('"'))
+                || (val_trimmed.starts_with('\'') && val_trimmed.ends_with('\''))
+            {
+                Ok(val_trimmed[1..val_trimmed.len() - 1].to_string())
+            } else if let Some(resolved) = context.get(val_trimmed) {
+                Ok(filters::html_escape(&resolved.to_string()))
+            } else {
+                Ok(filters::html_escape(val_trimmed))
+            }
+        }
+
+        Node::Now(format) => {
+            // {% now "Y-m-d" %} → current date/time
+            let now = chrono::Local::now();
+            Ok(django_date_format(&now, format))
+        }
 
         Node::UnsupportedTag { name, args } => {
             // Build tag signature for warning (only warn once per unique tag)
@@ -1178,6 +1287,94 @@ fn compare_values(a: &Value, b: &Value) -> i32 {
     }
 }
 
+/// Convert a Value to f64 for arithmetic operations (widthratio)
+trait ToF64 {
+    fn to_f64(&self) -> Option<f64>;
+}
+
+impl ToF64 for Value {
+    fn to_f64(&self) -> Option<f64> {
+        match self {
+            Value::Integer(i) => Some(*i as f64),
+            Value::Float(f) => Some(*f),
+            Value::String(s) => s.parse::<f64>().ok(),
+            Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+            _ => None,
+        }
+    }
+}
+
+/// Convert Django date format characters to chrono strftime format.
+///
+/// Django uses PHP-style single-character format codes (e.g., "Y" for 4-digit year).
+/// This converts the most common ones to chrono's strftime equivalents.
+fn django_date_format(dt: &chrono::DateTime<chrono::Local>, django_fmt: &str) -> String {
+    let mut result = String::new();
+    let chars = django_fmt.chars();
+    let mut escaped = false;
+
+    for c in chars {
+        if escaped {
+            result.push(c);
+            escaped = false;
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            continue;
+        }
+        match c {
+            // Day
+            'd' => result.push_str(&dt.format("%d").to_string()), // 01-31
+            'j' => result.push_str(&dt.format("%-d").to_string()), // 1-31
+            'D' => result.push_str(&dt.format("%a").to_string()), // Mon
+            'l' => result.push_str(&dt.format("%A").to_string()), // Monday
+            // Month
+            'm' => result.push_str(&dt.format("%m").to_string()), // 01-12
+            'n' => result.push_str(&dt.format("%-m").to_string()), // 1-12
+            'M' => result.push_str(&dt.format("%b").to_string()), // Jan
+            'F' => result.push_str(&dt.format("%B").to_string()), // January
+            // Year
+            'Y' => result.push_str(&dt.format("%Y").to_string()), // 2024
+            'y' => result.push_str(&dt.format("%y").to_string()), // 24
+            // Time
+            'H' => result.push_str(&dt.format("%H").to_string()), // 00-23
+            'i' => result.push_str(&dt.format("%M").to_string()), // 00-59
+            's' => result.push_str(&dt.format("%S").to_string()), // 00-59
+            'G' => result.push_str(&dt.format("%-H").to_string()), // 0-23
+            'g' => result.push_str(&dt.format("%-I").to_string()), // 1-12
+            'A' => result.push_str(&dt.format("%p").to_string()), // AM/PM
+            'P' => {
+                // Django's P format: "1 a.m.", "noon", "midnight"
+                let hour = dt.format("%-I").to_string().parse::<u32>().unwrap_or(0);
+                let minute = dt.format("%M").to_string();
+                let ampm = if dt.format("%P").to_string() == "am" {
+                    "a.m."
+                } else {
+                    "p.m."
+                };
+                if minute == "00" {
+                    if hour == 12 && ampm == "p.m." {
+                        result.push_str("noon");
+                    } else if hour == 12 && ampm == "a.m." {
+                        result.push_str("midnight");
+                    } else {
+                        result.push_str(&format!("{} {}", hour, ampm));
+                    }
+                } else {
+                    result.push_str(&format!("{}:{} {}", hour, minute, ampm));
+                }
+            }
+            // Timezone
+            'e' => result.push_str(&dt.format("%Z").to_string()),
+            // Other
+            'N' => result.push_str(&dt.format("%b.").to_string()), // Month abbrev AP style
+            _ => result.push(c), // Pass through unrecognized chars (colons, spaces, etc.)
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1734,5 +1931,170 @@ mod tests {
         context.set("c".to_string(), Value::Bool(false));
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "<!--dj-if-->B<!--dj-if-->");
+    }
+
+    // Tests for newly implemented Django template tags
+
+    #[test]
+    fn test_widthratio_basic() {
+        let tokens = tokenize("{% widthratio value max_value max_width %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("value".to_string(), Value::Integer(175));
+        context.set("max_value".to_string(), Value::Integer(200));
+        context.set("max_width".to_string(), Value::Integer(100));
+        let result = render_nodes(&nodes, &context).unwrap();
+        // 175/200 * 100 = 87.5, rounds to 88
+        assert_eq!(result, "88");
+    }
+
+    #[test]
+    fn test_widthratio_zero_max() {
+        let tokens = tokenize("{% widthratio value max_value 100 %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("value".to_string(), Value::Integer(50));
+        context.set("max_value".to_string(), Value::Integer(0));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "0");
+    }
+
+    #[test]
+    fn test_widthratio_progress_bar() {
+        // The exact use case from issue #329
+        let tokens =
+            tokenize("<div style=\"width: {% widthratio value total 100 %}%\"></div>").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("value".to_string(), Value::Integer(75));
+        context.set("total".to_string(), Value::Integer(100));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "<div style=\"width: 75%\"></div>");
+    }
+
+    #[test]
+    fn test_firstof_first_truthy() {
+        let tokens = tokenize("{% firstof var1 var2 var3 %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("var2".to_string(), Value::String("hello".to_string()));
+        context.set("var3".to_string(), Value::String("world".to_string()));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn test_firstof_fallback() {
+        let tokens = tokenize(r#"{% firstof var1 var2 "fallback" %}"#).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let context = Context::new();
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "fallback");
+    }
+
+    #[test]
+    fn test_firstof_escapes_html() {
+        let tokens = tokenize("{% firstof var1 %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "var1".to_string(),
+            Value::String("<script>xss</script>".to_string()),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "&lt;script&gt;xss&lt;/script&gt;");
+    }
+
+    #[test]
+    fn test_templatetag_openblock() {
+        let tokens = tokenize("{% templatetag openblock %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let context = Context::new();
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "{%");
+    }
+
+    #[test]
+    fn test_templatetag_openvariable() {
+        let tokens = tokenize("{% templatetag openvariable %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let context = Context::new();
+        assert_eq!(render_nodes(&nodes, &context).unwrap(), "{{");
+    }
+
+    #[test]
+    fn test_templatetag_all_types() {
+        for (name, expected) in [
+            ("openblock", "{%"),
+            ("closeblock", "%}"),
+            ("openvariable", "{{"),
+            ("closevariable", "}}"),
+            ("openbrace", "{"),
+            ("closebrace", "}"),
+            ("opencomment", "{#"),
+            ("closecomment", "#}"),
+        ] {
+            let tokens = tokenize(&format!("{{% templatetag {name} %}}")).unwrap();
+            let nodes = parse(&tokens).unwrap();
+            let context = Context::new();
+            assert_eq!(
+                render_nodes(&nodes, &context).unwrap(),
+                expected,
+                "templatetag {name} failed"
+            );
+        }
+    }
+
+    #[test]
+    fn test_spaceless() {
+        let tokens =
+            tokenize("{% spaceless %}<p>\n  <a href=\"foo\">Foo</a>\n</p>{% endspaceless %}")
+                .unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let context = Context::new();
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "<p><a href=\"foo\">Foo</a></p>");
+    }
+
+    #[test]
+    fn test_spaceless_preserves_text_spaces() {
+        let tokens = tokenize("{% spaceless %}<p> Hello World </p>{% endspaceless %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let context = Context::new();
+        let result = render_nodes(&nodes, &context).unwrap();
+        // Spaces inside text content should be preserved
+        assert_eq!(result, "<p> Hello World </p>");
+    }
+
+    #[test]
+    fn test_cycle_in_for_loop() {
+        let tokens =
+            tokenize("{% for item in items %}<tr class=\"{% cycle 'row1' 'row2' %}\">{{ item }}</tr>{% endfor %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "items".to_string(),
+            Value::List(vec![
+                Value::String("a".to_string()),
+                Value::String("b".to_string()),
+                Value::String("c".to_string()),
+            ]),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(
+            result,
+            "<tr class=\"row1\">a</tr><tr class=\"row2\">b</tr><tr class=\"row1\">c</tr>"
+        );
+    }
+
+    #[test]
+    fn test_now_basic_format() {
+        // Test that {% now %} produces non-empty output with basic format
+        let tokens = tokenize("{% now \"Y\" %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let context = Context::new();
+        let result = render_nodes(&nodes, &context).unwrap();
+        // Should be a 4-digit year
+        assert_eq!(result.len(), 4);
+        assert!(result.chars().all(|c| c.is_numeric()));
     }
 }
