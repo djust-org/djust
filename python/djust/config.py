@@ -6,6 +6,7 @@ Provides centralized configuration for:
 - Field rendering options
 - Component defaults
 - Template preferences
+- Serialization behavior (strict mode, depth limits)
 """
 
 import logging
@@ -65,6 +66,11 @@ class LiveViewConfig:
         "jit_cache_dir": "__pycache__/djust_serializers",  # Filesystem cache directory
         "jit_redis_url": "redis://localhost:6379/0",  # Redis URL for production
         "serialization_max_depth": 3,  # Max depth for nested model serialization (e.g., lease.tenant.user = 3 levels)
+        # Serialization behavior (issue #292)
+        # When False (default): non-serializable values are converted via str() fallback with a warning log
+        # When True: non-serializable values raise TypeError with actionable error message
+        # Always emits warning logs before fallback, even in non-strict mode
+        "strict_serialization": False,  # Raise TypeError for non-serializable values instead of str() fallback
         # CSS Framework
         "css_framework": "bootstrap5",  # Options: 'bootstrap5', 'tailwind', None
         # Bootstrap 5 classes

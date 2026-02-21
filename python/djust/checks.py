@@ -820,6 +820,9 @@ def check_liveviews(app_configs, **kwargs):
     # V006 -- service instance in mount() (AST-based scan of project files)
     _check_service_instances_in_mount(errors)
 
+    # V008 -- non-primitive type assignments in mount() (broader than V006)
+    _check_non_primitive_assignments_in_mount(errors)
+
     return errors
 
 
@@ -877,6 +880,104 @@ def _check_service_instances_in_mount(errors):
                                             "Move `self.%s = %s(...)` out of mount() into a "
                                             "helper method or property at line %d in `%s`."
                                             % (target.attr, call_name, stmt.lineno, relpath)
+                                        ),
+                                        file_path=filepath,
+                                        line_number=stmt.lineno,
+                                    )
+                                )
+
+
+def _check_non_primitive_assignments_in_mount(errors):
+    """V008: Detect assignments of non-primitive types in mount() methods via AST.
+
+    This is a broader check than V006 which only catches service instances.
+    Catches assignments like:
+    - self.items = []  (OK - primitive)
+    - self.data = CustomClass()  (WARNING - likely non-serializable)
+    - self.count = 0  (OK - primitive)
+
+    Related to issue #292: Silent str() fallback when non-serializable objects
+    are stored in LiveView state. This check helps catch these at development time
+    before they cause runtime AttributeError on deserialization.
+
+    Users can suppress with # noqa: V008 if they know the type is serializable.
+    """
+    app_dirs = _get_project_app_dirs()
+    if not app_dirs:
+        return
+
+    # Primitive types that are always serializable
+    SAFE_TYPES = {
+        "list",
+        "dict",
+        "set",
+        "tuple",
+        "str",
+        "int",
+        "float",
+        "bool",
+        "List",
+        "Dict",
+        "Set",
+        "Tuple",
+    }
+
+    for filepath in _iter_python_files(app_dirs):
+        tree, source_lines = _parse_python_file(filepath)
+        if tree is None:
+            continue
+
+        relpath = os.path.relpath(filepath)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+
+            # Find mount() methods inside class definitions
+            for item in node.body:
+                if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if item.name != "mount":
+                    continue
+
+                # Walk the mount body looking for self.X = NonPrimitive(...)
+                for stmt in ast.walk(item):
+                    if not isinstance(stmt, ast.Assign):
+                        continue
+                    for target in stmt.targets:
+                        if not isinstance(target, ast.Attribute):
+                            continue
+                        if not (isinstance(target.value, ast.Name) and target.value.id == "self"):
+                            continue
+
+                        # Skip private attributes (self._foo)
+                        if target.attr.startswith("_"):
+                            continue
+
+                        # Check if the value is a Call (instantiation)
+                        if not isinstance(stmt.value, ast.Call):
+                            continue
+
+                        call_name = _get_call_name(stmt.value)
+                        if call_name and call_name not in SAFE_TYPES:
+                            # This is a non-primitive instantiation
+                            if not _has_noqa(source_lines, stmt.lineno, "V008"):
+                                errors.append(
+                                    DjustInfo(
+                                        "%s:%d -- Non-primitive type '%s' assigned to self.%s in mount(). "
+                                        "Ensure this type is JSON-serializable."
+                                        % (relpath, stmt.lineno, call_name, target.attr),
+                                        hint=(
+                                            "If '%s' is not serializable, use self._%s instead "
+                                            "or re-initialize in event handlers. "
+                                            "See: docs/guides/services.md"
+                                            % (call_name, target.attr)
+                                        ),
+                                        id="djust.V008",
+                                        fix_hint=(
+                                            "If `%s` is not serializable, rename to `self._%s` "
+                                            "or move initialization out of mount() at line %d in `%s`."
+                                            % (target.attr, target.attr, stmt.lineno, relpath)
                                         ),
                                         file_path=filepath,
                                         line_number=stmt.lineno,

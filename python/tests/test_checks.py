@@ -2054,6 +2054,103 @@ class TestV007EventHandlerSignature:
 
 
 # ---------------------------------------------------------------------------
+# V008 -- Non-primitive type assignments in mount()
+# ---------------------------------------------------------------------------
+
+
+class TestV008NonPrimitiveInMount:
+    """V008 -- Detect non-primitive type assignments in mount()."""
+
+    def test_non_primitive_instantiation_in_mount(self, tmp_path):
+        """Warn when non-primitive types are instantiated in mount()."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.api_client = APIClient()
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        assert len(v008) == 1
+        assert "APIClient" in v008[0].msg
+        assert "api_client" in v008[0].msg
+
+    def test_primitive_types_allowed(self, tmp_path):
+        """Primitive type assignments don't trigger warning."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.items = []
+                        self.count = 0
+                        self.data = {}
+                        self.name = "test"
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        # Should not flag primitive types
+        assert len(v008) == 0
+
+    def test_private_attributes_ignored(self, tmp_path):
+        """Private attributes (self._foo) are ignored."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self._api_client = APIClient()
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        # Should not flag private attributes
+        assert len(v008) == 0
+
+    def test_noqa_suppresses_warning(self, tmp_path):
+        """# noqa: V008 suppresses the warning."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.client = CustomClient()  # noqa: V008
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        # Should be suppressed by noqa
+        assert len(v008) == 0
+
+
+# ---------------------------------------------------------------------------
 # T005 -- Template structure validation (dj-view / dj-root)
 # ---------------------------------------------------------------------------
 
