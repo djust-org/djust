@@ -1231,6 +1231,10 @@ _INCLUDE_RE = re.compile(r"\{%\s*include\s+")
 _LIVEVIEW_CONTENT_RE = re.compile(r"\{\{\s*liveview_content\s*\|\s*safe\s*\}\}")
 _DOC_DJUST_EVENT_RE = re.compile(r"""document\s*\.\s*addEventListener\s*\(\s*['"]djust:""")
 _NAV_DATA_ATTRS = re.compile(r"data-(view|tab|page|section)")  # Navigation-style data attributes
+_DJ_EVENT_DIRECTIVES_RE = re.compile(
+    r"dj-(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave)="
+)
+_DJ_COMPONENT_RE = re.compile(r"dj-component")
 
 
 @register("djust")
@@ -1345,6 +1349,39 @@ def check_templates(app_configs, **kwargs):
 
         # T010 -- dj-click used for navigation instead of dj-patch
         _check_click_for_navigation(content, relpath, filepath, errors)
+
+        # T012 -- template uses dj-* event directives but missing dj-view
+        if _DJ_EVENT_DIRECTIVES_RE.search(content) and not _DJ_VIEW_RE.search(content):
+            # Only fire if this isn't a component template (components don't need dj-view)
+            if not _DJ_COMPONENT_RE.search(content):
+                errors.append(
+                    DjustWarning(
+                        "%s -- template uses dj-* event directives but has no dj-view attribute."
+                        % relpath,
+                        hint=(
+                            'Add dj-view="yourapp.views.YourView" to the root element, '
+                            "or this template won't be connected to a LiveView."
+                        ),
+                        id="djust.T012",
+                        file_path=filepath,
+                    )
+                )
+
+        # T013 -- dj-view with empty or invalid value
+        for match in re.finditer(r'dj-view="([^"]*)"', content):
+            value = match.group(1)
+            if not value or "." not in value:
+                lineno = content[: match.start()].count("\n") + 1
+                errors.append(
+                    DjustWarning(
+                        "%s:%d -- dj-view has empty or invalid value '%s'."
+                        % (relpath, lineno, value),
+                        hint="dj-view should be a dotted Python path like 'myapp.views.MyView'.",
+                        id="djust.T013",
+                        file_path=filepath,
+                        line_number=lineno,
+                    )
+                )
 
     return errors
 

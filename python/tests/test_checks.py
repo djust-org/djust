@@ -2735,3 +2735,146 @@ class TestQ010NavigationStateInHandlers:
             errors = check_code_quality(None)
             q010 = [e for e in errors if e.id == "djust.Q010"]
             assert len(q010) == 0
+
+
+class TestT012EventDirectivesWithoutView:
+    """T012 -- template uses dj-* event directives but has no dj-view."""
+
+    def test_t012_detects_events_without_view(self, tmp_path, settings):
+        """T012 fires for template with dj-click but no dj-view."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "no_view.html").write_text(
+            textwrap.dedent(
+                """\
+                <div>
+                    <button dj-click="increment">+1</button>
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 1
+        assert "dj-view" in t012[0].msg
+
+    def test_t012_passes_with_view(self, tmp_path, settings):
+        """T012 should not fire when dj-view is present."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "has_view.html").write_text(
+            textwrap.dedent(
+                """\
+                <div dj-view="myapp.views.MyView">
+                    <button dj-click="increment">+1</button>
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 0
+
+    def test_t012_passes_for_component_template(self, tmp_path, settings):
+        """T012 should not fire for component templates (dj-component present)."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "component.html").write_text(
+            textwrap.dedent(
+                """\
+                <div dj-component="myapp.components.Counter">
+                    <button dj-click="increment">+1</button>
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 0
+
+
+class TestT013InvalidViewPath:
+    """T013 -- dj-view with empty or invalid value."""
+
+    def test_t013_detects_empty_view(self, tmp_path, settings):
+        """T013 fires for dj-view with empty value."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "empty_view.html").write_text('<div dj-view="">content</div>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t013 = [e for e in errors if e.id == "djust.T013"]
+        assert len(t013) == 1
+        assert "empty or invalid" in t013[0].msg
+
+    def test_t013_detects_no_dot(self, tmp_path, settings):
+        """T013 fires for dj-view without a dotted path."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "no_dot.html").write_text('<div dj-view="MyView">content</div>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t013 = [e for e in errors if e.id == "djust.T013"]
+        assert len(t013) == 1
+        assert "MyView" in t013[0].msg
+
+    def test_t013_passes_valid_path(self, tmp_path, settings):
+        """T013 should not fire for a valid dotted Python path."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "valid.html").write_text('<div dj-view="myapp.views.MyView">content</div>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t013 = [e for e in errors if e.id == "djust.T013"]
+        assert len(t013) == 0
