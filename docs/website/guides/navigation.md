@@ -213,6 +213,73 @@ Use handlers for navigation only when navigation depends on **server-side logic*
 
 **Common theme:** The handler does **meaningful work** before navigating. If your handler only calls `live_redirect()`, use `dj-navigate` instead.
 
+### Anti-Pattern: Don't Use `dj-click` for Tab/View Switching
+
+Using `dj-click` with data attributes like `data-view` or `data-tab` to switch between sections within a view is fragile and loses URL state. Use `dj-patch` instead.
+
+**The anti-pattern:**
+
+```html
+<button dj-click="switch_view" data-view="settings">Settings</button>
+```
+
+```python
+@event_handler()
+def switch_view(self, view="", **kwargs):
+    self.active_view = view
+    self._load_data()
+```
+
+**Why this breaks:**
+
+1. **Data attributes are fragile** -- if the VDOM diff replaces the element mid-click, or the user clicks a child element (e.g. an icon `<span>` inside the button), the `view` param can arrive as `""`, leaving the UI in a broken state.
+2. **No URL update** -- the browser URL doesn't change, so back/forward doesn't work, tabs aren't bookmarkable, and refreshing always resets to the default view.
+3. **Race conditions** -- if `handle_tick` fires between the click and the re-render, state can get out of sync because there's no URL as source of truth.
+
+**The correct pattern:**
+
+```html
+<a dj-patch="?tab=settings"
+   class="{% if active_tab == 'settings' %}active{% endif %}">
+    Settings
+</a>
+<a dj-patch="?tab=overview"
+   class="{% if active_tab == 'overview' %}active{% endif %}">
+    Overview
+</a>
+```
+
+```python
+class DashboardView(NavigationMixin, LiveView):
+    template_name = 'dashboard.html'
+    VALID_TABS = {"overview", "settings", "logs"}
+
+    def mount(self, request, **kwargs):
+        self.active_tab = "overview"
+
+    def handle_params(self, params, uri):
+        tab = params.get("tab", "overview")
+        if tab in self.VALID_TABS:
+            self.active_tab = tab
+        self._load_tab_data()
+```
+
+**Why it works:**
+
+- `dj-patch` updates the URL immediately on the client (no round-trip delay for the URL change)
+- `handle_params` is a first-class lifecycle method with proper re-render sequencing
+- Browser back/forward and bookmarks work automatically
+- Idempotent -- calling `handle_params` twice with the same params is a no-op
+- System check `djust.T010` detects the anti-pattern and suggests `dj-patch`
+
+**Rule of thumb:**
+
+| Directive | Use for |
+|---|---|
+| `dj-click` | Actions that modify state (increment counter, delete item, toggle) |
+| `dj-patch` | Navigation that should update the URL (tabs, filters, pagination) |
+| `dj-navigate` | Full page navigation to a different LiveView |
+
 ### URL Design Best Practices
 
 - Use query params for filter/sort/page state that should be shareable and bookmarkable.
