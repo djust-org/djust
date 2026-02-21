@@ -156,3 +156,4 @@ LiveViews work without WebSockets — they degrade gracefully to standard HTTP f
 - [Events](./events.md) — event binding and handler patterns
 - [Components](./components.md) — reusable UI components
 - [Templates](./templates.md) — template directives reference
+- [Loading States & Background Work](../guides/loading-states.md) — spinners, async operations

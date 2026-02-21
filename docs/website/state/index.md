@@ -162,6 +162,7 @@ You'll see logs like:
 | `@debounce(wait)`         | `wait`: seconds (float)                 | Search, autosave     |
 | `@throttle(interval)`     | `interval`: seconds (float)             | Scroll, resize       |
 | `@loading(attr)`          | `attr`: attribute name (str)            | Long operations      |
+| `@background`             | —                                       | API calls, AI gen    |
 | `@optimistic`             | —                                       | Toggles, counters    |
 | `@cache(ttl, key_params)` | `ttl`: seconds, `key_params`: list[str] | Expensive queries    |
 | `@client_state(keys)`     | `keys`: list[str]                       | Multi-component sync |

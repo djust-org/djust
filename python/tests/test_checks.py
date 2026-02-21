@@ -2392,3 +2392,299 @@ class TestT002Enhanced:
         t002 = [e for e in errors if e.id == "djust.T002"]
         assert len(t002) == 1
         assert "auto-inferred" in t002[0].msg
+
+
+class TestT010ClickForNavigation:
+    """T010 -- dj-click used for navigation instead of dj-patch."""
+
+    def test_t010_detects_click_with_data_view(self, tmp_path, settings):
+        """T010 should flag dj-click with data-view attribute."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "nav_click.html").write_text(
+            '<button dj-click="switchView" data-view="settings">Settings</button>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t010 = [e for e in errors if e.id == "djust.T010"]
+        assert len(t010) == 1
+        assert "dj-click" in t010[0].msg
+        assert "dj-patch" in t010[0].hint
+
+    def test_t010_detects_click_with_data_tab(self, tmp_path, settings):
+        """T010 should flag dj-click with data-tab attribute."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "tab_click.html").write_text(
+            '<button dj-click="selectTab" data-tab="profile">Profile</button>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t010 = [e for e in errors if e.id == "djust.T010"]
+        assert len(t010) == 1
+        assert "data-tab" in t010[0].msg
+
+    def test_t010_detects_click_with_data_page(self, tmp_path, settings):
+        """T010 should flag dj-click with data-page attribute."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page_click.html").write_text(
+            '<a dj-click="goToPage" data-page="2">Next</a>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t010 = [e for e in errors if e.id == "djust.T010"]
+        assert len(t010) == 1
+        assert "data-page" in t010[0].msg
+
+    def test_t010_detects_click_with_data_section(self, tmp_path, settings):
+        """T010 should flag dj-click with data-section attribute."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "section_click.html").write_text(
+            '<button dj-click="showSection" data-section="about">About</button>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t010 = [e for e in errors if e.id == "djust.T010"]
+        assert len(t010) == 1
+        assert "data-section" in t010[0].msg
+
+    def test_t010_passes_click_without_nav_data(self, tmp_path, settings):
+        """T010 should NOT flag dj-click without navigation data attributes."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "normal_click.html").write_text(
+            '<button dj-click="increment" data-count="5">Increment</button>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t010 = [e for e in errors if e.id == "djust.T010"]
+        assert len(t010) == 0
+
+    def test_t010_passes_patch_with_nav_data(self, tmp_path, settings):
+        """T010 should NOT flag dj-patch with navigation data attributes (correct pattern)."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "correct_patch.html").write_text(
+            '<button dj-patch="/view?tab=settings" data-tab="settings">Settings</button>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t010 = [e for e in errors if e.id == "djust.T010"]
+        assert len(t010) == 0
+
+    def test_t010_detects_multiple_violations(self, tmp_path, settings):
+        """T010 should detect multiple violations in one file."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "multi_nav.html").write_text(
+            textwrap.dedent(
+                """
+            <div>
+                <button dj-click="switchView" data-view="home">Home</button>
+                <button dj-click="selectTab" data-tab="profile">Profile</button>
+                <button dj-click="showPage" data-page="3">Page 3</button>
+            </div>
+            """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t010 = [e for e in errors if e.id == "djust.T010"]
+        assert len(t010) == 3
+
+
+class TestQ010NavigationStateInHandlers:
+    """Q010 -- event handlers that set navigation state without patching."""
+
+    def test_q010_detects_active_view_in_handler(self, tmp_path):
+        """Q010 should flag event handlers that set self.active_view."""
+        app_dir = tmp_path / "testapp"
+        app_dir.mkdir()
+        (app_dir / "__init__.py").write_text("")
+        (app_dir / "views.py").write_text(
+            textwrap.dedent(
+                """
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class MyView(LiveView):
+                @event_handler()
+                def switch_view(self, view_name="", **kwargs):
+                    self.active_view = view_name
+            """
+            )
+        )
+
+        # Mock _get_project_app_dirs to return our test app
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(app_dir)]):
+            from djust.checks import check_code_quality
+
+            errors = check_code_quality(None)
+            q010 = [e for e in errors if e.id == "djust.Q010"]
+            assert len(q010) == 1
+            assert "active_view" in q010[0].msg
+            assert "dj-patch" in q010[0].hint
+
+    def test_q010_detects_current_tab_in_handler(self, tmp_path):
+        """Q010 should flag event handlers that set self.current_tab."""
+        app_dir = tmp_path / "testapp"
+        app_dir.mkdir()
+        (app_dir / "__init__.py").write_text("")
+        (app_dir / "views.py").write_text(
+            textwrap.dedent(
+                """
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class TabView(LiveView):
+                @event_handler()
+                def select_tab(self, tab="", **kwargs):
+                    self.current_tab = tab
+            """
+            )
+        )
+
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(app_dir)]):
+            from djust.checks import check_code_quality
+
+            errors = check_code_quality(None)
+            q010 = [e for e in errors if e.id == "djust.Q010"]
+            assert len(q010) == 1
+            assert "current_tab" in q010[0].msg
+
+    def test_q010_passes_handler_with_patch_usage(self, tmp_path):
+        """Q010 should NOT flag handlers that use patch() or handle_params()."""
+        app_dir = tmp_path / "testapp"
+        app_dir.mkdir()
+        (app_dir / "__init__.py").write_text("")
+        (app_dir / "views.py").write_text(
+            textwrap.dedent(
+                """
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class GoodView(LiveView):
+                @event_handler()
+                def switch_view(self, view_name="", **kwargs):
+                    self.patch(f"?view={view_name}")
+
+                def handle_params(self, **params):
+                    self.active_view = params.get("view", "home")
+            """
+            )
+        )
+
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(app_dir)]):
+            from djust.checks import check_code_quality
+
+            errors = check_code_quality(None)
+            q010 = [e for e in errors if e.id == "djust.Q010"]
+            assert len(q010) == 0
+
+    def test_q010_passes_non_event_handler(self, tmp_path):
+        """Q010 should NOT flag methods without @event_handler decorator."""
+        app_dir = tmp_path / "testapp"
+        app_dir.mkdir()
+        (app_dir / "__init__.py").write_text("")
+        (app_dir / "views.py").write_text(
+            textwrap.dedent(
+                """
+            from djust import LiveView
+
+            class MyView(LiveView):
+                def _internal_switch(self):
+                    self.active_view = "new_view"
+            """
+            )
+        )
+
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(app_dir)]):
+            from djust.checks import check_code_quality
+
+            errors = check_code_quality(None)
+            q010 = [e for e in errors if e.id == "djust.Q010"]
+            assert len(q010) == 0
+
+    def test_q010_respects_noqa(self, tmp_path):
+        """Q010 should respect # noqa: Q010 comments."""
+        app_dir = tmp_path / "testapp"
+        app_dir.mkdir()
+        (app_dir / "__init__.py").write_text("")
+        (app_dir / "views.py").write_text(
+            textwrap.dedent(
+                """
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class MyView(LiveView):
+                @event_handler()  # noqa: Q010
+                def switch_view(self, view_name="", **kwargs):
+                    self.active_view = view_name
+            """
+            )
+        )
+
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(app_dir)]):
+            from djust.checks import check_code_quality
+
+            errors = check_code_quality(None)
+            q010 = [e for e in errors if e.id == "djust.Q010"]
+            assert len(q010) == 0

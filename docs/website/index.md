@@ -123,8 +123,8 @@ Complete API documentation.
 
 |                                               |                                                                                                         |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| **[LiveView](api-reference/liveview.md)**     | `mount()`, `get_context_data()`, `handle_params()`, `handle_info()`, navigation                         |
-| **[Decorators](api-reference/decorators.md)** | `@event_handler`, `@debounce`, `@throttle`, `@loading`, `@cache`, `@optimistic`, `@permission_required` |
+| **[LiveView](api-reference/liveview.md)**     | `mount()`, `get_context_data()`, `handle_params()`, `handle_info()`, `start_async()`, navigation                         |
+| **[Decorators](api-reference/decorators.md)** | `@event_handler`, `@debounce`, `@throttle`, `@loading`, `@cache`, `@optimistic`, `@background`, `@permission_required` |
 | **[Components](api-reference/components.md)** | `Component`, `LiveComponent`, built-in components, registry                                             |
 | **[Testing](api-reference/testing.md)**       | `LiveViewTestClient`, `SnapshotTestMixin`, `LiveViewSmokeTest`, `@performance_test`                     |
 

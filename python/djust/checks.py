@@ -1008,6 +1008,101 @@ def _get_call_name(call_node):
     return None
 
 
+def _check_navigation_state_in_handlers(errors):
+    """Q010: Heuristic to detect event handlers that set navigation state without patching.
+
+    Lower-confidence check that looks for @event_handler methods whose body primarily
+    sets navigation state variables (self.active_view, self.current_tab, etc.) without
+    using patch() or handle_params(). Suggests converting to dj-patch pattern.
+
+    This is INFO level as it's a heuristic and may have false positives.
+    """
+    app_dirs = _get_project_app_dirs()
+    if not app_dirs:
+        return
+
+    # Navigation state variable patterns
+    NAV_STATE_VARS = re.compile(
+        r"self\.(active_view|current_tab|selected_page|current_section|active_tab|selected_view)"
+    )
+
+    for filepath in _iter_python_files(app_dirs):
+        tree, source_lines = _parse_python_file(filepath)
+        if tree is None:
+            continue
+
+        # Read the original source for ast.get_source_segment
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
+                original_source = fh.read()
+        except OSError:
+            continue
+
+        relpath = os.path.relpath(filepath)
+
+        # Look for classes that might be LiveViews
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+
+            # Check each method in the class
+            for item in node.body:
+                if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+
+                # Skip non-event-handler methods
+                if not any(
+                    isinstance(deco, ast.Name) and deco.id == "event_handler"
+                    or isinstance(deco, ast.Call)
+                    and isinstance(deco.func, ast.Name)
+                    and deco.func.id == "event_handler"
+                    for deco in item.decorator_list
+                ):
+                    continue
+
+                # Check if the method body sets navigation state
+                method_source = ast.get_source_segment(original_source, item) or ""
+                has_nav_state = NAV_STATE_VARS.search(method_source)
+
+                # Check if it uses patch() or handle_params (indicators it's already using patching)
+                has_patch_pattern = "patch(" in method_source or "handle_params" in method_source
+
+                if has_nav_state and not has_patch_pattern:
+                    # Check for noqa on function definition line or any decorator line
+                    has_noqa_suppression = False
+                    for deco in item.decorator_list:
+                        if _has_noqa(source_lines, deco.lineno, "Q010"):
+                            has_noqa_suppression = True
+                            break
+                    if not has_noqa_suppression and _has_noqa(source_lines, item.lineno, "Q010"):
+                        has_noqa_suppression = True
+
+                    if not has_noqa_suppression:
+                        nav_match = NAV_STATE_VARS.search(method_source)
+                        var_name = nav_match.group(1) if nav_match else "navigation state"
+
+                        errors.append(
+                            DjustInfo(
+                                "%s:%d -- Event handler '%s.%s()' sets %s without using patch(). "
+                                "Consider using dj-patch for URL updates."
+                                % (relpath, item.lineno, node.name, item.name, var_name),
+                                hint=(
+                                    "Navigation state changes are better handled with dj-patch + handle_params(). "
+                                    "This enables URL updates and back-button support. "
+                                    "Example: Replace dj-click with dj-patch=\"?tab=value\" and handle in handle_params()."
+                                ),
+                                id="djust.Q010",
+                                fix_hint=(
+                                    "Convert method `%s` to use handle_params() instead of direct state "
+                                    "assignment at line %d in `%s`."
+                                    % (item.name, item.lineno, relpath)
+                                ),
+                                file_path=filepath,
+                                line_number=item.lineno,
+                            )
+                        )
+
+
 # ---------------------------------------------------------------------------
 # Security checks (S0xx) -- AST-based
 # ---------------------------------------------------------------------------
@@ -1138,6 +1233,7 @@ _DJ_ROOT_RE = re.compile(r"dj-root")
 _INCLUDE_RE = re.compile(r"\{%\s*include\s+")
 _LIVEVIEW_CONTENT_RE = re.compile(r"\{\{\s*liveview_content\s*\|\s*safe\s*\}\}")
 _DOC_DJUST_EVENT_RE = re.compile(r"""document\s*\.\s*addEventListener\s*\(\s*['"]djust:""")
+_NAV_DATA_ATTRS = re.compile(r"data-(view|tab|page|section)")  # Navigation-style data attributes
 
 
 @register("djust")
@@ -1245,6 +1341,9 @@ def check_templates(app_configs, **kwargs):
         if has_djust_view and has_djust_root:
             _check_view_root_same_element(content, relpath, filepath, errors)
 
+        # T010 -- dj-click used for navigation instead of dj-patch
+        _check_click_for_navigation(content, relpath, filepath, errors)
+
     return errors
 
 
@@ -1285,6 +1384,47 @@ def _check_view_root_same_element(content, relpath, filepath, errors):
                 line_number=view_only_lineno,
             )
         )
+
+
+def _check_click_for_navigation(content, relpath, filepath, errors):
+    """T010: Detect dj-click with navigation-style data attributes.
+
+    Elements with both dj-click and navigation-style data attributes (data-view,
+    data-tab, data-page, data-section) should use dj-patch instead for proper URL
+    updates and back-button support.
+    """
+    tag_re = re.compile(r"<[a-zA-Z][^>]*>", re.DOTALL)
+    for match in tag_re.finditer(content):
+        tag = match.group(0)
+        has_dj_click = "dj-click" in tag
+        has_nav_data = _NAV_DATA_ATTRS.search(tag)
+
+        if has_dj_click and has_nav_data:
+            lineno = content[: match.start()].count("\n") + 1
+            # Extract which data attribute was found for better messaging
+            nav_match = _NAV_DATA_ATTRS.search(tag)
+            nav_attr = nav_match.group(0) if nav_match else "data-*"
+
+            errors.append(
+                DjustWarning(
+                    "%s:%d -- Element uses dj-click for navigation (%s) — use dj-patch for URL updates and history support."
+                    % (relpath, lineno, nav_attr),
+                    hint=(
+                        "Navigation actions should use dj-patch instead of dj-click. "
+                        "dj-patch updates the URL and enables back-button support. "
+                        "Example: <button dj-patch=\"/view?tab=settings\">Settings</button>\n"
+                        "See: https://docs.djust.dev/guides/navigation"
+                    ),
+                    id="djust.T010",
+                    fix_hint=(
+                        "Replace dj-click with dj-patch at line %d in `%s` and handle "
+                        "navigation parameters in handle_params() method."
+                        % (lineno, relpath)
+                    ),
+                    file_path=filepath,
+                    line_number=lineno,
+                )
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1393,5 +1533,8 @@ def check_code_quality(app_configs, **kwargs):
                             line_number=i,
                         )
                     )
+
+    # Q010 -- event handlers that set navigation state without patching (heuristic)
+    _check_navigation_state_in_handlers(errors)
 
     return errors
