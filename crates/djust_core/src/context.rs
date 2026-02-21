@@ -10,6 +10,9 @@ pub struct Context {
     stack: Vec<AHashMap<String, Value>>,
     /// Keys marked as safe (skip auto-escaping), like Django's SafeData
     safe_keys: AHashSet<String>,
+    /// Track loop variable mappings: loop_var -> (iterable_name, index)
+    /// e.g., "item" -> ("items", 0) means `item` refers to `items[0]`
+    loop_mappings: AHashMap<String, (String, usize)>,
 }
 
 impl Context {
@@ -17,6 +20,7 @@ impl Context {
         Self {
             stack: vec![AHashMap::new()],
             safe_keys: AHashSet::new(),
+            loop_mappings: AHashMap::new(),
         }
     }
 
@@ -28,6 +32,7 @@ impl Context {
         Self {
             stack: vec![map],
             safe_keys: AHashSet::new(),
+            loop_mappings: AHashMap::new(),
         }
     }
 
@@ -38,7 +43,26 @@ impl Context {
 
     /// Check if a variable name is marked safe.
     pub fn is_safe(&self, key: &str) -> bool {
-        self.safe_keys.contains(key)
+        // First check directly
+        if self.safe_keys.contains(key) {
+            return true;
+        }
+
+        // If not found, try resolving loop variables
+        // e.g., "item.content" might map to "items.0.content" via loop_mappings
+        let parts: Vec<&str> = key.split('.').collect();
+        if let Some((iterable_name, index)) = self.loop_mappings.get(parts[0]) {
+            // Build the resolved path: "items.0.content" from "item.content"
+            let index_str = index.to_string();
+            let mut resolved_parts = vec![iterable_name.as_str(), index_str.as_str()];
+            resolved_parts.extend_from_slice(&parts[1..]);
+            let resolved_key = resolved_parts.join(".");
+            if self.safe_keys.contains(&resolved_key) {
+                return true;
+            }
+        }
+
+        false
     }
 
     pub fn get(&self, key: &str) -> Option<&Value> {
@@ -106,6 +130,17 @@ impl Context {
         if self.stack.len() > 1 {
             self.stack.pop();
         }
+    }
+
+    /// Register a loop variable mapping.
+    /// e.g., set_loop_mapping("item", "items", 0) means `item` refers to `items[0]`
+    pub fn set_loop_mapping(&mut self, loop_var: String, iterable_name: String, index: usize) {
+        self.loop_mappings.insert(loop_var, (iterable_name, index));
+    }
+
+    /// Clear a loop variable mapping (when exiting the loop scope)
+    pub fn clear_loop_mapping(&mut self, loop_var: &str) {
+        self.loop_mappings.remove(loop_var);
     }
 
     pub fn update(&mut self, dict: HashMap<String, Value>) {

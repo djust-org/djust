@@ -4,6 +4,7 @@ RustBridgeMixin - Rust backend integration for LiveView.
 
 import hashlib
 import logging
+from typing import Any, List, Optional, Set
 from urllib.parse import parse_qs, urlencode
 
 from ..serialization import normalize_django_value
@@ -15,6 +16,69 @@ try:
     from .._rust import RustLiveView
 except ImportError:
     RustLiveView = None
+
+
+def _collect_safe_keys(value: Any, prefix: str = "", visited: Optional[Set[int]] = None) -> List[str]:
+    """
+    Recursively scan a value for SafeString instances and return dotted paths.
+
+    Args:
+        value: The value to scan (SafeString, dict, list, or any other type)
+        prefix: Current path prefix (e.g., "items.0" or "data")
+        visited: Set of object IDs already visited (prevents circular references)
+
+    Returns:
+        List of dotted paths to SafeString values
+
+    Examples:
+        items = [{"content": mark_safe("<b>Item</b>")}]
+        → ["items.0.content"]
+
+        data = {"content": mark_safe("<u>Text</u>")}
+        → ["data.content"]
+    """
+    from django.utils.safestring import SafeString
+
+    if visited is None:
+        visited = set()
+
+    safe_keys = []
+
+    # Check if value itself is SafeString
+    if isinstance(value, SafeString):
+        if prefix:
+            safe_keys.append(prefix)
+        return safe_keys
+
+    # Recurse into dicts
+    if isinstance(value, dict):
+        # Prevent circular reference loops
+        value_id = id(value)
+        if value_id in visited:
+            return safe_keys
+        visited.add(value_id)
+
+        for key, sub_value in value.items():
+            sub_prefix = f"{prefix}.{key}" if prefix else key
+            safe_keys.extend(_collect_safe_keys(sub_value, sub_prefix, visited))
+
+        visited.remove(value_id)
+
+    # Recurse into lists/tuples
+    elif isinstance(value, (list, tuple)):
+        # Prevent circular reference loops
+        value_id = id(value)
+        if value_id in visited:
+            return safe_keys
+        visited.add(value_id)
+
+        for index, sub_value in enumerate(value):
+            sub_prefix = f"{prefix}.{index}" if prefix else str(index)
+            safe_keys.extend(_collect_safe_keys(sub_value, sub_prefix, visited))
+
+        visited.remove(value_id)
+
+    return safe_keys
 
 
 class RustBridgeMixin:
@@ -155,8 +219,8 @@ class RustBridgeMixin:
                 elif isinstance(value, forms.Form):
                     continue
                 else:
-                    if isinstance(value, SafeString):
-                        safe_keys.append(key)
+                    # Recursively collect all safe keys (including nested)
+                    safe_keys.extend(_collect_safe_keys(value, key))
                     rendered_context[key] = value
 
             json_compatible_context = normalize_django_value(rendered_context)
