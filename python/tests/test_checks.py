@@ -2878,3 +2878,122 @@ class TestT013InvalidViewPath:
         errors = check_templates(None)
         t013 = [e for e in errors if e.id == "djust.T013"]
         assert len(t013) == 0
+
+
+class TestT011UnsupportedTemplateTags:
+    """T011 -- unsupported Django template tags in LiveView templates."""
+
+    def test_t011_detects_unsupported_tag(self, tmp_path, settings):
+        """T011 fires for tags not implemented in Rust renderer."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page.html").write_text(
+            textwrap.dedent(
+                """\
+                <div dj-view="myapp.views.MyView">
+                    {% ifchanged item.category %}
+                        <h2>{{ item.category }}</h2>
+                    {% endifchanged %}
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t011 = [e for e in errors if e.id == "djust.T011"]
+        assert len(t011) == 1
+        assert "ifchanged" in t011[0].msg
+
+    def test_t011_does_not_fire_for_supported_tags(self, tmp_path, settings):
+        """T011 should not fire for tags implemented in Rust (widthratio, etc.)."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page.html").write_text(
+            textwrap.dedent(
+                """\
+                <div dj-view="myapp.views.MyView">
+                    {% widthratio value max_val 100 %}
+                    {% firstof var1 var2 "fallback" %}
+                    {% templatetag openblock %}
+                    {% spaceless %}<p> </p>{% endspaceless %}
+                    {% cycle "a" "b" "c" %}
+                    {% now "Y-m-d" %}
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t011 = [e for e in errors if e.id == "djust.T011"]
+        assert len(t011) == 0
+
+    def test_t011_noqa_suppresses_warning(self, tmp_path, settings):
+        """T011 is suppressed by {# noqa: T011 #} comment."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page.html").write_text(
+            textwrap.dedent(
+                """\
+                {# noqa: T011 #}
+                <div dj-view="myapp.views.MyView">
+                    {% regroup items by category as grouped %}
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t011 = [e for e in errors if e.id == "djust.T011"]
+        assert len(t011) == 0
+
+    def test_t011_multiple_unsupported_tags(self, tmp_path, settings):
+        """T011 fires once per unsupported tag found."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page.html").write_text(
+            textwrap.dedent(
+                """\
+                <div dj-view="myapp.views.MyView">
+                    {% regroup items by category as grouped %}
+                    {% lorem 3 p %}
+                    {% debug %}
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t011 = [e for e in errors if e.id == "djust.T011"]
+        assert len(t011) == 3

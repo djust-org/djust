@@ -419,6 +419,36 @@ fn node_to_template_string(node: &Node) -> String {
             result.push_str(" %}");
             result
         }
+        Node::WidthRatio {
+            value,
+            max_value,
+            max_width,
+        } => {
+            format!("{{% widthratio {value} {max_value} {max_width} %}}")
+        }
+        Node::FirstOf { args } => {
+            format!("{{% firstof {} %}}", args.join(" "))
+        }
+        Node::TemplateTag(name) => {
+            format!("{{% templatetag {name} %}}")
+        }
+        Node::Spaceless { nodes } => {
+            let mut result = "{% spaceless %}".to_string();
+            result.push_str(&nodes_to_template_string(nodes));
+            result.push_str("{% endspaceless %}");
+            result
+        }
+        Node::Cycle { values, name } => {
+            let mut result = format!("{{% cycle {}", values.join(" "));
+            if let Some(n) = name {
+                result.push_str(&format!(" as {n}"));
+            }
+            result.push_str(" %}");
+            result
+        }
+        Node::Now(format) => {
+            format!("{{% now \"{format}\" %}}")
+        }
     }
 }
 

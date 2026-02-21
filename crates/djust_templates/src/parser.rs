@@ -58,13 +58,36 @@ pub enum Node {
         /// Arguments from the template tag as raw strings
         args: Vec<String>,
     },
+    /// {% widthratio value max_value max_width %} - calculates round(value/max_value * max_width)
+    WidthRatio {
+        value: String,
+        max_value: String,
+        max_width: String,
+    },
+    /// {% firstof var1 var2 ... "fallback" %} - outputs first truthy variable
+    FirstOf {
+        args: Vec<String>,
+    },
+    /// {% templatetag name %} - outputs literal template syntax characters
+    TemplateTag(String),
+    /// {% spaceless %}...{% endspaceless %} - removes whitespace between HTML tags
+    Spaceless {
+        nodes: Vec<Node>,
+    },
+    /// {% cycle val1 val2 ... %} - cycles through values in a for loop
+    Cycle {
+        values: Vec<String>,
+        name: Option<String>,
+    },
+    /// {% now "format" %} - outputs current date/time with given format
+    Now(String),
     /// Unsupported template tag - renders as HTML comment with warning.
     ///
     /// This is used for Django template tags that don't have a registered
     /// handler. Instead of silently failing, it outputs a visible warning
     /// in development to help developers identify missing tag implementations.
     UnsupportedTag {
-        /// Tag name (e.g., "spaceless", "verbatim")
+        /// Tag name (e.g., "ifchanged", "regroup")
         name: String,
         /// Original arguments from the tag
         args: Vec<String>,
@@ -385,6 +408,82 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     Ok(Some(Node::Comment))
                 }
 
+                "widthratio" => {
+                    // {% widthratio value max_value max_width %}
+                    if args.len() < 3 {
+                        return Err(DjangoRustError::TemplateError(
+                            "widthratio tag requires 3 arguments: {% widthratio value max_value max_width %}"
+                                .to_string(),
+                        ));
+                    }
+                    Ok(Some(Node::WidthRatio {
+                        value: args[0].clone(),
+                        max_value: args[1].clone(),
+                        max_width: args[2].clone(),
+                    }))
+                }
+
+                "firstof" => {
+                    // {% firstof var1 var2 ... "fallback" %}
+                    if args.is_empty() {
+                        return Err(DjangoRustError::TemplateError(
+                            "firstof tag requires at least one argument".to_string(),
+                        ));
+                    }
+                    Ok(Some(Node::FirstOf { args: args.clone() }))
+                }
+
+                "templatetag" => {
+                    // {% templatetag openblock %}
+                    if args.is_empty() {
+                        return Err(DjangoRustError::TemplateError(
+                            "templatetag requires an argument".to_string(),
+                        ));
+                    }
+                    Ok(Some(Node::TemplateTag(args[0].clone())))
+                }
+
+                "spaceless" => {
+                    // {% spaceless %} ... {% endspaceless %}
+                    let (nodes, end_pos) = parse_spaceless_block(tokens, *i + 1)?;
+                    *i = end_pos;
+                    Ok(Some(Node::Spaceless { nodes }))
+                }
+
+                "endspaceless" => {
+                    // Handled by spaceless tag
+                    Ok(None)
+                }
+
+                "cycle" => {
+                    // {% cycle val1 val2 ... %} or {% cycle val1 val2 as cyclename %}
+                    if args.is_empty() {
+                        return Err(DjangoRustError::TemplateError(
+                            "cycle tag requires at least one argument".to_string(),
+                        ));
+                    }
+                    // Check for "as name" at the end
+                    let (values, name) = if args.len() >= 3 && args[args.len() - 2] == "as" {
+                        let name = args.last().unwrap().clone();
+                        let values = args[..args.len() - 2].to_vec();
+                        (values, Some(name))
+                    } else {
+                        (args.clone(), None)
+                    };
+                    Ok(Some(Node::Cycle { values, name }))
+                }
+
+                "now" => {
+                    // {% now "format_string" %}
+                    if args.is_empty() {
+                        return Err(DjangoRustError::TemplateError(
+                            "now tag requires a format string argument".to_string(),
+                        ));
+                    }
+                    let format = args[0].trim_matches(|c| c == '"' || c == '\'').to_string();
+                    Ok(Some(Node::Now(format)))
+                }
+
                 "endif" | "endfor" | "endblock" | "else" | "elif" => {
                     // These are handled by their opening tags
                     Ok(None)
@@ -569,6 +668,28 @@ fn parse_with_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)
 
     Err(DjangoRustError::TemplateError(
         "Unclosed with tag".to_string(),
+    ))
+}
+
+fn parse_spaceless_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)> {
+    let mut nodes = Vec::new();
+    let mut i = start;
+
+    while i < tokens.len() {
+        if let Token::Tag(name, _) = &tokens[i] {
+            if name == "endspaceless" {
+                return Ok((nodes, i));
+            }
+        }
+
+        if let Some(node) = parse_token(tokens, &mut i)? {
+            nodes.push(node);
+        }
+        i += 1;
+    }
+
+    Err(DjangoRustError::TemplateError(
+        "Unclosed spaceless tag".to_string(),
     ))
 }
 
@@ -781,7 +902,39 @@ fn extract_from_nodes(
                     }
                 }
             }
-            // Text, Comment, CsrfToken, Static, Include, Extends don't contain variable references
+            Node::WidthRatio {
+                value,
+                max_value,
+                max_width,
+            } => {
+                extract_from_variable(value, variables);
+                extract_from_variable(max_value, variables);
+                extract_from_variable(max_width, variables);
+            }
+            Node::FirstOf { args } => {
+                for arg in args {
+                    if !((arg.starts_with('"') && arg.ends_with('"'))
+                        || (arg.starts_with('\'') && arg.ends_with('\''))
+                        || arg.chars().all(|c| c.is_numeric() || c == '.'))
+                    {
+                        extract_from_variable(arg, variables);
+                    }
+                }
+            }
+            Node::Spaceless { nodes } => {
+                extract_from_nodes(nodes, variables);
+            }
+            Node::Cycle { values, .. } => {
+                for val in values {
+                    if !((val.starts_with('"') && val.ends_with('"'))
+                        || (val.starts_with('\'') && val.ends_with('\'')))
+                    {
+                        extract_from_variable(val, variables);
+                    }
+                }
+            }
+            // Text, Comment, CsrfToken, Static, Include, Extends, TemplateTag, Now
+            // don't contain variable references
             _ => {}
         }
     }
