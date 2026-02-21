@@ -6,7 +6,7 @@ Used for property lists, tenant lists, lease lists, maintenance lists, etc.
 """
 
 from djust.components.base import Component
-from django.utils.html import escape, format_html
+from django.utils.html import format_html, escape
 from django.utils.safestring import mark_safe
 from typing import List, Dict, Any, Optional
 
@@ -58,18 +58,22 @@ class DataTable(Component):
 
         # If no rows, show empty state
         if not self.rows:
-            return format_html('''
-            <div class="bg-card border border-border rounded-lg p-12 text-center">
-                <i data-lucide="inbox" class="w-12 h-12 mx-auto mb-4 text-muted-foreground"></i>
-                <p class="text-muted-foreground text-lg">{}</p>
-            </div>
-            ''', self.empty_message)
+            return format_html(
+                '<div class="bg-card border border-border rounded-lg p-12 text-center">'
+                '<i data-lucide="inbox" class="w-12 h-12 mx-auto mb-4 text-muted-foreground"></i>'
+                '<p class="text-muted-foreground text-lg">{}</p>'
+                '</div>',
+                self.empty_message
+            )
 
-        # Build table headers
+        # Build table headers (escape header text to prevent XSS)
         header_cells = []
         for header in self.headers:
             header_cells.append(
-                format_html('<th class="px-4 py-3 text-left text-sm font-medium text-muted-foreground">{}</th>', header)
+                format_html(
+                    '<th class="px-4 py-3 text-left text-sm font-medium text-muted-foreground">{}</th>',
+                    header
+                )
             )
 
         # Build table rows
@@ -82,13 +86,15 @@ class DataTable(Component):
             if self.striped and idx % 2 == 1:
                 row_classes.append("bg-muted/20")
 
-            # Build cells for this row
+            # Build cells for this row (escape cell values to prevent XSS)
             cells = []
             for header in self.headers:
                 cell_value = row.get(header, "")
-                # Escape cell value to prevent XSS
                 cells.append(
-                    format_html('<td class="px-4 py-3 text-sm text-card-foreground">{}</td>', cell_value)
+                    format_html(
+                        '<td class="px-4 py-3 text-sm text-card-foreground">{}</td>',
+                        cell_value
+                    )
                 )
 
             row_html_list.append(
@@ -99,17 +105,19 @@ class DataTable(Component):
                 )
             )
 
+        # Combine all HTML parts
+        header_html = mark_safe(''.join(str(h) for h in header_cells))
+        rows_html = mark_safe(''.join(str(r) for r in row_html_list))
+
         return format_html(
-            '''<div class="bg-card border border-border rounded-lg overflow-hidden">
-            <div class="overflow-x-auto">
-                <table class="w-full">
-                    <thead class="bg-muted/30 border-b border-border">
-                        <tr>{}</tr>
-                    </thead>
-                    <tbody>{}</tbody>
-                </table>
-            </div>
-        </div>''',
-            mark_safe(''.join(str(cell) for cell in header_cells)),
-            mark_safe(''.join(str(row) for row in row_html_list))
+            '<div class="bg-card border border-border rounded-lg overflow-hidden">'
+            '<div class="overflow-x-auto">'
+            '<table class="w-full">'
+            '<thead class="bg-muted/30 border-b border-border"><tr>{}</tr></thead>'
+            '<tbody>{}</tbody>'
+            '</table>'
+            '</div>'
+            '</div>',
+            header_html,
+            rows_html
         )

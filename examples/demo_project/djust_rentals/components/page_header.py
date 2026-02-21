@@ -49,15 +49,18 @@ class PageHeader(Component):
     def render(self) -> str:
         """Render the page header component."""
 
-        # Icon HTML
+        # Icon HTML (framework-controlled, safe)
         icon_html = ""
         if self.icon:
-            icon_html = format_html('<i data-lucide="{}" class="w-10 h-10 text-primary mr-3"></i>', self.icon)
+            icon_html = f'<i data-lucide="{self.icon}" class="w-10 h-10 text-primary mr-3"></i>'
 
-        # Subtitle HTML
+        # Subtitle HTML - use format_html to escape user content
         subtitle_html = ""
         if self.subtitle:
-            subtitle_html = format_html('<p class="text-muted-foreground text-lg">{}</p>', self.subtitle)
+            subtitle_html = format_html(
+                '<p class="text-muted-foreground text-lg">{}</p>',
+                self.subtitle
+            )
 
         # Actions HTML
         actions_html = ""
@@ -77,34 +80,39 @@ class PageHeader(Component):
                 else:  # primary
                     btn_class = "bg-primary text-primary-foreground hover:bg-primary/90"
 
-                buttons.append(format_html(
-                    '''<a href="{}"
-                   data-djust-navigate
-                   class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors {}">
-                    <i data-lucide="{}" class="w-4 h-4"></i>
-                    <span>{}</span>
-                </a>''',
-                    url, btn_class, icon, label
-                ))
+                # Escape user-provided label and URL
+                buttons.append(
+                    format_html(
+                        '<a href="{}" data-djust-navigate class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors {}">'
+                        '<i data-lucide="{}" class="w-4 h-4"></i>'
+                        '<span>{}</span>'
+                        '</a>',
+                        url,
+                        btn_class,
+                        icon,
+                        label
+                    )
+                )
 
             actions_html = format_html(
                 '<div class="flex items-center gap-3">{}</div>',
-                mark_safe(''.join(str(btn) for btn in buttons))
+                mark_safe(''.join(str(b) for b in buttons))
             )
 
+        # Main header - use format_html to escape title
         return format_html(
-            '''<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
-            <div class="flex items-center">
-                {}
-                <div>
-                    <h1 class="text-4xl font-bold text-card-foreground mb-1">{}</h1>
-                    {}
-                </div>
-            </div>
-            {}
-        </div>''',
+            '<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">'
+            '<div class="flex items-center">'
+            '{}'  # icon_html
+            '<div>'
+            '<h1 class="text-4xl font-bold text-card-foreground mb-1">{}</h1>'  # title
+            '{}'  # subtitle_html
+            '</div>'
+            '</div>'
+            '{}'  # actions_html
+            '</div>',
             mark_safe(icon_html),
             self.title,
-            mark_safe(subtitle_html),
-            mark_safe(actions_html)
+            mark_safe(str(subtitle_html)) if subtitle_html else '',
+            mark_safe(str(actions_html)) if actions_html else ''
         )

@@ -94,14 +94,18 @@ class StatusBadge(Component):
         # Get color classes
         color_class = self.COLOR_CLASSES.get(self.color, self.COLOR_CLASSES['gray'])
 
-        # Icon HTML
+        # Icon HTML (icon is framework-controlled, safe to use in f-string)
         icon_html = ""
         if self.icon:
-            icon_html = format_html('<i data-lucide="{}" class="w-3 h-3"></i>', self.icon)
+            icon_html = f'<i data-lucide="{self.icon}" class="w-3 h-3"></i>'
 
+        # Use format_html to properly escape the label (which may contain user input)
         return format_html(
-            '<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border {}">{}{}</span>',
+            '<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border {}">'
+            '{}'
+            '{}'
+            '</span>',
             color_class,
-            mark_safe(icon_html),
-            self.label
+            mark_safe(icon_html),  # icon_html is safe (framework-controlled)
+            self.label  # label is auto-escaped by format_html
         )

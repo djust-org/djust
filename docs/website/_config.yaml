@@ -6,36 +6,99 @@ navigation:
     slug: getting-started
     url: /docs/getting-started/
     order: 1
-    level: beginner
+    group: true
+    children:
+      - title: Installation
+        slug: installation
+        file: getting-started/installation.md
+        order: 1
+        level: beginner
+      - title: Your First LiveView
+        slug: first-liveview
+        file: getting-started/first-liveview.md
+        order: 2
+        level: beginner
+      - title: Core Concepts
+        slug: core-concepts-overview
+        file: getting-started/core-concepts.md
+        order: 3
+        level: beginner
 
   - title: Core Concepts
     slug: core-concepts
     url: /docs/core-concepts/
     order: 2
-    level: beginner
+    group: true
+    children:
+      - title: LiveView
+        slug: liveview
+        file: core-concepts/liveview.md
+        order: 1
+        level: beginner
+      - title: Events
+        slug: events
+        file: core-concepts/events.md
+        order: 2
+        level: beginner
+      - title: Components
+        slug: components-concepts
+        file: core-concepts/components.md
+        order: 3
+        level: beginner
+      - title: Templates
+        slug: templates
+        file: core-concepts/templates.md
+        order: 4
+        level: beginner
 
-  - title: Components
-    slug: components
-    url: /docs/components/
+  - title: Forms
+    slug: forms
+    url: /docs/forms/
     order: 3
-    level: beginner
+    group: true
+    children:
+      - title: Forms Overview
+        slug: forms-overview
+        file: forms/index.md
+        order: 1
+        level: beginner
+      - title: Forms Guide
+        slug: forms-guide
+        file: guides/forms.md
+        order: 2
+        level: intermediate
 
   - title: State Management
     slug: state
     url: /docs/state/
     order: 4
-    level: intermediate
-
-  - title: Forms
-    slug: forms
-    url: /docs/forms/
-    order: 5
-    level: intermediate
+    group: true
+    children:
+      - title: Overview
+        slug: state-overview
+        file: state/index.md
+        order: 1
+        level: intermediate
+      - title: Tutorial
+        slug: state-tutorial
+        file: ../../state-management/STATE_MANAGEMENT_TUTORIAL.md
+        order: 2
+        level: intermediate
+      - title: Patterns
+        slug: state-patterns
+        file: ../../state-management/STATE_MANAGEMENT_PATTERNS.md
+        order: 3
+        level: intermediate
+      - title: Examples
+        slug: state-examples
+        file: ../../state-management/STATE_MANAGEMENT_EXAMPLES.md
+        order: 4
+        level: intermediate
 
   - title: Guides
     slug: guides
     url: /docs/guides/
-    order: 6
+    order: 5
     group: true
     children:
       - title: Streaming
@@ -53,47 +116,83 @@ navigation:
         file: guides/uploads.md
         order: 3
         level: intermediate
+      - title: Loading States
+        slug: loading-states
+        file: guides/loading-states.md
+        order: 4
+        level: beginner
       - title: Navigation
         slug: navigation
         file: guides/navigation.md
-        order: 4
+        order: 5
         level: intermediate
       - title: Hooks
         slug: hooks
         file: guides/hooks.md
-        order: 5
+        order: 6
         level: intermediate
       - title: Model Binding
         slug: model-binding
         file: guides/model-binding.md
-        order: 6
+        order: 7
         level: intermediate
+      - title: Authentication
+        slug: authentication
+        file: guides/authentication.md
+        order: 8
+        level: intermediate
+      - title: CSS Frameworks
+        slug: css-frameworks
+        file: guides/css-frameworks.md
+        order: 9
+        level: beginner
       - title: Multi-Tenant
         slug: multi-tenant
         file: guides/multi-tenant.md
-        order: 7
+        order: 10
         level: advanced
+      - title: External Services
+        slug: services
+        file: guides/services.md
+        order: 11
+        level: intermediate
       - title: PWA
         slug: pwa
         file: guides/pwa.md
-        order: 8
+        order: 12
         level: intermediate
       - title: Deployment
         slug: deployment
         file: guides/deployment.md
-        order: 9
+        order: 13
         level: intermediate
+      - title: MCP Server
+        slug: mcp-server
+        file: guides/mcp-server.md
+        order: 14
+        level: advanced
+      - title: Error Codes
+        slug: error-codes
+        file: guides/error-codes.md
+        order: 15
+        level: reference
 
   - title: Testing
     slug: testing
     url: /docs/testing/
-    order: 7
-    level: intermediate
+    order: 6
+    group: true
+    children:
+      - title: Testing Guide
+        slug: testing-guide
+        file: testing/index.md
+        order: 1
+        level: intermediate
 
   - title: Advanced
     slug: advanced
     url: /docs/advanced/
-    order: 8
+    order: 7
     group: true
     children:
       - title: Server Push
@@ -120,5 +219,27 @@ navigation:
   - title: API Reference
     slug: api
     url: /docs/api/
-    order: 9
+    order: 8
     level: reference
+    group: true
+    children:
+      - title: LiveView
+        slug: api-liveview
+        file: api-reference/liveview.md
+        order: 1
+        level: reference
+      - title: Decorators
+        slug: api-decorators
+        file: api-reference/decorators.md
+        order: 2
+        level: reference
+      - title: Components
+        slug: api-components
+        file: api-reference/components.md
+        order: 3
+        level: reference
+      - title: Testing
+        slug: api-testing
+        file: api-reference/testing.md
+        order: 4
+        level: reference

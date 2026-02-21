@@ -50,11 +50,11 @@ class MyView(LiveView):
 
 The `event_security` setting controls enforcement:
 
-| Mode       | Behavior                                         |
-|------------|--------------------------------------------------|
-| `"strict"` | (default) Only `@event_handler` decorated methods |
+| Mode       | Behavior                                             |
+| ---------- | ---------------------------------------------------- |
+| `"strict"` | (default) Only `@event_handler` decorated methods    |
 | `"warn"`   | Allows undecorated methods with deprecation warnings |
-| `"open"`   | No decorator check (legacy, not recommended)     |
+| `"open"`   | No decorator check (legacy, not recommended)         |
 
 ### Layer 3: Rate Limiting
 

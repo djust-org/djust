@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Type stub files (.pyi) for LiveView and mixins** — Added PEP 561 compliant type stubs for `NavigationMixin`, `PushEventMixin`, `StreamsMixin`, `StreamingMixin`, and `LiveView` to enable IDE autocomplete and mypy type checking for runtime-injected methods like `live_redirect`, `live_patch`, `push_event`, `stream`, `stream_insert`, `stream_delete`, and `stream_to`. Includes `py.typed` marker file and comprehensive test suite.
 - **`start_async()` keeps loading state active during background work** — WebSocket responses include `async_pending` flag when a `start_async()` callback is running, preventing loading spinners from disappearing prematurely. Async completion responses include `event_name` so the client clears the correct loading state. ([#314](https://github.com/djust-org/djust/pull/314))
 - **`dj-loading.for` attribute** — Scope any `dj-loading.*` directive to a specific event name, regardless of DOM position. Allows spinners, disabled buttons, and other loading indicators anywhere in the page to react to a named event. ([#314](https://github.com/djust-org/djust/pull/314))
 - **`AsyncWorkMixin` included in `LiveView` base class** — `start_async()` is now available on all LiveViews without explicit mixin import. ([#314](https://github.com/djust-org/djust/pull/314))
@@ -25,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`dj-patch('/')` failed to update URL and `live_patch` routing broken** — Removed `url.pathname !== '/'` guard in `bindNavigationDirectives` so root-path navigation works. Fixed dict merge order in `_flush_navigation` so server sends `type='navigation'` instead of `type='live_patch'`. Updated `handleNavigation` to dispatch via `data.action` with `data.action || data.type` fallback for backwards compatibility. ([#318](https://github.com/djust-org/djust/pull/318))
 - **dj-submit forms sent empty params when created by VDOM patches** — `createNodeFromVNode` now correctly collects `FormData` for submit events; replaced `data-liveview-*-bound` attribute tracking with `WeakMap` to prevent stale binding flags after DOM replacement ([#312](https://github.com/djust-org/djust/pull/312))
 
 ### Tests

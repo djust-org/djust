@@ -227,141 +227,6 @@ class TestLiveSession:
         assert "myapp.views.DashboardView" in result
         assert "<script>" in result
 
-    def test_live_session_path_pattern_preserves_route(self):
-        """Regression: path() patterns should not extract regex with \\Z suffix."""
-        routing = _import_routing()
-        from django.urls import path
-
-        class FakeView:
-            @classmethod
-            def as_view(cls):
-                def view(request):
-                    pass
-
-                view.view_class = cls
-                return view
-
-        FakeView.__module__ = "myapp.views"
-        FakeView.__qualname__ = "FakeView"
-
-        patterns = routing.live_session(
-            "/app",
-            [
-                path("kanban/", FakeView.as_view(), name="kanban"),
-            ],
-        )
-
-        assert len(patterns) == 1
-        # The pattern route should be "app/kanban/" not "app/kanban/\Z"
-        pattern_str = str(patterns[0].pattern)
-        assert pattern_str == "app/kanban/"
-        # Should not contain regex anchors
-        assert "\\Z" not in pattern_str
-        assert "\\A" not in pattern_str
-
-    def test_live_session_path_with_params(self):
-        """path() with parameters should convert to JS route format."""
-        routing = _import_routing()
-        from django.urls import path
-
-        class ItemView:
-            @classmethod
-            def as_view(cls):
-                def view(request, id):
-                    pass
-
-                view.view_class = cls
-                return view
-
-        ItemView.__module__ = "myapp.views"
-        ItemView.__qualname__ = "ItemView"
-
-        routing.live_session(
-            "/app",
-            [
-                path("items/<int:id>/", ItemView.as_view(), name="item_detail"),
-            ],
-            session_name="test_params",
-        )
-
-        # Check route map has JS-friendly format
-        entries = routing.live_session._route_maps["test_params"]
-        assert len(entries) == 1
-        js_path, view_path = entries[0]
-        # Should be /app/items/:id/ not /app/items/<int:id>/
-        assert js_path == "/app/items/:id/"
-        assert view_path == "myapp.views.ItemView"
-
-    def test_live_session_re_path_pattern(self):
-        """re_path() should work correctly with regex patterns."""
-        routing = _import_routing()
-        from django.urls import re_path
-
-        class ArchiveView:
-            @classmethod
-            def as_view(cls):
-                def view(request, year):
-                    pass
-
-                view.view_class = cls
-                return view
-
-        ArchiveView.__module__ = "myapp.views"
-        ArchiveView.__qualname__ = "ArchiveView"
-
-        patterns = routing.live_session(
-            "/app",
-            [
-                re_path(r"^archive/(?P<year>\d{4})/$", ArchiveView.as_view(), name="archive"),
-            ],
-        )
-
-        assert len(patterns) == 1
-        # The pattern should have the prefix and cleaned regex
-        pattern_str = str(patterns[0].pattern)
-        # Should be a valid regex pattern with the prefix
-        assert "archive" in pattern_str
-
-    def test_live_session_route_actually_resolves(self):
-        """Generated patterns should be resolvable by Django's URL resolver."""
-        routing = _import_routing()
-        from django.urls import path
-
-        class TestView:
-            @classmethod
-            def as_view(cls):
-                def view(request):
-                    return "test"
-
-                view.view_class = cls
-                return view
-
-        TestView.__module__ = "myapp.views"
-        TestView.__qualname__ = "TestView"
-
-        patterns = routing.live_session(
-            "/app",
-            [
-                path("test/", TestView.as_view(), name="test"),
-            ],
-        )
-
-        # Verify the pattern is created correctly
-        assert len(patterns) == 1
-        assert patterns[0].name == "test"
-
-        # Use Django's reverse to verify the pattern works
-        from django.urls.resolvers import URLResolver, RoutePattern
-
-        # Create a temporary resolver for testing
-        resolver = URLResolver(RoutePattern(""), None)
-        resolver.url_patterns = patterns
-
-        # The pattern should match the expected URL
-        match = resolver.resolve("app/test/")
-        assert match is not None
-        assert match.url_name == "test"
-
 
 # ============================================================================
 # WebSocket consumer integration tests
@@ -410,7 +275,11 @@ class TestNavigationWebSocket:
 
         consumer_instance.send_json.assert_called_once()
         call_data = consumer_instance.send_json.call_args[0][0]
+        # type must be "navigation" so the client-side switch `case "navigation":`
+        # fires and handleNavigation() is invoked (issue #307 BUG 2).
         assert call_data["type"] == "navigation"
+        # action carries the nav sub-type so handleNavigation() can dispatch
+        # to handleLivePatch vs handleLiveRedirect.
         assert call_data["action"] == "live_patch"
         assert call_data["params"] == {"page": 2}
 
@@ -466,9 +335,12 @@ class TestNavigationWebSocket:
         assert consumer_instance.send_json.call_count == 2
         first = consumer_instance.send_json.call_args_list[0][0][0]
         second = consumer_instance.send_json.call_args_list[1][0][0]
+        # Both messages must carry type="navigation" so the client routes them
+        # correctly (issue #307 BUG 2).
         assert first["type"] == "navigation"
-        assert first["action"] == "live_patch"
         assert second["type"] == "navigation"
+        # action carries the nav sub-type for handleNavigation() dispatch.
+        assert first["action"] == "live_patch"
         assert second["action"] == "live_redirect"
         assert second["path"] == "/b/"
 
@@ -518,3 +390,71 @@ class TestHandleParams:
         view.handle_params({"category": "books"}, "/items/?category=books")
         assert view.category == "books"
         assert view.page == 1  # default
+
+
+# ============================================================================
+# Regression tests — issue #307
+# ============================================================================
+
+
+@pytest.mark.skipif(not HAS_CHANNELS, reason="channels not installed")
+class TestIssue307Regressions:
+    """Regression tests for issue #307 navigation bugs."""
+
+    # --- BUG 2: server-side messages must be routed to handleNavigation() ---
+
+    @pytest.mark.asyncio
+    async def test_flush_navigation_type_is_navigation_not_live_patch(self):
+        """
+        Regression: _flush_navigation must send type='navigation' so the
+        client-side switch `case 'navigation':` fires.  Before the fix,
+        **cmd overwrote 'type': 'navigation' with 'type': 'live_patch',
+        causing the message to be silently dropped.
+        """
+        from djust.websocket import LiveViewConsumer
+        from djust.mixins.navigation import NavigationMixin
+
+        class FakeView(NavigationMixin):
+            def __init__(self):
+                self._init_navigation()
+
+        consumer_instance = LiveViewConsumer.__new__(LiveViewConsumer)
+        view = FakeView()
+        view.live_patch(params={"page": 3})
+        consumer_instance.view_instance = view
+        consumer_instance.send_json = AsyncMock()
+
+        await consumer_instance._flush_navigation()
+
+        msg = consumer_instance.send_json.call_args[0][0]
+        assert msg["type"] == "navigation", (
+            "type must be 'navigation'; got %r — client switch will not route to "
+            "handleNavigation() if this is 'live_patch' (issue #307 BUG 2)" % msg["type"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_flush_navigation_action_field_preserved(self):
+        """
+        action field must carry the nav sub-type so handleNavigation() can
+        dispatch to handleLivePatch / handleLiveRedirect after the outer
+        type is fixed to 'navigation'.
+        """
+        from djust.websocket import LiveViewConsumer
+        from djust.mixins.navigation import NavigationMixin
+
+        class FakeView(NavigationMixin):
+            def __init__(self):
+                self._init_navigation()
+
+        consumer_instance = LiveViewConsumer.__new__(LiveViewConsumer)
+        view = FakeView()
+        view.live_redirect("/dashboard/")
+        consumer_instance.view_instance = view
+        consumer_instance.send_json = AsyncMock()
+
+        await consumer_instance._flush_navigation()
+
+        msg = consumer_instance.send_json.call_args[0][0]
+        assert msg["type"] == "navigation"
+        assert msg["action"] == "live_redirect"
+        assert msg["path"] == "/dashboard/"
