@@ -29,3 +29,14 @@ from django.dispatch import Signal
 #   html_snippet            – str or None, first 500 chars of rendered HTML
 #   previous_html_snippet   – str or None, first 500 chars of previous render
 full_html_update = Signal()
+
+liveview_server_error = Signal()
+"""
+Sent whenever send_error() is called on the WebSocket consumer.
+
+Kwargs sent:
+    sender    (type)  — the LiveView class, or None if no view is mounted yet
+    error     (str)   — human-readable error message sent to the client
+    view_name (str)   — "module.ClassName" of the view, or "" if unknown
+    context   (dict)  — extra kwargs passed to send_error() (e.g. validation_details)
+"""
