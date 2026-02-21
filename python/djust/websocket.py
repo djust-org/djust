@@ -288,6 +288,25 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         response.update(context)
         await self.send_json(response)
 
+        # Report to djust-monitor if configured
+        try:
+            import djust_monitor
+
+            view_name = ""
+            if hasattr(self, "view_instance") and self.view_instance:
+                view_name = type(self.view_instance).__qualname__
+            djust_monitor.capture_event(
+                "LiveViewError",
+                error,
+                context={
+                    "view": view_name,
+                    "source": "websocket",
+                    **context,
+                },
+            )
+        except Exception:
+            pass
+
     async def _dispatch_async_work(self) -> None:
         """
         Check if the handler scheduled background work via start_async().
