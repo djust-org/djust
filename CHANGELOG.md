@@ -7,11 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3rc1] - 2026-02-21
+
+### Added
+
+- **6 new Django template tags in Rust renderer** — Implemented `{% widthratio %}`, `{% firstof %}`, `{% templatetag %}`, `{% spaceless %}`, `{% cycle %}`, and `{% now %}` in the Rust template engine. These tags were previously rendered as HTML comments with warnings. ([#329](https://github.com/djust-org/djust/issues/329))
+- **System check `djust.T011` for unsupported template tags** — Warns at startup when templates use Django tags not yet implemented in the Rust renderer (`ifchanged`, `regroup`, `resetcycle`, `lorem`, `debug`, `filter`, `autoescape`). Suppressible with `{# noqa: T011 #}`. ([#329](https://github.com/djust-org/djust/issues/329))
+- **System check `djust.T012` for missing `dj-view`** — Detects templates that use `dj-*` event directives without a `dj-view` attribute, which would silently fail at runtime. ([#293](https://github.com/djust-org/djust/issues/293))
+- **System check `djust.T013` for invalid `dj-view` paths** — Detects empty or malformed `dj-view` attribute values. ([#293](https://github.com/djust-org/djust/issues/293))
+- **`{% now %}` supports 35+ Django date format specifiers** — Including `S` (ordinal suffix), `t` (days in month), `w`/`W` (weekday/week number), `L` (leap year), `c` (ISO 8601), `r` (RFC 2822), `U` (Unix timestamp), and Django's special `P` format (noon/midnight).
+- **Deployment guides** — Added deployment documentation for Railway, Render, and Fly.io. ([#247](https://github.com/djust-org/djust/issues/247))
+- **Navigation best practices documentation** — Documented `dj-patch` vs `dj-click` for client-side navigation, with `handle_params()` patterns. ([#304](https://github.com/djust-org/djust/issues/304))
+- **LiveView invariants documentation** — Documented root container requirement and `**kwargs` convention for event handlers. ([#316](https://github.com/djust-org/djust/issues/316))
+
 ### Fixed
 
 - **False `{% if %}` blocks now emit `<!--dj-if-->` placeholder instead of empty string** — Gives the VDOM diffing engine a stable DOM anchor to target when the condition later becomes true, resolving DJE-053 / issue #295.
 - **`dj-patch('/')` now correctly updates the browser URL to the root path** — Removed the `url.pathname !== '/'` guard in `bindNavigationDirectives` that prevented the browser URL from being updated when patching to `/`. The guard was silently ignoring root-path patches. ([#307](https://github.com/djust-org/djust/issues/307))
 - **`live_patch` routing restored — `handleNavigation` dispatch now fires correctly** — Fixed dict merge order in `_flush_navigation` so `type: 'navigation'` is no longer overwritten by `**cmd`. Added an `action` field to carry the nav sub-type (`live_patch` / `live_redirect`); `handleNavigation` now dispatches on `data.action` instead of `data.type`. Previously the client `switch case 'navigation':` never matched because `type` was being overwritten with `"live_patch"`. **Note:** `data.action || data.type` fallback is kept for old JS clients that send messages without an `action` field — this fallback is planned for removal in the next minor release. ([#307](https://github.com/djust-org/djust/issues/307))
+- **T003 false positives eliminated** — The `{% include %}` check now examines the include path instead of the whole file content, preventing false warnings on templates that include SVGs or modals alongside `dj-*` directives. ([#331](https://github.com/djust-org/djust/issues/331))
 
 ## [0.3.2] - 2026-02-18
 
