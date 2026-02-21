@@ -1052,7 +1052,8 @@ def _check_navigation_state_in_handlers(errors):
 
                 # Skip non-event-handler methods
                 if not any(
-                    isinstance(deco, ast.Name) and deco.id == "event_handler"
+                    isinstance(deco, ast.Name)
+                    and deco.id == "event_handler"
                     or isinstance(deco, ast.Call)
                     and isinstance(deco.func, ast.Name)
                     and deco.func.id == "event_handler"
@@ -1089,7 +1090,7 @@ def _check_navigation_state_in_handlers(errors):
                                 hint=(
                                     "Navigation state changes are better handled with dj-patch + handle_params(). "
                                     "This enables URL updates and back-button support. "
-                                    "Example: Replace dj-click with dj-patch=\"?tab=value\" and handle in handle_params()."
+                                    'Example: Replace dj-click with dj-patch="?tab=value" and handle in handle_params().'
                                 ),
                                 id="djust.Q010",
                                 fix_hint=(
@@ -1167,13 +1168,9 @@ def check_security(app_configs, **kwargs):
                         if (
                             node.body
                             and isinstance(node.body[0], ast.Expr)
-                            and isinstance(node.body[0].value, (ast.Constant, ast.Str))
+                            and isinstance(node.body[0].value, ast.Constant)
                         ):
-                            doc = (
-                                node.body[0].value.value
-                                if isinstance(node.body[0].value, ast.Constant)
-                                else node.body[0].value.s
-                            )
+                            doc = node.body[0].value.value
                             if "csrf" in doc.lower():
                                 has_justification = True
                         if not has_justification and not _has_noqa(
@@ -1412,14 +1409,13 @@ def _check_click_for_navigation(content, relpath, filepath, errors):
                     hint=(
                         "Navigation actions should use dj-patch instead of dj-click. "
                         "dj-patch updates the URL and enables back-button support. "
-                        "Example: <button dj-patch=\"/view?tab=settings\">Settings</button>\n"
+                        'Example: <button dj-patch="/view?tab=settings">Settings</button>\n'
                         "See: https://docs.djust.dev/guides/navigation"
                     ),
                     id="djust.T010",
                     fix_hint=(
                         "Replace dj-click with dj-patch at line %d in `%s` and handle "
-                        "navigation parameters in handle_params() method."
-                        % (lineno, relpath)
+                        "navigation parameters in handle_params() method." % (lineno, relpath)
                     ),
                     file_path=filepath,
                     line_number=lineno,
