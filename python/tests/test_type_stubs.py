@@ -9,6 +9,7 @@ These tests ensure that:
 
 import ast
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -69,6 +70,8 @@ class TestMypyIntegration:
                         "--no-error-summary",
                         "--allow-untyped-defs",  # Allow test methods without type hints
                         "--disable-error-code=no-untyped-def",
+                        "--python-executable",
+                        sys.executable,
                         f.name,
                     ],
                     capture_output=True,
@@ -212,7 +215,7 @@ class TestView(LiveView):
 
             try:
                 result = subprocess.run(
-                    ["mypy", "--no-error-summary", f.name],
+                    ["mypy", "--no-error-summary", "--python-executable", sys.executable, f.name],
                     capture_output=True,
                     text=True,
                 )
