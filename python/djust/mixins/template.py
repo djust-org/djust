@@ -192,7 +192,7 @@ class TemplateMixin:
             logger.debug("[LiveView] No handler metadata to inject, skipping script injection")
             return html
 
-        logger.debug(f"[LiveView] Injecting handler metadata script for {len(metadata)} handlers")
+        logger.debug("[LiveView] Injecting handler metadata script for %s handlers", len(metadata))
 
         # Build script tag
         script = f"""

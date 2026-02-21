@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`dj-patch('/')` failed to update URL and `live_patch` routing broken** — Removed `url.pathname !== '/'` guard in `bindNavigationDirectives` so root-path navigation works. Fixed dict merge order in `_flush_navigation` so server sends `type='navigation'` instead of `type='live_patch'`. Updated `handleNavigation` to dispatch via `data.action` with `data.action || data.type` fallback for backwards compatibility. ([#318](https://github.com/djust-org/djust/pull/318))
 - **dj-submit forms sent empty params when created by VDOM patches** — `createNodeFromVNode` now correctly collects `FormData` for submit events; replaced `data-liveview-*-bound` attribute tracking with `WeakMap` to prevent stale binding flags after DOM replacement ([#312](https://github.com/djust-org/djust/pull/312))
 
+### Security
+
+- **F-strings in logging calls** — Converted 9 logger calls to use %-style formatting (`logger.error("msg %s", val)`) instead of f-strings (`logger.error(f"msg {val}")`). F-strings defeat lazy evaluation, causing string interpolation before the log level check, potentially exposing sensitive data and wasting CPU. Affected files: `mixins/template.py`, `security/__init__.py`, `security/error_handling.py`, `template_tags/__init__.py`, `template_tags/static.py`, `template_tags/url.py`.
+
 ### Tests
 
 - **Regression tests for `|safe` filter with nested dicts** — Added comprehensive tests verifying that `|safe` filter works correctly for HTML content in nested dict/list values, preventing issue [#317](https://github.com/djust-org/djust/issues/317) from recurring

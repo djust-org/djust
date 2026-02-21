@@ -65,7 +65,7 @@ logger.info(f"User searched for: {user_query}")
 # GOOD - strips control characters and truncates
 from djust.security import sanitize_for_log
 
-logger.info(f"User searched for: {sanitize_for_log(user_query)}")
+logger.info("User searched for: %s", sanitize_for_log(user_query))
 ```
 
 **What it prevents:**
@@ -321,7 +321,7 @@ The following patterns are **prohibited** in djust code:
 |----------------|-------------|--------|
 | `setattr(obj, untrusted_key, value)` | `safe_setattr(obj, key, value)` | Prototype pollution |
 | `traceback.format_exc()` in responses | `create_safe_error_response()` | Information disclosure |
-| `f"...{user_input}..."` in logs | `f"...{sanitize_for_log(user_input)}..."` | Log injection |
+| `logger.error(f"msg {val}")` | `logger.error("msg %s", sanitize_for_log(val))` | Log injection, defeats lazy evaluation |
 | `params` in error responses | Remove entirely | Data leakage |
 | `eval(user_input)` | Never use eval | Code injection |
 | `exec(user_input)` | Never use exec | Code injection |
@@ -436,7 +436,7 @@ response = create_safe_error_response(e, error_type="event")
 ```python
 from djust.security import sanitize_for_log
 
-logger.info(f"Query: {sanitize_for_log(user_query)}")
+logger.info("Query: %s", sanitize_for_log(user_query))
 ```
 
 ### 4. XSS (Cross-Site Scripting)
