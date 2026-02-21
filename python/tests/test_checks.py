@@ -1507,14 +1507,13 @@ class TestT003IncludeInsteadOfLiveviewContent:
     """T003 -- wrapper template uses include instead of liveview_content|safe."""
 
     def test_t003_include_in_wrapper(self, tmp_path, settings):
-        """T003 fires for wrapper template using include + mentions liveview."""
+        """T003 fires for wrapper template using include with liveview in path."""
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
         (tpl_dir / "wrapper.html").write_text(
             textwrap.dedent("""\
-                <!-- liveview wrapper template -->
                 {% block content %}
-                    {% include "partial.html" %}
+                    {% include "liveview_partial.html" %}
                 {% endblock %}
             """)
         )
@@ -1541,6 +1540,56 @@ class TestT003IncludeInsteadOfLiveviewContent:
                 <!-- liveview wrapper template -->
                 {% block content %}
                     {{ liveview_content|safe }}
+                {% endblock %}
+            """)
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t003 = [e for e in errors if e.id == "djust.T003"]
+        assert len(t003) == 0
+
+    def test_t003_no_false_positive_for_unrelated_include(self, tmp_path, settings):
+        """T003 should NOT fire when include path is unrelated (e.g. icons.svg)."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "wrapper.html").write_text(
+            textwrap.dedent("""\
+                {% block content %}
+                    {% include "icons.svg" %}
+                    <div dj-click="increment">Click me</div>
+                {% endblock %}
+            """)
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t003 = [e for e in errors if e.id == "djust.T003"]
+        assert len(t003) == 0
+
+    def test_t003_noqa_suppresses_warning(self, tmp_path, settings):
+        """T003 should be suppressed by {# noqa: T003 #} comment."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "wrapper.html").write_text(
+            textwrap.dedent("""\
+                {# noqa: T003 #}
+                {% block content %}
+                    {% include "liveview_partial.html" %}
                 {% endblock %}
             """)
         )
@@ -2444,9 +2493,7 @@ class TestT010ClickForNavigation:
         """T010 should flag dj-click with data-page attribute."""
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
-        (tpl_dir / "page_click.html").write_text(
-            '<a dj-click="goToPage" data-page="2">Next</a>'
-        )
+        (tpl_dir / "page_click.html").write_text('<a dj-click="goToPage" data-page="2">Next</a>')
         settings.TEMPLATES = [
             {
                 "DIRS": [str(tpl_dir)],
