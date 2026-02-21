@@ -8,12 +8,15 @@ These tests ensure that:
 """
 
 import ast
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+_has_mypy = shutil.which("mypy") is not None
 
 
 class TestStubSyntax:
@@ -53,6 +56,7 @@ class TestStubSyntax:
         assert py_typed.exists(), "Missing py.typed marker file"
 
 
+@pytest.mark.skipif(not _has_mypy, reason="mypy not installed")
 class TestMypyIntegration:
     """Test that mypy can use the stubs for type checking."""
 
