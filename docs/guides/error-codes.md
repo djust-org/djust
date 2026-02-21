@@ -513,6 +513,8 @@ class PublicCounterView(LiveView):
     login_required = False  # Explicitly public
 ```
 
+**Note**: Prior to [#303](https://github.com/djust-org/djust/issues/303), this check incorrectly warned on views with `login_required = False`. The check now correctly distinguishes between intentionally public views (`False`) and views that haven't addressed authentication at all (`None`).
+
 **Related**: [Authentication Guide](authentication.md)
 
 ---
