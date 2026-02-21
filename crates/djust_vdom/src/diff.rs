@@ -313,8 +313,8 @@ fn diff_attrs(old: &VNode, new: &VNode, path: &[usize], target_id: &Option<Strin
 
     // Find removed and changed attributes
     for (key, old_value) in &old.attrs {
-        // Skip data-dj-id attribute - it's managed by the parser and shouldn't generate patches
-        if key == "data-dj-id" {
+        // Skip data-dj-id and data-dj-src attributes - managed by parser/renderer, not diffed
+        if key == "data-dj-id" || key == "data-dj-src" {
             continue;
         }
 
@@ -347,8 +347,8 @@ fn diff_attrs(old: &VNode, new: &VNode, path: &[usize], target_id: &Option<Strin
 
     // Find added attributes
     for (key, new_value) in &new.attrs {
-        // Skip data-dj-id attribute
-        if key == "data-dj-id" {
+        // Skip data-dj-id and data-dj-src attributes
+        if key == "data-dj-id" || key == "data-dj-src" {
             continue;
         }
 

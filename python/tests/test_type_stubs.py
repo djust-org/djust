@@ -8,7 +8,6 @@ These tests ensure that:
 """
 
 import ast
-import glob
 import subprocess
 import tempfile
 from pathlib import Path
@@ -58,7 +57,7 @@ class TestMypyIntegration:
 
     def run_mypy_on_code(self, code: str) -> subprocess.CompletedProcess:
         """Run mypy on a code snippet and return the result."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
             f.write(code)
             f.flush()
 
@@ -66,10 +65,10 @@ class TestMypyIntegration:
                 # Run mypy with lenient settings for test code
                 result = subprocess.run(
                     [
-                        'mypy',
-                        '--no-error-summary',
-                        '--allow-untyped-defs',  # Allow test methods without type hints
-                        '--disable-error-code=no-untyped-def',
+                        "mypy",
+                        "--no-error-summary",
+                        "--allow-untyped-defs",  # Allow test methods without type hints
+                        "--disable-error-code=no-untyped-def",
                         f.name,
                     ],
                     capture_output=True,
@@ -81,7 +80,7 @@ class TestMypyIntegration:
 
     def test_mypy_accepts_navigation_methods(self):
         """Mypy recognizes NavigationMixin methods from stubs."""
-        code = '''
+        code = """
 from djust import LiveView
 
 class TestView(LiveView):
@@ -93,13 +92,13 @@ class TestView(LiveView):
         self.live_redirect("/items/42/")
         self.live_redirect(path="/items/", params={"filter": "active"})
         self.handle_params({"page": "1"}, "/test/")
-'''
+"""
         result = self.run_mypy_on_code(code)
         assert result.returncode == 0, f"Mypy errors: {result.stdout}"
 
     def test_mypy_accepts_push_event_methods(self):
         """Mypy recognizes PushEventMixin methods from stubs."""
-        code = '''
+        code = """
 from djust import LiveView
 
 class TestView(LiveView):
@@ -109,13 +108,13 @@ class TestView(LiveView):
         self.push_event("flash", {"message": "Saved!"})
         self.push_event("scroll_to", {"selector": "#bottom"})
         self.push_event("custom_event")
-'''
+"""
         result = self.run_mypy_on_code(code)
         assert result.returncode == 0, f"Mypy errors: {result.stdout}"
 
     def test_mypy_accepts_streams_methods(self):
         """Mypy recognizes StreamsMixin methods from stubs."""
-        code = '''
+        code = """
 from djust import LiveView
 
 class TestView(LiveView):
@@ -130,13 +129,13 @@ class TestView(LiveView):
         self.stream_delete("items", 1)
         self.stream_reset("items")
         self.stream_reset("items", items)
-'''
+"""
         result = self.run_mypy_on_code(code)
         assert result.returncode == 0, f"Mypy errors: {result.stdout}"
 
     def test_mypy_accepts_streaming_methods(self):
         """Mypy recognizes StreamingMixin async methods from stubs."""
-        code = '''
+        code = """
 from djust import LiveView
 
 class TestView(LiveView):
@@ -146,7 +145,7 @@ class TestView(LiveView):
         await self.stream_to("messages", target="#message-list")
         await self.stream_to("messages", html="<div>Test</div>")
         await self.push_state()
-'''
+"""
         result = self.run_mypy_on_code(code)
         assert result.returncode == 0, f"Mypy errors: {result.stdout}"
 
@@ -158,7 +157,7 @@ class TestView(LiveView):
         typos like live_navigate vs live_redirect. However, the stubs DO
         provide autocomplete and signature hints in IDEs.
         """
-        code = '''
+        code = """
 from typing import Dict, Any
 from djust import LiveView
 
@@ -172,7 +171,7 @@ class TestView(LiveView):
         self.live_redirect(path="/items/")
         self.push_event("test", {"data": "value"})
         self.stream_insert("items", {"id": 1})
-'''
+"""
         result = self.run_mypy_on_code(code)
         assert result.returncode == 0, f"Mypy should accept correct usage: {result.stdout}"
 
@@ -189,18 +188,17 @@ class TestView(LiveView):
         from djust.mixins.push_events import PushEventMixin
 
         # These should be importable and have proper signatures
-        import inspect
 
         # The stubs provide type information for static analysis
         # even if the runtime implementation is dynamic
-        assert hasattr(NavigationMixin, 'live_patch')
-        assert hasattr(NavigationMixin, 'live_redirect')
-        assert hasattr(PushEventMixin, 'push_event')
+        assert hasattr(NavigationMixin, "live_patch")
+        assert hasattr(NavigationMixin, "live_redirect")
+        assert hasattr(PushEventMixin, "push_event")
 
     def test_mypy_catches_missing_required_arg(self):
         """Mypy catches missing required arguments."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-            test_code = '''
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            test_code = """
 from djust import LiveView
 
 class TestView(LiveView):
@@ -208,19 +206,25 @@ class TestView(LiveView):
 
     def my_handler(self) -> None:
         self.live_redirect()  # Missing required 'path' argument
-'''
+"""
             f.write(test_code)
             f.flush()
 
             try:
                 result = subprocess.run(
-                    ['mypy', '--no-error-summary', f.name],
+                    ["mypy", "--no-error-summary", f.name],
                     capture_output=True,
                     text=True,
                 )
                 # Should catch missing required argument
-                has_error = result.returncode != 0 or "Missing positional argument" in result.stdout or "Too few arguments" in result.stdout
-                assert has_error, f"Mypy should have caught missing argument. Output: {result.stdout}"
+                has_error = (
+                    result.returncode != 0
+                    or "Missing positional argument" in result.stdout
+                    or "Too few arguments" in result.stdout
+                )
+                assert (
+                    has_error
+                ), f"Mypy should have caught missing argument. Output: {result.stdout}"
             finally:
                 Path(f.name).unlink()
 

@@ -335,10 +335,18 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
 
     if (vnode.attrs) {
         for (const [key, value] of Object.entries(vnode.attrs)) {
+            // Set all attributes on the element (including dj-* attributes).
+            // Event listeners for dj-* attributes are attached by bindLiveViewEvents()
+            // after patches are applied, which already uses _markHandlerBound to
+            // prevent double-binding on subsequent calls.
             if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
                 elem.value = value;
             }
             elem.setAttribute(key, value);
+
+            // Note: dj-* event listeners are attached by bindLiveViewEvents() after
+            // patch application. Do NOT pre-mark elements here — that would prevent
+            // bindLiveViewEvents() from ever attaching the listener.
         }
     }
 

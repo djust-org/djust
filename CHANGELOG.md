@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **False `{% if %}` blocks now emit `<!--dj-if-->` placeholder instead of empty string** — Gives the VDOM diffing engine a stable DOM anchor to target when the condition later becomes true, resolving DJE-053 / issue #295.
+- **`dj-patch('/')` now correctly updates the browser URL to the root path** — Removed the `url.pathname !== '/'` guard in `bindNavigationDirectives` that prevented the browser URL from being updated when patching to `/`. The guard was silently ignoring root-path patches. ([#307](https://github.com/djust-org/djust/issues/307))
+- **`live_patch` routing restored — `handleNavigation` dispatch now fires correctly** — Fixed dict merge order in `_flush_navigation` so `type: 'navigation'` is no longer overwritten by `**cmd`. Added an `action` field to carry the nav sub-type (`live_patch` / `live_redirect`); `handleNavigation` now dispatches on `data.action` instead of `data.type`. Previously the client `switch case 'navigation':` never matched because `type` was being overwritten with `"live_patch"`. **Note:** `data.action || data.type` fallback is kept for old JS clients that send messages without an `action` field — this fallback is planned for removal in the next minor release. ([#307](https://github.com/djust-org/djust/issues/307))
+
+## [0.3.2] - 2026-02-18
+
 ### Added
 
 - **Type stub files (.pyi) for LiveView and mixins** — Added PEP 561 compliant type stubs for `NavigationMixin`, `PushEventMixin`, `StreamsMixin`, `StreamingMixin`, and `LiveView` to enable IDE autocomplete and mypy type checking for runtime-injected methods like `live_redirect`, `live_patch`, `push_event`, `stream`, `stream_insert`, `stream_delete`, and `stream_to`. Includes `py.typed` marker file and comprehensive test suite.
@@ -14,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`dj-loading.for` attribute** — Scope any `dj-loading.*` directive to a specific event name, regardless of DOM position. Allows spinners, disabled buttons, and other loading indicators anywhere in the page to react to a named event. ([#314](https://github.com/djust-org/djust/pull/314))
 - **`AsyncWorkMixin` included in `LiveView` base class** — `start_async()` is now available on all LiveViews without explicit mixin import. ([#314](https://github.com/djust-org/djust/pull/314))
 - **Loading state re-scan after DOM patches** — `scanAndRegister()` is called after every `bindLiveViewEvents()` so dynamically rendered elements (e.g., inside modals) get loading state registration. Stale entries for disconnected elements are cleaned up automatically. ([#314](https://github.com/djust-org/djust/pull/314))
+- **Type stubs for Rust extension and LiveView** — Added `.pyi` type stub files for `_rust` module and `LiveView` class, enabling IDE autocomplete, mypy/pyright type checking, and catching typos like `live_navigate` (should be `live_patch`) at lint time. Includes `py.typed` marker for PEP 561 compliance and comprehensive documentation in `docs/TYPE_STUBS.md`.
 
 ### Fixed
 
@@ -21,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Event listener leak causing duplicate WebSocket sends** — Single user actions were triggering the same event multiple times (e.g. `select_project` 5×, `mount` 3×) because listeners accumulated across VDOM patch/morph cycles without cleanup. Fixed four root causes: (1) `initReactCounters` now uses a `WeakSet` guard to skip already-initialized containers; (2) `createNodeFromVNode` no longer pre-marks elements as bound before `bindLiveViewEvents()` runs, eliminating a race where newly inserted elements were silently skipped; (3) `dj-click` handlers now read the attribute at fire-time rather than bind-time, so `morphElement` attribute updates take effect immediately; (4) three unguarded `console.log` calls in `12-vdom-patch.js` are now wrapped in `if (globalThis.djustDebug)`. The existing `WeakMap`-based deduplication in `bindLiveViewEvents()` (introduced in #312) correctly prevents re-binding when called repeatedly. ([#315](https://github.com/djust-org/djust/issues/315))
 - **`dj-patch('/')` failed to update URL and `live_patch` routing broken** — Removed `url.pathname !== '/'` guard in `bindNavigationDirectives` so root-path navigation works. Fixed dict merge order in `_flush_navigation` so server sends `type='navigation'` instead of `type='live_patch'`. Updated `handleNavigation` to dispatch via `data.action` with `data.action || data.type` fallback for backwards compatibility. ([#318](https://github.com/djust-org/djust/pull/318))
 - **dj-submit forms sent empty params when created by VDOM patches** — `createNodeFromVNode` now correctly collects `FormData` for submit events; replaced `data-liveview-*-bound` attribute tracking with `WeakMap` to prevent stale binding flags after DOM replacement ([#312](https://github.com/djust-org/djust/pull/312))
+
+### Tests
+
+- **Regression tests for `|safe` filter with nested dicts** — Added comprehensive tests verifying that `|safe` filter works correctly for HTML content in nested dict/list values, preventing issue [#317](https://github.com/djust-org/djust/issues/317) from recurring
 
 ## [0.3.2rc1] - 2026-02-15
 
