@@ -10,7 +10,7 @@ class StateBus {
         const oldValue = this.state.get(key);
         this.state.set(key, value);
         if (globalThis.djustDebug) {
-            console.log(`[StateBus] Set: ${key} =`, value, `(was:`, oldValue, `)`);
+            if (globalThis.djustDebug) console.log(`[StateBus] Set: ${key} =`, value, `(was:`, oldValue, `)`);
         }
         this.notify(key, value, oldValue);
     }
@@ -25,14 +25,14 @@ class StateBus {
         }
         this.subscribers.get(key).add(callback);
         if (globalThis.djustDebug) {
-            console.log(`[StateBus] Subscribed to: ${key} (${this.subscribers.get(key).size} subscribers)`);
+            if (globalThis.djustDebug) console.log(`[StateBus] Subscribed to: ${key} (${this.subscribers.get(key).size} subscribers)`);
         }
         return () => {
             const subs = this.subscribers.get(key);
             if (subs) {
                 subs.delete(callback);
                 if (globalThis.djustDebug) {
-                    console.log(`[StateBus] Unsubscribed from: ${key} (${subs.size} remaining)`);
+                    if (globalThis.djustDebug) console.log(`[StateBus] Unsubscribed from: ${key} (${subs.size} remaining)`);
                 }
             }
         };
@@ -41,7 +41,7 @@ class StateBus {
     notify(key, newValue, oldValue) {
         const callbacks = this.subscribers.get(key) || new Set();
         if (callbacks.size > 0 && globalThis.djustDebug) {
-            console.log(`[StateBus] Notifying ${callbacks.size} subscribers of: ${key}`);
+            if (globalThis.djustDebug) console.log(`[StateBus] Notifying ${callbacks.size} subscribers of: ${key}`);
         }
         callbacks.forEach(callback => {
             try {
@@ -56,7 +56,7 @@ class StateBus {
         this.state.clear();
         this.subscribers.clear();
         if (globalThis.djustDebug) {
-            console.log('[StateBus] Cleared all state');
+            if (globalThis.djustDebug) console.log('[StateBus] Cleared all state');
         }
     }
 
