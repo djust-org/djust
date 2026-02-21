@@ -666,3 +666,54 @@ fn urlize_javascript_url_not_linked() {
     // urlize regex only matches http(s)://, ftp://, www., and emails
     assert!(!result.contains("<a href=\"javascript:"));
 }
+
+// ===========================================================================
+// Bug: |safe filter renders empty for HTML in nested dict/list values
+// GitHub issue: https://github.com/djust-org/djust/issues/317
+// ===========================================================================
+
+#[test]
+fn safe_filter_works_for_nested_dict_in_list() {
+    // Simulate: self.items = [{"id": 1, "body_html": mark_safe("<strong>bold</strong>")}]
+    // Template: {% for item in items %}{{ item.body_html|safe }}{% endfor %}
+    let mut ctx = Context::new();
+    let mut obj = std::collections::HashMap::new();
+    obj.insert("id".to_string(), Value::Integer(1));
+    obj.insert(
+        "body_html".to_string(),
+        Value::String("<strong>bold</strong>".to_string()),
+    );
+    ctx.set("items".to_string(), Value::List(vec![Value::Object(obj)]));
+
+    let result = render(
+        "{% for item in items %}{{ item.body_html|safe }}{% endfor %}",
+        &ctx,
+    );
+    assert_eq!(
+        result, "<strong>bold</strong>",
+        "nested dict value with |safe should render HTML unescaped, got: {:?}",
+        result
+    );
+}
+
+#[test]
+fn safe_filter_nested_dict_without_safe_escapes() {
+    // Same as above but WITHOUT |safe — should auto-escape
+    let mut ctx = Context::new();
+    let mut obj = std::collections::HashMap::new();
+    obj.insert(
+        "body_html".to_string(),
+        Value::String("<strong>bold</strong>".to_string()),
+    );
+    ctx.set("items".to_string(), Value::List(vec![Value::Object(obj)]));
+
+    let result = render(
+        "{% for item in items %}{{ item.body_html }}{% endfor %}",
+        &ctx,
+    );
+    assert!(
+        result.contains("&lt;strong&gt;"),
+        "nested dict value without |safe should be escaped, got: {:?}",
+        result
+    );
+}
