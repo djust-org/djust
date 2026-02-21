@@ -82,7 +82,7 @@ class DjustFileChangeHandler(FileSystemEventHandler):
                 if time.time() - self._last_change_time >= self.DEBOUNCE_SECONDS:
                     if self._pending_reload:
                         self._pending_reload = False
-                        logger.info(f"[HotReload] File changed: {path}")
+                        logger.info("[HotReload] File changed: %s", path)
                         self.on_change_callback(path)
                     break
 
@@ -170,12 +170,12 @@ class HotReloadServer:
             watch_path = Path(watch_dir).resolve()
 
             if not watch_path.exists():
-                logger.warning(f"[HotReload] Watch directory does not exist: {watch_path}")
+                logger.warning("[HotReload] Watch directory does not exist: %s", watch_path)
                 continue
 
             self.watch_dirs.add(watch_path)
             self.observer.schedule(event_handler, str(watch_path), recursive=True)
-            logger.info(f"[HotReload] Watching: {watch_path}")
+            logger.info("[HotReload] Watching: %s", watch_path)
 
         # Start the observer
         self.observer.start()

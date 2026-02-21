@@ -185,7 +185,7 @@ class InMemoryStateBackend(StateBackend):
                 self._state_sizes.pop(key, None)
 
         if expired_keys:
-            logger.info(f"Cleaned up {len(expired_keys)} expired sessions from memory")
+            logger.info("Cleaned up %s expired sessions from memory", len(expired_keys))
 
         return len(expired_keys)
 
@@ -285,7 +285,7 @@ class InMemoryStateBackend(StateBackend):
 
         except Exception as e:
             latency_ms = (time.time() - start_time) * 1000
-            logger.error(f"InMemory health check failed: {e}")
+            logger.error("InMemory health check failed: %s", e)
 
             with self._lock:
                 # Count sessions excluding test key (in case it was partially written)

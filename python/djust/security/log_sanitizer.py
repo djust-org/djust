@@ -15,10 +15,10 @@ Usage:
     from djust.security import sanitize_for_log
 
     # Instead of logging user input directly:
-    # logger.info(f"Search: {user_query}")  # DANGEROUS
+    # logger.info("Search: %s", user_query)  # DANGEROUS - no sanitization
 
     # Use sanitize_for_log:
-    logger.info(f"Search: {sanitize_for_log(user_query)}")
+    logger.info("Search: %s", sanitize_for_log(user_query))
 """
 
 import re

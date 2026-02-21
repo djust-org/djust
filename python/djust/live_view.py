@@ -133,6 +133,56 @@ class LiveView(
                     <li id="messages-{{ msg.id }}">{{ msg.content }}</li>
                 {% endfor %}
             </ul>
+
+    Background Work with start_async():
+        For long-running operations (LLM calls, file processing), use start_async()
+        to run work in the background without blocking the UI:
+
+        class SpecGeneratorView(LiveView):
+            template_name = 'generator.html'
+
+            def mount(self, request, **kwargs):
+                self.generating = False
+                self.spec = ""
+                self.error = None
+
+            @event_handler
+            def generate(self, prompt: str = "", **kwargs):
+                self.generating = True  # Show loading state immediately
+                self.start_async(self._generate_spec, prompt=prompt, name="generation")
+
+            def _generate_spec(self, prompt: str):
+                '''Runs in background thread.'''
+                self.spec = call_llm_api(prompt)  # Slow operation
+                self.generating = False
+                # View auto-re-renders when this completes
+
+            def handle_async_result(self, name: str, result=None, error=None):
+                '''Optional: handle completion or errors.'''
+                if error:
+                    self.error = f"Generation failed: {error}"
+                    self.generating = False
+
+            @event_handler
+            def cancel_generation(self, **kwargs):
+                self.cancel_async("generation")
+                self.generating = False
+
+        Or use the @background decorator for simpler syntax:
+
+        class SimpleGeneratorView(LiveView):
+            template_name = 'generator.html'
+
+            @event_handler
+            @background
+            def generate(self, prompt: str = "", **kwargs):
+                '''Entire handler runs in background.'''
+                self.generating = True
+                self.spec = call_llm_api(prompt)
+                self.generating = False
+
+        Multiple concurrent tasks are supported with named tasks. Phoenix LiveView users
+        will find this API familiar.
     """
 
     template_name: Optional[str] = None
