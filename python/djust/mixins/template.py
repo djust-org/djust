@@ -192,7 +192,7 @@ class TemplateMixin:
             logger.debug("[LiveView] No handler metadata to inject, skipping script injection")
             return html
 
-        logger.debug(f"[LiveView] Injecting handler metadata script for {len(metadata)} handlers")
+        logger.debug("[LiveView] Injecting handler metadata script for %s handlers", len(metadata))
 
         # Build script tag
         script = f"""
@@ -432,7 +432,6 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # Check if we have a full template from template inheritance
         if hasattr(self, "_full_template") and self._full_template:
             from djust._rust import RustLiveView
-            from django.utils.safestring import SafeString
 
             template_dirs = get_template_dirs()
             temp_rust = RustLiveView(self._full_template, template_dirs)
@@ -440,10 +439,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             safe_keys = []
             if serialized_context is not None:
                 json_compatible_context = serialized_context
-                # Detect SafeStrings in the pre-serialized context
+                # Recursively detect SafeStrings in the pre-serialized context
+                from ..mixins.rust_bridge import _collect_safe_keys
+
                 for key, value in serialized_context.items():
-                    if isinstance(value, SafeString):
-                        safe_keys.append(key)
+                    safe_keys.extend(_collect_safe_keys(value, key))
             else:
                 from ..components.base import Component, LiveComponent
 
@@ -459,13 +459,15 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     elif isinstance(value, (Component, LiveComponent)):
                         rendered_context[key] = {"render": str(value.render())}
                         safe_keys.append(key)
-                    elif isinstance(value, SafeString):
-                        rendered_context[key] = value
-                        safe_keys.append(key)
                     else:
                         rendered_context[key] = value
 
                 from ..serialization import normalize_django_value
+                from ..mixins.rust_bridge import _collect_safe_keys
+
+                # Recursively detect SafeStrings in rendered context (including top-level)
+                for key, value in rendered_context.items():
+                    safe_keys.extend(_collect_safe_keys(value, key))
 
                 json_compatible_context = normalize_django_value(rendered_context)
 

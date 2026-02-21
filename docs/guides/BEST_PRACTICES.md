@@ -676,6 +676,23 @@ class MyView(LiveView):
 {% endif %}
 ```
 
+**Note**: If you need URL updates and browser history support for tabs (so users can bookmark specific tabs or use the back button), use `dj-patch` instead:
+
+```html
+<div class="tabs">
+    <a href="?tab=overview" dj-patch="handle_params"
+       class="{% if active_tab == 'overview' %}active{% endif %}">
+        Overview
+    </a>
+    <a href="?tab=settings" dj-patch="handle_params"
+       class="{% if active_tab == 'settings' %}active{% endif %}">
+        Settings
+    </a>
+</div>
+```
+
+System check `djust.T010` will warn if you use `dj-click` with `data-tab` attributes (and other navigation-related patterns) to help catch cases where URL navigation would be more appropriate.
+
 ### Toast notifications
 
 ```python

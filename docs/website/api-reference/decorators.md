@@ -10,6 +10,7 @@ from djust.decorators import (
     client_state,
     loading,
     permission_required,
+    background,
 )
 ```
 
@@ -257,6 +258,77 @@ def publish(self, **kwargs):
     self.item.published = True
     self.item.save()
 ```
+
+---
+
+## `@background`
+
+Run the entire event handler in a background thread after flushing current state. The view re-renders and sends patches when the handler completes.
+
+```python
+@background
+```
+
+No arguments — apply directly.
+
+**Usage:**
+
+```python
+from djust.decorators import background
+
+@event_handler
+@background
+def generate_content(self, prompt: str = "", **kwargs):
+    """Entire method runs in background thread."""
+    self.generating = True
+    try:
+        self.content = call_llm(prompt)  # Long-running operation
+    except Exception as e:
+        self.error = str(e)
+    finally:
+        self.generating = False
+```
+
+**How it works:**
+
+1. Current view state is flushed to client (e.g., loading spinner appears)
+2. Handler executes in background thread
+3. View re-renders and sends patches when handler completes
+4. Loading state stops (spinner disappears)
+
+**Task naming and cancellation:**
+
+The task name is automatically set to the handler's function name. Cancel via `self.cancel_async(name)`:
+
+```python
+@event_handler
+@background
+def long_operation(self, **kwargs):
+    # Task name is "long_operation"
+    ...
+
+@event_handler
+def cancel_operation(self, **kwargs):
+    self.cancel_async("long_operation")
+```
+
+**Combining with other decorators:**
+
+```python
+@event_handler
+@debounce(wait=0.5)
+@background
+def auto_save(self, **kwargs):
+    # Debounced and runs in background
+    self.save_draft()
+```
+
+**When to use `@background` vs `start_async()`:**
+
+- Use `@background` when the **entire handler** should run in background
+- Use `self.start_async(callback)` when you need to update state **before** starting background work, or need multiple concurrent tasks with different names
+
+See also: [Loading States & Background Work guide](../guides/loading-states.md)
 
 ---
 

@@ -172,13 +172,13 @@ def register(name: str):
             handler = handler_class()
             register_tag_handler(name, handler)
             _registered_handlers[name] = handler
-            logger.debug(f"Registered template tag handler: {name}")
+            logger.debug("Registered template tag handler: %s", name)
         except ImportError as e:
             logger.warning(
-                f"Could not register tag handler '{name}': Rust extension not available ({e})"
+                "Could not register tag handler '%s': Rust extension not available (%s)", name, e
             )
         except Exception as e:
-            logger.error(f"Failed to register tag handler '{name}': {e}")
+            logger.error("Failed to register tag handler '%s': %s", name, e)
 
         return handler_class
 

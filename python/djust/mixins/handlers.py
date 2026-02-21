@@ -20,12 +20,13 @@ class HandlerMixin:
         """
         if self._handler_metadata is not None:
             logger.debug(
-                f"[LiveView] Using cached handler metadata for {self.__class__.__name__} "
-                f"({len(self._handler_metadata)} handlers)"
+                "[LiveView] Using cached handler metadata for %s (%s handlers)",
+                self.__class__.__name__,
+                len(self._handler_metadata),
             )
             return self._handler_metadata
 
-        logger.debug(f"[LiveView] Extracting handler metadata for {self.__class__.__name__}")
+        logger.debug("[LiveView] Extracting handler metadata for %s", self.__class__.__name__)
         metadata = {}
 
         for name in dir(self):

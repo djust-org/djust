@@ -32,7 +32,7 @@ class LiveViewWebSocket {
      * Cleanly disconnect the WebSocket for TurboNav navigation
      */
     disconnect() {
-        console.log('[LiveView] Disconnecting for navigation...');
+        if (globalThis.djustDebug) console.log('[LiveView] Disconnecting for navigation...');
 
         // Stop heartbeat
         if (this.heartbeatInterval) {
@@ -76,11 +76,11 @@ class LiveViewWebSocket {
             url = `${protocol}//${host}/ws/live/`;
         }
 
-        console.log('[LiveView] Connecting to WebSocket:', url);
+        if (globalThis.djustDebug) console.log('[LiveView] Connecting to WebSocket:', url);
         this.ws = new WebSocket(url);
 
         this.ws.onopen = (_event) => {
-            console.log('[LiveView] WebSocket connected');
+            if (globalThis.djustDebug) console.log('[LiveView] WebSocket connected');
             this.reconnectAttempts = 0;
             this._intentionalDisconnect = false;
 
@@ -94,7 +94,7 @@ class LiveViewWebSocket {
         };
 
         this.ws.onclose = (_event) => {
-            console.log('[LiveView] WebSocket disconnected');
+            if (globalThis.djustDebug) console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
 
             // Notify hooks of disconnection
@@ -135,7 +135,7 @@ class LiveViewWebSocket {
             if (this.reconnectAttempts < this.maxReconnectAttempts) {
                 this.reconnectAttempts++;
                 const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-                console.log(`[LiveView] Reconnecting in ${delay}ms...`);
+                if (globalThis.djustDebug) console.log(`[LiveView] Reconnecting in ${delay}ms...`);
                 setTimeout(() => this.connect(url), delay);
             } else {
                 console.warn('[LiveView] Max reconnection attempts reached. Falling back to HTTP mode.');
@@ -174,23 +174,23 @@ class LiveViewWebSocket {
     }
 
     handleMessage(data) {
-        console.log('[LiveView] Received:', data.type, data);
+        if (globalThis.djustDebug) console.log('[LiveView] Received:', data.type, data);
 
         switch (data.type) {
             case 'connect':
                 this.sessionId = data.session_id;
-                console.log('[LiveView] Session ID:', this.sessionId);
+                if (globalThis.djustDebug) console.log('[LiveView] Session ID:', this.sessionId);
                 this.autoMount();
                 break;
 
             case 'mount':
                 this.viewMounted = true;
-                console.log('[LiveView] View mounted:', data.view);
+                if (globalThis.djustDebug) console.log('[LiveView] View mounted:', data.view);
 
                 // Initialize VDOM version from mount response (critical for patch generation)
                 if (data.version !== undefined) {
                     clientVdomVersion = data.version;
-                    console.log('[LiveView] VDOM version initialized:', clientVdomVersion);
+                    if (globalThis.djustDebug) console.log('[LiveView] VDOM version initialized:', clientVdomVersion);
                 }
 
                 // Initialize cache configuration from mount response
@@ -211,17 +211,17 @@ class LiveViewWebSocket {
                     // If server HTML has data-dj-id attributes, stamp them onto existing DOM
                     // This preserves whitespace (e.g. in code blocks) that innerHTML would destroy
                     if (hasDataDjAttrs && data.html) {
-                        console.log('[LiveView] Stamping data-dj-id attributes onto pre-rendered DOM');
+                        if (globalThis.djustDebug) console.log('[LiveView] Stamping data-dj-id attributes onto pre-rendered DOM');
                         _stampDjIds(data.html);
                     } else {
-                        console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
+                        if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
                     }
                     this.skipMountHtml = false;
                     bindLiveViewEvents();
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
-                        console.log('[LiveView] Hydrating DOM with data-dj-id attributes for reliable patching');
+                        if (globalThis.djustDebug) console.log('[LiveView] Hydrating DOM with data-dj-id attributes for reliable patching');
                     }
                     let container = document.querySelector('[dj-view]');
                     if (!container) {
@@ -266,7 +266,7 @@ class LiveViewWebSocket {
                 initTodoItems();
                 bindLiveViewEvents();
                 if (globalThis.djustDebug) {
-                    console.log('[LiveView] DOM recovered via morph, version:', data.version);
+                    if (globalThis.djustDebug) console.log('[LiveView] DOM recovered via morph, version:', data.version);
                 }
                 break;
             }
@@ -323,8 +323,8 @@ class LiveViewWebSocket {
                 if (this.lastEventName) {
                     if (!data.async_pending) {
                         globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
-                    } else if (globalThis.djustDebug) {
-                        console.log('[LiveView] Keeping loading state — async work pending');
+                    } else {
+                        if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
                     }
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
@@ -401,7 +401,7 @@ class LiveViewWebSocket {
             return false;
         }
 
-        console.log('[LiveView] Mounting view:', viewPath);
+        if (globalThis.djustDebug) console.log('[LiveView] Mounting view:', viewPath);
         // Detect browser timezone for server-side local time rendering
         let clientTimezone = null;
         try {
@@ -475,7 +475,7 @@ class LiveViewWebSocket {
                 const hasContent = container.innerHTML && container.innerHTML.trim().length > 0;
 
                 if (hasContent) {
-                    console.log('[LiveView] Content pre-rendered via HTTP - will skip HTML in mount response');
+                    if (globalThis.djustDebug) console.log('[LiveView] Content pre-rendered via HTTP - will skip HTML in mount response');
                     this.skipMountHtml = true;
                 }
 

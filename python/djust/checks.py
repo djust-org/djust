@@ -516,7 +516,9 @@ def check_configuration(app_configs, **kwargs):
 
             login_req = getattr(cls, "login_required", None)
             perm_req = getattr(cls, "permission_required", None)
-            if login_req or perm_req:
+            # Check if auth has been addressed (True/False) vs unaddressed (None).
+            # login_required = False means "intentionally public", so skip warning.
+            if login_req is not None or perm_req is not None:
                 continue  # View has auth configured
 
             # Check if check_permissions is overridden
@@ -539,7 +541,10 @@ def check_configuration(app_configs, **kwargs):
             exposed = _extract_exposed_state(cls)
             if exposed:
                 cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
-                cls_file = inspect.getfile(cls) if hasattr(cls, "__module__") else ""
+                try:
+                    cls_file = inspect.getfile(cls) if hasattr(cls, "__module__") else ""
+                except (OSError, TypeError):
+                    cls_file = ""
                 try:
                     cls_line = inspect.getsourcelines(cls)[1]
                 except (OSError, TypeError):
@@ -820,6 +825,9 @@ def check_liveviews(app_configs, **kwargs):
     # V006 -- service instance in mount() (AST-based scan of project files)
     _check_service_instances_in_mount(errors)
 
+    # V008 -- non-primitive type assignments in mount() (broader than V006)
+    _check_non_primitive_assignments_in_mount(errors)
+
     return errors
 
 
@@ -884,6 +892,104 @@ def _check_service_instances_in_mount(errors):
                                 )
 
 
+def _check_non_primitive_assignments_in_mount(errors):
+    """V008: Detect assignments of non-primitive types in mount() methods via AST.
+
+    This is a broader check than V006 which only catches service instances.
+    Catches assignments like:
+    - self.items = []  (OK - primitive)
+    - self.data = CustomClass()  (WARNING - likely non-serializable)
+    - self.count = 0  (OK - primitive)
+
+    Related to issue #292: Silent str() fallback when non-serializable objects
+    are stored in LiveView state. This check helps catch these at development time
+    before they cause runtime AttributeError on deserialization.
+
+    Users can suppress with # noqa: V008 if they know the type is serializable.
+    """
+    app_dirs = _get_project_app_dirs()
+    if not app_dirs:
+        return
+
+    # Primitive types that are always serializable
+    SAFE_TYPES = {
+        "list",
+        "dict",
+        "set",
+        "tuple",
+        "str",
+        "int",
+        "float",
+        "bool",
+        "List",
+        "Dict",
+        "Set",
+        "Tuple",
+    }
+
+    for filepath in _iter_python_files(app_dirs):
+        tree, source_lines = _parse_python_file(filepath)
+        if tree is None:
+            continue
+
+        relpath = os.path.relpath(filepath)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+
+            # Find mount() methods inside class definitions
+            for item in node.body:
+                if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if item.name != "mount":
+                    continue
+
+                # Walk the mount body looking for self.X = NonPrimitive(...)
+                for stmt in ast.walk(item):
+                    if not isinstance(stmt, ast.Assign):
+                        continue
+                    for target in stmt.targets:
+                        if not isinstance(target, ast.Attribute):
+                            continue
+                        if not (isinstance(target.value, ast.Name) and target.value.id == "self"):
+                            continue
+
+                        # Skip private attributes (self._foo)
+                        if target.attr.startswith("_"):
+                            continue
+
+                        # Check if the value is a Call (instantiation)
+                        if not isinstance(stmt.value, ast.Call):
+                            continue
+
+                        call_name = _get_call_name(stmt.value)
+                        if call_name and call_name not in SAFE_TYPES:
+                            # This is a non-primitive instantiation
+                            if not _has_noqa(source_lines, stmt.lineno, "V008"):
+                                errors.append(
+                                    DjustInfo(
+                                        "%s:%d -- Non-primitive type '%s' assigned to self.%s in mount(). "
+                                        "Ensure this type is JSON-serializable."
+                                        % (relpath, stmt.lineno, call_name, target.attr),
+                                        hint=(
+                                            "If '%s' is not serializable, use self._%s instead "
+                                            "or re-initialize in event handlers. "
+                                            "See: docs/guides/services.md"
+                                            % (call_name, target.attr)
+                                        ),
+                                        id="djust.V008",
+                                        fix_hint=(
+                                            "If `%s` is not serializable, rename to `self._%s` "
+                                            "or move initialization out of mount() at line %d in `%s`."
+                                            % (target.attr, target.attr, stmt.lineno, relpath)
+                                        ),
+                                        file_path=filepath,
+                                        line_number=stmt.lineno,
+                                    )
+                                )
+
+
 def _get_call_name(call_node):
     """Extract a human-readable name from a Call node's function."""
     func = call_node.func
@@ -900,6 +1006,101 @@ def _get_call_name(call_node):
             parts.append(current.id)
         return ".".join(reversed(parts))
     return None
+
+
+def _check_navigation_state_in_handlers(errors):
+    """Q010: Heuristic to detect event handlers that set navigation state without patching.
+
+    Lower-confidence check that looks for @event_handler methods whose body primarily
+    sets navigation state variables (self.active_view, self.current_tab, etc.) without
+    using patch() or handle_params(). Suggests converting to dj-patch pattern.
+
+    This is INFO level as it's a heuristic and may have false positives.
+    """
+    app_dirs = _get_project_app_dirs()
+    if not app_dirs:
+        return
+
+    # Navigation state variable patterns
+    NAV_STATE_VARS = re.compile(
+        r"self\.(active_view|current_tab|selected_page|current_section|active_tab|selected_view)"
+    )
+
+    for filepath in _iter_python_files(app_dirs):
+        tree, source_lines = _parse_python_file(filepath)
+        if tree is None:
+            continue
+
+        # Read the original source for ast.get_source_segment
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
+                original_source = fh.read()
+        except OSError:
+            continue
+
+        relpath = os.path.relpath(filepath)
+
+        # Look for classes that might be LiveViews
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+
+            # Check each method in the class
+            for item in node.body:
+                if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+
+                # Skip non-event-handler methods
+                if not any(
+                    isinstance(deco, ast.Name) and deco.id == "event_handler"
+                    or isinstance(deco, ast.Call)
+                    and isinstance(deco.func, ast.Name)
+                    and deco.func.id == "event_handler"
+                    for deco in item.decorator_list
+                ):
+                    continue
+
+                # Check if the method body sets navigation state
+                method_source = ast.get_source_segment(original_source, item) or ""
+                has_nav_state = NAV_STATE_VARS.search(method_source)
+
+                # Check if it uses patch() or handle_params (indicators it's already using patching)
+                has_patch_pattern = "patch(" in method_source or "handle_params" in method_source
+
+                if has_nav_state and not has_patch_pattern:
+                    # Check for noqa on function definition line or any decorator line
+                    has_noqa_suppression = False
+                    for deco in item.decorator_list:
+                        if _has_noqa(source_lines, deco.lineno, "Q010"):
+                            has_noqa_suppression = True
+                            break
+                    if not has_noqa_suppression and _has_noqa(source_lines, item.lineno, "Q010"):
+                        has_noqa_suppression = True
+
+                    if not has_noqa_suppression:
+                        nav_match = NAV_STATE_VARS.search(method_source)
+                        var_name = nav_match.group(1) if nav_match else "navigation state"
+
+                        errors.append(
+                            DjustInfo(
+                                "%s:%d -- Event handler '%s.%s()' sets %s without using patch(). "
+                                "Consider using dj-patch for URL updates."
+                                % (relpath, item.lineno, node.name, item.name, var_name),
+                                hint=(
+                                    "Navigation state changes are better handled with dj-patch + handle_params(). "
+                                    "This enables URL updates and back-button support. "
+                                    "Example: Replace dj-click with dj-patch=\"?tab=value\" and handle in handle_params()."
+                                ),
+                                id="djust.Q010",
+                                fix_hint=(
+                                    "Convert method `%s` to use handle_params() instead of direct state "
+                                    "assignment at line %d in `%s`."
+                                    % (item.name, item.lineno, relpath)
+                                ),
+                                file_path=filepath,
+                                line_number=item.lineno,
+                            )
+                        )
 
 
 # ---------------------------------------------------------------------------
@@ -1032,6 +1233,7 @@ _DJ_ROOT_RE = re.compile(r"dj-root")
 _INCLUDE_RE = re.compile(r"\{%\s*include\s+")
 _LIVEVIEW_CONTENT_RE = re.compile(r"\{\{\s*liveview_content\s*\|\s*safe\s*\}\}")
 _DOC_DJUST_EVENT_RE = re.compile(r"""document\s*\.\s*addEventListener\s*\(\s*['"]djust:""")
+_NAV_DATA_ATTRS = re.compile(r"data-(view|tab|page|section)")  # Navigation-style data attributes
 
 
 @register("djust")
@@ -1139,6 +1341,9 @@ def check_templates(app_configs, **kwargs):
         if has_djust_view and has_djust_root:
             _check_view_root_same_element(content, relpath, filepath, errors)
 
+        # T010 -- dj-click used for navigation instead of dj-patch
+        _check_click_for_navigation(content, relpath, filepath, errors)
+
     return errors
 
 
@@ -1179,6 +1384,47 @@ def _check_view_root_same_element(content, relpath, filepath, errors):
                 line_number=view_only_lineno,
             )
         )
+
+
+def _check_click_for_navigation(content, relpath, filepath, errors):
+    """T010: Detect dj-click with navigation-style data attributes.
+
+    Elements with both dj-click and navigation-style data attributes (data-view,
+    data-tab, data-page, data-section) should use dj-patch instead for proper URL
+    updates and back-button support.
+    """
+    tag_re = re.compile(r"<[a-zA-Z][^>]*>", re.DOTALL)
+    for match in tag_re.finditer(content):
+        tag = match.group(0)
+        has_dj_click = "dj-click" in tag
+        has_nav_data = _NAV_DATA_ATTRS.search(tag)
+
+        if has_dj_click and has_nav_data:
+            lineno = content[: match.start()].count("\n") + 1
+            # Extract which data attribute was found for better messaging
+            nav_match = _NAV_DATA_ATTRS.search(tag)
+            nav_attr = nav_match.group(0) if nav_match else "data-*"
+
+            errors.append(
+                DjustWarning(
+                    "%s:%d -- Element uses dj-click for navigation (%s) — use dj-patch for URL updates and history support."
+                    % (relpath, lineno, nav_attr),
+                    hint=(
+                        "Navigation actions should use dj-patch instead of dj-click. "
+                        "dj-patch updates the URL and enables back-button support. "
+                        "Example: <button dj-patch=\"/view?tab=settings\">Settings</button>\n"
+                        "See: https://docs.djust.dev/guides/navigation"
+                    ),
+                    id="djust.T010",
+                    fix_hint=(
+                        "Replace dj-click with dj-patch at line %d in `%s` and handle "
+                        "navigation parameters in handle_params() method."
+                        % (lineno, relpath)
+                    ),
+                    file_path=filepath,
+                    line_number=lineno,
+                )
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1287,5 +1533,8 @@ def check_code_quality(app_configs, **kwargs):
                             line_number=i,
                         )
                     )
+
+    # Q010 -- event handlers that set navigation state without patching (heuristic)
+    _check_navigation_state_in_handlers(errors)
 
     return errors

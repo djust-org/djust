@@ -420,6 +420,9 @@ LIVEVIEW_CONFIG = {
     # Debug settings
     'debug_vdom': False,  # Enable detailed VDOM patch logging (for troubleshooting)
 
+    # Serialization (issue #292)
+    'strict_serialization': False,  # Raise TypeError for non-serializable state values (recommended in development)
+
     # CSS Framework
     'css_framework': 'bootstrap5',  # Options: 'bootstrap5', 'tailwind', None
 }
@@ -431,6 +434,7 @@ LIVEVIEW_CONFIG = {
 |--------|---------|-------------|
 | `use_websocket` | `True` | Use WebSocket transport (requires Django Channels) |
 | `debug_vdom` | `False` | Enable detailed VDOM debugging logs |
+| `strict_serialization` | `False` | Raise TypeError for non-serializable state (recommended in dev) |
 | `css_framework` | `'bootstrap5'` | CSS framework for components |
 
 **CSS Framework Setup:**
@@ -516,6 +520,7 @@ class ProductSearchView(LiveView):
 | `@optimistic` | Instant feedback | Counter, toggle |
 | `@cache(ttl, key_params)` | Repeated queries | Autocomplete |
 | `@client_state(keys)` | Multi-component | Dashboard filters |
+| `@background` | Long operations | AI generation, file processing |
 | `DraftModeMixin` | Auto-save forms | Contact form |
 
 **Quick Decision Matrix:**
@@ -524,6 +529,7 @@ class ProductSearchView(LiveView):
 - Need instant UI update? → `@optimistic`
 - Same query multiple times? → `@cache(ttl)`
 - Multiple components? → `@client_state([keys])`
+- Long-running work? → `@background` or `self.start_async(callback)`
 - Auto-save forms? → `DraftModeMixin`
 
 #### Learn More

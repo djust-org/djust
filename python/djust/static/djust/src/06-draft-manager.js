@@ -20,7 +20,7 @@ class DraftManager {
                 localStorage.setItem(`djust_draft_${draftKey}`, JSON.stringify(draftData));
 
                 if (globalThis.djustDebug) {
-                    console.log(`[DraftMode] Saved draft: ${draftKey}`, data);
+                    if (globalThis.djustDebug) console.log(`[DraftMode] Saved draft: ${draftKey}`, data);
                 }
             } catch (error) {
                 console.error(`[DraftMode] Failed to save draft ${draftKey}:`, error);
@@ -42,7 +42,7 @@ class DraftManager {
 
             if (globalThis.djustDebug) {
                 const age = Math.round((Date.now() - draftData.timestamp) / 1000);
-                console.log(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
+                if (globalThis.djustDebug) console.log(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
             }
 
             return draftData.data;
@@ -62,7 +62,7 @@ class DraftManager {
             localStorage.removeItem(`djust_draft_${draftKey}`);
 
             if (globalThis.djustDebug) {
-                console.log(`[DraftMode] Cleared draft: ${draftKey}`);
+                if (globalThis.djustDebug) console.log(`[DraftMode] Cleared draft: ${draftKey}`);
             }
         } catch (error) {
             console.error(`[DraftMode] Failed to clear draft ${draftKey}:`, error);
@@ -89,7 +89,7 @@ class DraftManager {
         keys.forEach(key => this.clearDraft(key));
 
         if (globalThis.djustDebug) {
-            console.log(`[DraftMode] Cleared all ${keys.length} drafts`);
+            if (globalThis.djustDebug) console.log(`[DraftMode] Cleared all ${keys.length} drafts`);
         }
     }
 }
@@ -107,7 +107,7 @@ function initDraftMode() {
         return;
     }
 
-    console.log(`[DraftMode] Initializing draft mode with key: ${draftKey}`);
+    if (globalThis.djustDebug) console.log(`[DraftMode] Initializing draft mode with key: ${draftKey}`);
 
     // Load existing draft on page load
     const savedDraft = globalDraftManager.loadDraft(draftKey);
@@ -151,7 +151,7 @@ function initDraftMode() {
 
     // Check for draft clear flag
     if (draftRoot.hasAttribute('data-draft-clear')) {
-        console.log('[DraftMode] Draft clear flag detected, clearing draft...');
+        if (globalThis.djustDebug) console.log('[DraftMode] Draft clear flag detected, clearing draft...');
         globalDraftManager.clearDraft(draftKey);
         draftRoot.removeAttribute('data-draft-clear');
     }

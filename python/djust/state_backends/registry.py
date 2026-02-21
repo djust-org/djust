@@ -78,7 +78,7 @@ def get_backend() -> StateBackend:
             state_size_warning_kb=state_size_warning_kb,
         )
 
-    logger.info(f"Initialized state backend: {backend_type}")
+    logger.info("Initialized state backend: %s", backend_type)
     return _backend
 
 

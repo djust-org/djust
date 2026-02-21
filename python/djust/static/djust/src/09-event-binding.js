@@ -233,7 +233,7 @@ function bindLiveViewEvents() {
                 }
 
                 if (globalThis.djustDebug) {
-                    console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
+                    if (globalThis.djustDebug) console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
                 }
                 await handleEvent(parsedChange.name, params);
             };

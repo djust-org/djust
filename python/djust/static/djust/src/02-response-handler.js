@@ -27,7 +27,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 expiresAt
             });
             if (globalThis.djustDebug) {
-                console.log(`[LiveView:cache] Cached patches: ${cacheKey} (TTL: ${ttl}s)`);
+                if (globalThis.djustDebug) console.log(`[LiveView:cache] Cached patches: ${cacheKey} (TTL: ${ttl}s)`);
             }
             pendingCacheRequests.delete(data.cache_request_id);
         }
@@ -188,7 +188,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 globalLoadingManager.stopLoading(loadingEventName, triggerElement);
             }
         } else if (globalThis.djustDebug) {
-            console.log('[LiveView] Keeping loading state — async work pending');
+            if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
         }
         return true;
 

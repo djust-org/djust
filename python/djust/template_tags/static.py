@@ -88,5 +88,5 @@ class StaticTagHandler(TagHandler):
                 logger.error("Django not installed - cannot resolve static URLs")
                 return f"/static/{path}"
         except Exception as e:
-            logger.error(f"Error resolving static path '{path}': {e}")
+            logger.error("Error resolving static path '%s': %s", path, e)
             return f"/static/{path}"
