@@ -1,7 +1,9 @@
 /**
- * Tests for double-bind prevention and stale closure bugs on VDOM-patched elements.
+ * Tests for event binding on VDOM-patched elements and stale closure bugs.
  *
  * Regression test for #201 — delete_todo sends wrong args after patch.
+ * Regression test for #315 — VDOM-inserted elements never get event listeners
+ *   because createNodeFromVNode pre-marked them as bound without attaching listeners.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -41,42 +43,51 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
         window.eval(clientCode);
     });
 
-    it('createNodeFromVNode binds click handler on dj-click elements', () => {
+    it('bindLiveViewEvents attaches click listener to VDOM-created elements', () => {
+        // createNodeFromVNode must NOT pre-mark elements as bound.
+        // bindLiveViewEvents() must attach the listener on first call.
         const elem = window.djust.createNodeFromVNode({
-            tag: 'button',
-            attrs: { 'dj-click': 'delete_todo(1)', 'data-dj-id': 'b2' },
-            children: [{ tag: '', attrs: {}, children: [], text: 'Delete' }],
-        });
-        // WeakMap tracks binding internally; verify bindLiveViewEvents won't double-bind
-        let addEventCount = 0;
-        const origAddEvent = elem.addEventListener.bind(elem);
-        elem.addEventListener = function(type, ...args) {
-            if (type === 'click') addEventCount++;
-            return origAddEvent(type, ...args);
-        };
-        window.djust.bindLiveViewEvents();
-        expect(addEventCount).toBe(0);
-    });
-
-    it('bindLiveViewEvents skips elements already bound via WeakMap', () => {
-        const newBtn = window.djust.createNodeFromVNode({
             tag: 'button',
             attrs: { 'dj-click': 'delete_todo(1)', 'data-dj-id': 'b2' },
             children: [{ tag: '', attrs: {}, children: [], text: 'Delete' }],
         });
 
         const root = window.document.getElementById('root');
-        root.querySelector('[data-dj-id="b1"]').replaceWith(newBtn);
+        root.querySelector('[data-dj-id="b1"]').replaceWith(elem);
 
         let addEventCount = 0;
-        const origAddEvent = newBtn.addEventListener.bind(newBtn);
-        newBtn.addEventListener = function(type, ...args) {
+        const origAddEvent = elem.addEventListener.bind(elem);
+        elem.addEventListener = function(type, ...args) {
+            if (type === 'click') addEventCount++;
+            return origAddEvent(type, ...args);
+        };
+
+        // First call: should bind the listener (count = 1)
+        window.djust.bindLiveViewEvents();
+        expect(addEventCount).toBe(1);
+
+        // Second call: element already bound via WeakMap, no double-bind (count stays 1)
+        window.djust.bindLiveViewEvents();
+        expect(addEventCount).toBe(1);
+    });
+
+    it('bindLiveViewEvents does not double-bind elements already in the DOM', () => {
+        // Elements in the initial HTML are bound on first bindLiveViewEvents call.
+        // Subsequent calls must not add duplicate listeners.
+        const btn = window.document.querySelector('[data-dj-id="b1"]');
+
+        let addEventCount = 0;
+        const origAddEvent = btn.addEventListener.bind(btn);
+        btn.addEventListener = function(type, ...args) {
             if (type === 'click') addEventCount++;
             return origAddEvent(type, ...args);
         };
 
         window.djust.bindLiveViewEvents();
-        expect(addEventCount).toBe(0);
+        const countAfterFirst = addEventCount;
+
+        window.djust.bindLiveViewEvents();
+        expect(addEventCount).toBe(countAfterFirst); // no extra binds
     });
 
     it('binds handlers for other event types (submit, change) without double-binding', () => {
@@ -90,7 +101,10 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
         expect(form.getAttribute('dj-submit')).toBe('save');
         expect(input.getAttribute('dj-change')).toBe('validate');
 
-        // Verify calling bindLiveViewEvents doesn't double-bind
+        const root = window.document.getElementById('root');
+        root.appendChild(form);
+        root.appendChild(input);
+
         let submitCount = 0;
         const origFormAdd = form.addEventListener.bind(form);
         form.addEventListener = function(type, ...args) {
@@ -103,9 +117,16 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
             if (type === 'change') changeCount++;
             return origInputAdd(type, ...args);
         };
+
+        // First call: each element gets exactly 1 listener
         window.djust.bindLiveViewEvents();
-        expect(submitCount).toBe(0);
-        expect(changeCount).toBe(0);
+        expect(submitCount).toBe(1);
+        expect(changeCount).toBe(1);
+
+        // Second call: no double-binding
+        window.djust.bindLiveViewEvents();
+        expect(submitCount).toBe(1);
+        expect(changeCount).toBe(1);
     });
 
     it('createNodeFromVNode sets dj-click as DOM attribute', () => {
