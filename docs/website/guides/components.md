@@ -186,11 +186,13 @@ class CounterWidget(LiveComponent):
     def mount(self, **kwargs):
         self.count = kwargs.get("initial", 0)
 
-    def increment(self):
+    @event_handler()
+    def increment(self, **kwargs):
         self.count += 1
         self.trigger_update()
 
-    def decrement(self):
+    @event_handler()
+    def decrement(self, **kwargs):
         self.count -= 1
         self.trigger_update()
 
@@ -202,7 +204,7 @@ Key differences from `Component`:
 
 - **`mount()`** is required -- set up initial state here
 - **`get_context_data()`** is required -- return template variables
-- **Event handlers** are regular methods. Wire them with `dj-click`, `dj-submit`, etc.
+- **Event handlers** must be decorated with `@event_handler()` (same as LiveView). Wire them with `dj-click`, `dj-submit`, etc.
 - **`data-component-id="{{ component_id }}"`** routes events to the right component instance
 - **`trigger_update()`** tells the parent LiveView to re-render
 
@@ -262,7 +264,8 @@ class TodoItem(LiveComponent):
         self.completed = kwargs.get("completed", False)
         self.todo_id = kwargs.get("todo_id")
 
-    def toggle(self):
+    @event_handler()
+    def toggle(self, **kwargs):
         self.completed = not self.completed
         # Notify parent
         self.send_parent("todo_toggled", {
@@ -381,11 +384,13 @@ def mount(self, request, **kwargs):
         dismissible=True,
     )
 
-def save(self):
+@event_handler()
+def save(self, **kwargs):
     # ... save logic ...
     self.alert.show("Changes saved!", "success")
 
-def on_error(self):
+@event_handler()
+def on_error(self, **kwargs):
     self.alert.show("Something went wrong", "danger")
 ```
 
@@ -400,10 +405,12 @@ def mount(self, request, **kwargs):
         size="md",  # sm, md, lg, xl
     )
 
-def delete_clicked(self):
+@event_handler()
+def delete_clicked(self, **kwargs):
     self.confirm_modal.show()
 
-def dismiss(self):
+@event_handler()
+def dismiss(self, **kwargs):
     self.confirm_modal.hide()
 ```
 
@@ -545,6 +552,7 @@ class SearchBox(LiveComponent):
         self.loading = False
         self.search_fn = kwargs.get("search_fn")  # Callable for searching
 
+    @event_handler()
     def on_search(self, value="", **kwargs):
         self.query = value
         if len(value) >= 2 and self.search_fn:
@@ -555,6 +563,7 @@ class SearchBox(LiveComponent):
             self.results = []
         self.trigger_update()
 
+    @event_handler()
     def select_result(self, id=None, **kwargs):
         self.send_parent("result_selected", {"id": id})
 
@@ -570,6 +579,8 @@ class SearchBox(LiveComponent):
 
 When building a custom component:
 
+- [ ] `@event_handler()` on every method wired to a `dj-*` event
+- [ ] `**kwargs` in every event handler signature
 - [ ] `data-component-id="{{ component_id }}"` on every element with `dj-*` events
 - [ ] `trigger_update()` after state changes that should re-render
 - [ ] `send_parent()` for events the parent needs to know about

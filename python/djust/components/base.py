@@ -385,7 +385,8 @@ class LiveComponent(ABC):
                 self.type = kwargs.get('type', 'info')
                 self.visible = True
 
-            def dismiss(self):
+            @event_handler()
+            def dismiss(self, **kwargs):
                 self.visible = False
 
             def get_context_data(self):
