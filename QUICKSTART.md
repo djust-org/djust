@@ -4,9 +4,9 @@ Get a LiveView running in under 5 minutes.
 
 ## Prerequisites
 
-- Python 3.8+
-- Django 3.2+
-- Django Channels (for WebSocket support)
+- Python 3.10+
+- Django 4.2+
+- Django Channels 4.0+ (for WebSocket support)
 
 ## Install
 
@@ -34,24 +34,32 @@ CHANNEL_LAYERS = {
 }
 ```
 
-2. Configure `asgi.py`:
+2. Create `myproject/routing.py`:
+
+```python
+from django.urls import path
+from djust.websocket import LiveViewConsumer
+
+websocket_urlpatterns = [
+    path("ws/live/", LiveViewConsumer.as_asgi()),
+]
+```
+
+3. Configure `asgi.py`:
 
 ```python
 import os
 from django.core.asgi import get_asgi_application
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
-from djust.websocket import LiveViewConsumer
-from django.urls import path
+import myproject.routing
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.settings')
 
 application = ProtocolTypeRouter({
     "http": get_asgi_application(),
     "websocket": AuthMiddlewareStack(
-        URLRouter([
-            path('ws/live/', LiveViewConsumer.as_asgi()),
-        ])
+        URLRouter(myproject.routing.websocket_urlpatterns)
     ),
 })
 ```
@@ -203,6 +211,7 @@ def increment(self, **kwargs):
 
 ## Next Steps
 
-- [Event Handlers](docs/EVENT_HANDLERS.md) -- parameter conventions, type coercion, debugging
-- [State Management](docs/STATE_MANAGEMENT_QUICKSTART.md) -- debounce, throttle, optimistic updates
-- [Best Practices](docs/guides/BEST_PRACTICES.md) -- common pitfalls and patterns
+- [Event Handlers](docs/EVENT_HANDLERS.md) — parameter conventions, type coercion, debugging
+- [State Management](docs/STATE_MANAGEMENT_QUICKSTART.md) — debounce, throttle, optimistic updates
+- [Forms](docs/website/forms/index.md) — real-time form validation
+- [Loading States](docs/website/guides/loading-states.md) — background work, streaming, optimistic updates
