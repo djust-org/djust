@@ -870,7 +870,7 @@ Areas we'd love help with:
 - [x] JIT pipeline improvements and stale-closure fixes
 - [x] Authentication & authorization (view-level + handler-level)
 - [ ] File upload handling
-- [ ] Server-sent events (SSE) fallback
+- [x] Server-sent events (SSE) fallback
 - [ ] React/Vue component compatibility
 - [ ] TypeScript definitions
 - [ ] Redis-backed session storage

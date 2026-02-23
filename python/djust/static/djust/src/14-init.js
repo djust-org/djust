@@ -1,4 +1,42 @@
 
+// ============================================================================
+// SSE Transport Fallback
+// ============================================================================
+
+/**
+ * Switch the active transport to SSE.
+ *
+ * Called either when WebSocket exhausts all reconnect attempts (automatic
+ * fallback) or directly when WebSocket is disabled and SSE is available.
+ * Replaces the global liveViewWS instance with a LiveViewSSE instance and
+ * mounts the view via the SSE stream endpoint.
+ */
+function _switchToSSETransport() {
+    const container = document.querySelector('[dj-view]');
+    if (!container) {
+        console.warn('[SSE] No [dj-view] container found, cannot switch to SSE transport');
+        return;
+    }
+    const viewPath = container.getAttribute('dj-view');
+    if (!viewPath) {
+        console.warn('[SSE] [dj-view] has no view path attribute, cannot switch to SSE transport');
+        return;
+    }
+
+    if (globalThis.djustDebug) console.log('[SSE] Switching to SSE transport for view:', viewPath);
+
+    const sseInstance = new window.djust.LiveViewSSE();
+    liveViewWS = sseInstance;
+    window.djust.liveViewInstance = sseInstance;
+
+    const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+    sseInstance.connect(viewPath, urlParams);
+}
+
+// Expose for tests and manual override
+window.djust._switchToSSETransport = _switchToSSETransport;
+
+// ============================================================================
 // Auto-stamp dj-root and dj-liveview-root on [dj-view]
 // elements so developers only need to write dj-view (#258).
 // Extracted as a helper so both djustInit() and reinitLiveViewForTurboNav() can call it.
@@ -45,14 +83,27 @@ function djustInit() {
 
     // Only initialize WebSocket if there are eager containers AND WebSocket is enabled
     const wsEnabled = window.DJUST_USE_WEBSOCKET !== false;
+    const sseAvailable = typeof window.djust.LiveViewSSE !== 'undefined';
+
     if (eagerContainers.length > 0 && wsEnabled) {
         // Initialize WebSocket
         liveViewWS = new LiveViewWebSocket();
         window.djust.liveViewInstance = liveViewWS;
+
+        // Wire SSE fallback: if WebSocket exhausts all reconnect attempts AND
+        // the SSE transport is available, switch over automatically.
+        if (sseAvailable) {
+            liveViewWS.onTransportFailed = () => _switchToSSETransport();
+        }
+
         liveViewWS.connect();
 
         // Start heartbeat
         liveViewWS.startHeartbeat();
+    } else if (eagerContainers.length > 0 && !wsEnabled && sseAvailable) {
+        // use_websocket: false but SSE is available — skip WebSocket entirely
+        if (globalThis.djustDebug) console.log('[LiveView] WebSocket disabled, using SSE transport directly');
+        _switchToSSETransport();
     } else if (eagerContainers.length > 0 && !wsEnabled) {
         // HTTP-only mode: create WS instance but disable it so sendEvent() falls through to HTTP
         liveViewWS = new LiveViewWebSocket();
