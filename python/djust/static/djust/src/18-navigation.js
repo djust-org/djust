@@ -16,6 +16,7 @@
         // Use data.action (set by server alongside type:"navigation") to distinguish
         // live_patch from live_redirect. Falls back to data.type for any legacy messages
         // that were sent without an action field.
+        // TODO(deprecation): data.type fallback for pre-#307 clients — remove in next minor release
         const action = data.action || data.type;
         if (action === 'live_patch') {
             handleLivePatch(data);
