@@ -47,17 +47,17 @@ fn assert_eq_vnode(actual: &VNode, expected: &VNode, path: &[usize]) {
         path, actual.text, expected.text
     );
 
-    // Compare attributes ignoring data-dj-id
+    // Compare attributes ignoring dj-id
     let actual_attrs: std::collections::HashMap<&str, &str> = actual
         .attrs
         .iter()
-        .filter(|(k, _)| k.as_str() != "data-dj-id")
+        .filter(|(k, _)| k.as_str() != "dj-id")
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
     let expected_attrs: std::collections::HashMap<&str, &str> = expected
         .attrs
         .iter()
-        .filter(|(k, _)| k.as_str() != "data-dj-id")
+        .filter(|(k, _)| k.as_str() != "dj-id")
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
     assert_eq!(
