@@ -15,6 +15,10 @@ class LiveViewWebSocket {
         this._intentionalDisconnect = false;  // Set by disconnect() to suppress error overlay
         this.lastEventName = null;  // Phase 5: Track last event for loading state
         this.lastTriggerElement = null;  // Phase 5: Track trigger element for scoped loading
+        // Optional callback invoked when all reconnect attempts are exhausted.
+        // If set, it is called instead of _showConnectionErrorOverlay(), allowing
+        // 14-init.js to switch to the SSE fallback transport.
+        this.onTransportFailed = null;
 
         // WebSocket statistics tracking (Phase 2.1: WebSocket Inspector)
         this.stats = {
@@ -138,9 +142,16 @@ class LiveViewWebSocket {
                 if (globalThis.djustDebug) console.log(`[LiveView] Reconnecting in ${delay}ms...`);
                 setTimeout(() => this.connect(url), delay);
             } else {
-                console.warn('[LiveView] Max reconnection attempts reached. Falling back to HTTP mode.');
+                console.warn('[LiveView] Max reconnection attempts reached.');
                 this.enabled = false;
-                this._showConnectionErrorOverlay();
+                // If an SSE fallback is configured, hand off to it instead of
+                // showing the connection error overlay.
+                if (typeof this.onTransportFailed === 'function') {
+                    if (globalThis.djustDebug) console.log('[LiveView] Invoking onTransportFailed for SSE fallback');
+                    this.onTransportFailed();
+                } else {
+                    this._showConnectionErrorOverlay();
+                }
             }
         };
 
