@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "djust-theming"
+version = "0.3.0"
+description = "CSS theming utilities and base stylesheets for djust applications — dark/light mode, design tokens, and component styles."
+authors = [{name = "djust contributors"}]
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+keywords = ["django", "theming", "css", "dark-mode", "design-tokens"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Django",
+    "Framework :: Django :: 3.2",
+    "Framework :: Django :: 4.0",
+    "Framework :: Django :: 4.1",
+    "Framework :: Django :: 4.2",
+    "Framework :: Django :: 5.0",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    "Django>=3.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/djust-framework/djust"
+Documentation = "https://github.com/djust-framework/djust/tree/main/packages/djust-theming"
+Repository = "https://github.com/djust-framework/djust"
+"Bug Tracker" = "https://github.com/djust-framework/djust/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/djust_theming"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/",
+    "README.md",
+    "CHANGELOG.md",
+]
