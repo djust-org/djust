@@ -208,10 +208,10 @@ class LiveViewWebSocket {
                 const hasDataDjAttrs = data.has_ids === true;
                 if (this.skipMountHtml) {
                     // Content already rendered by HTTP GET - don't replace innerHTML
-                    // If server HTML has data-dj-id attributes, stamp them onto existing DOM
+                    // If server HTML has dj-id attributes, stamp them onto existing DOM
                     // This preserves whitespace (e.g. in code blocks) that innerHTML would destroy
                     if (hasDataDjAttrs && data.html) {
-                        if (globalThis.djustDebug) console.log('[LiveView] Stamping data-dj-id attributes onto pre-rendered DOM');
+                        if (globalThis.djustDebug) console.log('[LiveView] Stamping dj-id attributes onto pre-rendered DOM');
                         _stampDjIds(data.html);
                     } else {
                         if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
@@ -221,7 +221,7 @@ class LiveViewWebSocket {
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
-                        if (globalThis.djustDebug) console.log('[LiveView] Hydrating DOM with data-dj-id attributes for reliable patching');
+                        if (globalThis.djustDebug) console.log('[LiveView] Hydrating DOM with dj-id attributes for reliable patching');
                     }
                     let container = document.querySelector('[dj-view]');
                     if (!container) {

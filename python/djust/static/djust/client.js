@@ -13,7 +13,7 @@ window.djust = window.djust || {};
 // Prevent double execution when client.js is included in both base template
 // (for TurboNav compatibility) and injected by LiveView.
 if (window._djustClientLoaded) {
-    console.log('[LiveView] client.js already loaded, skipping duplicate initialization');
+    if (globalThis.djustDebug) console.log('[LiveView] client.js already loaded, skipping duplicate initialization');
 } else {
 window._djustClientLoaded = true;
 
@@ -183,7 +183,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 expiresAt
             });
             if (globalThis.djustDebug) {
-                console.log(`[LiveView:cache] Cached patches: ${cacheKey} (TTL: ${ttl}s)`);
+                if (globalThis.djustDebug) console.log(`[LiveView:cache] Cached patches: ${cacheKey} (TTL: ${ttl}s)`);
             }
             pendingCacheRequests.delete(data.cache_request_id);
         }
@@ -344,7 +344,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 globalLoadingManager.stopLoading(loadingEventName, triggerElement);
             }
         } else if (globalThis.djustDebug) {
-            console.log('[LiveView] Keeping loading state — async work pending');
+            if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
         }
         return true;
 
@@ -388,7 +388,7 @@ class LiveViewWebSocket {
      * Cleanly disconnect the WebSocket for TurboNav navigation
      */
     disconnect() {
-        console.log('[LiveView] Disconnecting for navigation...');
+        if (globalThis.djustDebug) console.log('[LiveView] Disconnecting for navigation...');
 
         // Stop heartbeat
         if (this.heartbeatInterval) {
@@ -432,11 +432,11 @@ class LiveViewWebSocket {
             url = `${protocol}//${host}/ws/live/`;
         }
 
-        console.log('[LiveView] Connecting to WebSocket:', url);
+        if (globalThis.djustDebug) console.log('[LiveView] Connecting to WebSocket:', url);
         this.ws = new WebSocket(url);
 
         this.ws.onopen = (_event) => {
-            console.log('[LiveView] WebSocket connected');
+            if (globalThis.djustDebug) console.log('[LiveView] WebSocket connected');
             this.reconnectAttempts = 0;
             this._intentionalDisconnect = false;
 
@@ -450,7 +450,7 @@ class LiveViewWebSocket {
         };
 
         this.ws.onclose = (_event) => {
-            console.log('[LiveView] WebSocket disconnected');
+            if (globalThis.djustDebug) console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
 
             // Notify hooks of disconnection
@@ -491,7 +491,7 @@ class LiveViewWebSocket {
             if (this.reconnectAttempts < this.maxReconnectAttempts) {
                 this.reconnectAttempts++;
                 const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-                console.log(`[LiveView] Reconnecting in ${delay}ms...`);
+                if (globalThis.djustDebug) console.log(`[LiveView] Reconnecting in ${delay}ms...`);
                 setTimeout(() => this.connect(url), delay);
             } else {
                 console.warn('[LiveView] Max reconnection attempts reached. Falling back to HTTP mode.');
@@ -530,23 +530,23 @@ class LiveViewWebSocket {
     }
 
     handleMessage(data) {
-        console.log('[LiveView] Received:', data.type, data);
+        if (globalThis.djustDebug) console.log('[LiveView] Received:', data.type, data);
 
         switch (data.type) {
             case 'connect':
                 this.sessionId = data.session_id;
-                console.log('[LiveView] Session ID:', this.sessionId);
+                if (globalThis.djustDebug) console.log('[LiveView] Session ID:', this.sessionId);
                 this.autoMount();
                 break;
 
             case 'mount':
                 this.viewMounted = true;
-                console.log('[LiveView] View mounted:', data.view);
+                if (globalThis.djustDebug) console.log('[LiveView] View mounted:', data.view);
 
                 // Initialize VDOM version from mount response (critical for patch generation)
                 if (data.version !== undefined) {
                     clientVdomVersion = data.version;
-                    console.log('[LiveView] VDOM version initialized:', clientVdomVersion);
+                    if (globalThis.djustDebug) console.log('[LiveView] VDOM version initialized:', clientVdomVersion);
                 }
 
                 // Initialize cache configuration from mount response
@@ -564,20 +564,20 @@ class LiveViewWebSocket {
                 const hasDataDjAttrs = data.has_ids === true;
                 if (this.skipMountHtml) {
                     // Content already rendered by HTTP GET - don't replace innerHTML
-                    // If server HTML has data-dj-id attributes, stamp them onto existing DOM
+                    // If server HTML has dj-id attributes, stamp them onto existing DOM
                     // This preserves whitespace (e.g. in code blocks) that innerHTML would destroy
                     if (hasDataDjAttrs && data.html) {
-                        console.log('[LiveView] Stamping data-dj-id attributes onto pre-rendered DOM');
+                        if (globalThis.djustDebug) console.log('[LiveView] Stamping dj-id attributes onto pre-rendered DOM');
                         _stampDjIds(data.html);
                     } else {
-                        console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
+                        if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
                     }
                     this.skipMountHtml = false;
                     bindLiveViewEvents();
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
-                        console.log('[LiveView] Hydrating DOM with data-dj-id attributes for reliable patching');
+                        if (globalThis.djustDebug) console.log('[LiveView] Hydrating DOM with dj-id attributes for reliable patching');
                     }
                     let container = document.querySelector('[dj-view]');
                     if (!container) {
@@ -622,7 +622,7 @@ class LiveViewWebSocket {
                 initTodoItems();
                 bindLiveViewEvents();
                 if (globalThis.djustDebug) {
-                    console.log('[LiveView] DOM recovered via morph, version:', data.version);
+                    if (globalThis.djustDebug) console.log('[LiveView] DOM recovered via morph, version:', data.version);
                 }
                 break;
             }
@@ -679,8 +679,8 @@ class LiveViewWebSocket {
                 if (this.lastEventName) {
                     if (!data.async_pending) {
                         globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
-                    } else if (globalThis.djustDebug) {
-                        console.log('[LiveView] Keeping loading state — async work pending');
+                    } else {
+                        if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
                     }
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
@@ -757,7 +757,7 @@ class LiveViewWebSocket {
             return false;
         }
 
-        console.log('[LiveView] Mounting view:', viewPath);
+        if (globalThis.djustDebug) console.log('[LiveView] Mounting view:', viewPath);
         // Detect browser timezone for server-side local time rendering
         let clientTimezone = null;
         try {
@@ -831,7 +831,7 @@ class LiveViewWebSocket {
                 const hasContent = container.innerHTML && container.innerHTML.trim().length > 0;
 
                 if (hasContent) {
-                    console.log('[LiveView] Content pre-rendered via HTTP - will skip HTML in mount response');
+                    if (globalThis.djustDebug) console.log('[LiveView] Content pre-rendered via HTTP - will skip HTML in mount response');
                     this.skipMountHtml = true;
                 }
 
@@ -1022,7 +1022,7 @@ function addToCache(cacheKey, value) {
         const oldestKey = resultCache.keys().next().value;
         resultCache.delete(oldestKey);
         if (globalThis.djustDebug) {
-            console.log(`[LiveView:cache] Evicted (LRU): ${oldestKey}`);
+            if (globalThis.djustDebug) console.log(`[LiveView:cache] Evicted (LRU): ${oldestKey}`);
         }
     }
 
@@ -1039,7 +1039,7 @@ function setCacheConfig(config) {
     Object.entries(config).forEach(([handlerName, handlerConfig]) => {
         cacheConfig.set(handlerName, handlerConfig);
         if (globalThis.djustDebug) {
-            console.log(`[LiveView:cache] Configured cache for ${handlerName}:`, handlerConfig);
+            if (globalThis.djustDebug) console.log(`[LiveView:cache] Configured cache for ${handlerName}:`, handlerConfig);
         }
     });
 }
@@ -1127,7 +1127,7 @@ function clearCache() {
     const size = resultCache.size;
     resultCache.clear();
     if (globalThis.djustDebug) {
-        console.log(`[LiveView:cache] Cleared all ${size} cached entries`);
+        if (globalThis.djustDebug) console.log(`[LiveView:cache] Cleared all ${size} cached entries`);
     }
 }
 
@@ -1157,7 +1157,7 @@ function invalidateCache(pattern) {
     }
 
     if (globalThis.djustDebug) {
-        console.log(`[LiveView:cache] Invalidated ${count} entries matching: ${pattern}`);
+        if (globalThis.djustDebug) console.log(`[LiveView:cache] Invalidated ${count} entries matching: ${pattern}`);
     }
 
     return count;
@@ -1178,7 +1178,7 @@ class StateBus {
         const oldValue = this.state.get(key);
         this.state.set(key, value);
         if (globalThis.djustDebug) {
-            console.log(`[StateBus] Set: ${key} =`, value, `(was:`, oldValue, `)`);
+            if (globalThis.djustDebug) console.log(`[StateBus] Set: ${key} =`, value, `(was:`, oldValue, `)`);
         }
         this.notify(key, value, oldValue);
     }
@@ -1193,14 +1193,14 @@ class StateBus {
         }
         this.subscribers.get(key).add(callback);
         if (globalThis.djustDebug) {
-            console.log(`[StateBus] Subscribed to: ${key} (${this.subscribers.get(key).size} subscribers)`);
+            if (globalThis.djustDebug) console.log(`[StateBus] Subscribed to: ${key} (${this.subscribers.get(key).size} subscribers)`);
         }
         return () => {
             const subs = this.subscribers.get(key);
             if (subs) {
                 subs.delete(callback);
                 if (globalThis.djustDebug) {
-                    console.log(`[StateBus] Unsubscribed from: ${key} (${subs.size} remaining)`);
+                    if (globalThis.djustDebug) console.log(`[StateBus] Unsubscribed from: ${key} (${subs.size} remaining)`);
                 }
             }
         };
@@ -1209,7 +1209,7 @@ class StateBus {
     notify(key, newValue, oldValue) {
         const callbacks = this.subscribers.get(key) || new Set();
         if (callbacks.size > 0 && globalThis.djustDebug) {
-            console.log(`[StateBus] Notifying ${callbacks.size} subscribers of: ${key}`);
+            if (globalThis.djustDebug) console.log(`[StateBus] Notifying ${callbacks.size} subscribers of: ${key}`);
         }
         callbacks.forEach(callback => {
             try {
@@ -1224,7 +1224,7 @@ class StateBus {
         this.state.clear();
         this.subscribers.clear();
         if (globalThis.djustDebug) {
-            console.log('[StateBus] Cleared all state');
+            if (globalThis.djustDebug) console.log('[StateBus] Cleared all state');
         }
     }
 
@@ -1256,7 +1256,7 @@ class DraftManager {
                 localStorage.setItem(`djust_draft_${draftKey}`, JSON.stringify(draftData));
 
                 if (globalThis.djustDebug) {
-                    console.log(`[DraftMode] Saved draft: ${draftKey}`, data);
+                    if (globalThis.djustDebug) console.log(`[DraftMode] Saved draft: ${draftKey}`, data);
                 }
             } catch (error) {
                 console.error(`[DraftMode] Failed to save draft ${draftKey}:`, error);
@@ -1278,7 +1278,7 @@ class DraftManager {
 
             if (globalThis.djustDebug) {
                 const age = Math.round((Date.now() - draftData.timestamp) / 1000);
-                console.log(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
+                if (globalThis.djustDebug) console.log(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
             }
 
             return draftData.data;
@@ -1298,7 +1298,7 @@ class DraftManager {
             localStorage.removeItem(`djust_draft_${draftKey}`);
 
             if (globalThis.djustDebug) {
-                console.log(`[DraftMode] Cleared draft: ${draftKey}`);
+                if (globalThis.djustDebug) console.log(`[DraftMode] Cleared draft: ${draftKey}`);
             }
         } catch (error) {
             console.error(`[DraftMode] Failed to clear draft ${draftKey}:`, error);
@@ -1325,7 +1325,7 @@ class DraftManager {
         keys.forEach(key => this.clearDraft(key));
 
         if (globalThis.djustDebug) {
-            console.log(`[DraftMode] Cleared all ${keys.length} drafts`);
+            if (globalThis.djustDebug) console.log(`[DraftMode] Cleared all ${keys.length} drafts`);
         }
     }
 }
@@ -1343,7 +1343,7 @@ function initDraftMode() {
         return;
     }
 
-    console.log(`[DraftMode] Initializing draft mode with key: ${draftKey}`);
+    if (globalThis.djustDebug) console.log(`[DraftMode] Initializing draft mode with key: ${draftKey}`);
 
     // Load existing draft on page load
     const savedDraft = globalDraftManager.loadDraft(draftKey);
@@ -1387,7 +1387,7 @@ function initDraftMode() {
 
     // Check for draft clear flag
     if (draftRoot.hasAttribute('data-draft-clear')) {
-        console.log('[DraftMode] Draft clear flag detected, clearing draft...');
+        if (globalThis.djustDebug) console.log('[DraftMode] Draft clear flag detected, clearing draft...');
         globalDraftManager.clearDraft(draftKey);
         draftRoot.removeAttribute('data-draft-clear');
     }
@@ -1455,7 +1455,7 @@ function restoreFormData(container, data) {
     });
 
     if (globalThis.djustDebug) {
-        console.log('[DraftMode] Restored form data:', data);
+        if (globalThis.djustDebug) console.log('[DraftMode] Restored form data:', data);
     }
 }
 
@@ -1699,7 +1699,7 @@ function extractTypedParams(element) {
         if (attr.name.startsWith('data-liveview') ||
             attr.name.startsWith('data-live-') ||
             attr.name.startsWith('data-djust') ||
-            attr.name === 'data-dj-id' ||
+            attr.name === 'dj-id' ||
             attr.name === 'data-loading' ||
             attr.name === 'data-component-id') {
             continue;
@@ -2041,7 +2041,7 @@ function bindLiveViewEvents() {
                 }
 
                 if (globalThis.djustDebug) {
-                    console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
+                    if (globalThis.djustDebug) console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
                 }
                 await handleEvent(parsedChange.name, params);
             };
@@ -2319,7 +2319,7 @@ const globalLoadingManager = {
         if (modifiers.length > 0) {
             this.registeredElements.set(element, { eventName, modifiers, originalState });
             if (globalThis.djustDebug) {
-                console.log(`[Loading] Registered element for "${eventName}":`, modifiers);
+                if (globalThis.djustDebug) console.log(`[Loading] Registered element for "${eventName}":`, modifiers);
             }
         }
     },
@@ -2363,7 +2363,7 @@ const globalLoadingManager = {
             }
         });
         if (globalThis.djustDebug) {
-            console.log(`[Loading] Scanned ${this.registeredElements.size} elements with dj-loading attributes`);
+            if (globalThis.djustDebug) console.log(`[Loading] Scanned ${this.registeredElements.size} elements with dj-loading attributes`);
         }
     },
 
@@ -2377,8 +2377,8 @@ const globalLoadingManager = {
             // Check if trigger element has dj-loading.disable
             const hasDisable = triggerElement.hasAttribute('dj-loading.disable');
             if (globalThis.djustDebug) {
-                console.log(`[Loading] triggerElement:`, triggerElement);
-                console.log(`[Loading] hasAttribute('dj-loading.disable'):`, hasDisable);
+                if (globalThis.djustDebug) console.log(`[Loading] triggerElement:`, triggerElement);
+                if (globalThis.djustDebug) console.log(`[Loading] hasAttribute('dj-loading.disable'):`, hasDisable);
             }
             if (hasDisable) {
                 triggerElement.disabled = true;
@@ -2395,7 +2395,7 @@ const globalLoadingManager = {
         document.body.classList.add('djust-global-loading');
 
         if (globalThis.djustDebug) {
-            console.log(`[Loading] Started: ${eventName}`);
+            if (globalThis.djustDebug) console.log(`[Loading] Started: ${eventName}`);
         }
     },
 
@@ -2422,7 +2422,7 @@ const globalLoadingManager = {
         document.body.classList.remove('djust-global-loading');
 
         if (globalThis.djustDebug) {
-            console.log(`[Loading] Stopped: ${eventName}`);
+            if (globalThis.djustDebug) console.log(`[Loading] Stopped: ${eventName}`);
         }
     },
 
@@ -2470,7 +2470,7 @@ function generateCacheRequestId() {
 // Main Event Handler
 async function handleEvent(eventName, params = {}) {
     if (globalThis.djustDebug) {
-        console.log(`[LiveView] Handling event: ${eventName}`, params);
+        if (globalThis.djustDebug) console.log(`[LiveView] Handling event: ${eventName}`, params);
     }
 
     // Extract client-only properties before sending to server.
@@ -2498,7 +2498,7 @@ async function handleEvent(eventName, params = {}) {
     if (cached) {
         // Cache hit! Apply cached patches without server round-trip
         if (globalThis.djustDebug) {
-            console.log(`[LiveView:cache] Cache hit: ${cacheKey}`);
+            if (globalThis.djustDebug) console.log(`[LiveView:cache] Cache hit: ${cacheKey}`);
         }
 
         // Still show brief loading state for UX consistency
@@ -2518,7 +2518,7 @@ async function handleEvent(eventName, params = {}) {
 
     // Cache miss - need to fetch from server
     if (globalThis.djustDebug && cacheConfig.has(eventName)) {
-        console.log(`[LiveView:cache] Cache miss: ${cacheKey}`);
+        if (globalThis.djustDebug) console.log(`[LiveView:cache] Cache miss: ${cacheKey}`);
     }
 
     if (!skipLoading) globalLoadingManager.startLoading(eventName, triggerElement);
@@ -2537,7 +2537,7 @@ async function handleEvent(eventName, params = {}) {
             if (pendingCacheRequests.has(cacheRequestId)) {
                 pendingCacheRequests.delete(cacheRequestId);
                 if (globalThis.djustDebug) {
-                    console.log(`[LiveView:cache] Cleaned up stale pending request: ${cacheRequestId}`);
+                    if (globalThis.djustDebug) console.log(`[LiveView:cache] Cleaned up stale pending request: ${cacheRequestId}`);
                 }
             }
         }, PENDING_CACHE_TIMEOUT);
@@ -2555,7 +2555,7 @@ async function handleEvent(eventName, params = {}) {
     }
 
     // Fallback to HTTP
-    console.log('[LiveView] WebSocket unavailable, falling back to HTTP');
+    if (globalThis.djustDebug) console.log('[LiveView] WebSocket unavailable, falling back to HTTP');
 
     try {
         const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value
@@ -2601,7 +2601,7 @@ function sanitizeIdForLog(id) {
  * Resolve a DOM node using ID-based lookup (primary) or path traversal (fallback).
  *
  * Resolution strategy:
- * 1. If djustId is provided, try querySelector('[data-dj-id="..."]') - O(1), reliable
+ * 1. If djustId is provided, try querySelector('[dj-id="..."]') - O(1), reliable
  * 2. Fall back to index-based path traversal
  *
  * @param {Array<number>} path - Index-based path (fallback)
@@ -2611,14 +2611,14 @@ function sanitizeIdForLog(id) {
 function getNodeByPath(path, djustId = null) {
     // Strategy 1: ID-based resolution (fast, reliable)
     if (djustId) {
-        const byId = document.querySelector(`[data-dj-id="${CSS.escape(djustId)}"]`);
+        const byId = document.querySelector(`[dj-id="${CSS.escape(djustId)}"]`);
         if (byId) {
             return byId;
         }
         // ID not found - fall through to path-based
         if (globalThis.djustDebug) {
             // Log without user data to avoid log injection
-            console.log('[LiveView] ID lookup failed, trying path fallback');
+            if (globalThis.djustDebug) console.log('[LiveView] ID lookup failed, trying path fallback');
         }
     }
 
@@ -3298,7 +3298,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                         // Clone and append new child
                         existingElement.appendChild(newChild.cloneNode(true));
                         if (globalThis.djustDebug) {
-                            console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
+                            if (globalThis.djustDebug) console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
                         }
                     }
                 }
@@ -3319,7 +3319,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                         // Clone and prepend new child
                         existingElement.insertBefore(newChild.cloneNode(true), firstExisting);
                         if (globalThis.djustDebug) {
-                            console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
+                            if (globalThis.djustDebug) console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
                         }
                     }
                 }
@@ -3329,7 +3329,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
             case 'ignore':
                 // Don't update this element at all
                 if (globalThis.djustDebug) {
-                    console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
+                    if (globalThis.djustDebug) console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
                 }
                 break;
 
@@ -3394,9 +3394,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
 }
 
 /**
- * Stamp data-dj-id attributes from server HTML onto existing pre-rendered DOM.
+ * Stamp dj-id attributes from server HTML onto existing pre-rendered DOM.
  * This avoids replacing innerHTML (which destroys whitespace in code blocks).
- * Walks both trees in parallel and copies data-dj-id from server elements to DOM elements.
+ * Walks both trees in parallel and copies dj-id from server elements to DOM elements.
  * Note: serverHtml is trusted (comes from our own WebSocket mount response).
  */
 function _stampDjIds(serverHtml, container) {
@@ -3417,9 +3417,9 @@ function _stampDjIds(serverHtml, container) {
         // Bail out if structure diverges (e.g. browser extension injected elements)
         if (domNode.tagName !== serverNode.tagName) return;
 
-        const djId = serverNode.getAttribute('data-dj-id');
+        const djId = serverNode.getAttribute('dj-id');
         if (djId) {
-            domNode.setAttribute('data-dj-id', djId);
+            domNode.setAttribute('dj-id', djId);
         }
         // Also stamp data-dj-src (template source mapping) if present
         const djSrc = serverNode.getAttribute('data-dj-src');
@@ -3684,9 +3684,9 @@ function applySinglePatch(patch) {
             case 'MoveChild': {
                 let child;
                 if (patch.child_d) {
-                    // ID-based resolution: find direct child by data-dj-id (resilient to index shifts)
+                    // ID-based resolution: find direct child by dj-id (resilient to index shifts)
                     const escaped = CSS.escape(patch.child_d);
-                    child = node.querySelector(`:scope > [data-dj-id="${escaped}"]`);
+                    child = node.querySelector(`:scope > [dj-id="${escaped}"]`);
                 }
                 if (!child) {
                     // Fallback: index-based
@@ -3947,7 +3947,7 @@ const lazyHydrationManager = {
         }
 
         if (globalThis.djustDebug) {
-            console.log(`[LiveView:lazy] Registered element for lazy hydration (mode: ${lazyMode})`, element);
+            if (globalThis.djustDebug) console.log(`[LiveView:lazy] Registered element for lazy hydration (mode: ${lazyMode})`, element);
         }
     },
 
