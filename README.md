@@ -872,7 +872,7 @@ Areas we'd love help with:
 - [ ] File upload handling
 - [x] Server-sent events (SSE) fallback
 - [ ] React/Vue component compatibility
-- [ ] TypeScript definitions
+- [x] TypeScript definitions (`djust.d.ts` shipped with the package)
 - [ ] Redis-backed session storage
 - [ ] Horizontal scaling support
 
