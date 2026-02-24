@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`data.type` fallback in `handleNavigation`** — The `data.action || data.type` fallback for pre-#307 clients (added for backwards compatibility in [#318](https://github.com/djust-org/djust/pull/318)) will be removed in the next minor release. Server now sends `data.action` on all navigation messages. Update any custom client code that sends navigation messages without an `action` field.
 
+### Deprecated
+
+- **`data.type` fallback in `handleNavigation`** — The `data.action || data.type` fallback for pre-#307 clients (added for backwards compatibility in [#318](https://github.com/djust-org/djust/pull/318)) will be removed in the next minor release. Server now sends `data.action` on all navigation messages. Update any custom client code that sends navigation messages without an `action` field.
+
 ### Fixed
 
 - **Silent `str()` coercion for non-serializable LiveView state** — Non-serializable objects stored in `self.*` during `mount()` (e.g., service instances, API clients) were silently converted to strings, causing confusing `AttributeError` on subsequent requests far from the root cause. `normalize_django_value()` now logs a warning before falling back with the type name, module, and guidance on how to fix. Opt-in strict mode (`DJUST_STRICT_SERIALIZATION = True`) raises `TypeError` instead of coercing, recommended for development. New static check `djust.V008` (AST-based) detects non-primitive assignments in `mount()` at development time. ([#292](https://github.com/djust-org/djust/issues/292))
