@@ -1265,11 +1265,17 @@ class LiveViewSSE {
         if (typeof crypto !== 'undefined' && crypto.randomUUID) {
             return crypto.randomUUID();
         }
-        // Fallback for older environments
-        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-            const r = Math.random() * 16 | 0;
-            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-        });
+        // Fallback using crypto.getRandomValues() — cryptographically secure,
+        // available in all modern environments (IE 11+, Node 15+).
+        if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+            const buf = new Uint8Array(16);
+            crypto.getRandomValues(buf);
+            buf[6] = (buf[6] & 0x0f) | 0x40; // UUID version 4
+            buf[8] = (buf[8] & 0x3f) | 0x80; // UUID variant bits
+            const hex = Array.from(buf, b => b.toString(16).padStart(2, '0')).join('');
+            return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+        }
+        throw new Error('djust: Web Crypto API is required but not available in this environment.');
     }
 }
 
@@ -1497,7 +1503,7 @@ class StateBus {
     notify(key, newValue, oldValue) {
         const callbacks = this.subscribers.get(key) || new Set();
         if (callbacks.size > 0 && globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[StateBus] Notifying ${callbacks.size} subscribers of: ${key}`);
+            console.log(`[StateBus] Notifying ${callbacks.size} subscribers of: ${key}`);
         }
         callbacks.forEach(callback => {
             try {
@@ -1566,7 +1572,7 @@ class DraftManager {
 
             if (globalThis.djustDebug) {
                 const age = Math.round((Date.now() - draftData.timestamp) / 1000);
-                if (globalThis.djustDebug) console.log(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
+                console.log(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
             }
 
             return draftData.data;
@@ -2666,7 +2672,7 @@ const globalLoadingManager = {
             const hasDisable = triggerElement.hasAttribute('dj-loading.disable');
             if (globalThis.djustDebug) {
                 console.log(`[Loading] triggerElement:`, triggerElement);
-                if (globalThis.djustDebug) console.log(`[Loading] hasAttribute('dj-loading.disable'):`, hasDisable);
+                console.log(`[Loading] hasAttribute('dj-loading.disable'):`, hasDisable);
             }
             if (hasDisable) {
                 triggerElement.disabled = true;
@@ -2806,7 +2812,7 @@ async function handleEvent(eventName, params = {}) {
 
     // Cache miss - need to fetch from server
     if (globalThis.djustDebug && cacheConfig.has(eventName)) {
-        if (globalThis.djustDebug) console.log(`[LiveView:cache] Cache miss: ${cacheKey}`);
+        console.log(`[LiveView:cache] Cache miss: ${cacheKey}`);
     }
 
     if (!skipLoading) globalLoadingManager.startLoading(eventName, triggerElement);
@@ -2921,11 +2927,6 @@ function getNodeByPath(path, djustId = null) {
         const index = path[i]; // eslint-disable-line security/detect-object-injection -- path is a server-provided integer array
         const children = Array.from(node.childNodes).filter(child => {
             if (child.nodeType === Node.ELEMENT_NODE) return true;
-            if (child.nodeType === Node.COMMENT_NODE) {
-                // Include dj-if placeholder comments — they are significant position
-                // anchors used by RemoveChild/InsertChild patches (see baa3ca8).
-                return child.nodeValue === 'dj-if';
-            }
             if (child.nodeType === Node.TEXT_NODE) {
                 // Preserve non-breaking spaces (\u00A0) as significant, matching Rust VDOM parser.
                 // Only filter out ASCII whitespace-only text nodes (space, tab, newline, CR).
@@ -3182,10 +3183,6 @@ function createHtmlElement(tagLower) {
 function createNodeFromVNode(vnode, inSvgContext = false) {
     if (vnode.tag === '#text') {
         return document.createTextNode(vnode.text || '');
-    }
-
-    if (vnode.tag === '#comment') {
-        return document.createComment(vnode.text || '');
     }
 
     // Validate tag name against whitelist (security: prevents script injection)
@@ -3752,13 +3749,6 @@ function getSignificantChildren(node) {
 
     return Array.from(node.childNodes).filter(child => {
         if (child.nodeType === Node.ELEMENT_NODE) return true;
-        if (child.nodeType === Node.COMMENT_NODE) {
-            // Include dj-if placeholder comments as significant children.
-            // These are stable position anchors emitted by the template engine
-            // when {% if %} conditions are false (baa3ca8). RemoveChild and
-            // InsertChild patches target them by index, so they must be counted.
-            return child.nodeValue === 'dj-if';
-        }
         if (child.nodeType === Node.TEXT_NODE) {
             // Preserve all text nodes inside pre/code/textarea
             if (preserveWhitespace) return true;

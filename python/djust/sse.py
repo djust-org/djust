@@ -162,7 +162,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
     # ---- Security: module allowlist ----
     allowed_modules = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", [])
     if allowed_modules and not any(view_path.startswith(m) for m in allowed_modules):
-        logger.warning("SSE: blocked attempt to mount view from unauthorized module: %s", view_path)
+        logger.warning("SSE: blocked attempt to mount view from unauthorized module: %s", sanitize_for_log(view_path))
         session.push(
             {
                 "type": "error",
@@ -180,7 +180,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
         view_class = getattr(module, class_name)
     except (ValueError, ImportError, AttributeError) as exc:
         error_msg = "Failed to load view %s: %s" % (view_path, exc)
-        logger.error("Failed to load view %s: %s", view_path, exc)
+        logger.error("Failed to load view %s: %s", sanitize_for_log(view_path), exc)
         session.push({"type": "error", "error": _safe_error(error_msg, "View not found")})
         return
 
@@ -189,7 +189,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
 
     if not (isinstance(view_class, type) and issubclass(view_class, LiveView)):
         error_msg = "Security: %s is not a LiveView subclass." % view_path
-        logger.error("Security: %s is not a LiveView subclass.", view_path)
+        logger.error("Security: %s is not a LiveView subclass.", sanitize_for_log(view_path))
         session.push({"type": "error", "error": _safe_error(error_msg, "Invalid view class")})
         return
 
@@ -244,7 +244,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
         if match.kwargs:
             mount_kwargs.update(match.kwargs)
     except Exception:
-        pass
+        pass  # URL may not resolve (e.g. plain path like "/items/123") — skip kwargs extraction
 
     # Merge query-string params passed by the client
     for key, value in request.GET.items():
@@ -301,7 +301,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
         mount_msg["cache_config"] = cache_config
 
     session.push(mount_msg)
-    logger.info("SSE: mounted view %s (session %s)", view_path, session.session_id)
+    logger.info("SSE: mounted view %s (session %s)", sanitize_for_log(view_path), session.session_id)
 
 
 def _extract_cache_config(view_instance) -> Optional[Dict[str, Any]]:
@@ -358,7 +358,7 @@ async def _sse_handle_event(session: SSESession, event_name: str, params: Dict[s
         handler, params, event_name, coerce=coerce, positional_args=positional_args
     )
     if not validation["valid"]:
-        logger.error("SSE: parameter validation failed: %s", validation["error"])
+        logger.error("SSE: parameter validation failed: %s", sanitize_for_log(validation["error"]))
         await session.send_error(
             validation["error"],
             validation_details={
@@ -448,7 +448,6 @@ async def _sse_handle_event(session: SSESession, event_name: str, params: Dict[s
                 if hasattr(view_instance, "_rust_view") and view_instance._rust_view:
                     view_instance._rust_view.reset()
                 patch_list = None
-                patches = None
 
         if patch_list is not None:
             update_msg: Dict[str, Any] = {
@@ -508,7 +507,7 @@ async def _sse_handle_event(session: SSESession, event_name: str, params: Dict[s
 
     logger.debug(
         "SSE: event '%s' handled in %.1fms",
-        event_name,
+        sanitize_for_log(event_name),
         (time.perf_counter() - start_time) * 1000,
     )
 

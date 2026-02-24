@@ -8,7 +8,6 @@ Primary use-case: conditional CSS classes and HTML attributes without
 the DOM-corrupting <!--dj-if--> comment nodes that {% if %} blocks emit.
 """
 
-import pytest
 from djust._rust import render_template
 
 
