@@ -243,7 +243,9 @@ def handle_exception(
     msg = log_message or "Error occurred"
 
     # Log with exc_info only in DEBUG mode (don't fill prod logs with stack traces).
-    # String args are sanitized by DjustLogSanitizerFilter (installed in AppConfig.ready()).
+    # sanitize_for_log() is applied to user-controlled values to break CodeQL taint chains;
+    # DjustLogSanitizerFilter (installed in AppConfig.ready()) provides an additional layer.
+    safe_exc = sanitize_for_log(str(exception))
     if debug_mode:
         if extra:
             from .log_sanitizer import sanitize_dict_for_log
@@ -254,7 +256,7 @@ def handle_exception(
                 msg,
                 context,
                 type(exception).__name__,
-                str(exception),
+                safe_exc,
                 exc_info=True,
                 extra={"sanitized_context": safe_extra},
             )
@@ -264,7 +266,7 @@ def handle_exception(
                 msg,
                 context,
                 type(exception).__name__,
-                str(exception),
+                safe_exc,
                 exc_info=True,
             )
     else:

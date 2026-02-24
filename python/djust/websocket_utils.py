@@ -129,7 +129,7 @@ def _check_event_security(handler, owner_instance, event_name: str) -> Optional[
     logger.warning(
         "Deprecation: handler '%s' on %s is not decorated with @event_handler. "
         "This will be blocked in strict mode.",
-        event_name,
+        sanitize_for_log(event_name),
         type(owner_instance).__name__,
     )
     return None
@@ -172,13 +172,13 @@ async def _validate_event_security(
     handler = getattr(owner_instance, event_name, None)
     if not handler or not callable(handler):
         error_msg = _format_handler_not_found_error(owner_instance, event_name)
-        logger.warning("Handler not found: %s", event_name)
+        logger.warning("Handler not found: %s", sanitize_for_log(event_name))
         await ws.send_error(_safe_error(error_msg, "Event rejected"))
         return None
 
     security_error = _check_event_security(handler, owner_instance, event_name)
     if security_error:
-        logger.warning("Security check failed for event %s", event_name)
+        logger.warning("Security check failed for event %s", sanitize_for_log(event_name))
         await ws.send_error(_safe_error(security_error))
         return None
 
