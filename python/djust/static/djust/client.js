@@ -3179,6 +3179,10 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
         return document.createTextNode(vnode.text || '');
     }
 
+    if (vnode.tag === '#comment') {
+        return document.createComment(vnode.text || '');
+    }
+
     // Validate tag name against whitelist (security: prevents script injection)
     // Convert to lowercase for consistent matching
     const tagLower = String(vnode.tag || '').toLowerCase();
