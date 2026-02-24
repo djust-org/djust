@@ -313,6 +313,26 @@ fn node_to_template_string(node: &Node) -> String {
             result.push_str("}}");
             result
         }
+        Node::InlineIf {
+            true_expr,
+            condition,
+            false_expr,
+            filters,
+        } => {
+            let mut result = format!("{{{{ {true_expr} if {condition}");
+            if !false_expr.is_empty() {
+                result.push_str(&format!(" else {false_expr}"));
+            }
+            for (filter_name, arg) in filters {
+                if let Some(arg) = arg {
+                    result.push_str(&format!("|{filter_name}:\"{arg}\""));
+                } else {
+                    result.push_str(&format!("|{filter_name}"));
+                }
+            }
+            result.push_str(" }}");
+            result
+        }
         Node::Block { name, nodes } => {
             let mut result = format!("{{% block {name} %}}");
             result.push_str(&nodes_to_template_string(nodes));
