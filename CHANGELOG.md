@@ -7,10 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3rc2] - 2026-02-24
+
 ### Fixed
 
 - **`{% if/else %}` branches miscounting div depth in template extraction** — `_extract_liveview_root_with_wrapper` and the other extraction methods treated both branches of a `{% if/else %}` block as independent div opens, causing depth to never reach 0 when both branches opened a div sharing a single closing `</div>`. This caused the entire template to be returned as root, making the view non-reactive. Fixed with a shared `_find_closing_div_pos()` static method that uses a branch stack to restore depth at `{% else %}`/`{% elif %}` tags, so mutually-exclusive branches are counted as one open. ([#365](https://github.com/djust-org/djust/issues/365))
 - **VDOM extraction used fully-merged `{% extends %}` document** — For inherited templates, `get_template()` extracted the VDOM root from the fully-resolved document (base HTML + inlined blocks), which contains surrounding HTML that the depth counter could trip over. Now prefers the child template source when it contains `dj-root`/`dj-view`, which holds exactly the block content needed. Also fixes the exception fallback path: the raw child source (containing `{% extends %}`) was incorrectly stored in `_full_template`, causing `render_full_template` to attempt rendering a non-standalone template. ([#366](https://github.com/djust-org/djust/issues/366))
+- **`TypeError: Illegal invocation` in debug panel on Chrome/Edge** — `_hookExistingWebSocket` called native WebSocket getter/setter functions via `Function.prototype.call()` from external code, which fails V8's brand check on IDL-generated bindings. Fixed by using normal property access (`ws.onmessage`) and assignment (`ws.onmessage = handler`) instead of `desc.get/set.call(ws)`. ([#367](https://github.com/djust-org/djust/issues/367))
 
 ## [0.3.3rc1] - 2026-02-21
 
@@ -135,11 +138,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Automatic change tracking** — Phoenix-style render optimization. The framework automatically detects which context values changed between renders and only sends those to Rust's `update_state()`. Replaces the manual `static_assigns` API. Two-layer detection: snapshot comparison for instance attributes, `id()` reference comparison for computed values (e.g., `@lru_cache` results). Immutable types (`str`, `int`, `float`, `bool`, `None`, `bytes`, `tuple`, `frozenset`) skip `deepcopy` in snapshots.
-
-### Fixed
-
-- **Developer Tools Events tab not capturing events** — The debug panel loaded after the WebSocket connected, so its prototype hooks missed the existing connection's `onmessage` handler. Fixed `_hookExistingWebSocket()` to re-trigger the patched `WebSocket.prototype.onmessage` setter via property assignment, which wraps the pre-existing handler with `_handleReceivedMessage`. Also added `html_update` to event response type matching. ([#367](https://github.com/djust-org/djust/issues/367))
-- **`TypeError: Illegal invocation` in debug panel on Chrome/Edge** — `_hookExistingWebSocket` called native WebSocket getter/setter functions via `Function.prototype.call()` from external code, which fails V8's brand check on IDL-generated bindings. Fixed by using normal property access (`ws.onmessage`) and assignment (`ws.onmessage = handler`) instead of `desc.get/set.call(ws)`. ([#367](https://github.com/djust-org/djust/issues/367))
 
 ### Removed
 
