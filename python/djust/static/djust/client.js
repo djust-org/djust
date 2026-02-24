@@ -183,7 +183,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 expiresAt
             });
             if (globalThis.djustDebug) {
-                console.log(`[LiveView:cache] Cached patches: ${cacheKey} (TTL: ${ttl}s)`);
+                if (globalThis.djustDebug) console.log(`[LiveView:cache] Cached patches: ${cacheKey} (TTL: ${ttl}s)`);
             }
             pendingCacheRequests.delete(data.cache_request_id);
         }
@@ -344,7 +344,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 globalLoadingManager.stopLoading(loadingEventName, triggerElement);
             }
         } else if (globalThis.djustDebug) {
-            console.log('[LiveView] Keeping loading state — async work pending');
+            if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
         }
         return true;
 
@@ -371,6 +371,10 @@ class LiveViewWebSocket {
         this._intentionalDisconnect = false;  // Set by disconnect() to suppress error overlay
         this.lastEventName = null;  // Phase 5: Track last event for loading state
         this.lastTriggerElement = null;  // Phase 5: Track trigger element for scoped loading
+        // Optional callback invoked when all reconnect attempts are exhausted.
+        // If set, it is called instead of _showConnectionErrorOverlay(), allowing
+        // 14-init.js to switch to the SSE fallback transport.
+        this.onTransportFailed = null;
 
         // WebSocket statistics tracking (Phase 2.1: WebSocket Inspector)
         this.stats = {
@@ -494,9 +498,16 @@ class LiveViewWebSocket {
                 if (globalThis.djustDebug) console.log(`[LiveView] Reconnecting in ${delay}ms...`);
                 setTimeout(() => this.connect(url), delay);
             } else {
-                console.warn('[LiveView] Max reconnection attempts reached. Falling back to HTTP mode.');
+                console.warn('[LiveView] Max reconnection attempts reached.');
                 this.enabled = false;
-                this._showConnectionErrorOverlay();
+                // If an SSE fallback is configured, hand off to it instead of
+                // showing the connection error overlay.
+                if (typeof this.onTransportFailed === 'function') {
+                    if (globalThis.djustDebug) console.log('[LiveView] Invoking onTransportFailed for SSE fallback');
+                    this.onTransportFailed();
+                } else {
+                    this._showConnectionErrorOverlay();
+                }
             }
         };
 
@@ -564,10 +575,10 @@ class LiveViewWebSocket {
                 const hasDataDjAttrs = data.has_ids === true;
                 if (this.skipMountHtml) {
                     // Content already rendered by HTTP GET - don't replace innerHTML
-                    // If server HTML has data-dj-id attributes, stamp them onto existing DOM
+                    // If server HTML has dj-id attributes, stamp them onto existing DOM
                     // This preserves whitespace (e.g. in code blocks) that innerHTML would destroy
                     if (hasDataDjAttrs && data.html) {
-                        if (globalThis.djustDebug) console.log('[LiveView] Stamping data-dj-id attributes onto pre-rendered DOM');
+                        if (globalThis.djustDebug) console.log('[LiveView] Stamping dj-id attributes onto pre-rendered DOM');
                         _stampDjIds(data.html);
                     } else {
                         if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
@@ -577,7 +588,7 @@ class LiveViewWebSocket {
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
-                        if (globalThis.djustDebug) console.log('[LiveView] Hydrating DOM with data-dj-id attributes for reliable patching');
+                        if (globalThis.djustDebug) console.log('[LiveView] Hydrating DOM with dj-id attributes for reliable patching');
                     }
                     let container = document.querySelector('[dj-view]');
                     if (!container) {
@@ -622,7 +633,7 @@ class LiveViewWebSocket {
                 initTodoItems();
                 bindLiveViewEvents();
                 if (globalThis.djustDebug) {
-                    console.log('[LiveView] DOM recovered via morph, version:', data.version);
+                    if (globalThis.djustDebug) console.log('[LiveView] DOM recovered via morph, version:', data.version);
                 }
                 break;
             }
@@ -988,6 +999,283 @@ window.LiveViewWebSocket = LiveViewWebSocket;
 // Global WebSocket instance
 let liveViewWS = null;
 
+// ============================================================================
+// SSE (Server-Sent Events) Transport for djust LiveView
+//
+// Fallback transport used when WebSocket is unavailable (e.g. corporate proxies).
+// Architecture:
+//   Server → Client : EventSource (text/event-stream at /djust/sse/<session_id>/)
+//   Client → Server : HTTP POST  to /djust/sse/<session_id>/event/
+//
+// Feature limitations vs WebSocket transport (documented in docs/sse-transport.md):
+//   - No binary file uploads
+//   - No presence tracking
+//   - No actor-based state management
+//   - No MessagePack binary encoding
+// ============================================================================
+
+class LiveViewSSE {
+    constructor() {
+        this.sessionId = null;
+        this.eventSource = null;
+        this.sseBaseUrl = null;
+        this.enabled = true;
+        this.viewMounted = false;
+        this.lastEventName = null;
+        this.lastTriggerElement = null;
+        // Mirror LiveViewWebSocket interface for interoperability
+        this.stats = { sent: 0, received: 0, sentBytes: 0, receivedBytes: 0 };
+    }
+
+    /**
+     * Open an SSE stream and mount the view.
+     *
+     * @param {string} viewPath  Dotted Python path to the LiveView class
+     * @param {Object} params    URL query params forwarded to mount()
+     */
+    connect(viewPath, params = {}) {
+        if (!this.enabled) return;
+        if (globalThis.djustDebug) console.log('[SSE] Connecting, view:', viewPath);
+
+        // Session ID is generated client-side; the server stores it as the
+        // lookup key so event POSTs can reach the right session.
+        this.sessionId = this._generateSessionId();
+        this.sseBaseUrl = `/djust/sse/${this.sessionId}/`;
+
+        const urlParams = new URLSearchParams(params);
+        urlParams.set('view', viewPath);
+        const streamUrl = `${this.sseBaseUrl}?${urlParams.toString()}`;
+
+        this.eventSource = new EventSource(streamUrl);
+
+        this.eventSource.onmessage = (event) => {
+            try {
+                this.stats.received++;
+                this.stats.receivedBytes += event.data.length;
+                const data = JSON.parse(event.data);
+                this.handleMessage(data);
+            } catch (err) {
+                console.error('[SSE] Failed to parse message:', err);
+            }
+        };
+
+        this.eventSource.onerror = (_err) => {
+            // EventSource auto-reconnects; we only disable on persistent failure.
+            // onerror fires on every connection hiccup, so guard against noise.
+            if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED) {
+                console.warn('[SSE] EventSource closed unexpectedly.');
+                this.enabled = false;
+            }
+        };
+    }
+
+    /**
+     * Cleanly close the SSE stream (e.g. during TurboNav page transitions).
+     */
+    disconnect() {
+        if (this.eventSource) {
+            this.eventSource.close();
+            this.eventSource = null;
+        }
+        this.viewMounted = false;
+        this.sessionId = null;
+        if (globalThis.djustDebug) console.log('[SSE] Disconnected');
+    }
+
+    /**
+     * Handle a server-pushed message.
+     * The message format is identical to the WebSocket protocol so that
+     * 02-response-handler.js and all other message-handling modules work
+     * without modification.
+     */
+    handleMessage(data) {
+        if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
+
+        switch (data.type) {
+
+            case 'sse_connect':
+                // Session ID confirmation from server (informational only — we
+                // already know our session ID since we generated it).
+                if (globalThis.djustDebug) console.log('[SSE] Connection acknowledged, session:', data.session_id);
+                break;
+
+            case 'mount':
+                this.viewMounted = true;
+                if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
+
+                if (data.version !== undefined) {
+                    clientVdomVersion = data.version;
+                }
+                if (data.cache_config) {
+                    setCacheConfig(data.cache_config);
+                }
+
+                if (data.html) {
+                    let container = document.querySelector('[dj-view]');
+                    if (!container) container = document.querySelector('[dj-root]');
+                    if (container) {
+                        const hasDataDjAttrs = data.has_ids === true;
+                        if (hasDataDjAttrs) {
+                            _stampDjIds(data.html);
+                        } else {
+                            container.innerHTML = data.html;
+                        }
+                        bindLiveViewEvents();
+                    }
+                }
+                break;
+
+            case 'patch':
+                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                this.lastEventName = null;
+                this.lastTriggerElement = null;
+                break;
+
+            case 'html_update':
+                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                this.lastEventName = null;
+                this.lastTriggerElement = null;
+                break;
+
+            case 'error':
+                console.error('[SSE] Server error:', data.error);
+                window.dispatchEvent(new CustomEvent('djust:error', {
+                    detail: { error: data.error, traceback: data.traceback || null }
+                }));
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
+            case 'noop':
+                if (this.lastEventName) {
+                    if (!data.async_pending) {
+                        globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    }
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
+            case 'push_event':
+                window.dispatchEvent(new CustomEvent('djust:push_event', {
+                    detail: { event: data.event, payload: data.payload }
+                }));
+                if (typeof dispatchPushEventToHooks === 'function') {
+                    dispatchPushEventToHooks(data.event, data.payload);
+                }
+                globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                break;
+
+            case 'navigation':
+                if (window.djust.navigation) {
+                    window.djust.navigation.handleNavigation(data);
+                }
+                break;
+
+            case 'navigate':
+                // Auth redirect (sent by server when auth check fails)
+                window.location.href = data.to;
+                break;
+
+            case 'stream':
+                if (window.djust.handleStreamMessage) {
+                    window.djust.handleStreamMessage(data);
+                }
+                break;
+
+            case 'accessibility':
+                if (window.djust.accessibility) {
+                    window.djust.accessibility.processAnnouncements(data.announcements);
+                }
+                break;
+
+            case 'focus':
+                if (window.djust.accessibility) {
+                    window.djust.accessibility.processFocus([data.selector, data.options]);
+                }
+                break;
+
+            case 'reload':
+                window.location.reload();
+                break;
+
+            default:
+                if (globalThis.djustDebug) console.log('[SSE] Unknown message type:', data.type);
+        }
+    }
+
+    /**
+     * Send an event to the server via HTTP POST.
+     *
+     * Returns true if the event was dispatched, false if not (mirrors
+     * LiveViewWebSocket.sendEvent so 11-event-handler.js works unchanged).
+     *
+     * @param {string}      eventName      Handler name on the LiveView
+     * @param {Object}      params         Event parameters
+     * @param {Element|null} triggerElement DOM element that triggered the event
+     */
+    sendEvent(eventName, params = {}, triggerElement = null) {
+        if (!this.enabled || !this.viewMounted) {
+            return false;
+        }
+
+        this.lastEventName = eventName;
+        this.lastTriggerElement = triggerElement;
+
+        const body = JSON.stringify({ event: eventName, params });
+        this.stats.sent++;
+        this.stats.sentBytes += body.length;
+
+        fetch(`${this.sseBaseUrl}event/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+        })
+            .then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.json();
+            })
+            .catch(err => {
+                console.error('[SSE] Event POST failed:', err);
+                globalLoadingManager.stopLoading(eventName, triggerElement);
+                this.lastEventName = null;
+                this.lastTriggerElement = null;
+            });
+
+        return true;
+    }
+
+    /**
+     * No-op: SSE keepalives are handled server-side via comment lines.
+     * This method exists so callers that call liveViewWS.startHeartbeat() work
+     * without branching.
+     */
+    startHeartbeat() {
+        // SSE transport uses server-side keepalive comments — no client heartbeat needed.
+    }
+
+    // ------------------------------------------------------------------ //
+    // Private helpers
+    // ------------------------------------------------------------------ //
+
+    _generateSessionId() {
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+            return crypto.randomUUID();
+        }
+        // Fallback for older environments
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = Math.random() * 16 | 0;
+            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+    }
+}
+
+// Expose to window for 14-init.js transport negotiation
+window.djust.LiveViewSSE = LiveViewSSE;
+
 // === HTTP Fallback LiveView Client ===
 
 // Track VDOM version for synchronization
@@ -1022,7 +1310,7 @@ function addToCache(cacheKey, value) {
         const oldestKey = resultCache.keys().next().value;
         resultCache.delete(oldestKey);
         if (globalThis.djustDebug) {
-            console.log(`[LiveView:cache] Evicted (LRU): ${oldestKey}`);
+            if (globalThis.djustDebug) console.log(`[LiveView:cache] Evicted (LRU): ${oldestKey}`);
         }
     }
 
@@ -1039,7 +1327,7 @@ function setCacheConfig(config) {
     Object.entries(config).forEach(([handlerName, handlerConfig]) => {
         cacheConfig.set(handlerName, handlerConfig);
         if (globalThis.djustDebug) {
-            console.log(`[LiveView:cache] Configured cache for ${handlerName}:`, handlerConfig);
+            if (globalThis.djustDebug) console.log(`[LiveView:cache] Configured cache for ${handlerName}:`, handlerConfig);
         }
     });
 }
@@ -1127,7 +1415,7 @@ function clearCache() {
     const size = resultCache.size;
     resultCache.clear();
     if (globalThis.djustDebug) {
-        console.log(`[LiveView:cache] Cleared all ${size} cached entries`);
+        if (globalThis.djustDebug) console.log(`[LiveView:cache] Cleared all ${size} cached entries`);
     }
 }
 
@@ -1157,7 +1445,7 @@ function invalidateCache(pattern) {
     }
 
     if (globalThis.djustDebug) {
-        console.log(`[LiveView:cache] Invalidated ${count} entries matching: ${pattern}`);
+        if (globalThis.djustDebug) console.log(`[LiveView:cache] Invalidated ${count} entries matching: ${pattern}`);
     }
 
     return count;
@@ -1178,7 +1466,7 @@ class StateBus {
         const oldValue = this.state.get(key);
         this.state.set(key, value);
         if (globalThis.djustDebug) {
-            console.log(`[StateBus] Set: ${key} =`, value, `(was:`, oldValue, `)`);
+            if (globalThis.djustDebug) console.log(`[StateBus] Set: ${key} =`, value, `(was:`, oldValue, `)`);
         }
         this.notify(key, value, oldValue);
     }
@@ -1193,14 +1481,14 @@ class StateBus {
         }
         this.subscribers.get(key).add(callback);
         if (globalThis.djustDebug) {
-            console.log(`[StateBus] Subscribed to: ${key} (${this.subscribers.get(key).size} subscribers)`);
+            if (globalThis.djustDebug) console.log(`[StateBus] Subscribed to: ${key} (${this.subscribers.get(key).size} subscribers)`);
         }
         return () => {
             const subs = this.subscribers.get(key);
             if (subs) {
                 subs.delete(callback);
                 if (globalThis.djustDebug) {
-                    console.log(`[StateBus] Unsubscribed from: ${key} (${subs.size} remaining)`);
+                    if (globalThis.djustDebug) console.log(`[StateBus] Unsubscribed from: ${key} (${subs.size} remaining)`);
                 }
             }
         };
@@ -1209,7 +1497,7 @@ class StateBus {
     notify(key, newValue, oldValue) {
         const callbacks = this.subscribers.get(key) || new Set();
         if (callbacks.size > 0 && globalThis.djustDebug) {
-            console.log(`[StateBus] Notifying ${callbacks.size} subscribers of: ${key}`);
+            if (globalThis.djustDebug) console.log(`[StateBus] Notifying ${callbacks.size} subscribers of: ${key}`);
         }
         callbacks.forEach(callback => {
             try {
@@ -1224,7 +1512,7 @@ class StateBus {
         this.state.clear();
         this.subscribers.clear();
         if (globalThis.djustDebug) {
-            console.log('[StateBus] Cleared all state');
+            if (globalThis.djustDebug) console.log('[StateBus] Cleared all state');
         }
     }
 
@@ -1256,7 +1544,7 @@ class DraftManager {
                 localStorage.setItem(`djust_draft_${draftKey}`, JSON.stringify(draftData));
 
                 if (globalThis.djustDebug) {
-                    console.log(`[DraftMode] Saved draft: ${draftKey}`, data);
+                    if (globalThis.djustDebug) console.log(`[DraftMode] Saved draft: ${draftKey}`, data);
                 }
             } catch (error) {
                 console.error(`[DraftMode] Failed to save draft ${draftKey}:`, error);
@@ -1278,7 +1566,7 @@ class DraftManager {
 
             if (globalThis.djustDebug) {
                 const age = Math.round((Date.now() - draftData.timestamp) / 1000);
-                console.log(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
+                if (globalThis.djustDebug) console.log(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
             }
 
             return draftData.data;
@@ -1298,7 +1586,7 @@ class DraftManager {
             localStorage.removeItem(`djust_draft_${draftKey}`);
 
             if (globalThis.djustDebug) {
-                console.log(`[DraftMode] Cleared draft: ${draftKey}`);
+                if (globalThis.djustDebug) console.log(`[DraftMode] Cleared draft: ${draftKey}`);
             }
         } catch (error) {
             console.error(`[DraftMode] Failed to clear draft ${draftKey}:`, error);
@@ -1325,7 +1613,7 @@ class DraftManager {
         keys.forEach(key => this.clearDraft(key));
 
         if (globalThis.djustDebug) {
-            console.log(`[DraftMode] Cleared all ${keys.length} drafts`);
+            if (globalThis.djustDebug) console.log(`[DraftMode] Cleared all ${keys.length} drafts`);
         }
     }
 }
@@ -1455,7 +1743,7 @@ function restoreFormData(container, data) {
     });
 
     if (globalThis.djustDebug) {
-        console.log('[DraftMode] Restored form data:', data);
+        if (globalThis.djustDebug) console.log('[DraftMode] Restored form data:', data);
     }
 }
 
@@ -1699,7 +1987,7 @@ function extractTypedParams(element) {
         if (attr.name.startsWith('data-liveview') ||
             attr.name.startsWith('data-live-') ||
             attr.name.startsWith('data-djust') ||
-            attr.name === 'data-dj-id' ||
+            attr.name === 'dj-id' ||
             attr.name === 'data-loading' ||
             attr.name === 'data-component-id') {
             continue;
@@ -2041,7 +2329,7 @@ function bindLiveViewEvents() {
                 }
 
                 if (globalThis.djustDebug) {
-                    console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
+                    if (globalThis.djustDebug) console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
                 }
                 await handleEvent(parsedChange.name, params);
             };
@@ -2319,7 +2607,7 @@ const globalLoadingManager = {
         if (modifiers.length > 0) {
             this.registeredElements.set(element, { eventName, modifiers, originalState });
             if (globalThis.djustDebug) {
-                console.log(`[Loading] Registered element for "${eventName}":`, modifiers);
+                if (globalThis.djustDebug) console.log(`[Loading] Registered element for "${eventName}":`, modifiers);
             }
         }
     },
@@ -2363,7 +2651,7 @@ const globalLoadingManager = {
             }
         });
         if (globalThis.djustDebug) {
-            console.log(`[Loading] Scanned ${this.registeredElements.size} elements with dj-loading attributes`);
+            if (globalThis.djustDebug) console.log(`[Loading] Scanned ${this.registeredElements.size} elements with dj-loading attributes`);
         }
     },
 
@@ -2377,8 +2665,8 @@ const globalLoadingManager = {
             // Check if trigger element has dj-loading.disable
             const hasDisable = triggerElement.hasAttribute('dj-loading.disable');
             if (globalThis.djustDebug) {
-                console.log(`[Loading] triggerElement:`, triggerElement);
-                console.log(`[Loading] hasAttribute('dj-loading.disable'):`, hasDisable);
+                if (globalThis.djustDebug) console.log(`[Loading] triggerElement:`, triggerElement);
+                if (globalThis.djustDebug) console.log(`[Loading] hasAttribute('dj-loading.disable'):`, hasDisable);
             }
             if (hasDisable) {
                 triggerElement.disabled = true;
@@ -2395,7 +2683,7 @@ const globalLoadingManager = {
         document.body.classList.add('djust-global-loading');
 
         if (globalThis.djustDebug) {
-            console.log(`[Loading] Started: ${eventName}`);
+            if (globalThis.djustDebug) console.log(`[Loading] Started: ${eventName}`);
         }
     },
 
@@ -2422,7 +2710,7 @@ const globalLoadingManager = {
         document.body.classList.remove('djust-global-loading');
 
         if (globalThis.djustDebug) {
-            console.log(`[Loading] Stopped: ${eventName}`);
+            if (globalThis.djustDebug) console.log(`[Loading] Stopped: ${eventName}`);
         }
     },
 
@@ -2470,7 +2758,7 @@ function generateCacheRequestId() {
 // Main Event Handler
 async function handleEvent(eventName, params = {}) {
     if (globalThis.djustDebug) {
-        console.log(`[LiveView] Handling event: ${eventName}`, params);
+        if (globalThis.djustDebug) console.log(`[LiveView] Handling event: ${eventName}`, params);
     }
 
     // Extract client-only properties before sending to server.
@@ -2498,7 +2786,7 @@ async function handleEvent(eventName, params = {}) {
     if (cached) {
         // Cache hit! Apply cached patches without server round-trip
         if (globalThis.djustDebug) {
-            console.log(`[LiveView:cache] Cache hit: ${cacheKey}`);
+            if (globalThis.djustDebug) console.log(`[LiveView:cache] Cache hit: ${cacheKey}`);
         }
 
         // Still show brief loading state for UX consistency
@@ -2518,7 +2806,7 @@ async function handleEvent(eventName, params = {}) {
 
     // Cache miss - need to fetch from server
     if (globalThis.djustDebug && cacheConfig.has(eventName)) {
-        console.log(`[LiveView:cache] Cache miss: ${cacheKey}`);
+        if (globalThis.djustDebug) console.log(`[LiveView:cache] Cache miss: ${cacheKey}`);
     }
 
     if (!skipLoading) globalLoadingManager.startLoading(eventName, triggerElement);
@@ -2537,7 +2825,7 @@ async function handleEvent(eventName, params = {}) {
             if (pendingCacheRequests.has(cacheRequestId)) {
                 pendingCacheRequests.delete(cacheRequestId);
                 if (globalThis.djustDebug) {
-                    console.log(`[LiveView:cache] Cleaned up stale pending request: ${cacheRequestId}`);
+                    if (globalThis.djustDebug) console.log(`[LiveView:cache] Cleaned up stale pending request: ${cacheRequestId}`);
                 }
             }
         }, PENDING_CACHE_TIMEOUT);
@@ -2601,7 +2889,7 @@ function sanitizeIdForLog(id) {
  * Resolve a DOM node using ID-based lookup (primary) or path traversal (fallback).
  *
  * Resolution strategy:
- * 1. If djustId is provided, try querySelector('[data-dj-id="..."]') - O(1), reliable
+ * 1. If djustId is provided, try querySelector('[dj-id="..."]') - O(1), reliable
  * 2. Fall back to index-based path traversal
  *
  * @param {Array<number>} path - Index-based path (fallback)
@@ -2611,14 +2899,14 @@ function sanitizeIdForLog(id) {
 function getNodeByPath(path, djustId = null) {
     // Strategy 1: ID-based resolution (fast, reliable)
     if (djustId) {
-        const byId = document.querySelector(`[data-dj-id="${CSS.escape(djustId)}"]`);
+        const byId = document.querySelector(`[dj-id="${CSS.escape(djustId)}"]`);
         if (byId) {
             return byId;
         }
         // ID not found - fall through to path-based
         if (globalThis.djustDebug) {
             // Log without user data to avoid log injection
-            console.log('[LiveView] ID lookup failed, trying path fallback');
+            if (globalThis.djustDebug) console.log('[LiveView] ID lookup failed, trying path fallback');
         }
     }
 
@@ -3298,7 +3586,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                         // Clone and append new child
                         existingElement.appendChild(newChild.cloneNode(true));
                         if (globalThis.djustDebug) {
-                            console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
+                            if (globalThis.djustDebug) console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
                         }
                     }
                 }
@@ -3319,7 +3607,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                         // Clone and prepend new child
                         existingElement.insertBefore(newChild.cloneNode(true), firstExisting);
                         if (globalThis.djustDebug) {
-                            console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
+                            if (globalThis.djustDebug) console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
                         }
                     }
                 }
@@ -3329,7 +3617,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
             case 'ignore':
                 // Don't update this element at all
                 if (globalThis.djustDebug) {
-                    console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
+                    if (globalThis.djustDebug) console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
                 }
                 break;
 
@@ -3394,9 +3682,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
 }
 
 /**
- * Stamp data-dj-id attributes from server HTML onto existing pre-rendered DOM.
+ * Stamp dj-id attributes from server HTML onto existing pre-rendered DOM.
  * This avoids replacing innerHTML (which destroys whitespace in code blocks).
- * Walks both trees in parallel and copies data-dj-id from server elements to DOM elements.
+ * Walks both trees in parallel and copies dj-id from server elements to DOM elements.
  * Note: serverHtml is trusted (comes from our own WebSocket mount response).
  */
 function _stampDjIds(serverHtml, container) {
@@ -3417,9 +3705,9 @@ function _stampDjIds(serverHtml, container) {
         // Bail out if structure diverges (e.g. browser extension injected elements)
         if (domNode.tagName !== serverNode.tagName) return;
 
-        const djId = serverNode.getAttribute('data-dj-id');
+        const djId = serverNode.getAttribute('dj-id');
         if (djId) {
-            domNode.setAttribute('data-dj-id', djId);
+            domNode.setAttribute('dj-id', djId);
         }
         // Also stamp data-dj-src (template source mapping) if present
         const djSrc = serverNode.getAttribute('data-dj-src');
@@ -3684,9 +3972,9 @@ function applySinglePatch(patch) {
             case 'MoveChild': {
                 let child;
                 if (patch.child_d) {
-                    // ID-based resolution: find direct child by data-dj-id (resilient to index shifts)
+                    // ID-based resolution: find direct child by dj-id (resilient to index shifts)
                     const escaped = CSS.escape(patch.child_d);
-                    child = node.querySelector(`:scope > [data-dj-id="${escaped}"]`);
+                    child = node.querySelector(`:scope > [dj-id="${escaped}"]`);
                 }
                 if (!child) {
                     // Fallback: index-based
@@ -3947,7 +4235,7 @@ const lazyHydrationManager = {
         }
 
         if (globalThis.djustDebug) {
-            console.log(`[LiveView:lazy] Registered element for lazy hydration (mode: ${lazyMode})`, element);
+            if (globalThis.djustDebug) console.log(`[LiveView:lazy] Registered element for lazy hydration (mode: ${lazyMode})`, element);
         }
     },
 
@@ -4046,6 +4334,44 @@ const lazyHydrationManager = {
 // Expose lazy hydration API
 window.djust.lazyHydration = lazyHydrationManager;
 
+// ============================================================================
+// SSE Transport Fallback
+// ============================================================================
+
+/**
+ * Switch the active transport to SSE.
+ *
+ * Called either when WebSocket exhausts all reconnect attempts (automatic
+ * fallback) or directly when WebSocket is disabled and SSE is available.
+ * Replaces the global liveViewWS instance with a LiveViewSSE instance and
+ * mounts the view via the SSE stream endpoint.
+ */
+function _switchToSSETransport() {
+    const container = document.querySelector('[dj-view]');
+    if (!container) {
+        console.warn('[SSE] No [dj-view] container found, cannot switch to SSE transport');
+        return;
+    }
+    const viewPath = container.getAttribute('dj-view');
+    if (!viewPath) {
+        console.warn('[SSE] [dj-view] has no view path attribute, cannot switch to SSE transport');
+        return;
+    }
+
+    if (globalThis.djustDebug) console.log('[SSE] Switching to SSE transport for view:', viewPath);
+
+    const sseInstance = new window.djust.LiveViewSSE();
+    liveViewWS = sseInstance;
+    window.djust.liveViewInstance = sseInstance;
+
+    const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+    sseInstance.connect(viewPath, urlParams);
+}
+
+// Expose for tests and manual override
+window.djust._switchToSSETransport = _switchToSSETransport;
+
+// ============================================================================
 // Auto-stamp dj-root and dj-liveview-root on [dj-view]
 // elements so developers only need to write dj-view (#258).
 // Extracted as a helper so both djustInit() and reinitLiveViewForTurboNav() can call it.
@@ -4092,14 +4418,27 @@ function djustInit() {
 
     // Only initialize WebSocket if there are eager containers AND WebSocket is enabled
     const wsEnabled = window.DJUST_USE_WEBSOCKET !== false;
+    const sseAvailable = typeof window.djust.LiveViewSSE !== 'undefined' && typeof EventSource !== 'undefined';
+
     if (eagerContainers.length > 0 && wsEnabled) {
         // Initialize WebSocket
         liveViewWS = new LiveViewWebSocket();
         window.djust.liveViewInstance = liveViewWS;
+
+        // Wire SSE fallback: if WebSocket exhausts all reconnect attempts AND
+        // the SSE transport is available, switch over automatically.
+        if (sseAvailable) {
+            liveViewWS.onTransportFailed = () => _switchToSSETransport();
+        }
+
         liveViewWS.connect();
 
         // Start heartbeat
         liveViewWS.startHeartbeat();
+    } else if (eagerContainers.length > 0 && !wsEnabled && sseAvailable) {
+        // use_websocket: false but SSE is available — skip WebSocket entirely
+        if (globalThis.djustDebug) console.log('[LiveView] WebSocket disabled, using SSE transport directly');
+        _switchToSSETransport();
     } else if (eagerContainers.length > 0 && !wsEnabled) {
         // HTTP-only mode: create WS instance but disable it so sendEvent() falls through to HTTP
         liveViewWS = new LiveViewWebSocket();
@@ -5036,6 +5375,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // Use data.action (set by server alongside type:"navigation") to distinguish
         // live_patch from live_redirect. Falls back to data.type for any legacy messages
         // that were sent without an action field.
+        // TODO(deprecation): data.type fallback for pre-#307 clients — remove in next minor release
         const action = data.action || data.type;
         if (action === 'live_patch') {
             handleLivePatch(data);

@@ -15,7 +15,7 @@ function sanitizeIdForLog(id) {
  * Resolve a DOM node using ID-based lookup (primary) or path traversal (fallback).
  *
  * Resolution strategy:
- * 1. If djustId is provided, try querySelector('[data-dj-id="..."]') - O(1), reliable
+ * 1. If djustId is provided, try querySelector('[dj-id="..."]') - O(1), reliable
  * 2. Fall back to index-based path traversal
  *
  * @param {Array<number>} path - Index-based path (fallback)
@@ -25,7 +25,7 @@ function sanitizeIdForLog(id) {
 function getNodeByPath(path, djustId = null) {
     // Strategy 1: ID-based resolution (fast, reliable)
     if (djustId) {
-        const byId = document.querySelector(`[data-dj-id="${CSS.escape(djustId)}"]`);
+        const byId = document.querySelector(`[dj-id="${CSS.escape(djustId)}"]`);
         if (byId) {
             return byId;
         }
@@ -808,9 +808,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
 }
 
 /**
- * Stamp data-dj-id attributes from server HTML onto existing pre-rendered DOM.
+ * Stamp dj-id attributes from server HTML onto existing pre-rendered DOM.
  * This avoids replacing innerHTML (which destroys whitespace in code blocks).
- * Walks both trees in parallel and copies data-dj-id from server elements to DOM elements.
+ * Walks both trees in parallel and copies dj-id from server elements to DOM elements.
  * Note: serverHtml is trusted (comes from our own WebSocket mount response).
  */
 function _stampDjIds(serverHtml, container) {
@@ -831,9 +831,9 @@ function _stampDjIds(serverHtml, container) {
         // Bail out if structure diverges (e.g. browser extension injected elements)
         if (domNode.tagName !== serverNode.tagName) return;
 
-        const djId = serverNode.getAttribute('data-dj-id');
+        const djId = serverNode.getAttribute('dj-id');
         if (djId) {
-            domNode.setAttribute('data-dj-id', djId);
+            domNode.setAttribute('dj-id', djId);
         }
         // Also stamp data-dj-src (template source mapping) if present
         const djSrc = serverNode.getAttribute('data-dj-src');
@@ -1098,9 +1098,9 @@ function applySinglePatch(patch) {
             case 'MoveChild': {
                 let child;
                 if (patch.child_d) {
-                    // ID-based resolution: find direct child by data-dj-id (resilient to index shifts)
+                    // ID-based resolution: find direct child by dj-id (resilient to index shifts)
                     const escaped = CSS.escape(patch.child_d);
-                    child = node.querySelector(`:scope > [data-dj-id="${escaped}"]`);
+                    child = node.querySelector(`:scope > [dj-id="${escaped}"]`);
                 }
                 if (!child) {
                     // Fallback: index-based

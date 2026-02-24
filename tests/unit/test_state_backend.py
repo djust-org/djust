@@ -356,8 +356,8 @@ class TestRedisBackend:
         # Do another update to verify VDOM diffing works
         view2.update_state({"count": 3})
         html4, patches, version = view2.render_with_diff()
-        # VDOM adds data-dj-id tracking attributes
-        assert html4 == '<div data-dj-id="0">3</div>'
+        # VDOM adds dj-id tracking attributes
+        assert html4 == '<div dj-id="0">3</div>'
         # Version should be preserved/incremented from serialization
         assert version >= 1
 

@@ -362,13 +362,13 @@ fn structurally_equal(a: &VNode, b: &VNode) -> bool {
     let a_attrs: HashMap<String, String> = a
         .attrs
         .iter()
-        .filter(|(k, _)| k.as_str() != "data-dj-id")
+        .filter(|(k, _)| k.as_str() != "dj-id")
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let b_attrs: HashMap<String, String> = b
         .attrs
         .iter()
-        .filter(|(k, _)| k.as_str() != "data-dj-id")
+        .filter(|(k, _)| k.as_str() != "dj-id")
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     if a_attrs != b_attrs {

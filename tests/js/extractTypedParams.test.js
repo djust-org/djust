@@ -206,9 +206,9 @@ describe('extractTypedParams', () => {
             expect(Object.keys(params)).toEqual(['name']);
         });
 
-        it('should skip data-dj-id', () => {
+        it('should skip dj-id', () => {
             const el = createElement({
-                'data-dj-id': 'comp-1',
+                'dj-id': 'comp-1',
                 'data-name': 'visible',
             });
             const params = extractTypedParams(el);

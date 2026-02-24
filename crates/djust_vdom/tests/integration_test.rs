@@ -260,7 +260,7 @@ fn test_multiple_fields_with_errors_cleared() {
 }
 
 // ============================================================================
-// Tests for data-dj-id attribute generation (compact ID-based patching)
+// Tests for dj-id attribute generation (compact ID-based patching)
 // ============================================================================
 
 #[test]
@@ -304,7 +304,7 @@ fn test_parsed_vdom_has_djust_ids() {
 
 #[test]
 fn test_to_html_includes_data_dj_attributes() {
-    // Verify that to_html() serializes data-dj-id attributes into HTML
+    // Verify that to_html() serializes dj-id attributes into HTML
     use djust_vdom::reset_id_counter;
 
     reset_id_counter();
@@ -313,17 +313,17 @@ fn test_to_html_includes_data_dj_attributes() {
 
     let output_html = vdom.to_html();
 
-    // Output should contain data-dj-id attributes
+    // Output should contain dj-id attributes
     assert!(
-        output_html.contains("data-dj-id="),
-        "to_html() should include data-dj-id attributes in output"
+        output_html.contains("dj-id="),
+        "to_html() should include dj-id attributes in output"
     );
 
-    // Should have multiple data-dj-id attributes for different elements
-    let data_dj_count = output_html.matches("data-dj-id=").count();
+    // Should have multiple dj-id attributes for different elements
+    let data_dj_count = output_html.matches("dj-id=").count();
     assert!(
         data_dj_count >= 3,
-        "Should have at least 3 data-dj-id attributes (div, span, p), found {}",
+        "Should have at least 3 dj-id attributes (div, span, p), found {}",
         data_dj_count
     );
 }
@@ -339,7 +339,7 @@ fn test_to_html_output_format() {
 
     let output_html = vdom.to_html();
 
-    // Should maintain structure with data-dj-id added
+    // Should maintain structure with dj-id added
     assert!(
         output_html.contains("<div"),
         "Output should contain div tag"
@@ -366,7 +366,7 @@ fn test_to_html_output_format() {
 fn test_patches_include_djust_id() {
     // Verify that generated patches include the `d` field for ID-based lookup
     // Note: Text node patches (SetText) don't have djust_ids since text nodes
-    // don't have data-dj-id attributes. Test with attribute changes instead.
+    // don't have dj-id attributes. Test with attribute changes instead.
     use djust_vdom::reset_id_counter;
 
     reset_id_counter();

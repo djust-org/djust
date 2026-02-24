@@ -2,6 +2,62 @@
 
 This guide helps you upgrade between major versions of djust.
 
+## Upgrading to 1.0 — Breaking Changes
+
+### 1. VDOM tracking attribute renamed: `data-dj-id` → `dj-id`
+
+The internal VDOM node-tracking attribute has been renamed from `data-dj-id` to `dj-id`
+to be consistent with all other `dj-` prefixed attributes (`dj-view`, `dj-click`, `dj-model`,
+etc.).
+
+**Impact:** Only affects you if your code reads or queries `data-dj-id` directly (e.g. custom
+JavaScript that relies on the attribute for DOM lookups). djust-generated HTML and the client
+patch engine are updated automatically.
+
+**Migration:** Replace any `querySelector('[data-dj-id="..."]')` calls with
+`querySelector('[dj-id="..."]')`. A system check (`djust.T011`) will warn you about
+`data-dj-id` attributes found in your templates.
+
+### 2. Keyed VDOM diffing: `id=` fallback removed; use explicit `dj-key`
+
+Previously, elements with an `id=` attribute had that value silently used as a keyed
+diffing key, even when the developer intended `id=` purely as a CSS/JS selector handle.
+This caused surprising DOM reuse behaviour when unrelated elements happened to share IDs
+across renders.
+
+The implicit fallback is removed in v1.0. Use the explicit `dj-key` attribute to opt in to
+keyed diffing:
+
+**Before (relied on implicit id= key):**
+```html
+<ul>
+  {% for item in items %}
+    <li id="item-{{ item.id }}">{{ item.name }}</li>
+  {% endfor %}
+</ul>
+```
+
+**After (explicit opt-in):**
+```html
+<ul>
+  {% for item in items %}
+    <li id="item-{{ item.id }}" dj-key="{{ item.id }}">{{ item.name }}</li>
+  {% endfor %}
+</ul>
+```
+
+The legacy `data-key` attribute continues to work as an explicit opt-in.
+
+**Impact:** If you had `id=` attributes on list items and were relying on keyed diffing
+to preserve element state (focus, scroll position, animations) across re-renders, add
+`dj-key="{{ item.pk }}"` to those elements.
+
+**Migration checklist:**
+1. Identify dynamic lists in your templates (loops that render repeated elements)
+2. On list items where identity-stable DOM reuse matters, add `dj-key="{{ item.pk }}"` or
+   `dj-key="{{ item.id }}"`
+3. Run `python manage.py check --deploy` — no new warnings should appear
+
 ## Upgrading to 0.2.1 — Event Handler Security
 
 Version 0.2.1 defaults `event_security` to `"strict"`: only methods decorated with `@event_handler` are callable via WebSocket or HTTP POST. Undecorated handler methods will be silently blocked.

@@ -6,9 +6,13 @@ from django.contrib import admin
 from django.urls import path, include
 
 from djust.pwa import service_worker_view, manifest_view
+from djust.sse import sse_urlpatterns
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+
+    # SSE fallback transport (server-sent events for corporate proxy environments)
+    path('djust/', include(sse_urlpatterns)),
 
     # PWA — service worker must be at root scope for full-site coverage
     path('sw.js', service_worker_view, name='service-worker'),
