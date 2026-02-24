@@ -7,8 +7,6 @@ Regression tests for Issue #365: div depth counter miscounts when
 
 import re
 
-import pytest
-from djust import LiveView
 from djust.mixins.template import TemplateMixin
 
 
@@ -92,3 +90,52 @@ class TestFindClosingDivPos:
         )
         close, end = self._find(t)
         assert t[end:] == ""
+
+
+class TestExtractLiveviewRootWithWrapper:
+    """Caller-level regression tests for _extract_liveview_root_with_wrapper.
+
+    These tests exercise the full extraction path through the caller so a
+    future refactor that misuses the _find_closing_div_pos return tuple
+    would be caught here, not just in the unit tests above.
+    """
+
+    def test_if_else_shared_close_extracts_correctly(self):
+        """Regression #365: if/else sharing a single </div> must not return full template."""
+        template = (
+            "<div dj-root>"
+            "{% if priority %}<div class='high'>{% else %}<div class='normal'>{% endif %}"
+            "content"
+            "</div>"    # closes the if/else div
+            "</div>"    # closes dj-root
+        )
+        mixin = TemplateMixin()
+        result = mixin._extract_liveview_root_with_wrapper(template)
+        assert result == template
+        assert result.startswith("<div dj-root>")
+        # Must NOT return the entire string unchanged due to depth miscount
+        # (if it does, the fallback `return template` path was hit instead)
+        assert result.endswith("</div>")
+
+    def test_simple_root_extraction(self):
+        """Baseline: simple dj-root div is extracted correctly."""
+        template = "<header>nav</header><div dj-root><p>hello</p></div><footer>f</footer>"
+        mixin = TemplateMixin()
+        result = mixin._extract_liveview_root_with_wrapper(template)
+        assert result == "<div dj-root><p>hello</p></div>"
+
+    def test_elif_shared_close_extracts_correctly(self):
+        """elif variant of the #365 bug — three-way branch sharing one close."""
+        template = (
+            "<div dj-root>"
+            "{% if a %}<div class='a'>"
+            "{% elif b %}<div class='b'>"
+            "{% else %}<div class='c'>"
+            "{% endif %}"
+            "content"
+            "</div>"    # closes whichever branch was taken
+            "</div>"    # closes dj-root
+        )
+        mixin = TemplateMixin()
+        result = mixin._extract_liveview_root_with_wrapper(template)
+        assert result == template
