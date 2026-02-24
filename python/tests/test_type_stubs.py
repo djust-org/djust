@@ -230,7 +230,7 @@ class TestView(LiveView):
 
             try:
                 result = subprocess.run(
-                    ["mypy", "--no-error-summary", "--python-executable", sys.executable, f.name],
+                    [_MYPY_EXE, "--no-error-summary", "--python-executable", sys.executable, f.name],
                     capture_output=True,
                     text=True,
                 )
