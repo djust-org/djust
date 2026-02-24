@@ -11,6 +11,7 @@ pub enum Node {
         condition: String,
         true_nodes: Vec<Node>,
         false_nodes: Vec<Node>,
+        in_tag_context: bool,
     },
     For {
         var_names: Vec<String>, // Supports tuple unpacking: {% for a, b in items %}
@@ -109,6 +110,43 @@ pub enum Node {
     },
 }
 
+/// Returns true if `text` ends inside an unclosed HTML opening tag.
+///
+/// Used to detect whether a `{% if %}` tag appears inside an attribute value,
+/// e.g. `<div class="btn {% if active %}`. In that context the VDOM placeholder
+/// comment `<!--dj-if-->` must NOT be emitted because HTML comments inside
+/// attribute values produce malformed HTML (fix for issue #380).
+///
+/// Scans left-to-right with quote state tracking so that `>` characters
+/// inside quoted attribute values (e.g. `title="a > b "`) are not mistaken
+/// for tag-closing `>` characters.
+///
+/// Known limitation: does not track JavaScript/CSS template literals or
+/// CDATA sections — these are not expected in Django template attribute values.
+fn is_inside_html_tag(text: &str) -> bool {
+    let mut in_tag = false;
+    let mut in_quote: Option<char> = None;
+
+    for ch in text.chars() {
+        match (in_tag, in_quote, ch) {
+            // Opening < starts a tag (only when not inside a quoted attribute)
+            (false, None, '<') => in_tag = true,
+            // Closing > ends a tag (only when not inside a quoted attribute)
+            (true, None, '>') => in_tag = false,
+            // Enter a double-quoted attribute value
+            (true, None, '"') => in_quote = Some('"'),
+            // Enter a single-quoted attribute value
+            (true, None, '\'') => in_quote = Some('\''),
+            // Exit a quoted attribute value (matching quote character)
+            (true, Some(q), c) if c == q => in_quote = None,
+            // All other characters — no state change
+            _ => {}
+        }
+    }
+
+    in_tag
+}
+
 pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
     let mut nodes = Vec::new();
     let mut i = 0;
@@ -163,12 +201,25 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
             match tag_name.as_str() {
                 "if" => {
                     let condition = args.join(" ");
+                    // Capture attribute context BEFORE advancing i.
+                    // If the immediately preceding token is text that ends inside an
+                    // unclosed HTML tag (e.g. `<div class="`), we are inside an
+                    // attribute value and must not emit <!--dj-if--> when false.
+                    let in_tag_context = if *i > 0 {
+                        match &tokens[*i - 1] {
+                            Token::Text(t) => is_inside_html_tag(t),
+                            _ => false,
+                        }
+                    } else {
+                        false
+                    };
                     let (true_nodes, false_nodes, end_pos) = parse_if_block(tokens, *i + 1)?;
                     *i = end_pos;
                     Ok(Some(Node::If {
                         condition,
                         true_nodes,
                         false_nodes,
+                        in_tag_context,
                     }))
                 }
 
@@ -585,6 +636,7 @@ fn parse_if_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, Vec<Node
                     condition: elif_condition,
                     true_nodes: elif_true,
                     false_nodes: elif_false,
+                    in_tag_context: false, // elif is never directly inside an attribute
                 });
                 return Ok((true_nodes, false_nodes, end_pos));
             }
@@ -796,6 +848,7 @@ fn extract_from_nodes(
                 condition,
                 true_nodes,
                 false_nodes,
+                ..
             } => {
                 // Extract from condition: {% if variable.path %}
                 extract_from_expression(condition, variables);
@@ -1594,6 +1647,7 @@ mod tests {
                 condition,
                 true_nodes,
                 false_nodes,
+                ..
             } => {
                 assert_eq!(condition, "a");
                 assert_eq!(true_nodes.len(), 1);
@@ -1604,6 +1658,7 @@ mod tests {
                         condition: elif_cond,
                         true_nodes: elif_true,
                         false_nodes: elif_false,
+                        ..
                     } => {
                         assert_eq!(elif_cond, "b");
                         assert_eq!(elif_true.len(), 1);
@@ -1626,6 +1681,7 @@ mod tests {
                 condition,
                 true_nodes,
                 false_nodes,
+                ..
             } => {
                 assert_eq!(condition, "a");
                 assert_eq!(true_nodes.len(), 1);
@@ -1636,6 +1692,7 @@ mod tests {
                         condition: elif_cond,
                         true_nodes: elif_true,
                         false_nodes: elif_false,
+                        ..
                     } => {
                         assert_eq!(elif_cond, "b");
                         assert_eq!(elif_true.len(), 1);
@@ -1719,6 +1776,7 @@ mod tests {
                 condition,
                 true_nodes,
                 false_nodes,
+                ..
             } => {
                 assert_eq!(condition, r#"icon == "arrow-left""#);
                 // Verify true branch has "ARROW"
@@ -1732,6 +1790,7 @@ mod tests {
                         condition: elif_cond,
                         true_nodes: elif_true,
                         false_nodes: elif_false,
+                        ..
                     } => {
                         assert_eq!(elif_cond, r#"icon == "close""#);
                         match &elif_true[0] {

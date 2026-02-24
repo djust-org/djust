@@ -145,23 +145,25 @@ fn render_node_with_loader<L: TemplateLoader>(
             condition,
             true_nodes,
             false_nodes,
+            in_tag_context,
         } => {
             let condition_result = evaluate_condition(condition, context)?;
 
             if condition_result {
                 render_nodes_with_loader(true_nodes, context, loader)
             } else if false_nodes.is_empty() {
-                // Fix for DJE-053: emit a placeholder comment so VDOM diffing has a stable
-                // DOM node to target when the condition later becomes true.
-                Ok("<!--dj-if-->".to_string())
-            } else {
-                // If false branch is empty, emit placeholder comment to maintain DOM structure
-                // This prevents VDOM diff from matching wrong siblings (issue #295)
-                if false_nodes.is_empty() {
-                    Ok("<!--dj-if-->".to_string())
+                if *in_tag_context {
+                    // Inside an HTML attribute value: a comment node would produce
+                    // malformed HTML (e.g. class="btn <!--dj-if-->"). Emit empty
+                    // string instead. Fix for issue #380.
+                    Ok(String::new())
                 } else {
-                    render_nodes_with_loader(false_nodes, context, loader)
+                    // Fix for DJE-053: emit a placeholder comment so VDOM diffing
+                    // has a stable DOM node to target when the condition becomes true.
+                    Ok("<!--dj-if-->".to_string())
                 }
+            } else {
+                render_nodes_with_loader(false_nodes, context, loader)
             }
         }
 
@@ -2223,5 +2225,94 @@ mod tests {
         // Should be a 4-digit year
         assert_eq!(result.len(), 4);
         assert!(result.chars().all(|c| c.is_numeric()));
+    }
+
+    // Tests for issue #380: {% if %} inside HTML attribute values
+
+    #[test]
+    fn test_if_in_attribute_false_emits_empty_not_comment() {
+        // #380: {% if %} inside attribute value must not emit <!--dj-if-->
+        // when condition is false — that would produce malformed HTML.
+        let template = r#"<div class="btn {% if active %}active{% endif %}"></div>"#;
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("active".to_string(), Value::Bool(false));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert!(
+            !result.contains("<!--dj-if-->"),
+            "comment must not appear in attribute: {result}"
+        );
+        assert!(
+            result.contains(r#"class="btn ""#),
+            "expected empty class suffix: {result}"
+        );
+    }
+
+    #[test]
+    fn test_if_in_attribute_true_renders_content() {
+        // #380: When condition is true the normal branch must still render.
+        let template = r#"<div class="btn {% if active %}active{% endif %}"></div>"#;
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("active".to_string(), Value::Bool(true));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert!(
+            result.contains(r#"class="btn active""#),
+            "expected active class: {result}"
+        );
+    }
+
+    #[test]
+    fn test_if_in_text_node_still_emits_comment() {
+        // #380: Outside attribute context the <!--dj-if--> VDOM anchor must be preserved.
+        let template = "<div>{% if show %}yes{% endif %}</div>";
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("show".to_string(), Value::Bool(false));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert!(
+            result.contains("<!--dj-if-->"),
+            "VDOM anchor must be present in text context: {result}"
+        );
+    }
+
+    #[test]
+    fn test_if_in_attribute_with_gt_in_value() {
+        // Fix for review issue #2: bare > inside an attribute value must not
+        // trick is_inside_html_tag() into thinking we are outside the tag.
+        // e.g. title="a > b {% if show %}text{% endif %}" with show=False
+        // must produce title="a > b " not title="a > b <!--dj-if-->".
+        let template = r#"<div title="a > b {% if show %}text{% endif %}"></div>"#;
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("show".to_string(), Value::Bool(false));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert!(
+            !result.contains("<!--dj-if-->"),
+            "comment must not appear in attribute with > in value: {result}"
+        );
+        assert!(
+            result.contains(r#"title="a > b ""#),
+            "expected clean attribute value: {result}"
+        );
+    }
+
+    #[test]
+    fn test_if_in_attribute_with_single_quote_gt() {
+        // Same check with single-quoted attribute value.
+        let template = r#"<div title='x > y {% if show %}yes{% endif %}'></div>"#;
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("show".to_string(), Value::Bool(false));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert!(
+            !result.contains("<!--dj-if-->"),
+            "comment must not appear in single-quoted attribute with > in value: {result}"
+        );
     }
 }

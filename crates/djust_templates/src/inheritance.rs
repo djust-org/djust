@@ -119,10 +119,12 @@ impl InheritanceChain {
                 condition,
                 true_nodes,
                 false_nodes,
+                in_tag_context,
             } => Node::If {
                 condition: condition.clone(),
                 true_nodes: self.apply_block_overrides(true_nodes),
                 false_nodes: self.apply_block_overrides(false_nodes),
+                in_tag_context: *in_tag_context,
             },
             Node::For {
                 var_names,
@@ -343,6 +345,7 @@ fn node_to_template_string(node: &Node) -> String {
             condition,
             true_nodes,
             false_nodes,
+            ..
         } => {
             let mut result = format!("{{% if {condition} %}}");
             result.push_str(&nodes_to_template_string(true_nodes));
@@ -612,6 +615,7 @@ mod tests {
             condition: "user.is_authenticated".to_string(),
             true_nodes: vec![Node::Text("Welcome!".to_string())],
             false_nodes: vec![Node::Text("Please login".to_string())],
+            in_tag_context: false,
         }];
 
         let result = nodes_to_template_string(&nodes);
@@ -716,6 +720,7 @@ mod tests {
                     empty_nodes: vec![],
                 }],
                 false_nodes: vec![Node::Text("<p>No items</p>".to_string())],
+                in_tag_context: false,
             }],
         }];
 
@@ -977,6 +982,7 @@ mod tests {
                 nodes: vec![Node::Text("PARENT_CONTENT".to_string())],
             }],
             false_nodes: vec![Node::Text("hidden".to_string())],
+            in_tag_context: false,
         }];
 
         let child_nodes = vec![
