@@ -239,7 +239,7 @@ function extractTypedParams(element) {
         if (attr.name.startsWith('data-liveview') ||
             attr.name.startsWith('data-live-') ||
             attr.name.startsWith('data-djust') ||
-            attr.name === 'data-dj-id' ||
+            attr.name === 'dj-id' ||
             attr.name === 'data-loading' ||
             attr.name === 'data-component-id') {
             continue;

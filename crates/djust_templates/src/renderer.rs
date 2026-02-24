@@ -143,11 +143,7 @@ fn render_node_with_loader<L: TemplateLoader>(
                     // Create an iterator with indices, reversing if needed
                     let items_vec = items;
                     let indices_and_items: Vec<(usize, Value)> = if *reversed {
-                        items_vec
-                            .into_iter()
-                            .enumerate()
-                            .rev()
-                            .collect()
+                        items_vec.into_iter().enumerate().rev().collect()
                     } else {
                         items_vec.into_iter().enumerate().collect()
                     };
