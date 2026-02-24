@@ -36,13 +36,9 @@ html = render_template("<h1>{{ title }}</h1>", {"title": "Hello"})
 """
         temp_test_file.write_text(code)
 
-        # Try to import mypy - skip if not available
-        try:
-            import mypy.api
-        except ImportError:
-            pytest.skip("mypy not installed")
+        mypy_api = pytest.importorskip("mypy.api", reason="mypy not installed")
 
-        result = mypy.api.run([str(temp_test_file), "--strict"])
+        result = mypy_api.run([str(temp_test_file), "--strict"])
         stdout, stderr, exit_code = result
 
         # Should pass (exit code 0) or have minimal warnings
@@ -55,17 +51,10 @@ html = render_template("<h1>{{ title }}</h1>", {"title": "Hello"})
         # We don't actually run mypy in strict mode here because
         # it would require full environment setup
 
-        _code_with_typo = """
-from djust._rust import render_tempalte  # Typo: 'tempalte' instead of 'template'
-
-html = render_tempalte("<h1>Test</h1>", {})
-"""
-
-        _code_correct = """
-from djust._rust import render_template  # Correct
-
-html = render_template("<h1>Test</h1>", {})
-"""
+        # With stubs, IDEs and mypy would catch:
+        #   from djust._rust import render_tempalte  # Typo — caught at lint time
+        # vs correct usage:
+        #   from djust._rust import render_template  # OK
 
         # Verify the stub file has the correct name
         from djust import _rust

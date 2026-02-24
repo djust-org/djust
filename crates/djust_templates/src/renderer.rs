@@ -102,6 +102,45 @@ fn render_node_with_loader<L: TemplateLoader>(
             }
         }
 
+        Node::InlineIf {
+            true_expr,
+            condition,
+            false_expr,
+            filters,
+        } => {
+            let expr = if evaluate_condition(condition, context)? {
+                true_expr.as_str()
+            } else {
+                false_expr.as_str()
+            };
+
+            let mut value = get_value(expr, context)?;
+
+            for (filter_name, arg) in filters {
+                value = filters::apply_filter(filter_name, &value, arg.as_deref())?;
+            }
+
+            let text = value.to_string();
+            let safe_output_filters = [
+                "safe",
+                "safeseq",
+                "force_escape",
+                "json_script",
+                "urlize",
+                "urlizetrunc",
+                "unordered_list",
+            ];
+            let is_safe = filters
+                .iter()
+                .any(|(name, _)| safe_output_filters.contains(&name.as_str()))
+                || context.is_safe(expr);
+            if is_safe {
+                Ok(text)
+            } else {
+                Ok(filters::html_escape(&text))
+            }
+        }
+
         Node::If {
             condition,
             true_nodes,

@@ -21,14 +21,18 @@ Usage:
     logger.info("Search: %s", sanitize_for_log(user_query))
 """
 
+import logging
 import re
 from typing import Optional, Union
 
 # Maximum length for logged values (prevents log flooding)
 MAX_LOG_LENGTH = 500
 
-# ANSI escape sequence pattern (terminal control codes)
-ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07")
+# ANSI escape sequence pattern (terminal control codes).
+# CSI: \x1b[ + up to 20 parameter bytes + letter.
+# OSC: \x1b] + up to 256 non-BEL/non-ESC bytes + BEL.
+# Bounded quantifiers prevent polynomial ReDoS on adversarial input.
+ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]{0,20}[a-zA-Z]|\x1b\][^\x07\x1b]{0,256}\x07")
 
 # Control characters (ASCII 0-31 except tab, newline, carriage return)
 # and DEL (127)
@@ -90,6 +94,11 @@ def sanitize_for_log(
             value = str(value)
         except Exception:
             return "[Unstringifiable value]"
+
+    # Truncate before regex to bound work on adversarial input.
+    # ANSI sequences add overhead, so allow 2× max_length before stripping.
+    if len(value) > max_length * 2:
+        value = value[: max_length * 2]
 
     # Strip ANSI escape sequences
     value = ANSI_ESCAPE_PATTERN.sub("", value)
@@ -202,3 +211,44 @@ def sanitize_dict_for_log(
             )
 
     return result
+
+
+class DjustLogSanitizerFilter(logging.Filter):
+    """
+    A logging.Filter that sanitizes all string arguments in log records.
+
+    Install this filter on the 'djust' logger (or its handlers) to
+    automatically sanitize every log message emitted by the framework,
+    preventing log injection without per-callsite sanitization.
+
+    Installed automatically by DjustConfig.ready() on the 'djust' logger.
+
+    Usage in Django LOGGING config (optional — already done by AppConfig):
+        LOGGING = {
+            "filters": {
+                "djust_sanitize": {"()": "djust.security.DjustLogSanitizerFilter"},
+            },
+            "handlers": {
+                "console": {
+                    "filters": ["djust_sanitize"],
+                    ...
+                },
+            },
+        }
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.args:
+            if isinstance(record.args, dict):
+                record.args = {
+                    k: sanitize_for_log(str(v)) if isinstance(v, str) else v
+                    for k, v in record.args.items()
+                }
+            elif isinstance(record.args, tuple):
+                record.args = tuple(
+                    sanitize_for_log(v) if isinstance(v, str) else v
+                    for v in record.args
+                )
+            elif isinstance(record.args, str):
+                record.args = sanitize_for_log(record.args)
+        return True

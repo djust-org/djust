@@ -8,7 +8,7 @@ These tests ensure that:
 """
 
 import ast
-import shutil
+import os
 import subprocess
 import sys
 import tempfile
@@ -16,7 +16,11 @@ from pathlib import Path
 
 import pytest
 
-_has_mypy = shutil.which("mypy") is not None
+# Directory containing the djust Python package (so mypy can find it)
+_DJUST_PYTHON_PATH = str(Path(__file__).parent.parent)
+# Use the same Python interpreter as the current test run to find mypy
+_MYPY_EXE = str(Path(sys.executable).parent / "mypy")
+_has_mypy = Path(_MYPY_EXE).exists()
 
 
 class TestStubSyntax:
@@ -67,10 +71,16 @@ class TestMypyIntegration:
             f.flush()
 
             try:
-                # Run mypy with lenient settings for test code
+                # Run mypy with lenient settings for test code.
+                # Use the venv's mypy and pass PYTHONPATH so it can find the djust package.
+                env = os.environ.copy()
+                existing = env.get("PYTHONPATH", "")
+                env["PYTHONPATH"] = (
+                    f"{_DJUST_PYTHON_PATH}:{existing}" if existing else _DJUST_PYTHON_PATH
+                )
                 result = subprocess.run(
                     [
-                        "mypy",
+                        _MYPY_EXE,
                         "--no-error-summary",
                         "--allow-untyped-defs",  # Allow test methods without type hints
                         "--disable-error-code=no-untyped-def",
@@ -80,6 +90,7 @@ class TestMypyIntegration:
                     ],
                     capture_output=True,
                     text=True,
+                    env=env,
                 )
                 return result
             finally:
@@ -219,7 +230,7 @@ class TestView(LiveView):
 
             try:
                 result = subprocess.run(
-                    ["mypy", "--no-error-summary", "--python-executable", sys.executable, f.name],
+                    [_MYPY_EXE, "--no-error-summary", "--python-executable", sys.executable, f.name],
                     capture_output=True,
                     text=True,
                 )

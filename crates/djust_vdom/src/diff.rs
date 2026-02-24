@@ -1,7 +1,7 @@
 //! Fast virtual DOM diffing algorithm
 //!
 //! Uses a keyed diffing algorithm for efficient list updates.
-//! Includes compact djust_id (data-dj-id) in patches for O(1) client-side resolution.
+//! Includes compact djust_id (dj-id) in patches for O(1) client-side resolution.
 //!
 //! ## Conditional Rendering (`{% if %}`)
 //!
@@ -43,10 +43,10 @@ pub fn sync_ids(old: &VNode, new: &mut VNode) {
     // also have synthetic IDs for apply_patches resolution (#221).
     if old.djust_id.is_some() {
         new.djust_id = old.djust_id.clone();
-        // Also sync the data-dj-id attribute to match (elements only)
+        // Also sync the dj-id attribute to match (elements only)
         if !old.is_text() {
             if let Some(ref id) = new.djust_id {
-                new.attrs.insert("data-dj-id".to_string(), id.clone());
+                new.attrs.insert("dj-id".to_string(), id.clone());
             }
         }
     }
@@ -313,8 +313,8 @@ fn diff_attrs(old: &VNode, new: &VNode, path: &[usize], target_id: &Option<Strin
 
     // Find removed and changed attributes
     for (key, old_value) in &old.attrs {
-        // Skip data-dj-id and data-dj-src attributes - managed by parser/renderer, not diffed
-        if key == "data-dj-id" || key == "data-dj-src" {
+        // Skip dj-id and data-dj-src attributes - managed by parser/renderer, not diffed
+        if key == "dj-id" || key == "data-dj-src" {
             continue;
         }
 
@@ -347,8 +347,8 @@ fn diff_attrs(old: &VNode, new: &VNode, path: &[usize], target_id: &Option<Strin
 
     // Find added attributes
     for (key, new_value) in &new.attrs {
-        // Skip data-dj-id and data-dj-src attributes
-        if key == "data-dj-id" || key == "data-dj-src" {
+        // Skip dj-id and data-dj-src attributes
+        if key == "dj-id" || key == "data-dj-src" {
             continue;
         }
 
@@ -1079,23 +1079,23 @@ mod tests {
 
     #[test]
     fn test_data_d_attr_not_diffed() {
-        // Ensure that data-dj-id attribute changes don't generate patches
-        // (the parser handles data-dj-id, diffing should ignore it)
+        // Ensure that dj-id attribute changes don't generate patches
+        // (the parser handles dj-id, diffing should ignore it)
         let old = VNode::element("div")
             .with_djust_id("old")
-            .with_attr("data-dj-id", "old")
+            .with_attr("dj-id", "old")
             .with_attr("class", "same");
         let new = VNode::element("div")
             .with_djust_id("new")
-            .with_attr("data-dj-id", "new")
+            .with_attr("dj-id", "new")
             .with_attr("class", "same");
 
         let patches = diff_nodes(&old, &new, &[]);
 
-        // Should be empty - no attribute changes (data-dj-id is ignored)
+        // Should be empty - no attribute changes (dj-id is ignored)
         assert!(
             patches.is_empty(),
-            "data-dj-id changes should not generate patches"
+            "dj-id changes should not generate patches"
         );
     }
 
@@ -1988,7 +1988,7 @@ mod tests {
     fn test_move_child_has_child_d() {
         // Regression test for #225: MoveChild patches must carry child_d
         // (the child's djust_id) so the client can resolve the child by
-        // data-dj-id instead of stale index after earlier moves.
+        // dj-id instead of stale index after earlier moves.
         //
         // Tree A: [span(dj-id=sp1), section(key=a, dj-id=s1), ul(key=b, dj-id=u1)]
         // Tree B: [ul(key=b), section(key=a), span(attr changed)]

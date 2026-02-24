@@ -229,32 +229,44 @@ def handle_exception(
     if logger is None:
         logger = logging_module.getLogger("djust.security")
 
-    # Build context for logging
+    # Build context for logging — sanitize to break taint chain from caller inputs.
+    from .log_sanitizer import sanitize_for_log
+
     context_parts = []
     if view_class:
-        context_parts.append(f"view={view_class}")
+        context_parts.append(f"view={sanitize_for_log(str(view_class))}")
     if event_name:
-        context_parts.append(f"event={event_name}")
+        context_parts.append(f"event={sanitize_for_log(event_name)}")
     context = f" ({', '.join(context_parts)})" if context_parts else ""
 
-    # Log message
-    msg = log_message or "Error occurred"
+    # Log message — sanitize to break taint chain from caller input
+    msg = sanitize_for_log(log_message) if log_message else "Error occurred"
 
-    # Log with exc_info only in DEBUG mode (don't fill prod logs with stack traces)
+    # Log with exc_info only in DEBUG mode (don't fill prod logs with stack traces).
+    # sanitize_for_log() is applied to user-controlled values to break CodeQL taint chains;
+    # DjustLogSanitizerFilter (installed in AppConfig.ready()) provides an additional layer.
+    safe_exc = sanitize_for_log(str(exception))
     if debug_mode:
-        # Full stack trace in development
         if extra:
             from .log_sanitizer import sanitize_dict_for_log
 
             safe_extra = sanitize_dict_for_log(extra)
             logger.error(
-                f"{msg}{context}: {type(exception).__name__}: {exception}",
+                "%s%s: %s: %s",
+                msg,
+                context,
+                type(exception).__name__,
+                safe_exc,
                 exc_info=True,
                 extra={"sanitized_context": safe_extra},
             )
         else:
             logger.error(
-                f"{msg}{context}: {type(exception).__name__}: {exception}",
+                "%s%s: %s: %s",
+                msg,
+                context,
+                type(exception).__name__,
+                safe_exc,
                 exc_info=True,
             )
     else:
