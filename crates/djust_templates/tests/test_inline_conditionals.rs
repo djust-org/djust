@@ -44,7 +44,10 @@ fn ctx_int(key: &str, val: i64) -> Context {
 #[test]
 fn inline_if_true_branch() {
     let c = ctx_bool("is_active", true);
-    assert_eq!(render(r#"{{ "active" if is_active else "" }}"#, &c), "active");
+    assert_eq!(
+        render(r#"{{ "active" if is_active else "" }}"#, &c),
+        "active"
+    );
 }
 
 #[test]
@@ -85,7 +88,10 @@ fn inline_if_variable_in_false_branch() {
     let mut c = Context::new();
     c.set("show".to_string(), Value::Bool(false));
     c.set("fallback".to_string(), Value::String("nobody".to_string()));
-    assert_eq!(render(r#"{{ "Alice" if show else fallback }}"#, &c), "nobody");
+    assert_eq!(
+        render(r#"{{ "Alice" if show else fallback }}"#, &c),
+        "nobody"
+    );
 }
 
 // ===========================================================================
@@ -95,20 +101,29 @@ fn inline_if_variable_in_false_branch() {
 #[test]
 fn inline_if_comparison_greater_than_true() {
     let c = ctx_int("count", 5);
-    assert_eq!(render(r#"{{ "many" if count > 0 else "none" }}"#, &c), "many");
+    assert_eq!(
+        render(r#"{{ "many" if count > 0 else "none" }}"#, &c),
+        "many"
+    );
 }
 
 #[test]
 fn inline_if_comparison_greater_than_false() {
     let c = ctx_int("count", 0);
-    assert_eq!(render(r#"{{ "many" if count > 0 else "none" }}"#, &c), "none");
+    assert_eq!(
+        render(r#"{{ "many" if count > 0 else "none" }}"#, &c),
+        "none"
+    );
 }
 
 #[test]
 fn inline_if_equality() {
     let c = ctx_str("mode", "dark");
     assert_eq!(
-        render(r#"{{ "dark-theme" if mode == "dark" else "light-theme" }}"#, &c),
+        render(
+            r#"{{ "dark-theme" if mode == "dark" else "light-theme" }}"#,
+            &c
+        ),
         "dark-theme"
     );
 }
@@ -116,10 +131,7 @@ fn inline_if_equality() {
 #[test]
 fn inline_if_inequality() {
     let c = ctx_str("status", "ok");
-    assert_eq!(
-        render(r#"{{ "error" if status != "ok" else "" }}"#, &c),
-        ""
-    );
+    assert_eq!(render(r#"{{ "error" if status != "ok" else "" }}"#, &c), "");
 }
 
 // ===========================================================================
@@ -130,7 +142,10 @@ fn inline_if_inequality() {
 fn inline_if_in_class_attribute_true() {
     let c = ctx_bool("is_selected", true);
     assert_eq!(
-        render(r#"<li class="{{ "selected" if is_selected else "" }}">item</li>"#, &c),
+        render(
+            r#"<li class="{{ "selected" if is_selected else "" }}">item</li>"#,
+            &c
+        ),
         r#"<li class="selected">item</li>"#
     );
 }
@@ -139,7 +154,10 @@ fn inline_if_in_class_attribute_true() {
 fn inline_if_in_class_attribute_false() {
     let c = ctx_bool("is_selected", false);
     assert_eq!(
-        render(r#"<li class="{{ "selected" if is_selected else "" }}">item</li>"#, &c),
+        render(
+            r#"<li class="{{ "selected" if is_selected else "" }}">item</li>"#,
+            &c
+        ),
         r#"<li class="">item</li>"#
     );
 }
@@ -148,7 +166,10 @@ fn inline_if_in_class_attribute_false() {
 fn inline_if_disabled_attribute() {
     let c = ctx_bool("is_locked", true);
     assert_eq!(
-        render(r#"<button {{ "disabled" if is_locked else "" }}>click</button>"#, &c),
+        render(
+            r#"<button {{ "disabled" if is_locked else "" }}>click</button>"#,
+            &c
+        ),
         r#"<button disabled>click</button>"#
     );
 }
@@ -158,11 +179,9 @@ fn inline_if_multiple_in_template() {
     let mut c = Context::new();
     c.set("active".to_string(), Value::Bool(true));
     c.set("error".to_string(), Value::Bool(false));
-    let tmpl = r#"<div class="{{ "active" if active else "" }} {{ "error" if error else "" }}"></div>"#;
-    assert_eq!(
-        render(tmpl, &c),
-        r#"<div class="active "></div>"#
-    );
+    let tmpl =
+        r#"<div class="{{ "active" if active else "" }} {{ "error" if error else "" }}"></div>"#;
+    assert_eq!(render(tmpl, &c), r#"<div class="active "></div>"#);
 }
 
 // ===========================================================================

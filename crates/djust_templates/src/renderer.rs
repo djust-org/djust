@@ -122,7 +122,12 @@ fn render_node_with_loader<L: TemplateLoader>(
 
             let text = value.to_string();
             let safe_output_filters = [
-                "safe", "safeseq", "force_escape", "json_script", "urlize", "urlizetrunc",
+                "safe",
+                "safeseq",
+                "force_escape",
+                "json_script",
+                "urlize",
+                "urlizetrunc",
                 "unordered_list",
             ];
             let is_safe = filters

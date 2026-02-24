@@ -20,6 +20,7 @@ import pytest
 _DJUST_PYTHON_PATH = str(Path(__file__).parent.parent)
 # Use the same Python interpreter as the current test run to find mypy
 _MYPY_EXE = str(Path(sys.executable).parent / "mypy")
+_has_mypy = Path(_MYPY_EXE).exists()
 
 
 class TestStubSyntax:

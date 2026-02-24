@@ -1789,7 +1789,12 @@ mod tests {
         let nodes = parse(&tokens).unwrap();
         assert_eq!(nodes.len(), 1);
         match &nodes[0] {
-            Node::InlineIf { true_expr, condition, false_expr, filters } => {
+            Node::InlineIf {
+                true_expr,
+                condition,
+                false_expr,
+                filters,
+            } => {
                 assert_eq!(true_expr, "'btn--active'");
                 assert_eq!(condition, "view_mode == 'day'");
                 assert_eq!(false_expr, "''");
@@ -1805,7 +1810,12 @@ mod tests {
         let nodes = parse(&tokens).unwrap();
         assert_eq!(nodes.len(), 1);
         match &nodes[0] {
-            Node::InlineIf { true_expr, condition, false_expr, .. } => {
+            Node::InlineIf {
+                true_expr,
+                condition,
+                false_expr,
+                ..
+            } => {
                 assert_eq!(true_expr, "'active'");
                 assert_eq!(condition, "is_active");
                 assert_eq!(false_expr, "");

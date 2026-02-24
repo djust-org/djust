@@ -301,7 +301,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
         mount_msg["cache_config"] = cache_config
 
     session.push(mount_msg)
-    logger.info("SSE: mounted view %s (session %s)", sanitize_for_log(view_path), session.session_id)
+    logger.info("SSE: mounted view %s (session %s)", sanitize_for_log(view_path), sanitize_for_log(session.session_id))
 
 
 def _extract_cache_config(view_instance) -> Optional[Dict[str, Any]]:
