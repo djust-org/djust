@@ -239,8 +239,8 @@ def handle_exception(
         context_parts.append(f"event={sanitize_for_log(event_name)}")
     context = f" ({', '.join(context_parts)})" if context_parts else ""
 
-    # Log message
-    msg = log_message or "Error occurred"
+    # Log message — sanitize to break taint chain from caller input
+    msg = sanitize_for_log(log_message) if log_message else "Error occurred"
 
     # Log with exc_info only in DEBUG mode (don't fill prod logs with stack traces).
     # sanitize_for_log() is applied to user-controlled values to break CodeQL taint chains;
