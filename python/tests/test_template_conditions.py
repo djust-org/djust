@@ -23,8 +23,8 @@ class TestGreaterThan:
         template = "{% if count > 10 %}many{% endif %}"
         context = {"count": 5}
         result = render_template(template, context)
-        # Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
-        assert result == "<!--dj-if-->"
+        # render_template strips dj-if placeholders for standalone rendering (VDOM detail hidden from API)
+        assert result == ""
 
     def test_greater_than_equal_values(self):
         """Test > returns false when values are equal."""
@@ -56,8 +56,8 @@ class TestLessThan:
         template = "{% if age < 18 %}minor{% endif %}"
         context = {"age": 21}
         result = render_template(template, context)
-        # Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
-        assert result == "<!--dj-if-->"
+        # render_template strips dj-if placeholders for standalone rendering (VDOM detail hidden from API)
+        assert result == ""
 
     def test_less_than_equal_values(self):
         """Test < returns false when values are equal."""
@@ -89,8 +89,8 @@ class TestGreaterThanOrEqual:
         template = "{% if price >= 100 %}expensive{% endif %}"
         context = {"price": 50}
         result = render_template(template, context)
-        # Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
-        assert result == "<!--dj-if-->"
+        # render_template strips dj-if placeholders for standalone rendering (VDOM detail hidden from API)
+        assert result == ""
 
 
 class TestLessThanOrEqual:
@@ -115,8 +115,8 @@ class TestLessThanOrEqual:
         template = "{% if score <= 50 %}failing{% endif %}"
         context = {"score": 80}
         result = render_template(template, context)
-        # Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
-        assert result == "<!--dj-if-->"
+        # render_template strips dj-if placeholders for standalone rendering (VDOM detail hidden from API)
+        assert result == ""
 
 
 class TestNotEqual:
@@ -134,8 +134,8 @@ class TestNotEqual:
         template = '{% if status != "active" %}inactive{% endif %}'
         context = {"status": "active"}
         result = render_template(template, context)
-        # Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
-        assert result == "<!--dj-if-->"
+        # render_template strips dj-if placeholders for standalone rendering (VDOM detail hidden from API)
+        assert result == ""
 
     def test_not_equal_numbers(self):
         """Test != works with numbers."""
@@ -160,8 +160,8 @@ class TestEqual:
         template = '{% if status == "active" %}is active{% endif %}'
         context = {"status": "pending"}
         result = render_template(template, context)
-        # Fix for DJE-053: false {% if %} blocks emit placeholder comment, not empty string
-        assert result == "<!--dj-if-->"
+        # render_template strips dj-if placeholders for standalone rendering (VDOM detail hidden from API)
+        assert result == ""
 
     def test_equal_numbers(self):
         """Test == works with numbers."""
