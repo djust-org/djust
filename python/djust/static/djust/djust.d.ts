@@ -17,7 +17,7 @@
  *
  *   { "files": ["node_modules/djust/static/djust/djust.d.ts"] }
  *
- * @version 0.3.2
+ * @version 0.3.4
  * @see https://djust.org
  */
 
