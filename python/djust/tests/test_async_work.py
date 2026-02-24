@@ -23,7 +23,7 @@ class TestStartAsync:
         # Check that _async_tasks dict was created with default name
         assert hasattr(view, "_async_tasks")
         assert len(view._async_tasks) == 1
-        task_name, (cb, args, kwargs) = list(view._async_tasks.items())[0]
+        _, (cb, args, kwargs) = list(view._async_tasks.items())[0]
         assert cb is callback
         assert args == ("arg1",)
         assert kwargs == {"key": "val"}

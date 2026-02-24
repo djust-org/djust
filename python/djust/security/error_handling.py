@@ -229,12 +229,14 @@ def handle_exception(
     if logger is None:
         logger = logging_module.getLogger("djust.security")
 
-    # Build context for logging
+    # Build context for logging — sanitize to break taint chain from caller inputs.
+    from .log_sanitizer import sanitize_for_log
+
     context_parts = []
     if view_class:
-        context_parts.append(f"view={view_class}")
+        context_parts.append(f"view={sanitize_for_log(str(view_class))}")
     if event_name:
-        context_parts.append(f"event={event_name}")
+        context_parts.append(f"event={sanitize_for_log(event_name)}")
     context = f" ({', '.join(context_parts)})" if context_parts else ""
 
     # Log message
