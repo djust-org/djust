@@ -2278,4 +2278,41 @@ mod tests {
             "VDOM anchor must be present in text context: {result}"
         );
     }
+
+    #[test]
+    fn test_if_in_attribute_with_gt_in_value() {
+        // Fix for review issue #2: bare > inside an attribute value must not
+        // trick is_inside_html_tag() into thinking we are outside the tag.
+        // e.g. title="a > b {% if show %}text{% endif %}" with show=False
+        // must produce title="a > b " not title="a > b <!--dj-if-->".
+        let template = r#"<div title="a > b {% if show %}text{% endif %}"></div>"#;
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("show".to_string(), Value::Bool(false));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert!(
+            !result.contains("<!--dj-if-->"),
+            "comment must not appear in attribute with > in value: {result}"
+        );
+        assert!(
+            result.contains(r#"title="a > b ""#),
+            "expected clean attribute value: {result}"
+        );
+    }
+
+    #[test]
+    fn test_if_in_attribute_with_single_quote_gt() {
+        // Same check with single-quoted attribute value.
+        let template = r#"<div title='x > y {% if show %}yes{% endif %}'></div>"#;
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("show".to_string(), Value::Bool(false));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert!(
+            !result.contains("<!--dj-if-->"),
+            "comment must not appear in single-quoted attribute with > in value: {result}"
+        );
+    }
 }

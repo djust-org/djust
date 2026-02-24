@@ -116,21 +116,35 @@ pub enum Node {
 /// e.g. `<div class="btn {% if active %}`. In that context the VDOM placeholder
 /// comment `<!--dj-if-->` must NOT be emitted because HTML comments inside
 /// attribute values produce malformed HTML (fix for issue #380).
+///
+/// Scans left-to-right with quote state tracking so that `>` characters
+/// inside quoted attribute values (e.g. `title="a > b "`) are not mistaken
+/// for tag-closing `>` characters.
+///
+/// Known limitation: does not track JavaScript/CSS template literals or
+/// CDATA sections — these are not expected in Django template attribute values.
 fn is_inside_html_tag(text: &str) -> bool {
-    let mut depth = 0i32;
-    for ch in text.chars().rev() {
-        match ch {
-            '>' => depth += 1,
-            '<' => {
-                if depth == 0 {
-                    return true;
-                }
-                depth -= 1;
-            }
+    let mut in_tag = false;
+    let mut in_quote: Option<char> = None;
+
+    for ch in text.chars() {
+        match (in_tag, in_quote, ch) {
+            // Opening < starts a tag (only when not inside a quoted attribute)
+            (false, None, '<') => in_tag = true,
+            // Closing > ends a tag (only when not inside a quoted attribute)
+            (true, None, '>') => in_tag = false,
+            // Enter a double-quoted attribute value
+            (true, None, '"') => in_quote = Some('"'),
+            // Enter a single-quoted attribute value
+            (true, None, '\'') => in_quote = Some('\''),
+            // Exit a quoted attribute value (matching quote character)
+            (true, Some(q), c) if c == q => in_quote = None,
+            // All other characters — no state change
             _ => {}
         }
     }
-    false
+
+    in_tag
 }
 
 pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
