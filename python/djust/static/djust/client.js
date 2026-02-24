@@ -2939,11 +2939,6 @@ function getNodeByPath(path, djustId = null) {
         const index = path[i]; // eslint-disable-line security/detect-object-injection -- path is a server-provided integer array
         const children = Array.from(node.childNodes).filter(child => {
             if (child.nodeType === Node.ELEMENT_NODE) return true;
-            if (child.nodeType === Node.COMMENT_NODE) {
-                // Include dj-if placeholder comments — they are significant position
-                // anchors used by RemoveChild/InsertChild patches (see baa3ca8).
-                return child.nodeValue === 'dj-if';
-            }
             if (child.nodeType === Node.TEXT_NODE) {
                 // Preserve non-breaking spaces (\u00A0) as significant, matching Rust VDOM parser.
                 // Only filter out ASCII whitespace-only text nodes (space, tab, newline, CR).
@@ -3200,10 +3195,6 @@ function createHtmlElement(tagLower) {
 function createNodeFromVNode(vnode, inSvgContext = false) {
     if (vnode.tag === '#text') {
         return document.createTextNode(vnode.text || '');
-    }
-
-    if (vnode.tag === '#comment') {
-        return document.createComment(vnode.text || '');
     }
 
     // Validate tag name against whitelist (security: prevents script injection)
@@ -3771,13 +3762,6 @@ function getSignificantChildren(node) {
 
     return Array.from(node.childNodes).filter(child => {
         if (child.nodeType === Node.ELEMENT_NODE) return true;
-        if (child.nodeType === Node.COMMENT_NODE) {
-            // Include dj-if placeholder comments as significant children.
-            // These are stable position anchors emitted by the template engine
-            // when {% if %} conditions are false (baa3ca8). RemoveChild and
-            // InsertChild patches target them by index, so they must be counted.
-            return child.nodeValue === 'dj-if';
-        }
         if (child.nodeType === Node.TEXT_NODE) {
             // Preserve all text nodes inside pre/code/textarea
             if (preserveWhitespace) return true;
