@@ -654,9 +654,10 @@ class DjustSSEStreamView(View):
     """
 
     async def get(self, request, session_id: str):
-        # Validate session_id is a valid UUID to prevent path traversal
+        # Validate session_id is a valid UUID to prevent path traversal.
+        # Use the canonical string form to break the taint chain from the URL parameter.
         try:
-            uuid.UUID(session_id)
+            session_id = str(uuid.UUID(session_id))
         except ValueError:
             return JsonResponse({"error": "Invalid session ID"}, status=400)
 
