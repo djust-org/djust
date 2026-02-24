@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **#382: `{% elif %}` inside HTML attribute values propagates `in_tag_context`** — When `{% if a %}...{% elif b %}...{% endif %}` appears inside an attribute value and all conditions are false, the elif node previously emitted `<!--dj-if-->` (malformed HTML). Fixed by threading `in_tag_context` as a parameter into `parse_if_block()` so elif nodes inherit the outer if's attribute context. ([#382](https://github.com/djust-org/djust/issues/382))
+
 ## [0.3.3rc2] - 2026-02-24
 
 ### Fixed

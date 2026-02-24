@@ -311,5 +311,36 @@ class TestIfInHtmlAttribute:
         assert "<!--" not in result
 
 
+class TestElifInHtmlAttribute:
+    """Regression tests for issue #382: {% elif %} inside HTML attribute values."""
+
+    def test_elif_both_false_no_comment(self):
+        """#382: {% if %}...{% elif %}...{% endif %} in attribute with both false must not emit <!--dj-if-->."""
+        template = '<div class="{% if a %}one{% elif b %}two{% endif %}"></div>'
+        result = render_template(template, {"a": False, "b": False})
+        assert "<!--" not in result
+        assert 'class=""' in result
+
+    def test_elif_branch_renders_when_true(self):
+        """#382: elif branch content must render when elif condition is true."""
+        template = '<div class="{% if a %}one{% elif b %}two{% endif %}"></div>'
+        result = render_template(template, {"a": False, "b": True})
+        assert 'class="two"' in result
+        assert "<!--" not in result
+
+    def test_if_branch_renders_when_true(self):
+        """#382: if branch content still renders normally when if condition is true."""
+        template = '<div class="{% if a %}one{% elif b %}two{% endif %}"></div>'
+        result = render_template(template, {"a": True, "b": False})
+        assert 'class="one"' in result
+
+    def test_multiple_elif_all_false_no_comment(self):
+        """#382: Multiple elif branches — all false — must not emit <!--dj-if-->."""
+        template = '<div class="{% if a %}a{% elif b %}b{% elif c %}c{% endif %}"></div>'
+        result = render_template(template, {"a": False, "b": False, "c": False})
+        assert "<!--" not in result
+        assert 'class=""' in result
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
