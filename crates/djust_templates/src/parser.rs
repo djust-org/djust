@@ -92,6 +92,21 @@ pub enum Node {
         /// Original arguments from the tag
         args: Vec<String>,
     },
+    /// Jinja2-style inline conditional: {{ true_expr if condition else false_expr }}
+    ///
+    /// This is safe to use inside HTML attribute values (unlike {% if %} blocks,
+    /// which insert `<!--dj-if-->` comment nodes that corrupt attribute strings).
+    ///
+    /// Examples:
+    ///   class="{{ 'btn--active' if view_mode == 'day' else '' }}"
+    ///   disabled="{{ 'disabled' if is_locked else '' }}"
+    ///   class="{{ 'error' if has_error }}"   {# else branch is optional #}
+    InlineIf {
+        true_expr: String,
+        condition: String,
+        false_expr: String,
+        filters: Vec<(String, Option<String>)>,
+    },
 }
 
 pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
@@ -116,32 +131,32 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
         Token::Variable(var) => {
             // Parse variable and filters: {{ var|filter1:arg1|filter2 }}
             let parts: Vec<String> = var.split('|').map(|s| s.trim().to_string()).collect();
-            let var_name = parts[0].clone();
+            let expr_part = &parts[0];
+            let filters = parse_filter_specs(&parts[1..]);
 
-            // Parse each filter and its optional argument
-            let filters: Vec<(String, Option<String>)> = parts[1..]
-                .iter()
-                .map(|filter_spec| {
-                    if let Some(colon_pos) = filter_spec.find(':') {
-                        let filter_name = filter_spec[..colon_pos].trim().to_string();
-                        let mut arg = filter_spec[colon_pos + 1..].trim().to_string();
+            // Check for Jinja2-style inline conditional:
+            //   {{ true_expr if condition else false_expr }}
+            //   {{ true_expr if condition }}   (else branch optional, defaults to "")
+            if let Some(if_pos) = find_if_keyword(expr_part) {
+                let true_expr = expr_part[..if_pos].trim().to_string();
+                let rest = expr_part[if_pos + 4..].trim(); // skip " if "
+                let (condition, false_expr) = if let Some(else_pos) = rest.find(" else ") {
+                    (
+                        rest[..else_pos].trim().to_string(),
+                        rest[else_pos + 6..].trim().to_string(),
+                    )
+                } else {
+                    (rest.to_string(), String::new())
+                };
+                return Ok(Some(Node::InlineIf {
+                    true_expr,
+                    condition,
+                    false_expr,
+                    filters,
+                }));
+            }
 
-                        // Strip surrounding quotes from the argument (single or double)
-                        if ((arg.starts_with('"') && arg.ends_with('"'))
-                            || (arg.starts_with('\'') && arg.ends_with('\'')))
-                            && arg.len() >= 2
-                        {
-                            arg = arg[1..arg.len() - 1].to_string();
-                        }
-
-                        (filter_name, Some(arg))
-                    } else {
-                        (filter_spec.clone(), None)
-                    }
-                })
-                .collect();
-
-            Ok(Some(Node::Variable(var_name, filters)))
+            Ok(Some(Node::Variable(expr_part.clone(), filters)))
         }
 
         Token::Tag(tag_name, args) => {
@@ -1013,6 +1028,53 @@ fn extract_from_expression(
     }
 }
 
+/// Find the position of the ` if ` keyword in an expression, skipping over
+/// quoted strings so that `'some if text' if cond else ''` works correctly.
+fn find_if_keyword(expr: &str) -> Option<usize> {
+    let bytes = expr.as_bytes();
+    let mut i = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\'' if !in_double => in_single = !in_single,
+            b'"' if !in_single => in_double = !in_double,
+            _ if !in_single && !in_double => {
+                if expr[i..].starts_with(" if ") {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Parse a slice of filter spec strings into `(filter_name, Option<arg>)` pairs.
+fn parse_filter_specs(parts: &[String]) -> Vec<(String, Option<String>)> {
+    parts
+        .iter()
+        .map(|filter_spec| {
+            if let Some(colon_pos) = filter_spec.find(':') {
+                let filter_name = filter_spec[..colon_pos].trim().to_string();
+                let mut arg = filter_spec[colon_pos + 1..].trim().to_string();
+                // Strip surrounding quotes from the argument (single or double)
+                if ((arg.starts_with('"') && arg.ends_with('"'))
+                    || (arg.starts_with('\'') && arg.ends_with('\'')))
+                    && arg.len() >= 2
+                {
+                    arg = arg[1..arg.len() - 1].to_string();
+                }
+                (filter_name, Some(arg))
+            } else {
+                (filter_spec.clone(), None)
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1719,5 +1781,48 @@ mod tests {
         let err = result.unwrap_err();
         assert!(err.to_string().contains("elif"));
         assert!(err.to_string().contains("else"));
+    }
+
+    #[test]
+    fn test_inline_if_parses_to_inline_if_node() {
+        let tokens = tokenize("{{ 'btn--active' if view_mode == 'day' else '' }}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        assert_eq!(nodes.len(), 1);
+        match &nodes[0] {
+            Node::InlineIf { true_expr, condition, false_expr, filters } => {
+                assert_eq!(true_expr, "'btn--active'");
+                assert_eq!(condition, "view_mode == 'day'");
+                assert_eq!(false_expr, "''");
+                assert!(filters.is_empty());
+            }
+            _ => panic!("Expected InlineIf node, got {:?}", nodes[0]),
+        }
+    }
+
+    #[test]
+    fn test_inline_if_without_else() {
+        let tokens = tokenize("{{ 'active' if is_active }}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        assert_eq!(nodes.len(), 1);
+        match &nodes[0] {
+            Node::InlineIf { true_expr, condition, false_expr, .. } => {
+                assert_eq!(true_expr, "'active'");
+                assert_eq!(condition, "is_active");
+                assert_eq!(false_expr, "");
+            }
+            _ => panic!("Expected InlineIf node"),
+        }
+    }
+
+    #[test]
+    fn test_regular_variable_not_affected() {
+        // A variable that happens to contain "if" in its name must not be treated as InlineIf
+        let tokens = tokenize("{{ notify_if_late }}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        assert_eq!(nodes.len(), 1);
+        match &nodes[0] {
+            Node::Variable(name, _) => assert_eq!(name, "notify_if_late"),
+            _ => panic!("Expected Variable node"),
+        }
     }
 }
