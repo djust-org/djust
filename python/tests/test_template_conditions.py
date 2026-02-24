@@ -270,5 +270,46 @@ class TestEdgeCases:
         assert result == "negative"
 
 
+class TestIfInHtmlAttribute:
+    """Regression tests for issue #380: {% if %} inside HTML attribute values."""
+
+    def test_if_in_attribute_false_no_comment(self):
+        """#380: {% if %} false inside attribute must not produce <!--dj-if--> in output."""
+        template = '<div class="btn {% if active %}active{% endif %}"></div>'
+        result = render_template(template, {"active": False})
+        assert "<!--" not in result
+        assert 'class="btn "' in result
+
+    def test_if_in_attribute_true_renders_content(self):
+        """#380: {% if %} true inside attribute must render the branch content."""
+        template = '<div class="btn {% if active %}active{% endif %}"></div>'
+        result = render_template(template, {"active": True})
+        assert 'class="btn active"' in result
+
+    def test_if_in_text_node_no_comment_via_api(self):
+        """render_template API strips <!--dj-if--> for standalone use."""
+        template = "<div>{% if show %}yes{% endif %}</div>"
+        result = render_template(template, {"show": False})
+        # Python-facing API strips placeholder comments
+        assert "<!--dj-if-->" not in result
+        assert result == "<div></div>"
+
+    def test_multiple_ifs_in_attributes(self):
+        """#380: Multiple {% if %} blocks inside attributes all stay clean."""
+        template = (
+            '<a class="{% if active %}active{% endif %} '
+            '{% if disabled %}disabled{% endif %}">link</a>'
+        )
+        result = render_template(template, {"active": False, "disabled": False})
+        assert "<!--" not in result
+
+    def test_if_in_attribute_with_else(self):
+        """#380: {% if %}...{% else %} inside attribute uses the else branch normally."""
+        template = '<div class="{% if active %}on{% else %}off{% endif %}"></div>'
+        result = render_template(template, {"active": False})
+        assert 'class="off"' in result
+        assert "<!--" not in result
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
