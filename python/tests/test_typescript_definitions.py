@@ -28,8 +28,7 @@ def dts_content():
     """Read and return the .d.ts file content."""
     abs_path = os.path.abspath(DTS_PATH)
     assert os.path.exists(abs_path), (
-        f"djust.d.ts not found at {abs_path}. "
-        "Run the implementation step to create it."
+        f"djust.d.ts not found at {abs_path}. " "Run the implementation step to create it."
     )
     with open(abs_path) as f:
         return f.read()
@@ -60,26 +59,33 @@ def test_djust_hook_context_interface(dts_content):
     # Must have el: Element
     assert re.search(r"el\s*:\s*Element", dts_content), "DjustHookContext must have el: Element"
     # Must have viewName: string
-    assert re.search(r"viewName\s*:\s*string", dts_content), (
-        "DjustHookContext must have viewName: string"
-    )
+    assert re.search(
+        r"viewName\s*:\s*string", dts_content
+    ), "DjustHookContext must have viewName: string"
     # Must have pushEvent method
-    assert re.search(r"pushEvent\s*\(", dts_content), (
-        "DjustHookContext must have pushEvent() method"
-    )
+    assert re.search(
+        r"pushEvent\s*\(", dts_content
+    ), "DjustHookContext must have pushEvent() method"
     # Must have handleEvent method
-    assert re.search(r"handleEvent\s*\(", dts_content), (
-        "DjustHookContext must have handleEvent() method"
-    )
+    assert re.search(
+        r"handleEvent\s*\(", dts_content
+    ), "DjustHookContext must have handleEvent() method"
 
 
 def test_djust_hook_interface_lifecycle(dts_content):
     """DjustHook must declare all five lifecycle callbacks."""
     assert "DjustHook" in dts_content, "Missing DjustHook interface"
-    for callback in ("mounted", "updated", "beforeUpdate", "destroyed", "disconnected", "reconnected"):
-        assert re.search(rf"\b{callback}\b", dts_content), (
-            f"DjustHook missing lifecycle callback: {callback}"
-        )
+    for callback in (
+        "mounted",
+        "updated",
+        "beforeUpdate",
+        "destroyed",
+        "disconnected",
+        "reconnected",
+    ):
+        assert re.search(
+            rf"\b{callback}\b", dts_content
+        ), f"DjustHook missing lifecycle callback: {callback}"
 
 
 def test_djust_hook_map_type(dts_content):
@@ -121,9 +127,9 @@ def test_websocket_stats_type(dts_content):
 def test_upload_progress_event_type(dts_content):
     """Upload progress custom event detail must be typed."""
     # Either a CustomEvent type or an interface for the detail
-    assert re.search(r"upload.*progress|DjustUpload", dts_content, re.IGNORECASE), (
-        "Missing upload progress type declarations"
-    )
+    assert re.search(
+        r"upload.*progress|DjustUpload", dts_content, re.IGNORECASE
+    ), "Missing upload progress type declarations"
     # ref field
     assert re.search(r"\bref\b\s*:", dts_content), "Upload type missing 'ref' field"
     # progress field (numeric percentage)
@@ -132,9 +138,9 @@ def test_upload_progress_event_type(dts_content):
 
 def test_upload_config_type(dts_content):
     """Upload config must be typed."""
-    assert re.search(r"DjustUpload|upload_config|UploadConfig", dts_content, re.IGNORECASE), (
-        "Missing upload config type"
-    )
+    assert re.search(
+        r"DjustUpload|upload_config|UploadConfig", dts_content, re.IGNORECASE
+    ), "Missing upload config type"
 
 
 # ---------------------------------------------------------------------------
@@ -144,9 +150,9 @@ def test_upload_config_type(dts_content):
 
 def test_stream_operation_type(dts_content):
     """Stream operation type must cover all ops: append, prepend, replace, delete, text, error."""
-    assert re.search(r"DjustStream|stream.*op|StreamOp", dts_content, re.IGNORECASE), (
-        "Missing stream operation type"
-    )
+    assert re.search(
+        r"DjustStream|stream.*op|StreamOp", dts_content, re.IGNORECASE
+    ), "Missing stream operation type"
     for op in ("append", "prepend", "replace", "delete"):
         assert op in dts_content, f"Stream operation '{op}' not represented in types"
 
@@ -164,12 +170,12 @@ def test_stream_message_type(dts_content):
 
 def test_djust_namespace_declared(dts_content):
     """window.djust must be typed via interface Window extension."""
-    assert re.search(r"interface\s+Window", dts_content), (
-        "Missing 'interface Window' extension for window.djust"
-    )
-    assert re.search(r"djust\s*:\s*Djust", dts_content), (
-        "Window interface must have 'djust: Djust' property"
-    )
+    assert re.search(
+        r"interface\s+Window", dts_content
+    ), "Missing 'interface Window' extension for window.djust"
+    assert re.search(
+        r"djust\s*:\s*Djust", dts_content
+    ), "Window interface must have 'djust: Djust' property"
 
 
 def test_djust_interface_core_props(dts_content):
@@ -185,8 +191,14 @@ def test_djust_interface_core_props(dts_content):
 
 def test_djust_interface_hook_methods(dts_content):
     """Djust interface must expose hook management methods."""
-    for method in ("mountHooks", "updateHooks", "destroyAllHooks", "notifyHooksDisconnected",
-                   "notifyHooksReconnected", "dispatchPushEventToHooks"):
+    for method in (
+        "mountHooks",
+        "updateHooks",
+        "destroyAllHooks",
+        "notifyHooksDisconnected",
+        "notifyHooksReconnected",
+        "dispatchPushEventToHooks",
+    ):
         assert method in dts_content, f"Djust interface missing method: {method}"
 
 
@@ -220,9 +232,9 @@ def test_djust_interface_model_binding(dts_content):
 
 def test_declare_global_block(dts_content):
     """File must use declare global {} to extend Window without a module."""
-    assert "declare global" in dts_content, (
-        "Missing 'declare global' block — required to extend Window as an ambient file"
-    )
+    assert (
+        "declare global" in dts_content
+    ), "Missing 'declare global' block — required to extend Window as an ambient file"
 
 
 def test_djust_debug_global(dts_content):
@@ -232,9 +244,9 @@ def test_djust_debug_global(dts_content):
 
 def test_djust_hooks_compat_alias(dts_content):
     """window.DjustHooks (Phoenix-compat alias) must be typed."""
-    assert "DjustHooks" in dts_content, (
-        "Missing DjustHooks window property (Phoenix LiveView-compatible hook registration)"
-    )
+    assert (
+        "DjustHooks" in dts_content
+    ), "Missing DjustHooks window property (Phoenix LiveView-compatible hook registration)"
 
 
 # ---------------------------------------------------------------------------
@@ -245,25 +257,23 @@ def test_djust_hooks_compat_alias(dts_content):
 def test_live_view_instance_nullable(dts_content):
     """liveViewInstance must allow null (no active connection)."""
     # Should be typed as `... | null` or optional
-    live_view_instance_section = re.search(
-        r"liveViewInstance\s*\??\s*:[^\n;]+", dts_content
-    )
+    live_view_instance_section = re.search(r"liveViewInstance\s*\??\s*:[^\n;]+", dts_content)
     assert live_view_instance_section, "liveViewInstance not typed in Djust interface"
-    assert "null" in live_view_instance_section.group(0) or "?" in live_view_instance_section.group(0), (
-        "liveViewInstance should be nullable (| null) since connection may not be established"
-    )
+    assert "null" in live_view_instance_section.group(0) or "?" in live_view_instance_section.group(
+        0
+    ), "liveViewInstance should be nullable (| null) since connection may not be established"
 
 
 def test_optional_parameters(dts_content):
     """Key methods must use optional parameters where appropriate."""
     # mountHooks(root?: Element) - root is optional
-    assert re.search(r"mountHooks\s*\(\s*root\s*\?", dts_content), (
-        "mountHooks root parameter should be optional"
-    )
+    assert re.search(
+        r"mountHooks\s*\(\s*root\s*\?", dts_content
+    ), "mountHooks root parameter should be optional"
     # handleEvent params should be optional
-    assert re.search(r"handleEvent\s*\([^)]*\?", dts_content), (
-        "handleEvent should have at least one optional parameter"
-    )
+    assert re.search(
+        r"handleEvent\s*\([^)]*\?", dts_content
+    ), "handleEvent should have at least one optional parameter"
 
 
 # ---------------------------------------------------------------------------
@@ -275,24 +285,24 @@ def test_balanced_braces(dts_content):
     """The file must have balanced curly braces."""
     open_count = dts_content.count("{")
     close_count = dts_content.count("}")
-    assert open_count == close_count, (
-        f"Unbalanced braces in djust.d.ts: {open_count} '{{' vs {close_count} '}}'"
-    )
+    assert (
+        open_count == close_count
+    ), f"Unbalanced braces in djust.d.ts: {open_count} '{{' vs {close_count} '}}'"
 
 
 def test_no_bare_javascript_syntax(dts_content):
     """The file must not contain function bodies (only declarations)."""
     # A .d.ts should not have function bodies with actual code
-    assert "this.ws = " not in dts_content, (
-        "djust.d.ts contains implementation code (this.ws = ...) — should be declarations only"
-    )
+    assert (
+        "this.ws = " not in dts_content
+    ), "djust.d.ts contains implementation code (this.ws = ...) — should be declarations only"
     # console.log should not appear outside of JSDoc comment blocks
     # Strip JSDoc/line comments and check the remaining code
     code_only = re.sub(r"/\*.*?\*/", "", dts_content, flags=re.DOTALL)  # strip block comments
     code_only = re.sub(r"//[^\n]*", "", code_only)  # strip line comments
-    assert "console.log" not in code_only, (
-        "djust.d.ts contains console.log outside of comments — should be declarations only"
-    )
+    assert (
+        "console.log" not in code_only
+    ), "djust.d.ts contains console.log outside of comments — should be declarations only"
 
 
 def test_export_empty_for_ambient_module(dts_content):

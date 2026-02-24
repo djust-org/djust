@@ -164,7 +164,12 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
     if allowed_modules and not any(view_path.startswith(m) for m in allowed_modules):
         logger.warning("SSE: blocked attempt to mount view from unauthorized module: %s", view_path)
         session.push(
-            {"type": "error", "error": _safe_error(f"View {view_path} is not in allowed modules", "View not found")}
+            {
+                "type": "error",
+                "error": _safe_error(
+                    f"View {view_path} is not in allowed modules", "View not found"
+                ),
+            }
         )
         return
 
@@ -410,6 +415,7 @@ async def _sse_handle_event(session: SSESession, event_name: str, params: Dict[s
 
     # ---- Render ----
     try:
+
         def _sync_render():
             return view_instance.render_with_diff()
 
@@ -649,8 +655,6 @@ class DjustSSEStreamView(View):
     """
 
     async def get(self, request, session_id: str):
-        from django.conf import settings
-
         # Validate session_id is a valid UUID to prevent path traversal
         try:
             uuid.UUID(session_id)

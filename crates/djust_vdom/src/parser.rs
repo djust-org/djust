@@ -287,10 +287,11 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                 let attr_value = attr.value.to_string();
 
                 // Extract dj-key or data-key for efficient list diffing (explicit opt-in only)
-                if (attr_name_lower == "dj-key" || attr_name_lower == "data-key") && !attr_value.is_empty() {
-                    if key.is_none() {
-                        key = Some(attr_value.clone());
-                    }
+                if (attr_name_lower == "dj-key" || attr_name_lower == "data-key")
+                    && !attr_value.is_empty()
+                    && key.is_none()
+                {
+                    key = Some(attr_value.clone());
                 }
 
                 // Don't overwrite our generated dj-id if template already has one
