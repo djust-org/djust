@@ -240,21 +240,29 @@ def handle_exception(
     # Log message
     msg = log_message or "Error occurred"
 
-    # Log with exc_info only in DEBUG mode (don't fill prod logs with stack traces)
+    # Log with exc_info only in DEBUG mode (don't fill prod logs with stack traces).
+    # String args are sanitized by DjustLogSanitizerFilter (installed in AppConfig.ready()).
     if debug_mode:
-        # Full stack trace in development
         if extra:
             from .log_sanitizer import sanitize_dict_for_log
 
             safe_extra = sanitize_dict_for_log(extra)
             logger.error(
-                f"{msg}{context}: {type(exception).__name__}: {exception}",
+                "%s%s: %s: %s",
+                msg,
+                context,
+                type(exception).__name__,
+                str(exception),
                 exc_info=True,
                 extra={"sanitized_context": safe_extra},
             )
         else:
             logger.error(
-                f"{msg}{context}: {type(exception).__name__}: {exception}",
+                "%s%s: %s: %s",
+                msg,
+                context,
+                type(exception).__name__,
+                str(exception),
                 exc_info=True,
             )
     else:

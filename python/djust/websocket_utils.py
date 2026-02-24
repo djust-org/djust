@@ -163,21 +163,22 @@ async def _validate_event_security(
     checks pass, or None after sending the appropriate error/close.
     """
     if not is_safe_event_name(event_name):
-        error_msg = f"Blocked unsafe event name: {sanitize_for_log(event_name)}"
-        logger.warning(error_msg)
+        safe_name = sanitize_for_log(event_name)
+        logger.warning("Blocked unsafe event name: %s", safe_name)
+        error_msg = f"Blocked unsafe event name: {safe_name}"
         await ws.send_error(_safe_error(error_msg))
         return None
 
     handler = getattr(owner_instance, event_name, None)
     if not handler or not callable(handler):
         error_msg = _format_handler_not_found_error(owner_instance, event_name)
-        logger.warning(error_msg)
+        logger.warning("Handler not found: %s", event_name)
         await ws.send_error(_safe_error(error_msg, "Event rejected"))
         return None
 
     security_error = _check_event_security(handler, owner_instance, event_name)
     if security_error:
-        logger.warning(security_error)
+        logger.warning("Security check failed for event %s", event_name)
         await ws.send_error(_safe_error(security_error))
         return None
 

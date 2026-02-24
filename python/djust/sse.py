@@ -693,7 +693,7 @@ class DjustSSEStreamView(View):
                 # Linger briefly so in-flight event POSTs can still find the session
                 await asyncio.sleep(_SESSION_LINGER_S)
                 _sse_sessions.pop(session_id, None)
-                logger.debug("SSE: session %s closed", session_id)
+                logger.debug("SSE: session %s closed", sanitize_for_log(session_id))
 
         response = StreamingHttpResponse(
             event_stream(),
