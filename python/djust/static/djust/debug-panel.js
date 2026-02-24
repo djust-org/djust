@@ -2643,9 +2643,6 @@
                 // Hook into onmessage property setter to capture messages
                 // assigned via ws.onmessage = handler (bypasses addEventListener)
                 const onmessageDescriptor = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
-                // Save original descriptor for _hookExistingWebSocket to use
-                // when wrapping an already-assigned onmessage handler
-                this._originalOnmessageDescriptor = onmessageDescriptor;
                 if (onmessageDescriptor) {
                     Object.defineProperty(WebSocket.prototype, 'onmessage', {
                         set(handler) {
