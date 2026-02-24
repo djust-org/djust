@@ -183,7 +183,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 expiresAt
             });
             if (globalThis.djustDebug) {
-                if (globalThis.djustDebug) console.log(`[LiveView:cache] Cached patches: ${cacheKey} (TTL: ${ttl}s)`);
+                console.log(`[LiveView:cache] Cached patches: ${cacheKey} (TTL: ${ttl}s)`);
             }
             pendingCacheRequests.delete(data.cache_request_id);
         }
@@ -344,7 +344,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 globalLoadingManager.stopLoading(loadingEventName, triggerElement);
             }
         } else if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
+            console.log('[LiveView] Keeping loading state — async work pending');
         }
         return true;
 
@@ -633,7 +633,7 @@ class LiveViewWebSocket {
                 initTodoItems();
                 bindLiveViewEvents();
                 if (globalThis.djustDebug) {
-                    if (globalThis.djustDebug) console.log('[LiveView] DOM recovered via morph, version:', data.version);
+                    console.log('[LiveView] DOM recovered via morph, version:', data.version);
                 }
                 break;
             }
@@ -1310,7 +1310,7 @@ function addToCache(cacheKey, value) {
         const oldestKey = resultCache.keys().next().value;
         resultCache.delete(oldestKey);
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[LiveView:cache] Evicted (LRU): ${oldestKey}`);
+            console.log(`[LiveView:cache] Evicted (LRU): ${oldestKey}`);
         }
     }
 
@@ -1327,7 +1327,7 @@ function setCacheConfig(config) {
     Object.entries(config).forEach(([handlerName, handlerConfig]) => {
         cacheConfig.set(handlerName, handlerConfig);
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[LiveView:cache] Configured cache for ${handlerName}:`, handlerConfig);
+            console.log(`[LiveView:cache] Configured cache for ${handlerName}:`, handlerConfig);
         }
     });
 }
@@ -1415,7 +1415,7 @@ function clearCache() {
     const size = resultCache.size;
     resultCache.clear();
     if (globalThis.djustDebug) {
-        if (globalThis.djustDebug) console.log(`[LiveView:cache] Cleared all ${size} cached entries`);
+        console.log(`[LiveView:cache] Cleared all ${size} cached entries`);
     }
 }
 
@@ -1445,7 +1445,7 @@ function invalidateCache(pattern) {
     }
 
     if (globalThis.djustDebug) {
-        if (globalThis.djustDebug) console.log(`[LiveView:cache] Invalidated ${count} entries matching: ${pattern}`);
+        console.log(`[LiveView:cache] Invalidated ${count} entries matching: ${pattern}`);
     }
 
     return count;
@@ -1466,7 +1466,7 @@ class StateBus {
         const oldValue = this.state.get(key);
         this.state.set(key, value);
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[StateBus] Set: ${key} =`, value, `(was:`, oldValue, `)`);
+            console.log(`[StateBus] Set: ${key} =`, value, `(was:`, oldValue, `)`);
         }
         this.notify(key, value, oldValue);
     }
@@ -1481,14 +1481,14 @@ class StateBus {
         }
         this.subscribers.get(key).add(callback);
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[StateBus] Subscribed to: ${key} (${this.subscribers.get(key).size} subscribers)`);
+            console.log(`[StateBus] Subscribed to: ${key} (${this.subscribers.get(key).size} subscribers)`);
         }
         return () => {
             const subs = this.subscribers.get(key);
             if (subs) {
                 subs.delete(callback);
                 if (globalThis.djustDebug) {
-                    if (globalThis.djustDebug) console.log(`[StateBus] Unsubscribed from: ${key} (${subs.size} remaining)`);
+                    console.log(`[StateBus] Unsubscribed from: ${key} (${subs.size} remaining)`);
                 }
             }
         };
@@ -1512,7 +1512,7 @@ class StateBus {
         this.state.clear();
         this.subscribers.clear();
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log('[StateBus] Cleared all state');
+            console.log('[StateBus] Cleared all state');
         }
     }
 
@@ -1544,7 +1544,7 @@ class DraftManager {
                 localStorage.setItem(`djust_draft_${draftKey}`, JSON.stringify(draftData));
 
                 if (globalThis.djustDebug) {
-                    if (globalThis.djustDebug) console.log(`[DraftMode] Saved draft: ${draftKey}`, data);
+                    console.log(`[DraftMode] Saved draft: ${draftKey}`, data);
                 }
             } catch (error) {
                 console.error(`[DraftMode] Failed to save draft ${draftKey}:`, error);
@@ -1586,7 +1586,7 @@ class DraftManager {
             localStorage.removeItem(`djust_draft_${draftKey}`);
 
             if (globalThis.djustDebug) {
-                if (globalThis.djustDebug) console.log(`[DraftMode] Cleared draft: ${draftKey}`);
+                console.log(`[DraftMode] Cleared draft: ${draftKey}`);
             }
         } catch (error) {
             console.error(`[DraftMode] Failed to clear draft ${draftKey}:`, error);
@@ -1613,7 +1613,7 @@ class DraftManager {
         keys.forEach(key => this.clearDraft(key));
 
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[DraftMode] Cleared all ${keys.length} drafts`);
+            console.log(`[DraftMode] Cleared all ${keys.length} drafts`);
         }
     }
 }
@@ -1743,7 +1743,7 @@ function restoreFormData(container, data) {
     });
 
     if (globalThis.djustDebug) {
-        if (globalThis.djustDebug) console.log('[DraftMode] Restored form data:', data);
+        console.log('[DraftMode] Restored form data:', data);
     }
 }
 
@@ -2329,7 +2329,7 @@ function bindLiveViewEvents() {
                 }
 
                 if (globalThis.djustDebug) {
-                    if (globalThis.djustDebug) console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
+                    console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
                 }
                 await handleEvent(parsedChange.name, params);
             };
@@ -2607,7 +2607,7 @@ const globalLoadingManager = {
         if (modifiers.length > 0) {
             this.registeredElements.set(element, { eventName, modifiers, originalState });
             if (globalThis.djustDebug) {
-                if (globalThis.djustDebug) console.log(`[Loading] Registered element for "${eventName}":`, modifiers);
+                console.log(`[Loading] Registered element for "${eventName}":`, modifiers);
             }
         }
     },
@@ -2651,7 +2651,7 @@ const globalLoadingManager = {
             }
         });
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[Loading] Scanned ${this.registeredElements.size} elements with dj-loading attributes`);
+            console.log(`[Loading] Scanned ${this.registeredElements.size} elements with dj-loading attributes`);
         }
     },
 
@@ -2665,7 +2665,7 @@ const globalLoadingManager = {
             // Check if trigger element has dj-loading.disable
             const hasDisable = triggerElement.hasAttribute('dj-loading.disable');
             if (globalThis.djustDebug) {
-                if (globalThis.djustDebug) console.log(`[Loading] triggerElement:`, triggerElement);
+                console.log(`[Loading] triggerElement:`, triggerElement);
                 if (globalThis.djustDebug) console.log(`[Loading] hasAttribute('dj-loading.disable'):`, hasDisable);
             }
             if (hasDisable) {
@@ -2683,7 +2683,7 @@ const globalLoadingManager = {
         document.body.classList.add('djust-global-loading');
 
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[Loading] Started: ${eventName}`);
+            console.log(`[Loading] Started: ${eventName}`);
         }
     },
 
@@ -2710,7 +2710,7 @@ const globalLoadingManager = {
         document.body.classList.remove('djust-global-loading');
 
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[Loading] Stopped: ${eventName}`);
+            console.log(`[Loading] Stopped: ${eventName}`);
         }
     },
 
@@ -2758,7 +2758,7 @@ function generateCacheRequestId() {
 // Main Event Handler
 async function handleEvent(eventName, params = {}) {
     if (globalThis.djustDebug) {
-        if (globalThis.djustDebug) console.log(`[LiveView] Handling event: ${eventName}`, params);
+        console.log(`[LiveView] Handling event: ${eventName}`, params);
     }
 
     // Extract client-only properties before sending to server.
@@ -2786,7 +2786,7 @@ async function handleEvent(eventName, params = {}) {
     if (cached) {
         // Cache hit! Apply cached patches without server round-trip
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[LiveView:cache] Cache hit: ${cacheKey}`);
+            console.log(`[LiveView:cache] Cache hit: ${cacheKey}`);
         }
 
         // Still show brief loading state for UX consistency
@@ -2825,7 +2825,7 @@ async function handleEvent(eventName, params = {}) {
             if (pendingCacheRequests.has(cacheRequestId)) {
                 pendingCacheRequests.delete(cacheRequestId);
                 if (globalThis.djustDebug) {
-                    if (globalThis.djustDebug) console.log(`[LiveView:cache] Cleaned up stale pending request: ${cacheRequestId}`);
+                    console.log(`[LiveView:cache] Cleaned up stale pending request: ${cacheRequestId}`);
                 }
             }
         }, PENDING_CACHE_TIMEOUT);
@@ -2906,7 +2906,7 @@ function getNodeByPath(path, djustId = null) {
         // ID not found - fall through to path-based
         if (globalThis.djustDebug) {
             // Log without user data to avoid log injection
-            if (globalThis.djustDebug) console.log('[LiveView] ID lookup failed, trying path fallback');
+            console.log('[LiveView] ID lookup failed, trying path fallback');
         }
     }
 
@@ -3595,7 +3595,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                         // Clone and append new child
                         existingElement.appendChild(newChild.cloneNode(true));
                         if (globalThis.djustDebug) {
-                            if (globalThis.djustDebug) console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
+                            console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
                         }
                     }
                 }
@@ -3616,7 +3616,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                         // Clone and prepend new child
                         existingElement.insertBefore(newChild.cloneNode(true), firstExisting);
                         if (globalThis.djustDebug) {
-                            if (globalThis.djustDebug) console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
+                            console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
                         }
                     }
                 }
@@ -3626,7 +3626,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
             case 'ignore':
                 // Don't update this element at all
                 if (globalThis.djustDebug) {
-                    if (globalThis.djustDebug) console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
+                    console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
                 }
                 break;
 
@@ -4251,7 +4251,7 @@ const lazyHydrationManager = {
         }
 
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[LiveView:lazy] Registered element for lazy hydration (mode: ${lazyMode})`, element);
+            console.log(`[LiveView:lazy] Registered element for lazy hydration (mode: ${lazyMode})`, element);
         }
     },
 

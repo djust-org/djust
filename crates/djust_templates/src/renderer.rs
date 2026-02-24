@@ -128,7 +128,7 @@ fn render_node_with_loader<L: TemplateLoader>(
             let is_safe = filters
                 .iter()
                 .any(|(name, _)| safe_output_filters.contains(&name.as_str()))
-                || context.is_safe(true_expr);
+                || context.is_safe(expr);
             if is_safe {
                 Ok(text)
             } else {

@@ -179,8 +179,8 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
         module = __import__(module_path, fromlist=[class_name])
         view_class = getattr(module, class_name)
     except (ValueError, ImportError, AttributeError) as exc:
-        error_msg = f"Failed to load view {view_path}: {exc}"
-        logger.error(error_msg)
+        error_msg = "Failed to load view %s: %s" % (view_path, exc)
+        logger.error("Failed to load view %s: %s", view_path, exc)
         session.push({"type": "error", "error": _safe_error(error_msg, "View not found")})
         return
 
@@ -188,8 +188,8 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
     from .live_view import LiveView
 
     if not (isinstance(view_class, type) and issubclass(view_class, LiveView)):
-        error_msg = f"Security: {view_path} is not a LiveView subclass."
-        logger.error(error_msg)
+        error_msg = "Security: %s is not a LiveView subclass." % view_path
+        logger.error("Security: %s is not a LiveView subclass.", view_path)
         session.push({"type": "error", "error": _safe_error(error_msg, "Invalid view class")})
         return
 
@@ -202,7 +202,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
             error_type="mount",
             view_class=view_path,
             logger=logger,
-            log_message=f"Failed to instantiate {view_path}",
+            log_message="Failed to instantiate %s" % view_path,
         )
         session.push(response)
         return
@@ -262,7 +262,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
             error_type="mount",
             view_class=view_path,
             logger=logger,
-            log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
+            log_message="Error in %s.mount()" % sanitize_for_log(view_path),
         )
         session.push(response)
         return
@@ -280,7 +280,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
             error_type="render",
             view_class=view_path,
             logger=logger,
-            log_message=f"Error rendering {sanitize_for_log(view_path)}",
+            log_message="Error rendering %s" % sanitize_for_log(view_path),
         )
         session.push(response)
         return
@@ -292,7 +292,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
         "view": view_path,
         "version": version,
         "html": html,
-        "has_ids": "data-dj-id=" in html,
+        "has_ids": "dj-id=" in html,
     }
 
     # Include @cache decorator configuration if present
@@ -384,7 +384,7 @@ async def _sse_handle_event(session: SSESession, event_name: str, params: Dict[s
             event_name=event_name,
             view_class=view_instance.__class__.__name__,
             logger=logger,
-            log_message=f"Error in SSE event handler {view_instance.__class__.__name__}.{sanitize_for_log(event_name)}()",
+            log_message="Error in SSE event handler %s.%s()" % (view_instance.__class__.__name__, sanitize_for_log(event_name)),
         )
         session.push(response)
         return
@@ -753,12 +753,6 @@ class DjustSSEEventView(View):
         await _sse_handle_event(session, event_name, params)
         return JsonResponse({"ok": True})
 
-    async def options(self, request, session_id: str):
-        """Handle CORS preflight for cross-origin deployments."""
-        response = JsonResponse({})
-        response["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-        response["Access-Control-Allow-Headers"] = "Content-Type"
-        return response
 
 
 # ------------------------------------------------------------------ #
