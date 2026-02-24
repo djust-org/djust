@@ -36,13 +36,9 @@ html = render_template("<h1>{{ title }}</h1>", {"title": "Hello"})
 """
         temp_test_file.write_text(code)
 
-        # Try to import mypy - skip if not available
-        try:
-            import mypy.api
-        except ImportError:
-            pytest.skip("mypy not installed")
+        mypy_api = pytest.importorskip("mypy.api", reason="mypy not installed")
 
-        result = mypy.api.run([str(temp_test_file), "--strict"])
+        result = mypy_api.run([str(temp_test_file), "--strict"])
         stdout, stderr, exit_code = result
 
         # Should pass (exit code 0) or have minimal warnings
