@@ -76,6 +76,7 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
         key_prefix: str = "djust",
         timeout: int = PRESENCE_TIMEOUT,
     ):
+        super().__init__(tenant_id=tenant_id)
         try:
             import redis as redis_lib
         except ImportError:
@@ -247,6 +248,7 @@ class TenantAwareMemoryBackend(TenantAwareBackendMixin, PresenceBackend):
     _heartbeats: Dict[str, Dict[str, float]] = {}
 
     def __init__(self, tenant_id: str, timeout: int = PRESENCE_TIMEOUT):
+        super().__init__(tenant_id=tenant_id)
         self._tenant_id = tenant_id
         self._timeout = timeout
 
