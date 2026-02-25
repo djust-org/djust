@@ -2352,4 +2352,27 @@ mod tests {
             "elif true branch must render in attribute: {result}"
         );
     }
+
+    #[test]
+    fn test_multiple_elif_in_attribute_all_false_emits_empty_not_comment() {
+        // #382: 3-branch elif chain inside an attribute with a=b=c=false must
+        // emit "" not "<!--dj-if-->". Verifies in_tag_context propagates through
+        // all recursive parse_if_block calls, not just the first elif.
+        let template = r#"<div class="{% if a %}a{% elif b %}b{% elif c %}c{% endif %}"></div>"#;
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("a".to_string(), Value::Bool(false));
+        context.set("b".to_string(), Value::Bool(false));
+        context.set("c".to_string(), Value::Bool(false));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert!(
+            !result.contains("<!--dj-if-->"),
+            "comment must not appear in attribute with 3-branch elif all false: {result}"
+        );
+        assert!(
+            result.contains(r#"class="""#),
+            "expected empty attribute value: {result}"
+        );
+    }
 }
