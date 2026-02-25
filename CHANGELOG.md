@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-02-24
+
+Stable release — promotes 0.3.3rc1 through 0.3.3rc3. All changes below were present in the RC series; this entry summarises them for the stable changelog.
+
+### Added
+
+- **6 new Django template tags in Rust renderer** — `{% widthratio %}`, `{% firstof %}`, `{% templatetag %}`, `{% spaceless %}`, `{% cycle %}`, `{% now %}`. ([#329](https://github.com/djust-org/djust/issues/329))
+- **System checks `djust.T011` / `T012` / `T013`** — Warns at startup for unsupported Rust template tags, missing `dj-view`, and invalid `dj-view` paths. ([#293](https://github.com/djust-org/djust/issues/293), [#329](https://github.com/djust-org/djust/issues/329))
+- **Deployment guides** — Railway, Render, and Fly.io. ([#247](https://github.com/djust-org/djust/issues/247))
+- **Navigation and LiveView invariants documentation.** ([#304](https://github.com/djust-org/djust/issues/304), [#316](https://github.com/djust-org/djust/issues/316))
+
+### Fixed
+
+- **#380: `{% if %}` in HTML attribute values no longer emits `<!--dj-if-->` comment** — Produced malformed HTML (e.g. `class="btn <!--dj-if-->"`). Empty string is emitted instead; text-node VDOM anchor is unaffected. ([#381](https://github.com/djust-org/djust/pull/381))
+- **#382: `{% elif %}` chains in attribute values propagate `in_tag_context`** — All elif nodes in a chain now inherit the outer `{% if %}`'s attribute context. ([#383](https://github.com/djust-org/djust/pull/383))
+- **`{% if/else %}` branches miscounting div depth in template extraction.** ([#365](https://github.com/djust-org/djust/issues/365))
+- **VDOM extraction used fully-merged `{% extends %}` document.** ([#366](https://github.com/djust-org/djust/issues/366))
+- **`TypeError: Illegal invocation` in debug panel on Chrome/Edge.** ([#367](https://github.com/djust-org/djust/issues/367))
+- **`dj-patch('/')` now correctly updates browser URL to root path.** ([#307](https://github.com/djust-org/djust/issues/307))
+- **`live_patch` routing restored** — `handleNavigation` dispatch now fires correctly. ([#307](https://github.com/djust-org/djust/issues/307))
+- **T003 false positives eliminated** — `{% include %}` check now examines the include path, not whole-file content. ([#331](https://github.com/djust-org/djust/issues/331))
+
 ## [0.3.3rc3] - 2026-02-24
 
 ### Fixed
