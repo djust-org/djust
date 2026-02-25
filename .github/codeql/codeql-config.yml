@@ -1,0 +1,10 @@
+name: "djust CodeQL config"
+
+paths-ignore:
+  # Compiled build artifacts — analyzed via their source files in src/
+  - "python/djust/static/djust/client.js"
+  - "python/djust/static/djust/debug-panel.js"
+  # Test fixtures and examples are not production code
+  - "python/djust/tests/**"
+  - "python/tests/**"
+  - "examples/**"

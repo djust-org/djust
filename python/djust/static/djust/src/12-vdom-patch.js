@@ -821,6 +821,7 @@ function _stampDjIds(serverHtml, container) {
     if (!container) return;
 
     const parser = new DOMParser();
+    // codeql[js/xss] -- serverHtml is rendered by the trusted Django/Rust template engine
     const doc = parser.parseFromString('<div>' + serverHtml + '</div>', 'text/html');
     const serverRoot = doc.body.firstChild;
 

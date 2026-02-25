@@ -223,7 +223,7 @@ class LiveViewWebSocket {
                     // This preserves whitespace (e.g. in code blocks) that innerHTML would destroy
                     if (hasDataDjAttrs && data.html) {
                         if (globalThis.djustDebug) console.log('[LiveView] Stamping dj-id attributes onto pre-rendered DOM');
-                        _stampDjIds(data.html);
+                        _stampDjIds(data.html); // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                     } else {
                         if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
                     }
@@ -239,6 +239,7 @@ class LiveViewWebSocket {
                         container = document.querySelector('[dj-root]');
                     }
                     if (container) {
+                        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         container.innerHTML = data.html;
                         bindLiveViewEvents();
                     }
@@ -546,6 +547,7 @@ class LiveViewWebSocket {
         }
 
         const _morphTemp = document.createElement('div');
+        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
         _morphTemp.innerHTML = html;
         morphChildren(container, _morphTemp);
         if (globalThis.djustDebug) console.log(`[LiveView] Updated embedded view: ${viewId}`);
