@@ -2,6 +2,7 @@
 Simplified LiveView for initial testing
 """
 
+from django.conf import settings
 from django.views import View
 from django.http import HttpResponse
 
@@ -43,7 +44,9 @@ class LiveView(View):
                 context = self.get_context_data()
                 return render_template_with_dirs(self.template, context, get_template_dirs())
             except Exception as e:
-                return f"<div>Error: {e}</div>"
+                if settings.DEBUG:
+                    return f"<div>Template error: {e}</div>"
+                return "<div>An error occurred rendering this view.</div>"
         return "<div>Rust backend not available</div>"
 
     def get(self, request, *args, **kwargs):
