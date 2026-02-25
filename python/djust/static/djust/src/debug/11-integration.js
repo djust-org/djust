@@ -219,12 +219,22 @@
 
             const stats = footer.querySelector('.djust-stats');
             if (stats && performance) {
-                stats.innerHTML = `
-                    <div class="djust-stat">Events:<span>${performance.event_count || 0}</span></div>
-                    <div class="djust-stat">Patches:<span>${performance.patch_count || 0}</span></div>
-                    <div class="djust-stat">Renders:<span>${performance.render_count || 0}</span></div>
-                    <div class="djust-stat">Render Time:<span>${performance.render_time ? performance.render_time.toFixed(2) + 'ms' : 'N/A'}</span></div>
-                `;
+                const metrics = [
+                    ['Events', performance.event_count || 0],
+                    ['Patches', performance.patch_count || 0],
+                    ['Renders', performance.render_count || 0],
+                    ['Render Time', performance.render_time ? performance.render_time.toFixed(2) + 'ms' : 'N/A'],
+                ];
+                stats.innerHTML = ''; // clear only once, with no interpolation
+                for (const [label, value] of metrics) {
+                    const div = document.createElement('div');
+                    div.className = 'djust-stat';
+                    div.textContent = label + ':';
+                    const span = document.createElement('span');
+                    span.textContent = value;
+                    div.appendChild(span);
+                    stats.appendChild(div);
+                }
             }
         }
 
