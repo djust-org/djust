@@ -1047,7 +1047,7 @@ class ProductDataTableView(BaseViewWithNavbar):
         except Exception as e:
             import traceback
             traceback.print_exc()
-            return JsonResponse({'error': str(e)}, status=500)
+            return JsonResponse({'error': 'An error occurred. Check server logs.'}, status=500)
 
     def mount(self, request, **kwargs):
         """Initialize with sample data"""
