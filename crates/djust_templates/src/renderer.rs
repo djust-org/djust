@@ -2315,4 +2315,64 @@ mod tests {
             "comment must not appear in single-quoted attribute with > in value: {result}"
         );
     }
+
+    #[test]
+    fn test_elif_in_attribute_both_false_emits_empty_not_comment() {
+        // #382: {% if a %}...{% elif b %}...{% endif %} inside an attribute value
+        // with both a=false and b=false must emit "" not "<!--dj-if-->".
+        let template = r#"<div class="{% if a %}one{% elif b %}two{% endif %}"></div>"#;
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("a".to_string(), Value::Bool(false));
+        context.set("b".to_string(), Value::Bool(false));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert!(
+            !result.contains("<!--dj-if-->"),
+            "comment must not appear in attribute when elif is false: {result}"
+        );
+        assert!(
+            result.contains(r#"class="""#),
+            "expected empty attribute value: {result}"
+        );
+    }
+
+    #[test]
+    fn test_elif_in_attribute_elif_branch_renders() {
+        // #382: when a=false and b=true, the elif branch content must render.
+        let template = r#"<div class="{% if a %}one{% elif b %}two{% endif %}"></div>"#;
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("a".to_string(), Value::Bool(false));
+        context.set("b".to_string(), Value::Bool(true));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert!(
+            result.contains(r#"class="two""#),
+            "elif true branch must render in attribute: {result}"
+        );
+    }
+
+    #[test]
+    fn test_multiple_elif_in_attribute_all_false_emits_empty_not_comment() {
+        // #382: 3-branch elif chain inside an attribute with a=b=c=false must
+        // emit "" not "<!--dj-if-->". Verifies in_tag_context propagates through
+        // all recursive parse_if_block calls, not just the first elif.
+        let template = r#"<div class="{% if a %}a{% elif b %}b{% elif c %}c{% endif %}"></div>"#;
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("a".to_string(), Value::Bool(false));
+        context.set("b".to_string(), Value::Bool(false));
+        context.set("c".to_string(), Value::Bool(false));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert!(
+            !result.contains("<!--dj-if-->"),
+            "comment must not appear in attribute with 3-branch elif all false: {result}"
+        );
+        assert!(
+            result.contains(r#"class="""#),
+            "expected empty attribute value: {result}"
+        );
+    }
 }

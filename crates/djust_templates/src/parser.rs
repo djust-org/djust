@@ -213,7 +213,8 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                     } else {
                         false
                     };
-                    let (true_nodes, false_nodes, end_pos) = parse_if_block(tokens, *i + 1)?;
+                    let (true_nodes, false_nodes, end_pos) =
+                        parse_if_block(tokens, *i + 1, in_tag_context)?;
                     *i = end_pos;
                     Ok(Some(Node::If {
                         condition,
@@ -608,7 +609,11 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
     }
 }
 
-fn parse_if_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, Vec<Node>, usize)> {
+fn parse_if_block(
+    tokens: &[Token],
+    start: usize,
+    in_tag_context: bool,
+) -> Result<(Vec<Node>, Vec<Node>, usize)> {
     let mut true_nodes = Vec::new();
     let mut false_nodes = Vec::new();
     let mut in_else = false;
@@ -631,12 +636,13 @@ fn parse_if_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, Vec<Node
                 // elif is equivalent to: else + nested if
                 // {% elif condition %} becomes {% else %}{% if condition %}...{% endif %}
                 let elif_condition = args.join(" ");
-                let (elif_true, elif_false, end_pos) = parse_if_block(tokens, i + 1)?;
+                let (elif_true, elif_false, end_pos) =
+                    parse_if_block(tokens, i + 1, in_tag_context)?;
                 false_nodes.push(Node::If {
                     condition: elif_condition,
                     true_nodes: elif_true,
                     false_nodes: elif_false,
-                    in_tag_context: false, // elif is never directly inside an attribute
+                    in_tag_context,
                 });
                 return Ok((true_nodes, false_nodes, end_pos));
             }
