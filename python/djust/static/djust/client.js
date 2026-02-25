@@ -595,7 +595,8 @@ class LiveViewWebSocket {
                         container = document.querySelector('[dj-root]');
                     }
                     if (container) {
-                        container.innerHTML = data.html; // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                        container.innerHTML = data.html;
                         bindLiveViewEvents();
                     }
                     this.skipMountHtml = false;
@@ -902,7 +903,8 @@ class LiveViewWebSocket {
         }
 
         const _morphTemp = document.createElement('div');
-        _morphTemp.innerHTML = html; // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+        _morphTemp.innerHTML = html;
         morphChildren(container, _morphTemp);
         if (globalThis.djustDebug) console.log(`[LiveView] Updated embedded view: ${viewId}`);
 
@@ -1118,7 +1120,8 @@ class LiveViewSSE {
                         if (hasDataDjAttrs) {
                             _stampDjIds(data.html);
                         } else {
-                            container.innerHTML = data.html; // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                            // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                            container.innerHTML = data.html;
                         }
                         bindLiveViewEvents();
                     }
@@ -3701,7 +3704,8 @@ function _stampDjIds(serverHtml, container) {
     if (!container) return;
 
     const parser = new DOMParser();
-    const doc = parser.parseFromString('<div>' + serverHtml + '</div>', 'text/html'); // codeql[js/xss] -- serverHtml is rendered by the trusted Django/Rust template engine
+    // codeql[js/xss] -- serverHtml is rendered by the trusted Django/Rust template engine
+    const doc = parser.parseFromString('<div>' + serverHtml + '</div>', 'text/html');
     const serverRoot = doc.body.firstChild;
 
     function stampRecursive(domNode, serverNode) {
@@ -5202,7 +5206,8 @@ function _applyStreamOp(op, streamName) {
 
     switch (op.op) {
         case 'replace':
-            el.innerHTML = op.html || ''; // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+            // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+            el.innerHTML = op.html || '';
             _removeStreamError(el);
             _dispatchStreamEvent(el, 'stream:update', { op: 'replace', stream: streamName });
             break;
@@ -5330,7 +5335,8 @@ function _dispatchStreamEvent(el, eventName, detail) {
  */
 function _htmlToFragment(html) {
     const template = document.createElement('template');
-    template.innerHTML = html || ''; // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+    // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+    template.innerHTML = html || '';
     return template.content;
 }
 

@@ -239,7 +239,8 @@ class LiveViewWebSocket {
                         container = document.querySelector('[dj-root]');
                     }
                     if (container) {
-                        container.innerHTML = data.html; // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                        container.innerHTML = data.html;
                         bindLiveViewEvents();
                     }
                     this.skipMountHtml = false;
@@ -546,7 +547,8 @@ class LiveViewWebSocket {
         }
 
         const _morphTemp = document.createElement('div');
-        _morphTemp.innerHTML = html; // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+        _morphTemp.innerHTML = html;
         morphChildren(container, _morphTemp);
         if (globalThis.djustDebug) console.log(`[LiveView] Updated embedded view: ${viewId}`);
 
