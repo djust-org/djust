@@ -118,7 +118,7 @@ class LiveViewSSE {
                         if (hasDataDjAttrs) {
                             _stampDjIds(data.html);
                         } else {
-                            container.innerHTML = data.html; // lgtm[js/xss-through-dom] -- html is server-rendered by the trusted Django/Rust template engine
+                            container.innerHTML = data.html; // codeql[js/xss-through-dom] -- html is server-rendered by the trusted Django/Rust template engine
                         }
                         bindLiveViewEvents();
                     }
