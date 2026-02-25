@@ -78,6 +78,7 @@ class StatusBadge(Component):
         icon: Optional[str] = None,
         color: Optional[str] = None  # Override auto-color
     ):
+        super().__init__()
         self.status = status.lower()
         self.label = label or status.replace('_', ' ').title()
         self.icon = icon

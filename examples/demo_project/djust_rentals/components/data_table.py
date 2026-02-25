@@ -47,6 +47,7 @@ class DataTable(Component):
         hover: bool = True,
         striped: bool = False
     ):
+        super().__init__()
         self.headers = headers
         self.rows = rows
         self.empty_message = empty_message
