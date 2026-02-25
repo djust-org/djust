@@ -579,7 +579,7 @@ class LiveViewWebSocket {
                     // This preserves whitespace (e.g. in code blocks) that innerHTML would destroy
                     if (hasDataDjAttrs && data.html) {
                         if (globalThis.djustDebug) console.log('[LiveView] Stamping dj-id attributes onto pre-rendered DOM');
-                        _stampDjIds(data.html); // codeql[js/xss-through-dom] -- html is server-rendered by the trusted Django/Rust template engine
+                        _stampDjIds(data.html); // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                     } else {
                         if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
                     }
@@ -595,7 +595,7 @@ class LiveViewWebSocket {
                         container = document.querySelector('[dj-root]');
                     }
                     if (container) {
-                        container.innerHTML = data.html; // codeql[js/xss-through-dom] -- html is server-rendered by the trusted Django/Rust template engine
+                        container.innerHTML = data.html; // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         bindLiveViewEvents();
                     }
                     this.skipMountHtml = false;
@@ -902,7 +902,7 @@ class LiveViewWebSocket {
         }
 
         const _morphTemp = document.createElement('div');
-        _morphTemp.innerHTML = html; // codeql[js/xss-through-dom] -- html is server-rendered by the trusted Django/Rust template engine
+        _morphTemp.innerHTML = html; // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
         morphChildren(container, _morphTemp);
         if (globalThis.djustDebug) console.log(`[LiveView] Updated embedded view: ${viewId}`);
 
@@ -1118,7 +1118,7 @@ class LiveViewSSE {
                         if (hasDataDjAttrs) {
                             _stampDjIds(data.html);
                         } else {
-                            container.innerHTML = data.html; // codeql[js/xss-through-dom] -- html is server-rendered by the trusted Django/Rust template engine
+                            container.innerHTML = data.html; // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         }
                         bindLiveViewEvents();
                     }
@@ -3701,7 +3701,7 @@ function _stampDjIds(serverHtml, container) {
     if (!container) return;
 
     const parser = new DOMParser();
-    const doc = parser.parseFromString('<div>' + serverHtml + '</div>', 'text/html'); // codeql[js/xss-through-dom] -- serverHtml is rendered by the trusted Django/Rust template engine
+    const doc = parser.parseFromString('<div>' + serverHtml + '</div>', 'text/html'); // codeql[js/xss] -- serverHtml is rendered by the trusted Django/Rust template engine
     const serverRoot = doc.body.firstChild;
 
     function stampRecursive(domNode, serverNode) {
@@ -5202,7 +5202,7 @@ function _applyStreamOp(op, streamName) {
 
     switch (op.op) {
         case 'replace':
-            el.innerHTML = op.html || ''; // codeql[js/xss-through-dom] -- html is server-rendered by the trusted Django/Rust template engine
+            el.innerHTML = op.html || ''; // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
             _removeStreamError(el);
             _dispatchStreamEvent(el, 'stream:update', { op: 'replace', stream: streamName });
             break;
@@ -5330,7 +5330,7 @@ function _dispatchStreamEvent(el, eventName, detail) {
  */
 function _htmlToFragment(html) {
     const template = document.createElement('template');
-    template.innerHTML = html || ''; // codeql[js/xss-through-dom] -- html is server-rendered by the trusted Django/Rust template engine
+    template.innerHTML = html || ''; // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
     return template.content;
 }
 
