@@ -15,6 +15,7 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[Template Requirements](guides/template-requirements.md)** - Required template attributes (dj-view, dj-root)
 - **[Working with External Services](guides/services.md)** - AWS, REST APIs, Redis integration patterns
 - **[Error Code Reference](guides/error-codes.md)** - Complete error code guide with fixes
+- **[System Checks Reference](system-checks.md)** - All 37 check IDs (C/V/S/T/Q), severities, suppression patterns, and false positives
 
 ### 🔌 Real-Time Features
 - **[Navigation](guides/navigation.md)** - URL state management with live_patch and live_redirect

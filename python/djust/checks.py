@@ -710,7 +710,20 @@ def check_liveviews(app_configs, **kwargs):
                 continue
             if not callable(method):
                 continue
-            if name in ("mount", "get_context_data", "dispatch", "setup", "get", "post"):
+            # Skip known lifecycle methods — these are called by the framework, not
+            # by user events, and should never carry @event_handler.
+            if name in (
+                "mount",
+                "get_context_data",
+                "dispatch",
+                "setup",
+                "get",
+                "post",
+                "handle_params",
+                "handle_disconnect",
+                "handle_connect",
+                "handle_event",
+            ):
                 continue
             if is_event_handler(method):
                 continue
@@ -927,12 +940,51 @@ def _check_non_primitive_assignments_in_mount(errors):
         "Tuple",
     }
 
+    # Primitive return-type annotation names — functions annotated with these
+    # return serialisable values even if their name looks non-primitive.
+    _PRIMITIVE_RETURN_ANNOTATIONS = {
+        "str",
+        "int",
+        "float",
+        "bool",
+        "list",
+        "dict",
+        "tuple",
+        "set",
+        "None",
+        "List",
+        "Dict",
+        "Tuple",
+        "Set",
+        "Optional",
+    }
+
     for filepath in _iter_python_files(app_dirs):
         tree, source_lines = _parse_python_file(filepath)
         if tree is None:
             continue
 
         relpath = os.path.relpath(filepath)
+
+        # Build a set of function names in this file that are annotated as
+        # returning a primitive type.  We use bare name annotations only
+        # (e.g. ``-> str``, ``-> int``); subscripted generics (``-> list[str]``)
+        # are not yet resolved but are uncommon in mount() return patterns.
+        primitive_return_funcs: set = set()
+        for fn_node in ast.walk(tree):
+            if not isinstance(fn_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if fn_node.returns is None:
+                continue
+            ret = fn_node.returns
+            ret_name = None
+            if isinstance(ret, ast.Constant) and isinstance(ret.value, str):
+                # String-quoted annotation: def f() -> "str"
+                ret_name = ret.value
+            elif isinstance(ret, ast.Name):
+                ret_name = ret.id
+            if ret_name in _PRIMITIVE_RETURN_ANNOTATIONS:
+                primitive_return_funcs.add(fn_node.name)
 
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
@@ -965,6 +1017,10 @@ def _check_non_primitive_assignments_in_mount(errors):
 
                         call_name = _get_call_name(stmt.value)
                         if call_name and call_name not in SAFE_TYPES:
+                            # Skip if the called function is annotated as returning
+                            # a primitive type in this same file.
+                            if call_name in primitive_return_funcs:
+                                continue
                             # This is a non-primitive instantiation
                             if not _has_noqa(source_lines, stmt.lineno, "V008"):
                                 errors.append(
@@ -1374,6 +1430,10 @@ def check_templates(app_configs, **kwargs):
         # T013 -- dj-view with empty or invalid value
         for match in re.finditer(r'dj-view="([^"]*)"', content):
             value = match.group(1)
+            # Allow Django template variable syntax — dj-view="{{ view_path }}" is a
+            # valid pattern where the view path is injected from context by a wrapper.
+            if re.match(r"^\s*\{\{.*\}\}\s*$", value):
+                continue
             if not value or "." not in value:
                 lineno = content[: match.start()].count("\n") + 1
                 errors.append(
@@ -1435,6 +1495,9 @@ def _check_view_root_same_element(content, relpath, filepath, errors):
 # Tags still unsupported by the Rust renderer (after implementing widthratio,
 # firstof, templatetag, spaceless, cycle, now in v0.3.3).
 # Only opening tags are matched — end tags always accompany their openers.
+#
+# NOTE: {% extends %} and {% block %} are FULLY SUPPORTED since template
+# inheritance was implemented (PR #272). Do not add them here.
 _UNSUPPORTED_TAGS_RE = re.compile(
     r"\{%\s*(ifchanged|regroup|resetcycle|lorem|debug|filter|autoescape)\b"
 )
