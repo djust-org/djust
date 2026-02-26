@@ -310,6 +310,9 @@ fn block_if_in_class_attr_does_not_shift_vdom_paths() {
     c2.set("is_active".to_string(), Value::Bool(true));
     c2.set("counter".to_string(), Value::Integer(2));
     let result2 = render(src, &c2);
-    assert!(result2.contains(r#"class="label active""#), "got: {result2}");
+    assert!(
+        result2.contains(r#"class="label active""#),
+        "got: {result2}"
+    );
     assert!(result2.contains("<span>2</span>"), "got: {result2}");
 }
