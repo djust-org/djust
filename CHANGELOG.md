@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5rc1] - 2026-02-26
+
+### Added
+
+- **Type stubs for Rust-injected LiveView methods** — `.pyi` stubs for `live_redirect`, `live_patch`, `push_event`, `stream`, and related methods so mypy/pyright catch typos at lint time. ([#390](https://github.com/djust-org/djust/pull/390))
+- **Navigation Patterns guide** — Documents when to use `dj-navigate` vs `live_redirect` vs `live_patch`. ([#390](https://github.com/djust-org/djust/pull/390))
+- **Testing guide** — Django testing best practices and pytest setup for djust applications. ([#390](https://github.com/djust-org/djust/pull/390))
+- **System checks reference** — New `docs/system-checks.md` covering all 37 check IDs (C/V/S/T/Q) with severity, detection method, suppression patterns, and known false positives. ([#398](https://github.com/djust-org/djust/pull/398))
+
+### Security
+
+- **`mark_safe(f"...")` eliminated in core framework** — `components/base.py` now uses `format_html()` to avoid XSS risk in component rendering. ([#390](https://github.com/djust-org/djust/pull/390))
+- **Exception details no longer exposed in production** — `render_template()` previously returned `f"<div>Error: {e}</div>"` unconditionally, leaking internal Rust template engine details. Now returns a generic message in production; error details are only shown when `settings.DEBUG = True`. ([#385](https://github.com/djust-org/djust/pull/385))
+- **Playground XSS fixed** — Replaced `innerHTML` assignment with a sandboxed iframe for user-editable preview content. ([#384](https://github.com/djust-org/djust/pull/384))
+- **Prototype pollution guard** — Added safeguards against prototype pollution in client-side JS. ([#384](https://github.com/djust-org/djust/pull/384))
+
+### Fixed
+
+- **`{% if %}` inside attribute values no longer shifts VDOM path indices** — Conditional attribute fragments were causing off-by-one errors in VDOM diffing. ([#390](https://github.com/djust-org/djust/pull/390))
+- **`super().__init__()` added to component and backend subclasses** — `TenantAwareRedisBackend`, `TenantAwareMemoryBackend`, and several example components were missing `super().__init__()` calls, causing MRO issues. ([#386](https://github.com/djust-org/djust/pull/386))
+- **Unused `escape` import removed from `data_table.py`** — CodeQL alert resolved. ([#387](https://github.com/djust-org/djust/pull/387))
+- **`render_full_template` signature mismatch fixed** — `no_template_demo.py` override now correctly accepts `serialized_context`. ([#387](https://github.com/djust-org/djust/pull/387))
+- **V004 false positives on lifecycle methods** — `handle_params()`, `handle_disconnect()`, `handle_connect()`, and `handle_event()` no longer incorrectly trigger the V004 system check. ([#398](https://github.com/djust-org/djust/pull/398))
+- **T013 false positives for `{{ view_path }}`** — `dj-view="{{ view_path }}"` (Django template variable injection) is now correctly recognised as valid by T013. ([#398](https://github.com/djust-org/djust/pull/398))
+- **V008 false positives for `-> str`-annotated functions** — Functions with primitive return-type annotations (e.g. `-> str`, `-> int`) no longer trigger V008 when their result is assigned in `mount()`. ([#398](https://github.com/djust-org/djust/pull/398))
+- **Test isolation** — `test_checks.py` and `double_bind.test.js` no longer fail when run as part of the full suite. ([#390](https://github.com/djust-org/djust/pull/390))
+
 ## [0.3.4] - 2026-02-24
 
 Stable release — promotes 0.3.3rc1 through 0.3.3rc3. All changes below were present in the RC series; this entry summarises them for the stable changelog.
