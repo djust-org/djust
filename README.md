@@ -59,6 +59,188 @@ class CounterView(LiveView):
 
 That's it! No JavaScript needed. State changes automatically trigger minimal DOM updates.
 
+## 🔄 How Reactivity Works
+
+djust uses a Rust-powered Virtual DOM (VDOM) to diff server-rendered HTML and send only the changed patches over WebSocket. Understanding a few core attributes makes everything click.
+
+### Template Anatomy
+
+```html
+{% load djust_tags %}
+<!DOCTYPE html>
+<html>
+<head>
+    {% djust_scripts %}              {# Loads ~5KB client JavaScript #}
+</head>
+<body dj-view="{{ dj_view_id }}">   {# Identifies the WebSocket session #}
+    <div dj-root>                    {# Reactive boundary — only this is diffed #}
+        <h1>Count: {{ count }}</h1>
+        <button dj-click="increment">+</button>
+    </div>
+    {# Static content outside dj-root is never touched by VDOM patching #}
+</body>
+</html>
+```
+
+| Attribute | Where | Purpose |
+|---|---|---|
+| `{% djust_scripts %}` | `<head>` | Injects client JavaScript |
+| `dj-view="{{ dj_view_id }}"` | `<body>` | Connects page to WebSocket session |
+| `dj-root` | Inner `<div>` | Marks the reactive region; only HTML inside is diffed and patched |
+
+### Stable List Identity
+
+For lists that can reorder or have items inserted/deleted, add `data-key` or `dj-key` on each item. djust uses this to emit `MoveChild` patches instead of remove-then-insert pairs — preserving DOM state (focus, scroll position, animations):
+
+```html
+{% for item in items %}
+<div data-key="{{ item.id }}">
+    {{ item.name }}
+    <button dj-click="delete" data-item-id="{{ item.id }}">Delete</button>
+</div>
+{% endfor %}
+```
+
+Without a key, djust diffs by position — correct, but produces more DOM mutations for reorders.
+
+### Common Pitfall: One-Sided `{% if %}` in Class Attributes
+
+Using `{% if %}` without `{% else %}` inside an HTML attribute value can cause VDOM patching misalignment due to djust's branch-aware div-depth counting:
+
+```html
+{# WRONG: one-sided if inside class attribute #}
+<div class="card {% if active %}active{% endif %}">
+
+{# CORRECT: use full if/else #}
+<div class="card {% if active %}active{% else %}{% endif %}">
+
+{# ALSO CORRECT: move conditional outside the tag #}
+{% if active %}
+<div class="card active">
+{% else %}
+<div class="card">
+{% endif %}
+    ...
+</div>
+```
+
+This applies only to attribute values — `{% if %}` blocks in element content work fine.
+
+See the [VDOM Architecture guide](docs/website/advanced/vdom-architecture.md) and [Template Cheat Sheet](docs/website/guides/template-cheatsheet.md) for full details.
+
+## 🚀 Getting Started
+
+Here's a complete walkthrough from zero to a working reactive counter in 5 steps.
+
+### Step 1 — Install
+
+```bash
+pip install djust django-channels
+```
+
+### Step 2 — Add to `INSTALLED_APPS` and configure settings
+
+In `myproject/settings.py`:
+
+```python
+INSTALLED_APPS = [
+    # ... your existing apps ...
+    'channels',   # WebSocket support
+    'djust',
+]
+
+ASGI_APPLICATION = 'myproject.asgi.application'
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    }
+}
+```
+
+### Step 3 — Configure `asgi.py`
+
+Replace `myproject/asgi.py` with:
+
+```python
+import os
+from django.core.asgi import get_asgi_application
+from channels.routing import ProtocolTypeRouter, URLRouter
+from channels.auth import AuthMiddlewareStack
+from djust.websocket import LiveViewConsumer
+from django.urls import path
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.settings')
+
+application = ProtocolTypeRouter({
+    "http": get_asgi_application(),
+    "websocket": AuthMiddlewareStack(
+        URLRouter([
+            path('ws/live/', LiveViewConsumer.as_asgi()),
+        ])
+    ),
+})
+```
+
+### Step 4 — Add the URL route
+
+In `myproject/urls.py`:
+
+```python
+from django.urls import path
+from myapp.views import CounterView
+
+urlpatterns = [
+    path('counter/', CounterView.as_live_view(), name='counter'),
+]
+```
+
+### Step 5 — Write the view and template
+
+`myapp/views.py`:
+
+```python
+from djust import LiveView, event_handler
+
+class CounterView(LiveView):
+    template_name = 'counter.html'
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    @event_handler
+    def increment(self):
+        self.count += 1
+
+    @event_handler
+    def decrement(self):
+        self.count -= 1
+```
+
+`myapp/templates/counter.html`:
+
+```html
+{% load djust_tags %}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Counter</title>
+    {% djust_scripts %}
+</head>
+<body dj-view="{{ dj_view_id }}">
+    <div dj-root>
+        <h1>Count: {{ count }}</h1>
+        <button dj-click="increment">+</button>
+        <button dj-click="decrement">-</button>
+    </div>
+</body>
+</html>
+```
+
+Run with `uvicorn myproject.asgi:application --reload` and open `/counter/`. Clicking the buttons updates the count **without a page reload** — no JavaScript written, no build step.
+
+---
+
 ## 📊 Performance
 
 Benchmarked on M1 MacBook Pro (2021):
@@ -268,7 +450,7 @@ djust supports Django template syntax with event binding:
 <p>{{ text|upper }}</p>
 <p>{{ description|truncatewords:20 }}</p>
 <a href="?q={{ query|urlencode }}">Search</a>
-{{ body|urlize|safe }}
+{{ body|urlize }}  {# urlize handles its own escaping — do not add |safe #}
 
 <!-- Control flow -->
 {% if show %}
@@ -451,7 +633,7 @@ This auto-detects template directories, creates config files, and builds your CS
 python manage.py djust_setup_css tailwind --minify
 ```
 
-See the [CSS Framework Guide](docs/guides/css-frameworks.md) for detailed setup instructions, Bootstrap configuration, and CI/CD integration.
+See the [CSS Framework Guide](docs/website/guides/css-frameworks.md) for detailed setup instructions, Bootstrap configuration, and CI/CD integration.
 
 **Debug Mode:**
 
