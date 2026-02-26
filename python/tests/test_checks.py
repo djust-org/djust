@@ -2997,3 +2997,283 @@ class TestT011UnsupportedTemplateTags:
         errors = check_templates(None)
         t011 = [e for e in errors if e.id == "djust.T011"]
         assert len(t011) == 3
+
+    def test_t011_does_not_fire_for_extends_and_block(self, tmp_path, settings):
+        """T011 must NOT fire for {% extends %} or {% block %} — fully supported."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page.html").write_text(
+            textwrap.dedent(
+                """\
+                {% extends "base.html" %}
+                {% block content %}
+                <div dj-view="myapp.views.MyView" dj-root>
+                    <p>Hello</p>
+                </div>
+                {% endblock %}
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t011 = [e for e in errors if e.id == "djust.T011"]
+        assert len(t011) == 0, (
+            "T011 must not flag {% extends %} or {% block %} — they are fully "
+            "supported by the Rust renderer since PR #272"
+        )
+
+
+# ---------------------------------------------------------------------------
+# V004 lifecycle method whitelist (issue #392)
+# ---------------------------------------------------------------------------
+
+
+class TestV004LifecycleMethods:
+    """V004 must not fire on known djust lifecycle methods."""
+
+    def _make_view_with_method(self, method_name):
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.checks import check_liveviews
+
+        def mount(self, request, **kwargs):
+            pass
+
+        def lifecycle_method(self, **kwargs):
+            pass
+
+        cls = type(
+            f"V004Lifecycle_{method_name}",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "t.html",
+                "mount": mount,
+                method_name: lifecycle_method,
+            },
+        )
+
+        try:
+            errors = check_liveviews(None)
+            v004 = [e for e in errors if e.id == "djust.V004"]
+            cls_name = f"V004Lifecycle_{method_name}"
+            assert not any(
+                cls_name in e.msg and method_name in e.msg for e in v004
+            ), f"V004 should not fire on lifecycle method {method_name!r}"
+        finally:
+            del cls
+            _force_gc()
+
+    def test_v004_ignores_handle_params(self):
+        """handle_params() is a lifecycle method — V004 must not fire."""
+        self._make_view_with_method("handle_params")
+
+    def test_v004_ignores_handle_disconnect(self):
+        """handle_disconnect() is a lifecycle method — V004 must not fire."""
+        self._make_view_with_method("handle_disconnect")
+
+    def test_v004_ignores_handle_connect(self):
+        """handle_connect() is a lifecycle method — V004 must not fire."""
+        self._make_view_with_method("handle_connect")
+
+    def test_v004_ignores_handle_event(self):
+        """handle_event() is a lifecycle method — V004 must not fire."""
+        self._make_view_with_method("handle_event")
+
+
+# ---------------------------------------------------------------------------
+# T013 — allow {{ ... }} Django template variable in dj-view (issue #395)
+# ---------------------------------------------------------------------------
+
+
+class TestT013TemplateVariableDjView:
+    """T013 must not fire when dj-view uses a Django template variable."""
+
+    def test_t013_passes_template_variable_syntax(self, tmp_path, settings):
+        """dj-view='{{ view_path }}' is valid — T013 must not fire."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "base.html").write_text(
+            '<div dj-view="{{ view_path }}" dj-root>{% block content %}{% endblock %}</div>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t013 = [e for e in errors if e.id == "djust.T013"]
+        assert (
+            len(t013) == 0
+        ), "dj-view='{{ view_path }}' is a valid pattern — T013 should not flag it"
+
+    def test_t013_passes_template_variable_with_spaces(self, tmp_path, settings):
+        """dj-view='{{ view_path }}' with whitespace padding should also pass."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "base.html").write_text('<div dj-view="{{ view_path }}" dj-root></div>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t013 = [e for e in errors if e.id == "djust.T013"]
+        assert len(t013) == 0
+
+    def test_t013_still_fires_for_empty_value(self, tmp_path, settings):
+        """T013 must still fire for dj-view='' (empty value)."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text('<div dj-view="">content</div>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t013 = [e for e in errors if e.id == "djust.T013"]
+        assert len(t013) == 1
+
+    def test_t013_still_fires_for_no_dot(self, tmp_path, settings):
+        """T013 must still fire for dj-view without a dotted path."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text('<div dj-view="MyView">content</div>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t013 = [e for e in errors if e.id == "djust.T013"]
+        assert len(t013) == 1
+
+
+# ---------------------------------------------------------------------------
+# V008 — primitive return type annotation suppresses warning (issue #393)
+# ---------------------------------------------------------------------------
+
+
+class TestV008PrimitiveReturnAnnotation:
+    """V008 must not fire when the called function is annotated -> primitive."""
+
+    def test_v008_skips_str_annotated_function(self, tmp_path):
+        """self.x = get_script() should not trigger V008 when -> str annotated."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                def get_route_map_script() -> str:
+                    return "<script>...</script>"
+
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.route_map = get_route_map_script()
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        assert len(v008) == 0, "V008 must not fire when the called function is annotated -> str"
+
+    def test_v008_skips_int_annotated_function(self, tmp_path):
+        """V008 must not fire when called function is annotated -> int."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                def get_count() -> int:
+                    return 42
+
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.count = get_count()
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        assert len(v008) == 0
+
+    def test_v008_still_fires_for_unannotated_non_primitive(self, tmp_path):
+        """V008 must still fire when called function has no return annotation."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                def build_client():
+                    return SomeClient()
+
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.client = build_client()
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        assert len(v008) == 1
+
+    def test_v008_still_fires_for_non_primitive_annotated_function(self, tmp_path):
+        """V008 must still fire when the called function is annotated -> CustomType."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                def get_client() -> SomeClient:
+                    return SomeClient()
+
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.client = get_client()
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        assert len(v008) == 1
