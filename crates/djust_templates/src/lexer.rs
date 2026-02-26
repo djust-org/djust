@@ -1,6 +1,6 @@
 //! Template lexer for tokenizing Django template syntax
 
-use djust_core::{DjangoRustError, Result};
+use djust_core::Result;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -166,98 +166,6 @@ fn parse_jsx_component(chars: &mut std::iter::Peekable<std::str::Chars>) -> Resu
     })
 }
 
-/// Validates that `{% if %}`, `{% elif %}`, `{% else %}`, `{% endif %}`,
-/// `{% for %}`, and `{% endfor %}` block tags do not appear inside HTML
-/// attribute values (between quote characters).
-///
-/// Block tags inside attribute values cause VDOM path index mismatches because
-/// the renderer emits `<!--dj-if-->` comment anchors that browsers cannot place
-/// inside attribute values — so the server's path indices diverge from the
-/// browser's actual DOM structure, causing patches to land on the wrong nodes.
-///
-/// Use inline conditionals instead:
-///   `class="{{ 'active' if condition else '' }}"`
-pub fn validate_no_block_tags_in_attrs(source: &str) -> Result<()> {
-    #[derive(Clone, Copy, PartialEq)]
-    enum State {
-        OutsideTag,
-        InsideTag,
-        InsideAttrValue(char),
-    }
-
-    let chars: Vec<char> = source.chars().collect();
-    let len = chars.len();
-    let mut state = State::OutsideTag;
-    let mut i = 0;
-
-    while i < len {
-        let ch = chars[i];
-
-        match state {
-            State::OutsideTag => {
-                if ch == '<' && i + 1 < len {
-                    let next = chars[i + 1];
-                    // Only enter tag state for actual element tags (not <! or whitespace)
-                    if next.is_alphabetic() || next == '/' {
-                        state = State::InsideTag;
-                    }
-                }
-            }
-            State::InsideTag => {
-                if ch == '>' {
-                    state = State::OutsideTag;
-                } else if (ch == '"' || ch == '\'') && i > 0 {
-                    // Only enter attr-value state when preceded by '=' (assignment context)
-                    // Walk back past whitespace to find '='
-                    let mut j = i.saturating_sub(1);
-                    while j > 0 && chars[j].is_whitespace() {
-                        j -= 1;
-                    }
-                    if chars[j] == '=' {
-                        state = State::InsideAttrValue(ch);
-                    }
-                }
-            }
-            State::InsideAttrValue(quote) => {
-                if ch == quote {
-                    state = State::InsideTag;
-                } else if ch == '{' && i + 1 < len && chars[i + 1] == '%' {
-                    // Found a template tag inside an attribute value — check the tag name
-                    let tag_start = i + 2;
-                    let mut j = tag_start;
-                    while j + 1 < len && !(chars[j] == '%' && chars[j + 1] == '}') {
-                        j += 1;
-                    }
-                    let tag_content: String = chars[tag_start..j].iter().collect();
-                    let tag_name = tag_content.split_whitespace().next().unwrap_or("");
-
-                    match tag_name {
-                        "if" | "elif" | "else" | "endif" | "for" | "endfor" => {
-                            return Err(DjangoRustError::TemplateError(format!(
-                                "Template error: '{{% {tag_name} %}}' block tag found inside \
-                                 an HTML attribute value. Block tags cannot be used inside \
-                                 attribute values because they insert DOM comment anchors that \
-                                 browsers discard in attribute context, causing VDOM path index \
-                                 mismatches.\n\
-                                 \n\
-                                 Use an inline conditional instead:\n\
-                                   class=\"base {{{{ 'extra' if condition else '' }}}}\"\n\
-                                 \n\
-                                 See: https://github.com/djust-org/djust/issues/388"
-                            )));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        i += 1;
-    }
-
-    Ok(())
-}
-
 pub fn tokenize(source: &str) -> Result<Vec<Token>> {
     let mut tokens = Vec::new();
     let mut chars = source.chars().peekable();
@@ -373,75 +281,6 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ---------------------------------------------------------------------------
-    // validate_no_block_tags_in_attrs tests
-    // ---------------------------------------------------------------------------
-
-    #[test]
-    fn test_block_tag_in_attr_value_if_is_rejected() {
-        let src = r#"<a class="nav {% if active %}active{% endif %}">link</a>"#;
-        let result = validate_no_block_tags_in_attrs(src);
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("{% if %}"), "error should name the tag: {msg}");
-        assert!(
-            msg.contains("inline conditional"),
-            "error should suggest inline conditional: {msg}"
-        );
-    }
-
-    #[test]
-    fn test_block_tag_in_attr_value_for_is_rejected() {
-        let src = r#"<div title="{% for x in items %}{{ x }}{% endfor %}">x</div>"#;
-        let result = validate_no_block_tags_in_attrs(src);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_block_tag_in_attr_value_elif_is_rejected() {
-        let src = r#"<span class="{% if a %}a{% elif b %}b{% endif %}">x</span>"#;
-        let result = validate_no_block_tags_in_attrs(src);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_block_tag_between_elements_is_allowed() {
-        // {% if %} between elements (not inside an attribute) must remain valid
-        let src = r#"<nav>{% if active %}<span>active</span>{% endif %}</nav>"#;
-        assert!(validate_no_block_tags_in_attrs(src).is_ok());
-    }
-
-    #[test]
-    fn test_inline_conditional_in_attr_is_allowed() {
-        // {{ 'x' if cond else '' }} inside an attribute is fine (no comment anchors)
-        let src = r#"<a class="{{ 'active' if is_active else '' }}">link</a>"#;
-        assert!(validate_no_block_tags_in_attrs(src).is_ok());
-    }
-
-    #[test]
-    fn test_variable_in_attr_is_allowed() {
-        let src = r#"<a href="{{ url }}">link</a>"#;
-        assert!(validate_no_block_tags_in_attrs(src).is_ok());
-    }
-
-    #[test]
-    fn test_empty_template_is_allowed() {
-        assert!(validate_no_block_tags_in_attrs("").is_ok());
-    }
-
-    #[test]
-    fn test_no_html_is_allowed() {
-        let src = "{% if foo %}bar{% endif %}";
-        assert!(validate_no_block_tags_in_attrs(src).is_ok());
-    }
-
-    #[test]
-    fn test_single_quoted_attr_with_block_tag_is_rejected() {
-        let src = "<a class='{% if x %}active{% endif %}'>link</a>";
-        let result = validate_no_block_tags_in_attrs(src);
-        assert!(result.is_err());
-    }
 
     // ---------------------------------------------------------------------------
     // tokenize tests

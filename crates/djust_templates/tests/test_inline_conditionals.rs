@@ -251,52 +251,61 @@ fn inline_if_nonzero_is_truthy() {
 }
 
 // ===========================================================================
-// Block tags inside attribute values — must be rejected (issue #388)
+// Block tags inside attribute values — must NOT emit <!--dj-if--> (issue #388)
 // ===========================================================================
 
-/// `{% if %}` inside a class attribute value must raise a compile-time error.
-/// Previously this produced `<!--dj-if-->` comment text inside the attribute,
-/// causing VDOM path index mismatches for all sibling elements.
+/// `{% if %}` inside a class attribute value must compile and render without
+/// emitting `<!--dj-if-->` comment anchors. Such comments cannot exist inside
+/// HTML attribute values (browsers ignore them), which was causing VDOM path
+/// index mismatches. Regression test for issue #388.
 #[test]
-fn block_if_in_class_attr_is_rejected_at_compile_time() {
+fn block_if_in_class_attr_no_comment_anchors() {
     let src = r#"<a class="nav-link {% if active %}active{% endif %}">link</a>"#;
-    let result = Template::new(src);
+
+    let mut c = Context::new();
+    c.set("active".to_string(), Value::Bool(false));
+    let result = render(src, &c);
     assert!(
-        result.is_err(),
-        "Template::new should reject {{% if %}} inside attribute value"
+        !result.contains("<!--"),
+        "{{% if %}} inside attribute value must not emit comment anchors: {result}"
     );
-    let msg = result.err().unwrap().to_string();
     assert!(
-        msg.contains("inline conditional"),
-        "error should suggest inline conditional syntax, got: {msg}"
+        result.contains(r#"class="nav-link "#),
+        "false branch must leave class without extra text: {result}"
+    );
+
+    c.set("active".to_string(), Value::Bool(true));
+    let result2 = render(src, &c);
+    assert!(
+        result2.contains(r#"class="nav-link active""#),
+        "true branch must render content inside attribute: {result2}"
     );
 }
 
-/// Verify that the inline conditional alternative renders correctly and
-/// does NOT insert VDOM comment anchors that would shift path indices.
-/// Regression test for issue #388.
+/// Verify that `{% if %}` inside an attribute value does NOT shift VDOM path
+/// indices for sibling elements. Regression test for issue #388.
 #[test]
-fn inline_if_in_class_attr_does_not_shift_vdom_paths() {
-    // Template equivalent of the bug report's minimal reproduction,
-    // rewritten to use inline conditionals:
-    //   class="label {{ 'active' if is_active else '' }}"
-    // The second <span> must be at VDOM index 1, not 2.
-    let src = r#"<div><span class="label {{ "active" if is_active else "" }}">Status</span><span>{{ counter }}</span></div>"#;
+fn block_if_in_class_attr_does_not_shift_vdom_paths() {
+    // The second <span> must be at VDOM child index 1, not 2.
+    // If a <!--dj-if--> comment were emitted inside the first span's class
+    // attribute, it would become part of the attribute string (not a DOM node),
+    // but the server would still count it as a path index — causing all
+    // subsequent sibling patches to target the wrong node.
+    let src = r#"<div><span class="label {% if is_active %}active{% endif %}">Status</span><span>{{ counter }}</span></div>"#;
 
     let mut c = Context::new();
     c.set("is_active".to_string(), Value::Bool(false));
     c.set("counter".to_string(), Value::Integer(1));
     let result = render(src, &c);
 
-    // No comment anchors in attribute values
+    // No comment anchors anywhere
     assert!(
         !result.contains("<!--dj-if-->"),
-        "inline conditional must not emit comment anchors: {result}"
+        "{{% if %}} in attribute must not emit comment anchors: {result}"
     );
-    // Second span renders its text correctly
+    // Second span renders correctly
     assert!(result.contains("<span>1</span>"), "got: {result}");
 
-    // Render again with counter=2 to verify no stale state
     let mut c2 = Context::new();
     c2.set("is_active".to_string(), Value::Bool(true));
     c2.set("counter".to_string(), Value::Integer(2));
