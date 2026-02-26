@@ -84,7 +84,7 @@ let html = template.render(&context)?;
 - Compiles a template string into an AST
 - **Parameters**: `source` - Template source code
 - **Returns**: Compiled `Template` instance
-- **Errors**: Returns `DjangoRustError::TemplateError` for syntax errors
+- **Errors**: Returns `DjangoRustError::TemplateError` for syntax errors, including `{% if %}`/`{% for %}` block tags found inside HTML attribute values (issue #388 — these cause VDOM path index mismatches and are rejected at compile time). Use inline conditionals (`{{ 'cls' if cond else '' }}`) in attribute values instead.
 - **Performance**: Typically <1ms for standard templates
 
 **`template.render(&self, context: &Context) -> Result<String>`**
@@ -968,6 +968,10 @@ variables = extract_template_variables(template_source)
 ---
 
 ## Changelog
+
+### v0.3.3 (2026-02-26)
+- **Compile-time validation**: `Template::new()` now rejects `{% if %}`, `{% elif %}`, `{% else %}`, `{% endif %}`, `{% for %}`, and `{% endfor %}` block tags inside HTML attribute values. These caused VDOM path index mismatches (issue #388) because browsers cannot place DOM comment anchors inside attribute values. Templates must use inline conditionals (`{{ 'cls' if cond else '' }}`) in attribute contexts instead.
+- Added `validate_no_block_tags_in_attrs()` in `lexer.rs` — a state-machine validator that fires before tokenisation and emits a clear error message with an inline-conditional suggestion.
 
 ### v0.1.7 (2026-01-24)
 - Added `optimize_ast()` function to merge adjacent Text nodes (5-15% render speedup)

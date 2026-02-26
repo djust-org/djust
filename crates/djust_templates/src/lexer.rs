@@ -282,6 +282,10 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>> {
 mod tests {
     use super::*;
 
+    // ---------------------------------------------------------------------------
+    // tokenize tests
+    // ---------------------------------------------------------------------------
+
     #[test]
     fn test_tokenize_text() {
         let tokens = tokenize("Hello World").unwrap();

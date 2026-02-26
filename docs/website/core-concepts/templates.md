@@ -162,6 +162,23 @@ class HelloView(LiveView):
 {% if not a and b %}...{% endif %}
 ```
 
+## Conditional Class Attributes
+
+`{% if %}` block tags **cannot** appear inside attribute values — this is a compile-time error. Use inline conditionals instead:
+
+```html
+<!-- ERROR: block tag inside attribute value -->
+<a class="nav-link {% if active %}active{% endif %}">
+
+<!-- CORRECT: inline conditional -->
+<a class="nav-link {{ 'active' if active else '' }}">
+
+<!-- CORRECT: full ternary -->
+<div class="{{ 'card-active' if selected else 'card' }}">
+```
+
+`{{ expr if condition else fallback }}` is resolved entirely in the template engine — no DOM comment anchors are inserted, so VDOM path indices stay correct. The `else` branch is optional and defaults to empty string.
+
 ## Template Requirements (Legacy)
 
 Some older setups used `dj-view` and `dj-root` differently. The required pattern is:
