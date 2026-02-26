@@ -1,7 +1,15 @@
 //! Fast virtual DOM diffing algorithm
 //!
 //! Uses a keyed diffing algorithm for efficient list updates.
-//! Includes compact djust_id (data-dj-id) in patches for O(1) client-side resolution.
+//! Includes compact djust_id (dj-id) in patches for O(1) client-side resolution.
+//!
+//! ## Conditional Rendering (`{% if %}`)
+//!
+//! When `{% if %}` blocks evaluate to false, the template engine emits `<!--dj-if-->`
+//! placeholder comments to maintain consistent sibling positions in the DOM. This prevents
+//! VDOM diff from incorrectly matching siblings when conditionals remove nodes (issue #295).
+//! When toggling between placeholder and actual content, the diff generates `RemoveChild` +
+//! `InsertChild` patches instead of `Replace` patches for semantic consistency.
 //!
 //! ## Debugging
 //!
@@ -35,10 +43,10 @@ pub fn sync_ids(old: &VNode, new: &mut VNode) {
     // also have synthetic IDs for apply_patches resolution (#221).
     if old.djust_id.is_some() {
         new.djust_id = old.djust_id.clone();
-        // Also sync the data-dj-id attribute to match (elements only)
+        // Also sync the dj-id attribute to match (elements only)
         if !old.is_text() {
             if let Some(ref id) = new.djust_id {
-                new.attrs.insert("data-dj-id".to_string(), id.clone());
+                new.attrs.insert("dj-id".to_string(), id.clone());
             }
         }
     }
@@ -153,8 +161,81 @@ pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
         return patches;
     }
 
-    // If tags differ, replace the whole node
+    // If tags differ, replace the whole node.
+    // Special case: <!--dj-if--> placeholders (issue #295 fix) should generate
+    // RemoveChild + InsertChild instead of Replace when toggling to actual content,
+    // to maintain semantic consistency (conditionals "insert" content) and backward
+    // compatibility with code expecting InsertChild patches.
     if old.tag != new.tag {
+        // Check if old is a <!--dj-if--> placeholder and new is actual content
+        if old.is_comment()
+            && old.text.as_ref().map(|t| t == "dj-if").unwrap_or(false)
+            && !new.is_comment()
+        {
+            vdom_trace!(
+                "DJ-IF PLACEHOLDER -> CONTENT: removing placeholder and inserting <{}> (id={:?})",
+                new.tag,
+                target_id
+            );
+
+            // Extract parent path and child index from current path
+            if let Some((&child_idx, parent_path)) = path.split_last() {
+                // Get parent's djust_id from the old node's parent context
+                // Since we don't have direct access to the parent node here,
+                // we need to pass None for parent_id and let the client handle it
+                let parent_id = None; // Will be resolved by client via path traversal
+
+                // RemoveChild to remove the <!--dj-if--> placeholder
+                patches.push(Patch::RemoveChild {
+                    path: parent_path.to_vec(),
+                    d: parent_id.clone(),
+                    index: child_idx,
+                });
+
+                // InsertChild to add the actual content
+                patches.push(Patch::InsertChild {
+                    path: parent_path.to_vec(),
+                    d: parent_id,
+                    index: child_idx,
+                    node: new.clone(),
+                });
+
+                return patches;
+            }
+            // Fallback if path is empty (shouldn't happen in practice)
+        }
+
+        // Also handle the reverse: content -> placeholder (for completeness)
+        if !old.is_comment()
+            && new.is_comment()
+            && new.text.as_ref().map(|t| t == "dj-if").unwrap_or(false)
+        {
+            vdom_trace!(
+                "CONTENT -> DJ-IF PLACEHOLDER: removing <{}> and inserting placeholder",
+                old.tag
+            );
+
+            if let Some((&child_idx, parent_path)) = path.split_last() {
+                let parent_id = None;
+
+                patches.push(Patch::RemoveChild {
+                    path: parent_path.to_vec(),
+                    d: parent_id.clone(),
+                    index: child_idx,
+                });
+
+                patches.push(Patch::InsertChild {
+                    path: parent_path.to_vec(),
+                    d: parent_id,
+                    index: child_idx,
+                    node: new.clone(),
+                });
+
+                return patches;
+            }
+        }
+
+        // Standard Replace for other tag mismatches
         vdom_trace!(
             "TAG MISMATCH: replacing <{}> (id={:?}) with <{}>",
             old.tag,
@@ -197,6 +278,27 @@ pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
         return patches;
     }
 
+    // Diff comment nodes (e.g., <!--dj-if--> placeholders for issue #295).
+    // Comments are static and don't change, but we need to handle them
+    // to avoid mismatching siblings in the VDOM diff.
+    if old.is_comment() {
+        if old.text != new.text {
+            vdom_trace!(
+                "COMMENT CHANGE: path={:?} old={:?} new={:?}",
+                path,
+                old.text,
+                new.text
+            );
+            // Comments can be replaced if needed (though our placeholders are static)
+            patches.push(Patch::Replace {
+                path: path.to_vec(),
+                d: old.djust_id.clone(),
+                node: new.clone(),
+            });
+        }
+        return patches;
+    }
+
     // Diff attributes
     patches.extend(diff_attrs(old, new, path, &target_id));
 
@@ -211,8 +313,8 @@ fn diff_attrs(old: &VNode, new: &VNode, path: &[usize], target_id: &Option<Strin
 
     // Find removed and changed attributes
     for (key, old_value) in &old.attrs {
-        // Skip data-dj-id attribute - it's managed by the parser and shouldn't generate patches
-        if key == "data-dj-id" {
+        // Skip dj-id and data-dj-src attributes - managed by parser/renderer, not diffed
+        if key == "dj-id" || key == "data-dj-src" {
             continue;
         }
 
@@ -245,8 +347,8 @@ fn diff_attrs(old: &VNode, new: &VNode, path: &[usize], target_id: &Option<Strin
 
     // Find added attributes
     for (key, new_value) in &new.attrs {
-        // Skip data-dj-id attribute
-        if key == "data-dj-id" {
+        // Skip dj-id and data-dj-src attributes
+        if key == "dj-id" || key == "data-dj-src" {
             continue;
         }
 
@@ -977,23 +1079,23 @@ mod tests {
 
     #[test]
     fn test_data_d_attr_not_diffed() {
-        // Ensure that data-dj-id attribute changes don't generate patches
-        // (the parser handles data-dj-id, diffing should ignore it)
+        // Ensure that dj-id attribute changes don't generate patches
+        // (the parser handles dj-id, diffing should ignore it)
         let old = VNode::element("div")
             .with_djust_id("old")
-            .with_attr("data-dj-id", "old")
+            .with_attr("dj-id", "old")
             .with_attr("class", "same");
         let new = VNode::element("div")
             .with_djust_id("new")
-            .with_attr("data-dj-id", "new")
+            .with_attr("dj-id", "new")
             .with_attr("class", "same");
 
         let patches = diff_nodes(&old, &new, &[]);
 
-        // Should be empty - no attribute changes (data-dj-id is ignored)
+        // Should be empty - no attribute changes (dj-id is ignored)
         assert!(
             patches.is_empty(),
-            "data-dj-id changes should not generate patches"
+            "dj-id changes should not generate patches"
         );
     }
 
@@ -1886,7 +1988,7 @@ mod tests {
     fn test_move_child_has_child_d() {
         // Regression test for #225: MoveChild patches must carry child_d
         // (the child's djust_id) so the client can resolve the child by
-        // data-dj-id instead of stale index after earlier moves.
+        // dj-id instead of stale index after earlier moves.
         //
         // Tree A: [span(dj-id=sp1), section(key=a, dj-id=s1), ul(key=b, dj-id=u1)]
         // Tree B: [ul(key=b), section(key=a), span(attr changed)]

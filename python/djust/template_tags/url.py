@@ -111,9 +111,9 @@ class UrlTagHandler(TagHandler):
                 return reverse(url_name)
         except NoReverseMatch as e:
             logger.warning(
-                f"NoReverseMatch for URL '{url_name}' with args={url_args}, kwargs={url_kwargs}: {e}"
+                "NoReverseMatch for URL '%s' with args=%s, kwargs=%s: %s", url_name, url_args, url_kwargs, e
             )
             return ""
         except Exception as e:
-            logger.error(f"Error resolving URL '{url_name}': {e}")
+            logger.error("Error resolving URL '%s': %s", url_name, e)
             return ""

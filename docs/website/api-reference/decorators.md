@@ -10,6 +10,7 @@ from djust.decorators import (
     client_state,
     loading,
     permission_required,
+    background,
 )
 ```
 
@@ -24,6 +25,7 @@ Mark a method as callable from the client. **Required** on all event handlers �
 ```
 
 **Parameters:**
+
 - `params` (`list[str]`, optional) — Explicit list of allowed parameter names. Defaults to auto-extraction from the function signature.
 - `description` (`str`) — Human-readable description shown in the debug panel. Defaults to the method docstring.
 - `coerce_types` (`bool`, default `True`) — Automatically coerce string values from `data-*` attributes to the expected types based on type hints (`"5"` → `5` for `int`).
@@ -59,6 +61,7 @@ def raw_handler(self, value: str = "", **kwargs):
 ```
 
 **Rules:**
+
 - Always accept `**kwargs` — djust passes extra metadata
 - Always provide default values for all parameters
 - `value` is the magic parameter name for `dj-input` and `dj-change` events
@@ -75,6 +78,7 @@ Debounce event handler calls on the client side. The handler fires only after th
 ```
 
 **Parameters:**
+
 - `wait` (`float`) — Seconds to wait after the last event before firing. Default `0.3`.
 - `max_wait` (`float | None`) — Maximum seconds to wait even if events keep firing. Default `None` (unlimited).
 
@@ -107,6 +111,7 @@ Limit how often a handler fires. Useful for scroll, resize, or mouse-move events
 ```
 
 **Parameters:**
+
 - `interval` (`float`) — Minimum seconds between calls. Default `0.1`.
 - `leading` (`bool`) — Fire on the first event. Default `True`.
 - `trailing` (`bool`) — Fire on the last event after the interval. Default `True`.
@@ -155,6 +160,7 @@ Cache handler responses client-side. The response is stored in the browser index
 ```
 
 **Parameters:**
+
 - `ttl` (`int`) — Cache lifetime in seconds. Default `60`.
 - `key_params` (`list[str] | None`) — Parameter names to use as cache key. Default `[]` (caches by handler name only).
 
@@ -179,6 +185,7 @@ Share state via a client-side pub/sub bus. When specified keys change, other com
 ```
 
 **Parameters:**
+
 - `keys` (`list[str]`) — Attribute names to publish after this handler runs.
 
 **Usage:**
@@ -202,6 +209,7 @@ Set a boolean attribute to `True` while the handler is running, `False` after. U
 ```
 
 **Parameters:**
+
 - `attr` (`str`) — Name of the boolean attribute to set.
 
 **Usage:**
@@ -232,6 +240,7 @@ Check Django permissions before the handler executes. Returns an error if the us
 ```
 
 **Parameters:**
+
 - `perm` (`str | list[str]`) — Django permission string(s) (e.g., `"myapp.can_delete"`).
 
 **Usage:**
@@ -249,6 +258,77 @@ def publish(self, **kwargs):
     self.item.published = True
     self.item.save()
 ```
+
+---
+
+## `@background`
+
+Run the entire event handler in a background thread after flushing current state. The view re-renders and sends patches when the handler completes.
+
+```python
+@background
+```
+
+No arguments — apply directly.
+
+**Usage:**
+
+```python
+from djust.decorators import background
+
+@event_handler
+@background
+def generate_content(self, prompt: str = "", **kwargs):
+    """Entire method runs in background thread."""
+    self.generating = True
+    try:
+        self.content = call_llm(prompt)  # Long-running operation
+    except Exception as e:
+        self.error = str(e)
+    finally:
+        self.generating = False
+```
+
+**How it works:**
+
+1. Current view state is flushed to client (e.g., loading spinner appears)
+2. Handler executes in background thread
+3. View re-renders and sends patches when handler completes
+4. Loading state stops (spinner disappears)
+
+**Task naming and cancellation:**
+
+The task name is automatically set to the handler's function name. Cancel via `self.cancel_async(name)`:
+
+```python
+@event_handler
+@background
+def long_operation(self, **kwargs):
+    # Task name is "long_operation"
+    ...
+
+@event_handler
+def cancel_operation(self, **kwargs):
+    self.cancel_async("long_operation")
+```
+
+**Combining with other decorators:**
+
+```python
+@event_handler
+@debounce(wait=0.5)
+@background
+def auto_save(self, **kwargs):
+    # Debounced and runs in background
+    self.save_draft()
+```
+
+**When to use `@background` vs `start_async()`:**
+
+- Use `@background` when the **entire handler** should run in background
+- Use `self.start_async(callback)` when you need to update state **before** starting background work, or need multiple concurrent tasks with different names
+
+See also: [Loading States & Background Work guide](../guides/loading-states.md)
 
 ---
 

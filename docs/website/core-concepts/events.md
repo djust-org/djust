@@ -4,14 +4,14 @@ djust uses `dj-*` HTML attributes to bind server-side Python handlers to client-
 
 ## Event Bindings
 
-| Attribute | Fires when | Handler receives |
-|-----------|-----------|-----------------|
-| `dj-click="handler"` | Element is clicked | `data-*` attrs as kwargs |
-| `dj-input="handler"` | Input value changes (keyup) | `value=` string |
-| `dj-change="handler"` | Input/select loses focus | `value=` string |
-| `dj-submit="handler"` | Form is submitted | All named fields as kwargs |
-| `dj-keydown.enter="handler"` | Enter key pressed | `**kwargs` |
-| `dj-keydown.escape="handler"` | Escape key pressed | `**kwargs` |
+| Attribute                     | Fires when                  | Handler receives           |
+| ----------------------------- | --------------------------- | -------------------------- |
+| `dj-click="handler"`          | Element is clicked          | `data-*` attrs as kwargs   |
+| `dj-input="handler"`          | Input value changes (keyup) | `value=` string            |
+| `dj-change="handler"`         | Input/select loses focus    | `value=` string            |
+| `dj-submit="handler"`         | Form is submitted           | All named fields as kwargs |
+| `dj-keydown.enter="handler"`  | Enter key pressed           | `**kwargs`                 |
+| `dj-keydown.escape="handler"` | Escape key pressed          | `**kwargs`                 |
 
 ## Defining Handlers
 
@@ -43,6 +43,7 @@ class MyView(LiveView):
 ```
 
 **Rules:**
+
 - Always accept `**kwargs` — djust may pass extra metadata
 - Provide default values for all parameters (`value: str = ""`)
 - Use type hints for automatic coercion (`item_id: int` converts `"5"` → `5`)
@@ -137,6 +138,8 @@ def save(self, **form_data):
     {% if is_saving %}Saving...{% else %}Save{% endif %}
 </button>
 ```
+
+For long-running operations (API calls, AI generation), use the `@background` decorator to run work in a background thread. See [Loading States & Background Work](../guides/loading-states.md) for details.
 
 ## DOM Keying for Lists
 

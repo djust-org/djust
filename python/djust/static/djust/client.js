@@ -13,7 +13,7 @@ window.djust = window.djust || {};
 // Prevent double execution when client.js is included in both base template
 // (for TurboNav compatibility) and injected by LiveView.
 if (window._djustClientLoaded) {
-    console.log('[LiveView] client.js already loaded, skipping duplicate initialization');
+    if (globalThis.djustDebug) console.log('[LiveView] client.js already loaded, skipping duplicate initialization');
 } else {
 window._djustClientLoaded = true;
 
@@ -371,6 +371,10 @@ class LiveViewWebSocket {
         this._intentionalDisconnect = false;  // Set by disconnect() to suppress error overlay
         this.lastEventName = null;  // Phase 5: Track last event for loading state
         this.lastTriggerElement = null;  // Phase 5: Track trigger element for scoped loading
+        // Optional callback invoked when all reconnect attempts are exhausted.
+        // If set, it is called instead of _showConnectionErrorOverlay(), allowing
+        // 14-init.js to switch to the SSE fallback transport.
+        this.onTransportFailed = null;
 
         // WebSocket statistics tracking (Phase 2.1: WebSocket Inspector)
         this.stats = {
@@ -388,7 +392,7 @@ class LiveViewWebSocket {
      * Cleanly disconnect the WebSocket for TurboNav navigation
      */
     disconnect() {
-        console.log('[LiveView] Disconnecting for navigation...');
+        if (globalThis.djustDebug) console.log('[LiveView] Disconnecting for navigation...');
 
         // Stop heartbeat
         if (this.heartbeatInterval) {
@@ -432,11 +436,11 @@ class LiveViewWebSocket {
             url = `${protocol}//${host}/ws/live/`;
         }
 
-        console.log('[LiveView] Connecting to WebSocket:', url);
+        if (globalThis.djustDebug) console.log('[LiveView] Connecting to WebSocket:', url);
         this.ws = new WebSocket(url);
 
         this.ws.onopen = (_event) => {
-            console.log('[LiveView] WebSocket connected');
+            if (globalThis.djustDebug) console.log('[LiveView] WebSocket connected');
             this.reconnectAttempts = 0;
             this._intentionalDisconnect = false;
 
@@ -450,7 +454,7 @@ class LiveViewWebSocket {
         };
 
         this.ws.onclose = (_event) => {
-            console.log('[LiveView] WebSocket disconnected');
+            if (globalThis.djustDebug) console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
 
             // Notify hooks of disconnection
@@ -491,12 +495,19 @@ class LiveViewWebSocket {
             if (this.reconnectAttempts < this.maxReconnectAttempts) {
                 this.reconnectAttempts++;
                 const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-                console.log(`[LiveView] Reconnecting in ${delay}ms...`);
+                if (globalThis.djustDebug) console.log(`[LiveView] Reconnecting in ${delay}ms...`);
                 setTimeout(() => this.connect(url), delay);
             } else {
-                console.warn('[LiveView] Max reconnection attempts reached. Falling back to HTTP mode.');
+                console.warn('[LiveView] Max reconnection attempts reached.');
                 this.enabled = false;
-                this._showConnectionErrorOverlay();
+                // If an SSE fallback is configured, hand off to it instead of
+                // showing the connection error overlay.
+                if (typeof this.onTransportFailed === 'function') {
+                    if (globalThis.djustDebug) console.log('[LiveView] Invoking onTransportFailed for SSE fallback');
+                    this.onTransportFailed();
+                } else {
+                    this._showConnectionErrorOverlay();
+                }
             }
         };
 
@@ -530,23 +541,23 @@ class LiveViewWebSocket {
     }
 
     handleMessage(data) {
-        console.log('[LiveView] Received:', data.type, data);
+        if (globalThis.djustDebug) console.log('[LiveView] Received:', data.type, data);
 
         switch (data.type) {
             case 'connect':
                 this.sessionId = data.session_id;
-                console.log('[LiveView] Session ID:', this.sessionId);
+                if (globalThis.djustDebug) console.log('[LiveView] Session ID:', this.sessionId);
                 this.autoMount();
                 break;
 
             case 'mount':
                 this.viewMounted = true;
-                console.log('[LiveView] View mounted:', data.view);
+                if (globalThis.djustDebug) console.log('[LiveView] View mounted:', data.view);
 
                 // Initialize VDOM version from mount response (critical for patch generation)
                 if (data.version !== undefined) {
                     clientVdomVersion = data.version;
-                    console.log('[LiveView] VDOM version initialized:', clientVdomVersion);
+                    if (globalThis.djustDebug) console.log('[LiveView] VDOM version initialized:', clientVdomVersion);
                 }
 
                 // Initialize cache configuration from mount response
@@ -564,26 +575,27 @@ class LiveViewWebSocket {
                 const hasDataDjAttrs = data.has_ids === true;
                 if (this.skipMountHtml) {
                     // Content already rendered by HTTP GET - don't replace innerHTML
-                    // If server HTML has data-dj-id attributes, stamp them onto existing DOM
+                    // If server HTML has dj-id attributes, stamp them onto existing DOM
                     // This preserves whitespace (e.g. in code blocks) that innerHTML would destroy
                     if (hasDataDjAttrs && data.html) {
-                        console.log('[LiveView] Stamping data-dj-id attributes onto pre-rendered DOM');
-                        _stampDjIds(data.html);
+                        if (globalThis.djustDebug) console.log('[LiveView] Stamping dj-id attributes onto pre-rendered DOM');
+                        _stampDjIds(data.html); // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                     } else {
-                        console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
+                        if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
                     }
                     this.skipMountHtml = false;
                     bindLiveViewEvents();
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
-                        console.log('[LiveView] Hydrating DOM with data-dj-id attributes for reliable patching');
+                        if (globalThis.djustDebug) console.log('[LiveView] Hydrating DOM with dj-id attributes for reliable patching');
                     }
                     let container = document.querySelector('[dj-view]');
                     if (!container) {
                         container = document.querySelector('[dj-root]');
                     }
                     if (container) {
+                        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         container.innerHTML = data.html;
                         bindLiveViewEvents();
                     }
@@ -609,6 +621,7 @@ class LiveViewWebSocket {
                 // Server response to request_html — morph DOM with recovered HTML.
                 // Bypasses normal version tracking to avoid mismatch loops.
                 const parser = new DOMParser();
+                // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                 const doc = parser.parseFromString(data.html, 'text/html');
                 const liveviewRoot = getLiveViewRoot();
                 if (!liveviewRoot) {
@@ -622,14 +635,17 @@ class LiveViewWebSocket {
                 initTodoItems();
                 bindLiveViewEvents();
                 if (globalThis.djustDebug) {
+                    // codeql[js/log-injection] -- data.version is a server-controlled integer
                     console.log('[LiveView] DOM recovered via morph, version:', data.version);
                 }
                 break;
             }
 
             case 'error':
+                // codeql[js/log-injection] -- data.error and data.traceback are server-provided error messages, not user input
                 console.error('[LiveView] Server error:', data.error);
                 if (data.traceback) {
+                    // codeql[js/log-injection] -- data.traceback is a server-provided stack trace, not user input
                     console.error('Traceback:', data.traceback);
                 }
                 // Dispatch event for dev tools (debug panel, toasts)
@@ -663,6 +679,7 @@ class LiveViewWebSocket {
 
             case 'upload_registered':
                 // Upload registration acknowledged
+                // codeql[js/log-injection] -- data.ref and data.upload_name are server-assigned upload identifiers
                 if (globalThis.djustDebug) console.log('[Upload] Registered:', data.ref, 'for', data.upload_name);
                 break;
 
@@ -679,8 +696,8 @@ class LiveViewWebSocket {
                 if (this.lastEventName) {
                     if (!data.async_pending) {
                         globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
-                    } else if (globalThis.djustDebug) {
-                        console.log('[LiveView] Keeping loading state — async work pending');
+                    } else {
+                        if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
                     }
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
@@ -714,6 +731,7 @@ class LiveViewWebSocket {
 
             case 'rate_limit_exceeded':
                 // Server is dropping events due to rate limiting — show brief warning, do NOT retry
+                // codeql[js/log-injection] -- data.message is a server-controlled rate limit message
                 console.warn('[LiveView] Rate limited:', data.message || 'Too many events');
                 this._showRateLimitWarning();
                 // Stop loading state if applicable
@@ -757,7 +775,7 @@ class LiveViewWebSocket {
             return false;
         }
 
-        console.log('[LiveView] Mounting view:', viewPath);
+        if (globalThis.djustDebug) console.log('[LiveView] Mounting view:', viewPath);
         // Detect browser timezone for server-side local time rendering
         let clientTimezone = null;
         try {
@@ -831,7 +849,7 @@ class LiveViewWebSocket {
                 const hasContent = container.innerHTML && container.innerHTML.trim().length > 0;
 
                 if (hasContent) {
-                    console.log('[LiveView] Content pre-rendered via HTTP - will skip HTML in mount response');
+                    if (globalThis.djustDebug) console.log('[LiveView] Content pre-rendered via HTTP - will skip HTML in mount response');
                     this.skipMountHtml = true;
                 }
 
@@ -880,19 +898,23 @@ class LiveViewWebSocket {
         const viewId = data.view_id;
         const html = data.html;
         if (!viewId || html === undefined) {
+            // codeql[js/log-injection] -- data is a server WebSocket message, not user input
             console.warn('[LiveView] Invalid embedded_update message:', data);
             return;
         }
 
         const container = document.querySelector(`[data-djust-embedded="${CSS.escape(viewId)}"]`);
         if (!container) {
+            // codeql[js/log-injection] -- viewId is a server-assigned embedded view identifier
             console.warn(`[LiveView] Embedded view container not found: ${viewId}`);
             return;
         }
 
         const _morphTemp = document.createElement('div');
+        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
         _morphTemp.innerHTML = html;
         morphChildren(container, _morphTemp);
+        // codeql[js/log-injection] -- viewId is a server-assigned embedded view identifier
         if (globalThis.djustDebug) console.log(`[LiveView] Updated embedded view: ${viewId}`);
 
         // Re-bind events within the updated container
@@ -987,6 +1009,290 @@ window.LiveViewWebSocket = LiveViewWebSocket;
 
 // Global WebSocket instance
 let liveViewWS = null;
+
+// ============================================================================
+// SSE (Server-Sent Events) Transport for djust LiveView
+//
+// Fallback transport used when WebSocket is unavailable (e.g. corporate proxies).
+// Architecture:
+//   Server → Client : EventSource (text/event-stream at /djust/sse/<session_id>/)
+//   Client → Server : HTTP POST  to /djust/sse/<session_id>/event/
+//
+// Feature limitations vs WebSocket transport (documented in docs/sse-transport.md):
+//   - No binary file uploads
+//   - No presence tracking
+//   - No actor-based state management
+//   - No MessagePack binary encoding
+// ============================================================================
+
+class LiveViewSSE {
+    constructor() {
+        this.sessionId = null;
+        this.eventSource = null;
+        this.sseBaseUrl = null;
+        this.enabled = true;
+        this.viewMounted = false;
+        this.lastEventName = null;
+        this.lastTriggerElement = null;
+        // Mirror LiveViewWebSocket interface for interoperability
+        this.stats = { sent: 0, received: 0, sentBytes: 0, receivedBytes: 0 };
+    }
+
+    /**
+     * Open an SSE stream and mount the view.
+     *
+     * @param {string} viewPath  Dotted Python path to the LiveView class
+     * @param {Object} params    URL query params forwarded to mount()
+     */
+    connect(viewPath, params = {}) {
+        if (!this.enabled) return;
+        if (globalThis.djustDebug) console.log('[SSE] Connecting, view:', viewPath);
+
+        // Session ID is generated client-side; the server stores it as the
+        // lookup key so event POSTs can reach the right session.
+        this.sessionId = this._generateSessionId();
+        this.sseBaseUrl = `/djust/sse/${this.sessionId}/`;
+
+        const urlParams = new URLSearchParams(params);
+        urlParams.set('view', viewPath);
+        const streamUrl = `${this.sseBaseUrl}?${urlParams.toString()}`;
+
+        this.eventSource = new EventSource(streamUrl);
+
+        this.eventSource.onmessage = (event) => {
+            try {
+                this.stats.received++;
+                this.stats.receivedBytes += event.data.length;
+                const data = JSON.parse(event.data);
+                this.handleMessage(data);
+            } catch (err) {
+                console.error('[SSE] Failed to parse message:', err);
+            }
+        };
+
+        this.eventSource.onerror = (_err) => {
+            // EventSource auto-reconnects; we only disable on persistent failure.
+            // onerror fires on every connection hiccup, so guard against noise.
+            if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED) {
+                console.warn('[SSE] EventSource closed unexpectedly.');
+                this.enabled = false;
+            }
+        };
+    }
+
+    /**
+     * Cleanly close the SSE stream (e.g. during TurboNav page transitions).
+     */
+    disconnect() {
+        if (this.eventSource) {
+            this.eventSource.close();
+            this.eventSource = null;
+        }
+        this.viewMounted = false;
+        this.sessionId = null;
+        if (globalThis.djustDebug) console.log('[SSE] Disconnected');
+    }
+
+    /**
+     * Handle a server-pushed message.
+     * The message format is identical to the WebSocket protocol so that
+     * 02-response-handler.js and all other message-handling modules work
+     * without modification.
+     */
+    handleMessage(data) {
+        if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
+
+        switch (data.type) {
+
+            case 'sse_connect':
+                // Session ID confirmation from server (informational only — we
+                // already know our session ID since we generated it).
+                if (globalThis.djustDebug) console.log('[SSE] Connection acknowledged, session:', data.session_id);
+                break;
+
+            case 'mount':
+                this.viewMounted = true;
+                if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
+
+                if (data.version !== undefined) {
+                    clientVdomVersion = data.version;
+                }
+                if (data.cache_config) {
+                    setCacheConfig(data.cache_config);
+                }
+
+                if (data.html) {
+                    let container = document.querySelector('[dj-view]');
+                    if (!container) container = document.querySelector('[dj-root]');
+                    if (container) {
+                        const hasDataDjAttrs = data.has_ids === true;
+                        if (hasDataDjAttrs) {
+                            _stampDjIds(data.html);
+                        } else {
+                            // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                            container.innerHTML = data.html;
+                        }
+                        bindLiveViewEvents();
+                    }
+                }
+                break;
+
+            case 'patch':
+                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                this.lastEventName = null;
+                this.lastTriggerElement = null;
+                break;
+
+            case 'html_update':
+                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                this.lastEventName = null;
+                this.lastTriggerElement = null;
+                break;
+
+            case 'error':
+                console.error('[SSE] Server error:', data.error);
+                window.dispatchEvent(new CustomEvent('djust:error', {
+                    detail: { error: data.error, traceback: data.traceback || null }
+                }));
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
+            case 'noop':
+                if (this.lastEventName) {
+                    if (!data.async_pending) {
+                        globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    }
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
+            case 'push_event':
+                window.dispatchEvent(new CustomEvent('djust:push_event', {
+                    detail: { event: data.event, payload: data.payload }
+                }));
+                if (typeof dispatchPushEventToHooks === 'function') {
+                    dispatchPushEventToHooks(data.event, data.payload);
+                }
+                globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                break;
+
+            case 'navigation':
+                if (window.djust.navigation) {
+                    window.djust.navigation.handleNavigation(data);
+                }
+                break;
+
+            case 'navigate':
+                // Auth redirect (sent by server when auth check fails)
+                window.location.href = data.to;
+                break;
+
+            case 'stream':
+                if (window.djust.handleStreamMessage) {
+                    window.djust.handleStreamMessage(data);
+                }
+                break;
+
+            case 'accessibility':
+                if (window.djust.accessibility) {
+                    window.djust.accessibility.processAnnouncements(data.announcements);
+                }
+                break;
+
+            case 'focus':
+                if (window.djust.accessibility) {
+                    window.djust.accessibility.processFocus([data.selector, data.options]);
+                }
+                break;
+
+            case 'reload':
+                window.location.reload();
+                break;
+
+            default:
+                if (globalThis.djustDebug) console.log('[SSE] Unknown message type:', data.type);
+        }
+    }
+
+    /**
+     * Send an event to the server via HTTP POST.
+     *
+     * Returns true if the event was dispatched, false if not (mirrors
+     * LiveViewWebSocket.sendEvent so 11-event-handler.js works unchanged).
+     *
+     * @param {string}      eventName      Handler name on the LiveView
+     * @param {Object}      params         Event parameters
+     * @param {Element|null} triggerElement DOM element that triggered the event
+     */
+    sendEvent(eventName, params = {}, triggerElement = null) {
+        if (!this.enabled || !this.viewMounted) {
+            return false;
+        }
+
+        this.lastEventName = eventName;
+        this.lastTriggerElement = triggerElement;
+
+        const body = JSON.stringify({ event: eventName, params });
+        this.stats.sent++;
+        this.stats.sentBytes += body.length;
+
+        fetch(`${this.sseBaseUrl}event/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+        })
+            .then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.json();
+            })
+            .catch(err => {
+                console.error('[SSE] Event POST failed:', err);
+                globalLoadingManager.stopLoading(eventName, triggerElement);
+                this.lastEventName = null;
+                this.lastTriggerElement = null;
+            });
+
+        return true;
+    }
+
+    /**
+     * No-op: SSE keepalives are handled server-side via comment lines.
+     * This method exists so callers that call liveViewWS.startHeartbeat() work
+     * without branching.
+     */
+    startHeartbeat() {
+        // SSE transport uses server-side keepalive comments — no client heartbeat needed.
+    }
+
+    // ------------------------------------------------------------------ //
+    // Private helpers
+    // ------------------------------------------------------------------ //
+
+    _generateSessionId() {
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+            return crypto.randomUUID();
+        }
+        // Fallback using crypto.getRandomValues() — cryptographically secure,
+        // available in all modern environments (IE 11+, Node 15+).
+        if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+            const buf = new Uint8Array(16);
+            crypto.getRandomValues(buf);
+            buf[6] = (buf[6] & 0x0f) | 0x40; // UUID version 4
+            buf[8] = (buf[8] & 0x3f) | 0x80; // UUID variant bits
+            const hex = Array.from(buf, b => b.toString(16).padStart(2, '0')).join('');
+            return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+        }
+        throw new Error('djust: Web Crypto API is required but not available in this environment.');
+    }
+}
+
+// Expose to window for 14-init.js transport negotiation
+window.djust.LiveViewSSE = LiveViewSSE;
 
 // === HTTP Fallback LiveView Client ===
 
@@ -1343,7 +1649,7 @@ function initDraftMode() {
         return;
     }
 
-    console.log(`[DraftMode] Initializing draft mode with key: ${draftKey}`);
+    if (globalThis.djustDebug) console.log(`[DraftMode] Initializing draft mode with key: ${draftKey}`);
 
     // Load existing draft on page load
     const savedDraft = globalDraftManager.loadDraft(draftKey);
@@ -1387,7 +1693,7 @@ function initDraftMode() {
 
     // Check for draft clear flag
     if (draftRoot.hasAttribute('data-draft-clear')) {
-        console.log('[DraftMode] Draft clear flag detected, clearing draft...');
+        if (globalThis.djustDebug) console.log('[DraftMode] Draft clear flag detected, clearing draft...');
         globalDraftManager.clearDraft(draftKey);
         draftRoot.removeAttribute('data-draft-clear');
     }
@@ -1459,9 +1765,17 @@ function restoreFormData(container, data) {
     }
 }
 
+// Track which Counter containers have been initialized to prevent duplicate listeners
+// on each server response. WeakSet entries are GC'd when the container is removed.
+const _initializedCounters = new WeakSet();
+
 // Client-side React Counter component (vanilla JS implementation)
 function initReactCounters() {
     document.querySelectorAll('[data-react-component="Counter"]').forEach(container => {
+        // Skip containers already initialized — prevents N listeners after N server responses
+        if (_initializedCounters.has(container)) return;
+        _initializedCounters.add(container);
+
         const propsJson = container.dataset.reactProps;
         let props = {};
         try {
@@ -1691,7 +2005,7 @@ function extractTypedParams(element) {
         if (attr.name.startsWith('data-liveview') ||
             attr.name.startsWith('data-live-') ||
             attr.name.startsWith('data-djust') ||
-            attr.name === 'data-dj-id' ||
+            attr.name === 'dj-id' ||
             attr.name === 'data-loading' ||
             attr.name === 'data-component-id') {
             continue;
@@ -1852,11 +2166,12 @@ function bindLiveViewEvents() {
         const clickHandler = element.getAttribute('dj-click');
         if (clickHandler && !_isHandlerBound(element, 'click')) {
             _markHandlerBound(element, 'click');
-            // Parse handler string to extract function name and arguments
-            const parsed = parseEventHandler(clickHandler);
 
             const clickHandlerFn = async (e) => {
                 e.preventDefault();
+
+                // Read attribute at fire time so morphElement attribute updates take effect
+                const parsed = parseEventHandler(element.getAttribute('dj-click') || '');
 
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(element)) {
@@ -2546,7 +2861,7 @@ async function handleEvent(eventName, params = {}) {
     }
 
     // Fallback to HTTP
-    console.log('[LiveView] WebSocket unavailable, falling back to HTTP');
+    if (globalThis.djustDebug) console.log('[LiveView] WebSocket unavailable, falling back to HTTP');
 
     try {
         const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value
@@ -2592,7 +2907,7 @@ function sanitizeIdForLog(id) {
  * Resolve a DOM node using ID-based lookup (primary) or path traversal (fallback).
  *
  * Resolution strategy:
- * 1. If djustId is provided, try querySelector('[data-dj-id="..."]') - O(1), reliable
+ * 1. If djustId is provided, try querySelector('[dj-id="..."]') - O(1), reliable
  * 2. Fall back to index-based path traversal
  *
  * @param {Array<number>} path - Index-based path (fallback)
@@ -2602,7 +2917,7 @@ function sanitizeIdForLog(id) {
 function getNodeByPath(path, djustId = null) {
     // Strategy 1: ID-based resolution (fast, reliable)
     if (djustId) {
-        const byId = document.querySelector(`[data-dj-id="${CSS.escape(djustId)}"]`);
+        const byId = document.querySelector(`[dj-id="${CSS.escape(djustId)}"]`);
         if (byId) {
             return byId;
         }
@@ -2913,25 +3228,17 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
     if (vnode.attrs) {
         for (const [key, value] of Object.entries(vnode.attrs)) {
             // Set all attributes on the element (including dj-* attributes).
-            // For dj-* event attributes, bind the event listener immediately and
-            // mark as bound in the WeakMap to prevent bindLiveViewEvents() from
-            // adding duplicate listeners. This ensures VDOM-inserted elements
-            // are properly bound without double-binding.
+            // Event listeners for dj-* attributes are attached by bindLiveViewEvents()
+            // after patches are applied, which already uses _markHandlerBound to
+            // prevent double-binding on subsequent calls.
             if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
                 elem.value = value;
             }
             elem.setAttribute(key, value);
 
-            // Bind dj-* event handlers for VDOM-created elements
-            if (key.startsWith('dj-')) {
-                const eventType = key.substring(3); // e.g., 'dj-click' -> 'click'
-                // Only bind standard djust events, skip special attributes like dj-root, dj-view, dj-model, etc.
-                const EVENT_TYPES = ['click', 'submit', 'change', 'input', 'blur', 'focus', 'keydown', 'keyup'];
-                if (EVENT_TYPES.includes(eventType)) {
-                    // Mark as bound immediately to prevent bindLiveViewEvents() from re-binding
-                    window.djust._markHandlerBound(elem, eventType);
-                }
-            }
+            // Note: dj-* event listeners are attached by bindLiveViewEvents() after
+            // patch application. Do NOT pre-mark elements here — that would prevent
+            // bindLiveViewEvents() from ever attaching the listener.
         }
     }
 
@@ -3296,7 +3603,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                     if (newChild.id && !existingChildIds.has(newChild.id)) {
                         // Clone and append new child
                         existingElement.appendChild(newChild.cloneNode(true));
-                        console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
+                        if (globalThis.djustDebug) {
+                            console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
+                        }
                     }
                 }
                 break;
@@ -3315,7 +3624,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                     if (newChild.id && !existingChildIds.has(newChild.id)) {
                         // Clone and prepend new child
                         existingElement.insertBefore(newChild.cloneNode(true), firstExisting);
-                        console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
+                        if (globalThis.djustDebug) {
+                            console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
+                        }
                     }
                 }
                 break;
@@ -3323,7 +3634,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
 
             case 'ignore':
                 // Don't update this element at all
-                console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
+                if (globalThis.djustDebug) {
+                    console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
+                }
                 break;
 
             case 'replace':
@@ -3387,9 +3700,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
 }
 
 /**
- * Stamp data-dj-id attributes from server HTML onto existing pre-rendered DOM.
+ * Stamp dj-id attributes from server HTML onto existing pre-rendered DOM.
  * This avoids replacing innerHTML (which destroys whitespace in code blocks).
- * Walks both trees in parallel and copies data-dj-id from server elements to DOM elements.
+ * Walks both trees in parallel and copies dj-id from server elements to DOM elements.
  * Note: serverHtml is trusted (comes from our own WebSocket mount response).
  */
 function _stampDjIds(serverHtml, container) {
@@ -3400,6 +3713,7 @@ function _stampDjIds(serverHtml, container) {
     if (!container) return;
 
     const parser = new DOMParser();
+    // codeql[js/xss] -- serverHtml is rendered by the trusted Django/Rust template engine
     const doc = parser.parseFromString('<div>' + serverHtml + '</div>', 'text/html');
     const serverRoot = doc.body.firstChild;
 
@@ -3410,9 +3724,9 @@ function _stampDjIds(serverHtml, container) {
         // Bail out if structure diverges (e.g. browser extension injected elements)
         if (domNode.tagName !== serverNode.tagName) return;
 
-        const djId = serverNode.getAttribute('data-dj-id');
+        const djId = serverNode.getAttribute('dj-id');
         if (djId) {
-            domNode.setAttribute('data-dj-id', djId);
+            domNode.setAttribute('dj-id', djId);
         }
         // Also stamp data-dj-src (template source mapping) if present
         const djSrc = serverNode.getAttribute('data-dj-src');
@@ -3677,9 +3991,9 @@ function applySinglePatch(patch) {
             case 'MoveChild': {
                 let child;
                 if (patch.child_d) {
-                    // ID-based resolution: find direct child by data-dj-id (resilient to index shifts)
+                    // ID-based resolution: find direct child by dj-id (resilient to index shifts)
                     const escaped = CSS.escape(patch.child_d);
-                    child = node.querySelector(`:scope > [data-dj-id="${escaped}"]`);
+                    child = node.querySelector(`:scope > [dj-id="${escaped}"]`);
                 }
                 if (!child) {
                     // Fallback: index-based
@@ -4039,6 +4353,44 @@ const lazyHydrationManager = {
 // Expose lazy hydration API
 window.djust.lazyHydration = lazyHydrationManager;
 
+// ============================================================================
+// SSE Transport Fallback
+// ============================================================================
+
+/**
+ * Switch the active transport to SSE.
+ *
+ * Called either when WebSocket exhausts all reconnect attempts (automatic
+ * fallback) or directly when WebSocket is disabled and SSE is available.
+ * Replaces the global liveViewWS instance with a LiveViewSSE instance and
+ * mounts the view via the SSE stream endpoint.
+ */
+function _switchToSSETransport() {
+    const container = document.querySelector('[dj-view]');
+    if (!container) {
+        console.warn('[SSE] No [dj-view] container found, cannot switch to SSE transport');
+        return;
+    }
+    const viewPath = container.getAttribute('dj-view');
+    if (!viewPath) {
+        console.warn('[SSE] [dj-view] has no view path attribute, cannot switch to SSE transport');
+        return;
+    }
+
+    if (globalThis.djustDebug) console.log('[SSE] Switching to SSE transport for view:', viewPath);
+
+    const sseInstance = new window.djust.LiveViewSSE();
+    liveViewWS = sseInstance;
+    window.djust.liveViewInstance = sseInstance;
+
+    const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+    sseInstance.connect(viewPath, urlParams);
+}
+
+// Expose for tests and manual override
+window.djust._switchToSSETransport = _switchToSSETransport;
+
+// ============================================================================
 // Auto-stamp dj-root and dj-liveview-root on [dj-view]
 // elements so developers only need to write dj-view (#258).
 // Extracted as a helper so both djustInit() and reinitLiveViewForTurboNav() can call it.
@@ -4085,14 +4437,27 @@ function djustInit() {
 
     // Only initialize WebSocket if there are eager containers AND WebSocket is enabled
     const wsEnabled = window.DJUST_USE_WEBSOCKET !== false;
+    const sseAvailable = typeof window.djust.LiveViewSSE !== 'undefined' && typeof EventSource !== 'undefined';
+
     if (eagerContainers.length > 0 && wsEnabled) {
         // Initialize WebSocket
         liveViewWS = new LiveViewWebSocket();
         window.djust.liveViewInstance = liveViewWS;
+
+        // Wire SSE fallback: if WebSocket exhausts all reconnect attempts AND
+        // the SSE transport is available, switch over automatically.
+        if (sseAvailable) {
+            liveViewWS.onTransportFailed = () => _switchToSSETransport();
+        }
+
         liveViewWS.connect();
 
         // Start heartbeat
         liveViewWS.startHeartbeat();
+    } else if (eagerContainers.length > 0 && !wsEnabled && sseAvailable) {
+        // use_websocket: false but SSE is available — skip WebSocket entirely
+        if (globalThis.djustDebug) console.log('[LiveView] WebSocket disabled, using SSE transport directly');
+        _switchToSSETransport();
     } else if (eagerContainers.length > 0 && !wsEnabled) {
         // HTTP-only mode: create WS instance but disable it so sendEvent() falls through to HTTP
         liveViewWS = new LiveViewWebSocket();
@@ -4467,6 +4832,7 @@ if (document.readyState === 'loading') {
                 // Validate client-side
                 if (config) {
                     if (file.size > config.max_file_size) {
+                        // codeql[js/log-injection] -- file.name and file.size come from the browser FileList API, not from untrusted network input
                         console.warn(`[Upload] File too large: ${file.name} (${file.size} > ${config.max_file_size})`);
                         window.dispatchEvent(new CustomEvent('djust:upload:error', {
                             detail: { file: file.name, error: 'File too large' }
@@ -4850,6 +5216,7 @@ function _applyStreamOp(op, streamName) {
 
     switch (op.op) {
         case 'replace':
+            // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
             el.innerHTML = op.html || '';
             _removeStreamError(el);
             _dispatchStreamEvent(el, 'stream:update', { op: 'replace', stream: streamName });
@@ -4978,6 +5345,7 @@ function _dispatchStreamEvent(el, eventName, detail) {
  */
 function _htmlToFragment(html) {
     const template = document.createElement('template');
+    // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
     template.innerHTML = html || '';
     return template.content;
 }
@@ -5029,6 +5397,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // Use data.action (set by server alongside type:"navigation") to distinguish
         // live_patch from live_redirect. Falls back to data.type for any legacy messages
         // that were sent without an action field.
+        // TODO(deprecation): data.type fallback for pre-#307 clients — remove in next minor release
         const action = data.action || data.type;
         if (action === 'live_patch') {
             handleLivePatch(data);

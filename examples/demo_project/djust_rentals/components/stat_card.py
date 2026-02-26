@@ -39,6 +39,7 @@ class StatCard(Component):
         trend_direction: str = None,  # "up" or "down"
         color: str = "primary"  # "primary", "destructive", "muted"
     ):
+        super().__init__()
         self.label = label
         self.value = value
         self.icon = icon

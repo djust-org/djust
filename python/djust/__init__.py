@@ -57,7 +57,7 @@ except ImportError:
     # Rust components not yet built - this is optional
     rust_components = None
 
-__version__ = "0.3.0"
+__version__ = "0.3.2"
 
 
 def enable_hot_reload():
@@ -164,7 +164,7 @@ def enable_hot_reload():
             else:
                 loop.run_until_complete(LiveViewConsumer.broadcast_reload(file_path))
         except Exception as e:
-            logger.error(f"[HotReload] Error broadcasting reload: {e}")
+            logger.error("[HotReload] Error broadcasting reload: %s", e)
 
     # Start the hot reload server
     try:
@@ -179,7 +179,7 @@ def enable_hot_reload():
         )
     except Exception as e:
         print(f"[HotReload] Failed to start hot reload server: {e}")
-        logger.error(f"[HotReload] Failed to start hot reload server: {e}")
+        logger.error("[HotReload] Failed to start hot reload server: %s", e)
 
 
 __all__ = [

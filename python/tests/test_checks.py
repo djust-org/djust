@@ -1040,6 +1040,111 @@ class TestV005AllowedModules:
 
 
 # ---------------------------------------------------------------------------
+# Security checks - LiveView authentication (S005)
+# ---------------------------------------------------------------------------
+
+
+class TestS005UnauthenticatedViews:
+    """S005 -- LiveView exposes state without authentication."""
+
+    def test_s005_fires_when_auth_not_addressed(self):
+        """S005 fires when neither login_required nor permission_required is set."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.checks import check_configuration
+
+        def mount(self, request, **kwargs):
+            self.user_data = {"email": "test@example.com"}
+
+        cls = type(
+            "UnauthView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "test.html",
+                "mount": mount,
+            },
+        )
+
+        try:
+            errors = check_configuration(None)
+            s005 = [e for e in errors if e.id == "djust.S005"]
+            assert any("UnauthView" in e.msg for e in s005)
+        finally:
+            del cls
+            _force_gc()
+
+    def test_s005_suppressed_with_login_required_true(self):
+        """S005 should not fire when login_required = True."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.checks import check_configuration
+
+        def mount(self, request, **kwargs):
+            self.user_data = {"email": "test@example.com"}
+
+        cls = type(
+            "AuthRequiredView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "test.html",
+                "mount": mount,
+                "login_required": True,
+            },
+        )
+
+        try:
+            errors = check_configuration(None)
+            s005 = [e for e in errors if e.id == "djust.S005"]
+            assert not any("AuthRequiredView" in e.msg for e in s005)
+        finally:
+            del cls
+            _force_gc()
+
+    def test_s005_suppressed_with_login_required_false(self):
+        """S005 should not fire when login_required = False (intentionally public)."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.checks import check_configuration
+
+        def mount(self, request, **kwargs):
+            self.public_data = {"version": "1.0"}
+
+        cls = type(
+            "PublicView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "test.html",
+                "mount": mount,
+                "login_required": False,  # Intentionally public
+            },
+        )
+
+        try:
+            errors = check_configuration(None)
+            s005 = [e for e in errors if e.id == "djust.S005"]
+            # After the fix, this should pass
+            assert not any("PublicView" in e.msg for e in s005)
+        finally:
+            del cls
+            _force_gc()
+
+
+# ---------------------------------------------------------------------------
 # Security checks (S001-S003) -- AST-based
 # ---------------------------------------------------------------------------
 
@@ -1402,14 +1507,13 @@ class TestT003IncludeInsteadOfLiveviewContent:
     """T003 -- wrapper template uses include instead of liveview_content|safe."""
 
     def test_t003_include_in_wrapper(self, tmp_path, settings):
-        """T003 fires for wrapper template using include + mentions liveview."""
+        """T003 fires for wrapper template using include with liveview in path."""
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
         (tpl_dir / "wrapper.html").write_text(
             textwrap.dedent("""\
-                <!-- liveview wrapper template -->
                 {% block content %}
-                    {% include "partial.html" %}
+                    {% include "liveview_partial.html" %}
                 {% endblock %}
             """)
         )
@@ -1436,6 +1540,56 @@ class TestT003IncludeInsteadOfLiveviewContent:
                 <!-- liveview wrapper template -->
                 {% block content %}
                     {{ liveview_content|safe }}
+                {% endblock %}
+            """)
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t003 = [e for e in errors if e.id == "djust.T003"]
+        assert len(t003) == 0
+
+    def test_t003_no_false_positive_for_unrelated_include(self, tmp_path, settings):
+        """T003 should NOT fire when include path is unrelated (e.g. icons.svg)."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "wrapper.html").write_text(
+            textwrap.dedent("""\
+                {% block content %}
+                    {% include "icons.svg" %}
+                    <div dj-click="increment">Click me</div>
+                {% endblock %}
+            """)
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t003 = [e for e in errors if e.id == "djust.T003"]
+        assert len(t003) == 0
+
+    def test_t003_noqa_suppresses_warning(self, tmp_path, settings):
+        """T003 should be suppressed by {# noqa: T003 #} comment."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "wrapper.html").write_text(
+            textwrap.dedent("""\
+                {# noqa: T003 #}
+                {% block content %}
+                    {% include "liveview_partial.html" %}
                 {% endblock %}
             """)
         )
@@ -2054,6 +2208,103 @@ class TestV007EventHandlerSignature:
 
 
 # ---------------------------------------------------------------------------
+# V008 -- Non-primitive type assignments in mount()
+# ---------------------------------------------------------------------------
+
+
+class TestV008NonPrimitiveInMount:
+    """V008 -- Detect non-primitive type assignments in mount()."""
+
+    def test_non_primitive_instantiation_in_mount(self, tmp_path):
+        """Warn when non-primitive types are instantiated in mount()."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.api_client = APIClient()
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        assert len(v008) == 1
+        assert "APIClient" in v008[0].msg
+        assert "api_client" in v008[0].msg
+
+    def test_primitive_types_allowed(self, tmp_path):
+        """Primitive type assignments don't trigger warning."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.items = []
+                        self.count = 0
+                        self.data = {}
+                        self.name = "test"
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        # Should not flag primitive types
+        assert len(v008) == 0
+
+    def test_private_attributes_ignored(self, tmp_path):
+        """Private attributes (self._foo) are ignored."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self._api_client = APIClient()
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        # Should not flag private attributes
+        assert len(v008) == 0
+
+    def test_noqa_suppresses_warning(self, tmp_path):
+        """# noqa: V008 suppresses the warning."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.client = CustomClient()  # noqa: V008
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        # Should be suppressed by noqa
+        assert len(v008) == 0
+
+
+# ---------------------------------------------------------------------------
 # T005 -- Template structure validation (dj-view / dj-root)
 # ---------------------------------------------------------------------------
 
@@ -2190,3 +2441,559 @@ class TestT002Enhanced:
         t002 = [e for e in errors if e.id == "djust.T002"]
         assert len(t002) == 1
         assert "auto-inferred" in t002[0].msg
+
+
+class TestT010ClickForNavigation:
+    """T010 -- dj-click used for navigation instead of dj-patch."""
+
+    def test_t010_detects_click_with_data_view(self, tmp_path, settings):
+        """T010 should flag dj-click with data-view attribute."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "nav_click.html").write_text(
+            '<button dj-click="switchView" data-view="settings">Settings</button>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t010 = [e for e in errors if e.id == "djust.T010"]
+        assert len(t010) == 1
+        assert "dj-click" in t010[0].msg
+        assert "dj-patch" in t010[0].hint
+
+    def test_t010_detects_click_with_data_tab(self, tmp_path, settings):
+        """T010 should flag dj-click with data-tab attribute."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "tab_click.html").write_text(
+            '<button dj-click="selectTab" data-tab="profile">Profile</button>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t010 = [e for e in errors if e.id == "djust.T010"]
+        assert len(t010) == 1
+        assert "data-tab" in t010[0].msg
+
+    def test_t010_detects_click_with_data_page(self, tmp_path, settings):
+        """T010 should flag dj-click with data-page attribute."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page_click.html").write_text('<a dj-click="goToPage" data-page="2">Next</a>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t010 = [e for e in errors if e.id == "djust.T010"]
+        assert len(t010) == 1
+        assert "data-page" in t010[0].msg
+
+    def test_t010_detects_click_with_data_section(self, tmp_path, settings):
+        """T010 should flag dj-click with data-section attribute."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "section_click.html").write_text(
+            '<button dj-click="showSection" data-section="about">About</button>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t010 = [e for e in errors if e.id == "djust.T010"]
+        assert len(t010) == 1
+        assert "data-section" in t010[0].msg
+
+    def test_t010_passes_click_without_nav_data(self, tmp_path, settings):
+        """T010 should NOT flag dj-click without navigation data attributes."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "normal_click.html").write_text(
+            '<button dj-click="increment" data-count="5">Increment</button>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t010 = [e for e in errors if e.id == "djust.T010"]
+        assert len(t010) == 0
+
+    def test_t010_passes_patch_with_nav_data(self, tmp_path, settings):
+        """T010 should NOT flag dj-patch with navigation data attributes (correct pattern)."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "correct_patch.html").write_text(
+            '<button dj-patch="/view?tab=settings" data-tab="settings">Settings</button>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t010 = [e for e in errors if e.id == "djust.T010"]
+        assert len(t010) == 0
+
+    def test_t010_detects_multiple_violations(self, tmp_path, settings):
+        """T010 should detect multiple violations in one file."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "multi_nav.html").write_text(
+            textwrap.dedent(
+                """
+            <div>
+                <button dj-click="switchView" data-view="home">Home</button>
+                <button dj-click="selectTab" data-tab="profile">Profile</button>
+                <button dj-click="showPage" data-page="3">Page 3</button>
+            </div>
+            """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t010 = [e for e in errors if e.id == "djust.T010"]
+        assert len(t010) == 3
+
+
+class TestQ010NavigationStateInHandlers:
+    """Q010 -- event handlers that set navigation state without patching."""
+
+    def test_q010_detects_active_view_in_handler(self, tmp_path):
+        """Q010 should flag event handlers that set self.active_view."""
+        app_dir = tmp_path / "testapp"
+        app_dir.mkdir()
+        (app_dir / "__init__.py").write_text("")
+        (app_dir / "views.py").write_text(
+            textwrap.dedent(
+                """
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class MyView(LiveView):
+                @event_handler()
+                def switch_view(self, view_name="", **kwargs):
+                    self.active_view = view_name
+            """
+            )
+        )
+
+        # Mock _get_project_app_dirs to return our test app
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(app_dir)]):
+            from djust.checks import check_code_quality
+
+            errors = check_code_quality(None)
+            q010 = [e for e in errors if e.id == "djust.Q010"]
+            assert len(q010) == 1
+            assert "active_view" in q010[0].msg
+            assert "dj-patch" in q010[0].hint
+
+    def test_q010_detects_current_tab_in_handler(self, tmp_path):
+        """Q010 should flag event handlers that set self.current_tab."""
+        app_dir = tmp_path / "testapp"
+        app_dir.mkdir()
+        (app_dir / "__init__.py").write_text("")
+        (app_dir / "views.py").write_text(
+            textwrap.dedent(
+                """
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class TabView(LiveView):
+                @event_handler()
+                def select_tab(self, tab="", **kwargs):
+                    self.current_tab = tab
+            """
+            )
+        )
+
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(app_dir)]):
+            from djust.checks import check_code_quality
+
+            errors = check_code_quality(None)
+            q010 = [e for e in errors if e.id == "djust.Q010"]
+            assert len(q010) == 1
+            assert "current_tab" in q010[0].msg
+
+    def test_q010_passes_handler_with_patch_usage(self, tmp_path):
+        """Q010 should NOT flag handlers that use patch() or handle_params()."""
+        app_dir = tmp_path / "testapp"
+        app_dir.mkdir()
+        (app_dir / "__init__.py").write_text("")
+        (app_dir / "views.py").write_text(
+            textwrap.dedent(
+                """
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class GoodView(LiveView):
+                @event_handler()
+                def switch_view(self, view_name="", **kwargs):
+                    self.patch(f"?view={view_name}")
+
+                def handle_params(self, **params):
+                    self.active_view = params.get("view", "home")
+            """
+            )
+        )
+
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(app_dir)]):
+            from djust.checks import check_code_quality
+
+            errors = check_code_quality(None)
+            q010 = [e for e in errors if e.id == "djust.Q010"]
+            assert len(q010) == 0
+
+    def test_q010_passes_non_event_handler(self, tmp_path):
+        """Q010 should NOT flag methods without @event_handler decorator."""
+        app_dir = tmp_path / "testapp"
+        app_dir.mkdir()
+        (app_dir / "__init__.py").write_text("")
+        (app_dir / "views.py").write_text(
+            textwrap.dedent(
+                """
+            from djust import LiveView
+
+            class MyView(LiveView):
+                def _internal_switch(self):
+                    self.active_view = "new_view"
+            """
+            )
+        )
+
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(app_dir)]):
+            from djust.checks import check_code_quality
+
+            errors = check_code_quality(None)
+            q010 = [e for e in errors if e.id == "djust.Q010"]
+            assert len(q010) == 0
+
+    def test_q010_respects_noqa(self, tmp_path):
+        """Q010 should respect # noqa: Q010 comments."""
+        app_dir = tmp_path / "testapp"
+        app_dir.mkdir()
+        (app_dir / "__init__.py").write_text("")
+        (app_dir / "views.py").write_text(
+            textwrap.dedent(
+                """
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class MyView(LiveView):
+                @event_handler()  # noqa: Q010
+                def switch_view(self, view_name="", **kwargs):
+                    self.active_view = view_name
+            """
+            )
+        )
+
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(app_dir)]):
+            from djust.checks import check_code_quality
+
+            errors = check_code_quality(None)
+            q010 = [e for e in errors if e.id == "djust.Q010"]
+            assert len(q010) == 0
+
+
+class TestT012EventDirectivesWithoutView:
+    """T012 -- template uses dj-* event directives but has no dj-view."""
+
+    def test_t012_detects_events_without_view(self, tmp_path, settings):
+        """T012 fires for template with dj-click but no dj-view."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "no_view.html").write_text(
+            textwrap.dedent(
+                """\
+                <div>
+                    <button dj-click="increment">+1</button>
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 1
+        assert "dj-view" in t012[0].msg
+
+    def test_t012_passes_with_view(self, tmp_path, settings):
+        """T012 should not fire when dj-view is present."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "has_view.html").write_text(
+            textwrap.dedent(
+                """\
+                <div dj-view="myapp.views.MyView">
+                    <button dj-click="increment">+1</button>
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 0
+
+    def test_t012_passes_for_component_template(self, tmp_path, settings):
+        """T012 should not fire for component templates (dj-component present)."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "component.html").write_text(
+            textwrap.dedent(
+                """\
+                <div dj-component="myapp.components.Counter">
+                    <button dj-click="increment">+1</button>
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 0
+
+
+class TestT013InvalidViewPath:
+    """T013 -- dj-view with empty or invalid value."""
+
+    def test_t013_detects_empty_view(self, tmp_path, settings):
+        """T013 fires for dj-view with empty value."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "empty_view.html").write_text('<div dj-view="">content</div>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t013 = [e for e in errors if e.id == "djust.T013"]
+        assert len(t013) == 1
+        assert "empty or invalid" in t013[0].msg
+
+    def test_t013_detects_no_dot(self, tmp_path, settings):
+        """T013 fires for dj-view without a dotted path."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "no_dot.html").write_text('<div dj-view="MyView">content</div>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t013 = [e for e in errors if e.id == "djust.T013"]
+        assert len(t013) == 1
+        assert "MyView" in t013[0].msg
+
+    def test_t013_passes_valid_path(self, tmp_path, settings):
+        """T013 should not fire for a valid dotted Python path."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "valid.html").write_text('<div dj-view="myapp.views.MyView">content</div>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t013 = [e for e in errors if e.id == "djust.T013"]
+        assert len(t013) == 0
+
+
+class TestT011UnsupportedTemplateTags:
+    """T011 -- unsupported Django template tags in LiveView templates."""
+
+    def test_t011_detects_unsupported_tag(self, tmp_path, settings):
+        """T011 fires for tags not implemented in Rust renderer."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page.html").write_text(
+            textwrap.dedent(
+                """\
+                <div dj-view="myapp.views.MyView">
+                    {% ifchanged item.category %}
+                        <h2>{{ item.category }}</h2>
+                    {% endifchanged %}
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t011 = [e for e in errors if e.id == "djust.T011"]
+        assert len(t011) == 1
+        assert "ifchanged" in t011[0].msg
+
+    def test_t011_does_not_fire_for_supported_tags(self, tmp_path, settings):
+        """T011 should not fire for tags implemented in Rust (widthratio, etc.)."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page.html").write_text(
+            textwrap.dedent(
+                """\
+                <div dj-view="myapp.views.MyView">
+                    {% widthratio value max_val 100 %}
+                    {% firstof var1 var2 "fallback" %}
+                    {% templatetag openblock %}
+                    {% spaceless %}<p> </p>{% endspaceless %}
+                    {% cycle "a" "b" "c" %}
+                    {% now "Y-m-d" %}
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t011 = [e for e in errors if e.id == "djust.T011"]
+        assert len(t011) == 0
+
+    def test_t011_noqa_suppresses_warning(self, tmp_path, settings):
+        """T011 is suppressed by {# noqa: T011 #} comment."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page.html").write_text(
+            textwrap.dedent(
+                """\
+                {# noqa: T011 #}
+                <div dj-view="myapp.views.MyView">
+                    {% regroup items by category as grouped %}
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t011 = [e for e in errors if e.id == "djust.T011"]
+        assert len(t011) == 0
+
+    def test_t011_multiple_unsupported_tags(self, tmp_path, settings):
+        """T011 fires once per unsupported tag found."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page.html").write_text(
+            textwrap.dedent(
+                """\
+                <div dj-view="myapp.views.MyView">
+                    {% regroup items by category as grouped %}
+                    {% lorem 3 p %}
+                    {% debug %}
+                </div>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t011 = [e for e in errors if e.id == "djust.T011"]
+        assert len(t011) == 3

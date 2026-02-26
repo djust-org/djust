@@ -482,4 +482,34 @@ describe('Debug Panel Harness — _hookExistingWebSocket (#196)', () => {
         // Should not throw
         expect(panel).toBeDefined();
     });
+
+    it('reassigns pre-existing onmessage through the setter when handler already exists (#367)', () => {
+        // Regression test: before the fix, _hookExistingWebSocket called
+        // desc.get/set.call(ws) which throws "TypeError: Illegal invocation"
+        // in Chrome/Edge because V8 brand checks reject .call() on native
+        // WebSocket IDL getter/setter functions from external code.
+        //
+        // The fix reads/writes ws.onmessage via property access so the
+        // patched WebSocket.prototype setter handles the wrapping.
+        const originalHandler = vi.fn();
+        let stored = originalHandler;
+        const setterCalls = [];
+        const mockWs = { send: vi.fn(), readyState: 1 };
+        Object.defineProperty(mockWs, 'onmessage', {
+            get: () => stored,
+            set: (fn) => { setterCalls.push(fn); stored = fn; },
+            configurable: true,
+        });
+
+        window.djust = { liveViewInstance: { ws: mockWs } };
+        // Should not throw (was "TypeError: Illegal invocation" before fix)
+        expect(() => { panel = createPanel(); }).not.toThrow();
+
+        // _hookExistingWebSocket must have re-assigned onmessage through the
+        // setter — in production that triggers the patched prototype setter
+        // which wraps the handler with _handleReceivedMessage.
+        expect(setterCalls.length).toBeGreaterThan(0);
+        expect(setterCalls[setterCalls.length - 1]).toBe(originalHandler);
+        expect(mockWs._djustDebugHooked).toBe(true);
+    });
 });

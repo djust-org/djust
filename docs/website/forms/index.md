@@ -90,17 +90,18 @@ class ArticleEditView(FormMixin, LiveView):
 
 ## FormMixin Template Variables
 
-| Variable | Type | Description |
-|----------|------|-------------|
-| `form_data` | dict | Current field values |
-| `field_errors` | dict | Per-field errors `{field: [errors]}` |
-| `form_errors` | list | Non-field errors from `clean()` |
-| `is_valid` | bool | Result of last submission |
-| `form_instance` | Form | Current Django Form instance |
+| Variable        | Type | Description                          |
+| --------------- | ---- | ------------------------------------ |
+| `form_data`     | dict | Current field values                 |
+| `field_errors`  | dict | Per-field errors `{field: [errors]}` |
+| `form_errors`   | list | Non-field errors from `clean()`      |
+| `is_valid`      | bool | Result of last submission            |
+| `form_instance` | Form | Current Django Form instance         |
 
 ## Full Guide
 
 See [guides/forms.md](../guides/forms.md) for:
+
 - Real-time validation details
 - `form.as_live` auto-rendering
 - Confirmation dialogs (`dj-confirm`)

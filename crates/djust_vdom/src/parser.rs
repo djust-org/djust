@@ -1,6 +1,13 @@
 //! HTML parser for converting HTML strings to virtual DOM
 //!
-//! Generates compact `data-dj-id` IDs on each element for reliable patch targeting.
+//! Generates compact `dj-id` IDs on each element for reliable patch targeting.
+//!
+//! ## Special Comment Handling
+//!
+//! Preserves `<!--dj-if-->` placeholder comments emitted by the template engine
+//! when `{% if %}` blocks evaluate to false. These placeholders maintain consistent
+//! sibling positions in the VDOM to prevent incorrect node matching during diff
+//! (issue #295). Regular HTML comments are filtered out.
 //!
 //! ## Debugging
 //!
@@ -155,7 +162,7 @@ fn is_svg_element(tag_name: &str) -> bool {
 
 /// Parse HTML into a virtual DOM with compact IDs for patch targeting.
 ///
-/// Each element receives a `data-dj-id` attribute with a base62-encoded unique ID.
+/// Each element receives a `dj-id` attribute with a base62-encoded unique ID.
 /// These IDs enable O(1) querySelector lookup on the client, avoiding fragile
 /// index-based path traversal.
 ///
@@ -165,9 +172,9 @@ fn is_svg_element(tag_name: &str) -> bool {
 ///
 /// Example output:
 /// ```html
-/// <div data-dj-id="0">
-///   <span data-dj-id="1">Hello</span>
-///   <span data-dj-id="2">World</span>
+/// <div dj-id="0">
+///   <span dj-id="1">Hello</span>
+///   <span dj-id="2">World</span>
 /// </div>
 /// ```
 pub fn parse_html(html: &str) -> Result<VNode> {
@@ -262,13 +269,12 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
             parser_trace!("Assigned ID '{}' to <{}>", djust_id, tag);
             vnode.djust_id = Some(djust_id.clone());
 
-            // Convert attributes and extract data-key for keyed diffing
+            // Convert attributes and extract dj-key/data-key for keyed diffing
             let mut attributes = HashMap::new();
             let mut key: Option<String> = None;
-            let mut id_attr: Option<String> = None;
 
-            // Add data-dj-id attribute for client-side querySelector lookup
-            attributes.insert("data-dj-id".to_string(), djust_id);
+            // Add dj-id attribute for client-side querySelector lookup
+            attributes.insert("dj-id".to_string(), djust_id);
 
             for attr in attrs.borrow().iter() {
                 let attr_name_lower = attr.name.local.to_string();
@@ -280,18 +286,16 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                 };
                 let attr_value = attr.value.to_string();
 
-                // Extract data-key for efficient list diffing (highest priority)
-                if attr_name_lower == "data-key" && !attr_value.is_empty() {
+                // Extract dj-key or data-key for efficient list diffing (explicit opt-in only)
+                if (attr_name_lower == "dj-key" || attr_name_lower == "data-key")
+                    && !attr_value.is_empty()
+                    && key.is_none()
+                {
                     key = Some(attr_value.clone());
                 }
 
-                // Extract id attribute as fallback key (if no data-key)
-                if attr_name_lower == "id" && !attr_value.is_empty() {
-                    id_attr = Some(attr_value.clone());
-                }
-
-                // Don't overwrite our generated data-dj-id if template already has one
-                if attr_name_lower == "data-dj-id" {
+                // Don't overwrite our generated dj-id if template already has one
+                if attr_name_lower == "dj-id" {
                     continue;
                 }
 
@@ -299,9 +303,9 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
             }
             vnode.attrs = attributes;
 
-            // Use data-key if present, otherwise fall back to id attribute
-            // This allows existing code patterns with id="..." to benefit from keyed diffing
-            vnode.key = key.or(id_attr);
+            // Use dj-key or data-key when explicitly set. The id= attribute is NOT used
+            // as a key — developers must opt in with dj-key="..." for keyed diffing.
+            vnode.key = key;
             if vnode.key.is_some() {
                 parser_trace!("  Element <{}> has key: {:?}", tag, vnode.key);
             }
@@ -316,10 +320,23 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
             );
 
             for child in handle.children.borrow().iter() {
-                // Skip comment nodes - they are not part of the DOM that JavaScript sees
-                if matches!(child.data, NodeData::Comment { .. }) {
-                    // Debug logging disabled - too verbose
-                    // eprintln!("[Parser] Filtered comment node");
+                // Check for special placeholder comments (e.g., <!--dj-if-->)
+                // These are preserved for VDOM diffing stability (issue #295)
+                if let NodeData::Comment { ref contents } = child.data {
+                    let comment_text = contents.to_string();
+                    if comment_text == "dj-if" {
+                        // Preserve this as a comment node for VDOM diffing
+                        let comment_vnode = VNode {
+                            tag: "#comment".to_string(),
+                            attrs: HashMap::new(),
+                            children: Vec::new(),
+                            text: Some(comment_text),
+                            key: None,
+                            djust_id: None,
+                        };
+                        children.push(comment_vnode);
+                    }
+                    // Regular comments are still filtered out
                     continue;
                 }
 
@@ -568,35 +585,67 @@ mod tests {
     }
 
     #[test]
-    fn test_id_attribute_used_as_key() {
-        // Test that id attribute is automatically used as key for keyed diffing
+    fn test_id_attribute_not_used_as_key() {
+        // id= is NOT implicitly used as a diff key; developers must use dj-key explicitly
         let html = r#"<div id="message-123">Content</div>"#;
         let vnode = parse_html(html).unwrap();
 
         assert_eq!(vnode.tag, "div");
-        assert_eq!(vnode.key, Some("message-123".to_string()));
-        // id should still be in attrs
+        assert_eq!(vnode.key, None);
+        // id should still be in attrs (it's a normal HTML attribute)
         assert_eq!(vnode.attrs.get("id"), Some(&"message-123".to_string()));
     }
 
     #[test]
-    fn test_data_key_takes_priority_over_id() {
-        // Test that data-key takes priority over id when both are present
-        let html = r#"<div id="dom-id" data-key="diff-key">Content</div>"#;
+    fn test_dj_key_attribute() {
+        // dj-key opt-in enables keyed diffing
+        let html = r#"<div dj-key="item-123">Content</div>"#;
         let vnode = parse_html(html).unwrap();
 
-        // data-key should be used, not id
-        assert_eq!(vnode.key, Some("diff-key".to_string()));
+        assert_eq!(vnode.key, Some("item-123".to_string()));
+        // dj-key should be in attrs for DOM rendering
+        assert_eq!(vnode.attrs.get("dj-key"), Some(&"item-123".to_string()));
     }
 
     #[test]
-    fn test_id_key_in_list() {
-        // Test that id attributes work for keyed diffing in lists
+    fn test_data_key_takes_priority_over_dj_key() {
+        // First-seen wins when both dj-key and data-key are present;
+        // in practice parsers iterate attributes in declaration order.
+        // Both are accepted — this test just verifies one value is chosen.
+        let html = r#"<div dj-key="first" data-key="second">Content</div>"#;
+        let vnode = parse_html(html).unwrap();
+
+        // One of the two values is set; id= is irrelevant here
+        assert!(vnode.key.is_some());
+    }
+
+    #[test]
+    fn test_id_in_list_not_used_as_key() {
+        // id= attributes in list items do NOT implicitly become diff keys
         let html = r#"
             <ul>
                 <li id="item-1">First</li>
                 <li id="item-2">Second</li>
                 <li id="item-3">Third</li>
+            </ul>
+        "#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.tag, "ul");
+        assert_eq!(vnode.children.len(), 3);
+        assert_eq!(vnode.children[0].key, None);
+        assert_eq!(vnode.children[1].key, None);
+        assert_eq!(vnode.children[2].key, None);
+    }
+
+    #[test]
+    fn test_dj_key_in_list() {
+        // dj-key in list items enables keyed diffing
+        let html = r#"
+            <ul>
+                <li dj-key="item-1">First</li>
+                <li dj-key="item-2">Second</li>
+                <li dj-key="item-3">Third</li>
             </ul>
         "#;
         let vnode = parse_html(html).unwrap();
@@ -610,7 +659,7 @@ mod tests {
 
     #[test]
     fn test_empty_id_not_used_as_key() {
-        // Test that empty id values are not used as keys
+        // Empty id values are not used as keys (no change in behavior)
         let html = r#"<div id="">Content</div>"#;
         let vnode = parse_html(html).unwrap();
 

@@ -142,7 +142,7 @@ class JITMixin:
                     with open(django_template.origin.name, "r") as f:
                         return f.read()
             except Exception as e:
-                logger.debug(f"Could not load template for JIT: {e}")
+                logger.debug("Could not load template for JIT: %s", e)
                 return None
 
         return None
@@ -265,17 +265,23 @@ class JITMixin:
 
             if config.get("jit_debug"):
                 logger.debug(
-                    f"[JIT] Serialized {len(result)} {queryset.model.__name__} objects for '{variable_name}'"
+                    "[JIT] Serialized %s %s objects for '%s'",
+                    len(result),
+                    queryset.model.__name__,
+                    variable_name,
                 )
                 if result:
-                    logger.debug(f"[JIT DEBUG] First item keys: {list(result[0].keys())}")
+                    logger.debug("[JIT DEBUG] First item keys: %s", list(result[0].keys()))
             return result
 
         except Exception as e:
             import traceback
 
             logger.error(
-                f"[JIT ERROR] Serialization failed for '{variable_name}': {e}\nTraceback:\n{traceback.format_exc()}"
+                "[JIT ERROR] Serialization failed for '%s': %s\nTraceback:\n%s",
+                variable_name,
+                e,
+                traceback.format_exc(),
             )
             return [normalize_django_value(obj) for obj in queryset]
 
@@ -316,7 +322,7 @@ class JITMixin:
             return serializer(obj)
 
         except Exception as e:
-            logger.debug(f"JIT serialization failed for {variable_name}: {e}")
+            logger.debug("JIT serialization failed for %s: %s", variable_name, e)
             return normalize_django_value(obj)
 
     def _lazy_serialize_context(self, context: dict) -> dict:

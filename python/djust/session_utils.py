@@ -123,7 +123,7 @@ def clear_jit_cache() -> int:
     _jit_serializer_cache.clear()
     _get_model_hash.cache_clear()  # Also clear the model hash cache
     if count > 0:
-        logger.info(f"[JIT] Cleared {count} cached serializers")
+        logger.info("[JIT] Cleared %s cached serializers", count)
     return count
 
 

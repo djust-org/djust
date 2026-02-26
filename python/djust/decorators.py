@@ -511,6 +511,64 @@ def permission_required(perm: Union[str, List[str]]) -> Callable[[F], F]:
     return _make_metadata_decorator("permission_required", perm)
 
 
+def background(func: F) -> F:
+    """
+    Run event handler in background thread after flushing current state.
+
+    The decorator wraps the entire handler to run via start_async(),
+    allowing immediate UI feedback (loading states) while the handler
+    executes in the background.
+
+    The current view state is flushed to the client before the handler runs,
+    so any changes made before calling the handler (e.g., self.loading = True)
+    are visible immediately. When the handler completes, the view re-renders
+    and patches are sent.
+
+    Usage:
+        class MyView(LiveView):
+            @event_handler
+            @background
+            def generate_content(self, prompt: str = "", **kwargs):
+                '''Entire method runs in background thread.'''
+                self.generating = True
+                self.content = call_llm(prompt)  # slow operation
+                self.generating = False
+
+            def handle_async_result(self, name: str, result=None, error=None):
+                '''Optional: handle completion or errors.'''
+                if error:
+                    self.error = f"Generation failed: {error}"
+
+    The @background decorator can be combined with other decorators:
+        @event_handler
+        @debounce(wait=0.5)
+        @background
+        def auto_save(self, **kwargs):
+            # Debounced and runs in background
+            self.save_draft()
+
+    Note: The handler should be a regular (non-async) function. It will
+    be executed in a thread pool via sync_to_async in the consumer.
+    """
+
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        # Create a closure that captures the current arguments
+        def _async_callback():
+            return func(self, *args, **kwargs)
+
+        # Use function name as task name for cancellation/tracking
+        task_name = func.__name__
+
+        # Schedule the callback via start_async
+        self.start_async(_async_callback, name=task_name)
+
+    # Add metadata for introspection
+    _add_decorator_metadata(wrapper, "background", True)
+
+    return cast(F, wrapper)
+
+
 __all__ = [
     "event_handler",
     "event",
@@ -525,4 +583,5 @@ __all__ = [
     "optimistic",
     "cache",
     "client_state",
+    "background",
 ]

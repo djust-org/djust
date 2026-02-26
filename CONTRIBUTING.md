@@ -374,9 +374,7 @@ When modifying code with dual implementations:
 
 ### Future Features
 - Template inheritance support
-- Server-sent events fallback
 - Redis session backend
-- TypeScript definitions
 
 ## Supporting the Project
 

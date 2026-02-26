@@ -24,7 +24,7 @@ from .websocket_utils import (
     get_handler_coerce_setting,
 )
 from .presence import PresenceManager
-from .signals import full_html_update
+from .signals import full_html_update, liveview_server_error
 
 logger = logging.getLogger(__name__)
 hotreload_logger = logging.getLogger("djust.hotreload")
@@ -108,6 +108,22 @@ def _build_context_snapshot(context, max_value_len=100):
         else:
             snapshot[key] = f"[{type(value).__name__}]"
     return snapshot
+
+
+def _emit_liveview_server_error(view_instance, error: str, context: dict) -> None:
+    """Emit the liveview_server_error signal from send_error()."""
+    if view_instance is not None:
+        view_cls = view_instance.__class__
+        view_name = f"{view_cls.__module__}.{view_cls.__qualname__}"
+    else:
+        view_cls = None
+        view_name = ""
+    liveview_server_error.send(
+        sender=view_cls,
+        error=error,
+        view_name=view_name,
+        context=context,
+    )
 
 
 def _emit_full_html_update(
@@ -212,11 +228,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
         commands = self.view_instance._drain_navigation()
         for cmd in commands:
+            # Promote cmd's "type" (e.g. "live_patch") to "action" so it doesn't
+            # collide with the outer message "type" key.
+            action = cmd.get("type")
+            payload = {k: v for k, v in cmd.items() if k != "type"}
             await self.send_json(
                 {
-                    **cmd,
                     "type": "navigation",
-                    "action": cmd["type"],
+                    "action": action,
+                    **payload,
                 }
             )
 
@@ -279,37 +299,54 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     async def send_error(self, error: str, **context) -> None:
         """
         Send an error response to the client with consistent formatting.
-
-        Args:
-            error: Human-readable error message
-            **context: Additional context to include in the response
-                (e.g., validation_details, expected_params)
+        Also emits the liveview_server_error signal for monitor integrations.
         """
         response: Dict[str, Any] = {"type": "error", "error": error}
         response.update(context)
         await self.send_json(response)
+        _emit_liveview_server_error(getattr(self, "view_instance", None), error, context)
 
     async def _dispatch_async_work(self) -> None:
         """
         Check if the handler scheduled background work via start_async().
 
-        If _async_pending is set, spawn the callback as an asyncio task
-        so it runs after the current response is sent to the client.
-        When the callback completes, re-render and send updated patches.
+        If _async_tasks is set, spawn each callback as an asyncio task
+        so they run after the current response is sent to the client.
+        When each callback completes, re-render and send updated patches.
+
+        Supports both new multi-task dict format (_async_tasks) and
+        legacy single-task tuple format (_async_pending) for backward
+        compatibility.
         """
         if not self.view_instance:
             return
-        pending = getattr(self.view_instance, "_async_pending", None)
-        if not pending:
-            return
-        self.view_instance._async_pending = None
-        callback, args, kwargs = pending
-        # Pass the event name so the completion response can tell the client
-        # which loading state to clear.
-        event_name = getattr(self, "_current_event_name", None)
-        asyncio.ensure_future(self._run_async_work(callback, args, kwargs, event_name=event_name))
 
-    async def _run_async_work(self, callback, args, kwargs, event_name=None) -> None:
+        # New format: multiple named tasks
+        tasks = getattr(self.view_instance, "_async_tasks", None)
+        if tasks:
+            event_name = getattr(self, "_current_event_name", None)
+            # Spawn all pending tasks
+            for task_name, (callback, args, kwargs) in list(tasks.items()):
+                asyncio.ensure_future(
+                    self._run_async_work(task_name, callback, args, kwargs, event_name=event_name)
+                )
+            # Clear all scheduled tasks
+            self.view_instance._async_tasks = {}
+
+        # Legacy format: single task (_async_pending)
+        # This maintains backward compatibility with existing code
+        pending = getattr(self.view_instance, "_async_pending", None)
+        if pending:
+            self.view_instance._async_pending = None
+            callback, args, kwargs = pending
+            event_name = getattr(self, "_current_event_name", None)
+            asyncio.ensure_future(
+                self._run_async_work("_default", callback, args, kwargs, event_name=event_name)
+            )
+
+    async def _run_async_work(
+        self, task_name: str, callback, args, kwargs, event_name=None
+    ) -> None:
         """
         Execute a start_async callback in a thread, then re-render the view.
 
@@ -317,12 +354,42 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         When the callback completes, render_with_diff is called and the result
         is sent to the client, completing the loading cycle.
 
+        If the task was cancelled via cancel_async(), the re-render is skipped.
+
         Args:
+            task_name: Name of the task being executed (for tracking/cancellation).
+            callback: The callback function to execute.
+            args: Positional arguments for the callback.
+            kwargs: Keyword arguments for the callback.
             event_name: The event that triggered this async work. Included in
                 the response so the client can clear the correct loading state.
         """
+        # Check if task was cancelled before starting
+        if hasattr(self.view_instance, "_async_cancelled"):
+            if task_name in self.view_instance._async_cancelled:
+                self.view_instance._async_cancelled.discard(task_name)
+                logger.debug("Async task %s was cancelled, skipping execution", task_name)
+                return
+
+        result = None
+        error = None
+
         try:
-            await sync_to_async(callback)(*args, **kwargs)
+            # Execute callback in thread pool
+            result = await sync_to_async(callback)(*args, **kwargs)
+
+            # Check if task was cancelled during execution
+            if hasattr(self.view_instance, "_async_cancelled"):
+                if task_name in self.view_instance._async_cancelled:
+                    self.view_instance._async_cancelled.discard(task_name)
+                    logger.debug("Async task %s was cancelled, skipping re-render", task_name)
+                    return
+
+            # Call handle_async_result if defined (success path)
+            if hasattr(self.view_instance, "handle_async_result"):
+                await sync_to_async(self.view_instance.handle_async_result)(
+                    task_name, result=result, error=None
+                )
 
             # Re-render and send patches (mirrors the server_push path)
             if hasattr(self.view_instance, "_sync_state_to_rust"):
@@ -346,11 +413,52 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self._send_update(html=html_content, version=version, event_name=event_name)
 
             await self._flush_push_events()
-        except Exception:
+
+        except Exception as e:
+            error = e
             logger.exception(
-                "[djust] Error in start_async callback on %s",
+                "[djust] Error in start_async callback '%s' on %s",
+                task_name,
                 self.view_instance.__class__.__name__ if self.view_instance else "?",
             )
+
+            # Call handle_async_result if defined (error path)
+            if hasattr(self.view_instance, "handle_async_result"):
+                try:
+                    await sync_to_async(self.view_instance.handle_async_result)(
+                        task_name, result=None, error=error
+                    )
+
+                    # Re-render to show error state
+                    if hasattr(self.view_instance, "_sync_state_to_rust"):
+                        await sync_to_async(self.view_instance._sync_state_to_rust)()
+
+                    html, patches, version = await sync_to_async(
+                        self.view_instance.render_with_diff
+                    )()
+
+                    if patches is not None:
+                        patch_list = json.loads(patches) if patches else []
+                        await self._send_update(
+                            patches=patch_list, version=version, event_name=event_name
+                        )
+                    else:
+                        html_stripped, html_content = await sync_to_async(
+                            lambda h: (
+                                self.view_instance._strip_comments_and_whitespace(h),
+                                self.view_instance._extract_liveview_content(
+                                    self.view_instance._strip_comments_and_whitespace(h)
+                                ),
+                            )
+                        )(html)
+                        await self._send_update(
+                            html=html_content, version=version, event_name=event_name
+                        )
+
+                except Exception:
+                    logger.exception(
+                        "[djust] Error in handle_async_result for task '%s'", task_name
+                    )
 
     async def _send_update(
         self,
@@ -909,6 +1017,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     mount_kwargs.update(match.kwargs)
             except Exception:
                 pass  # URL may not resolve (e.g., root "/") — that's fine
+
+            # Call lifecycle hooks that some mixins register on the HTTP path
+            # (dispatch/get/post) but that are bypassed here because we never
+            # go through Django's view dispatch.  Calling these explicitly
+            # means mixin authors don't need to know about the WebSocket path.
+            #
+            # Current hooks:
+            #   _ensure_tenant() — djust-tenants TenantMixin resolves the tenant.
+            #     Without this, self.tenant is always None in the live path even
+            #     though the SSR pre-render (HTTP) path works correctly.
+            #     See: https://github.com/djust-org/djust/issues/342
+            if hasattr(self.view_instance, "_ensure_tenant"):
+                await sync_to_async(self.view_instance._ensure_tenant)(request)
 
             # Run synchronous view operations in a thread pool
             await sync_to_async(self.view_instance.mount)(request, **mount_kwargs)

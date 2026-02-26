@@ -10,12 +10,12 @@ from djust import LiveView
 
 ### Class Attributes
 
-| Attribute | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `template_name` | `str` | — | Path to a Django template file |
-| `template` | `str` | — | Inline HTML template string |
-| `temporary_assigns` | `dict` | `{}` | State that resets to the default after each render (e.g., `{"messages": []}`) |
-| `use_actors` | `bool` | `False` | Enable actor-based state management |
+| Attribute           | Type   | Default | Description                                                                   |
+| ------------------- | ------ | ------- | ----------------------------------------------------------------------------- |
+| `template_name`     | `str`  | —       | Path to a Django template file                                                |
+| `template`          | `str`  | —       | Inline HTML template string                                                   |
+| `temporary_assigns` | `dict` | `{}`    | State that resets to the default after each render (e.g., `{"messages": []}`) |
+| `use_actors`        | `bool` | `False` | Enable actor-based state management                                           |
 
 Either `template_name` or `template` is required.
 
@@ -26,6 +26,7 @@ Either `template_name` or `template` is required.
 Called once when the page first loads (HTTP request). Initialize all state here.
 
 **Parameters:**
+
 - `request` — Django `HttpRequest`
 - `**kwargs` — URL parameters from the route (e.g., `path("<int:pk>/", ...)` passes `pk=...`)
 
@@ -63,6 +64,7 @@ def get_context_data(self, **kwargs):
 Called when URL parameters change via `live_patch()` (soft navigation without a full page reload).
 
 **Parameters:**
+
 - `params` — `dict` of current URL query parameters
 - `url` — Current URL string
 - `**kwargs` — Additional keyword arguments
@@ -81,6 +83,7 @@ def handle_params(self, params, url, **kwargs):
 Called when the server sends a message to this LiveView (e.g., from background tasks, PubSub, or `send_update()`).
 
 **Parameters:**
+
 - `event` — Event name string
 - `data` — Event payload (dict)
 - `**kwargs` — Additional metadata
@@ -144,6 +147,77 @@ def mount(self, request, **kwargs):
 
 ---
 
+### Background Work
+
+#### `start_async(callback, *args, name=None, **kwargs)`
+
+Schedule a callback to run in a background thread after flushing the current view state to the client. The view automatically re-renders when the callback completes.
+
+**Parameters:**
+
+- `callback` — Method to run in background (receives view instance as `self`)
+- `*args` — Positional arguments forwarded to callback
+- `name` (`str`, optional) — Task name for tracking and cancellation
+- `**kwargs` — Keyword arguments forwarded to callback
+
+**Usage:**
+
+```python
+@event_handler()
+def generate_report(self, **kwargs):
+    self.generating = True  # Sent to client immediately
+    self.start_async(self._do_generate, name="report")
+
+def _do_generate(self):
+    self.report = call_slow_api()  # Runs in background
+    self.generating = False  # View re-renders when this returns
+```
+
+See [Loading States & Background Work](../guides/loading-states.md) for detailed examples.
+
+---
+
+#### `cancel_async(name)`
+
+Cancel a pending or running async task by name.
+
+**Parameters:**
+
+- `name` (`str`) — Name of the task to cancel
+
+**Usage:**
+
+```python
+@event_handler()
+def cancel_export(self, **kwargs):
+    self.cancel_async("export")
+    self.exporting = False
+```
+
+---
+
+#### `handle_async_result(name, result=None, error=None)`
+
+Optional callback invoked when an async task completes or fails. Override this method to handle completion/errors.
+
+**Parameters:**
+
+- `name` (`str`) — Name of the completed task
+- `result` — Return value from the callback (if any)
+- `error` (`Exception`, optional) — Exception raised by the callback
+
+**Usage:**
+
+```python
+def handle_async_result(self, name: str, result=None, error=None):
+    if error:
+        self.error_message = f"Task {name} failed: {error}"
+    elif name == "export":
+        self.status = "Export complete"
+```
+
+---
+
 ### Server-Push
 
 #### `send_update()`
@@ -186,9 +260,9 @@ class ProtectedView(LoginRequiredMixin, LiveView):
 
 ## State Conventions
 
-| Pattern | Meaning |
-|---------|---------|
-| `self.count` | Public — available in template context |
+| Pattern       | Meaning                                   |
+| ------------- | ----------------------------------------- |
+| `self.count`  | Public — available in template context    |
 | `self._items` | Private — not serialized, not in template |
 
 Private vars (underscore prefix) are useful for QuerySets and large objects that shouldn't be JIT-serialized.

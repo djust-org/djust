@@ -108,6 +108,37 @@ class ReportView(AsyncWorkMixin, LiveView):
 {% endif %}
 ```
 
+## @background Decorator
+
+Simpler syntax — entire handler runs in background:
+
+```python
+from djust.decorators import background
+
+class ContentView(LiveView):
+    @event_handler
+    @background
+    def generate_content(self, prompt: str = "", **kwargs):
+        self.generating = True
+        self.content = call_llm(prompt)
+        self.generating = False
+```
+
+**vs start_async:**
+- `@background`: entire handler runs in background
+- `start_async()`: update state first, then start background work
+
+Can combine with other decorators:
+```python
+@event_handler
+@debounce(wait=0.5)
+@background
+def auto_save(self, **kwargs):
+    self.save_draft()
+```
+
+Task name is function name; cancel via `self.cancel_async("generate_content")`.
+
 ## Configuration
 
 ```python

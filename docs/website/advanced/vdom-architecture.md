@@ -75,15 +75,15 @@ let patches: Vec<Patch> = diff(&old_vdom, &new_vdom);
 
 ### Patch Types
 
-| Patch          | Description                              |
-|----------------|------------------------------------------|
-| `SetText`      | Update a text node's content             |
-| `SetAttr`      | Set or update an attribute               |
-| `RemoveAttr`   | Remove an attribute                      |
-| `Replace`      | Replace an entire node                   |
-| `InsertChild`  | Insert a new child at an index           |
-| `RemoveChild`  | Remove a child at an index               |
-| `MoveChild`    | Move a child from one index to another   |
+| Patch         | Description                            |
+| ------------- | -------------------------------------- |
+| `SetText`     | Update a text node's content           |
+| `SetAttr`     | Set or update an attribute             |
+| `RemoveAttr`  | Remove an attribute                    |
+| `Replace`     | Replace an entire node                 |
+| `InsertChild` | Insert a new child at an index         |
+| `RemoveChild` | Remove a child at an index             |
+| `MoveChild`   | Move a child from one index to another |
 
 Every patch carries both a `path` (index-based array) and a `d` (djust_id) field. The client tries ID-based resolution first for O(1) lookup, falling back to path traversal.
 
@@ -150,15 +150,16 @@ extracted = self._strip_comments_and_whitespace(extracted)
 
 ## Performance Characteristics
 
-| Operation              | Typical Time     |
-|------------------------|------------------|
-| HTML parsing (Rust)    | 0.1 - 0.5 ms    |
-| VDOM diff (Rust)       | 0.05 - 0.2 ms   |
-| Patch serialization    | < 0.1 ms         |
-| Client patch apply     | 0.5 - 2 ms       |
-| Total round-trip       | 2 - 10 ms        |
+| Operation           | Typical Time  |
+| ------------------- | ------------- |
+| HTML parsing (Rust) | 0.1 - 0.5 ms  |
+| VDOM diff (Rust)    | 0.05 - 0.2 ms |
+| Patch serialization | < 0.1 ms      |
+| Client patch apply  | 0.5 - 2 ms    |
+| Total round-trip    | 2 - 10 ms     |
 
 Targets for interactive updates:
+
 - **Simple update** (text change): 1-2 patches, < 1 ms client-side
 - **Form input**: 1-2 patches, < 1 ms
 - **List update**: 5-20 patches, < 5 ms

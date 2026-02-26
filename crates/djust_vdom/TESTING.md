@@ -140,12 +140,33 @@ Current coverage:
 - ✅ Form validation error removal
 - ✅ Deep path traversal
 - ✅ Conditional rendering (show/hide with classes)
+- ✅ Conditional placeholder handling (`<!--dj-if-->` for issue #295)
 - ✅ Multiple simultaneous removals
 - ✅ Real HTML parsing with html5ever
 - ✅ Attribute changes
 - ✅ Text content changes
 - ✅ Child insertion/removal
 - ✅ Node replacement
+
+## Conditional Rendering Fix (Issue #295)
+
+### Problem
+When `{% if %}` blocks evaluated to false, they removed elements from the DOM without leaving a placeholder. This caused sibling positions to shift, making the VDOM diff incorrectly match siblings and generate wrong patches.
+
+### Solution
+When `{% if condition %}` is false and has no `{% else %}`, the template engine now emits a `<!--dj-if-->` placeholder comment. This maintains consistent sibling positions in the VDOM tree.
+
+### How It Works
+1. **Template engine** (`crates/djust_templates/src/renderer.rs`): Emits `<!--dj-if-->` when condition is false
+2. **Parser** (`crates/djust_vdom/src/parser.rs`): Preserves `<!--dj-if-->` comments as special comment vnodes
+3. **Diff** (`crates/djust_vdom/src/diff.rs`): Detects placeholder-to-content transitions and generates `RemoveChild` + `InsertChild` patches instead of `Replace` patches
+
+### Tests
+See tests in `crates/djust_templates/src/renderer.rs`:
+- `test_if_false_emits_placeholder` - Placeholder emission
+- `test_if_true_no_placeholder` - No placeholder when true
+- `test_if_with_else_no_placeholder` - No placeholder when else branch exists
+- `test_if_siblings_with_placeholder` - Sibling position maintenance
 
 ## Future Test Ideas
 

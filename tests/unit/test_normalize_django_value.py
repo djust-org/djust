@@ -338,3 +338,66 @@ class TestParityWithJSONRoundtrip:
         value = (Decimal("1.0"), "a", 3)
         expected = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
         assert normalize_django_value(value) == expected
+
+
+class TestStrictSerializationMode:
+    """Test strict_serialization config behavior."""
+
+    def test_non_serializable_logs_warning_by_default(self, caplog):
+        """Non-serializable objects emit warning in default mode."""
+        import logging
+        from djust.config import config
+
+        class NonSerializable:
+            def __str__(self):
+                return "NonSerializable instance"
+
+        # Default mode (strict_serialization=False)
+        assert config.get("strict_serialization", False) is False
+
+        with caplog.at_level(logging.WARNING):
+            result = normalize_django_value(NonSerializable())
+
+        assert isinstance(result, str)
+        assert any("non-serializable value" in rec.message.lower() for rec in caplog.records)
+
+    def test_strict_mode_raises_type_error(self):
+        """In strict mode, non-serializable objects raise TypeError."""
+        from djust.config import config
+
+        class NonSerializable:
+            def __str__(self):
+                return "NonSerializable instance"
+
+        # Enable strict mode
+        config.set("strict_serialization", True)
+
+        try:
+            with pytest.raises(TypeError) as exc_info:
+                normalize_django_value(NonSerializable())
+
+            assert "non-serializable value" in str(exc_info.value).lower()
+            assert "NonSerializable" in str(exc_info.value)
+        finally:
+            # Reset config
+            config.set("strict_serialization", False)
+
+    def test_strict_mode_message_includes_guidance(self):
+        """Error message includes helpful guidance."""
+        from djust.config import config
+
+        class ServiceClient:
+            def __str__(self):
+                return "ServiceClient instance"
+
+        config.set("strict_serialization", True)
+
+        try:
+            with pytest.raises(TypeError) as exc_info:
+                normalize_django_value(ServiceClient())
+
+            msg = str(exc_info.value)
+            assert "ServiceClient" in msg
+            assert "self._" in msg or "re-initialize" in msg
+        finally:
+            config.set("strict_serialization", False)

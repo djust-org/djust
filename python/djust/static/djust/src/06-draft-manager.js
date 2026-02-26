@@ -107,7 +107,7 @@ function initDraftMode() {
         return;
     }
 
-    console.log(`[DraftMode] Initializing draft mode with key: ${draftKey}`);
+    if (globalThis.djustDebug) console.log(`[DraftMode] Initializing draft mode with key: ${draftKey}`);
 
     // Load existing draft on page load
     const savedDraft = globalDraftManager.loadDraft(draftKey);
@@ -151,7 +151,7 @@ function initDraftMode() {
 
     // Check for draft clear flag
     if (draftRoot.hasAttribute('data-draft-clear')) {
-        console.log('[DraftMode] Draft clear flag detected, clearing draft...');
+        if (globalThis.djustDebug) console.log('[DraftMode] Draft clear flag detected, clearing draft...');
         globalDraftManager.clearDraft(draftKey);
         draftRoot.removeAttribute('data-draft-clear');
     }

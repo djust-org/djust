@@ -29,6 +29,7 @@ class CodeBlock(Component):
             filename: Optional filename to display above code
             show_line_numbers: Whether to show line numbers
         """
+        super().__init__()
         self.code = code.strip()
         self.language = language
         self.filename = filename
@@ -92,6 +93,7 @@ class CodeTabs(Component):
         Args:
             tabs: List of dicts with 'label', 'code', 'language', optional 'filename'
         """
+        super().__init__()
         self.tabs = tabs
 
     def render(self) -> str:
@@ -165,6 +167,7 @@ class CodeTabsWithHighlighting(Component):
             theme: Prism.js theme name (default: tomorrow)
             include_highlighting: Override automatic detection - force include/exclude setup
         """
+        super().__init__()
         self.code_tabs = CodeTabs(tabs)
         self.setup = CodeHighlightingSetup(theme)
 

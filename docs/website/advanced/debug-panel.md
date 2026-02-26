@@ -101,12 +101,12 @@ Visualizes Virtual DOM patch operations for debugging rendering and performance:
 
 ### Performance Targets
 
-| Update type   | Patches | Time    |
-|---------------|---------|---------|
-| Form input    | 1-2     | < 1 ms  |
-| Typical update| 1-5     | < 2 ms  |
-| List update   | 5-20    | < 5 ms  |
-| Full refresh  | 50+     | Optimize if > 10 ms |
+| Update type    | Patches | Time                |
+| -------------- | ------- | ------------------- |
+| Form input     | 1-2     | < 1 ms              |
+| Typical update | 1-5     | < 2 ms              |
+| List update    | 5-20    | < 5 ms              |
+| Full refresh   | 50+     | Optimize if > 10 ms |
 
 ## Variables Tab
 

@@ -317,6 +317,97 @@ Or remove `LIVEVIEW_ALLOWED_MODULES` entirely to allow all modules.
 
 ---
 
+### V006: Service instance in mount()
+
+**Severity**: Warning
+
+**What causes it**: AST analysis detected an assignment in `mount()` that instantiates a class whose name contains keywords like "Service", "Client", "Session", "API", or "Connection". These are typically not JSON-serializable.
+
+**What you see**: The view works initially, but after a WebSocket reconnection or page refresh, you get `AttributeError` when trying to call methods on what is now a string representation of the object.
+
+**Fix**: Use the helper method pattern:
+
+```python
+# WRONG
+class MyView(LiveView):
+    def mount(self, request, **kwargs):
+        self.s3 = boto3.client("s3")  # Not serializable
+
+# CORRECT
+class MyView(LiveView):
+    def _get_s3(self):
+        return boto3.client("s3")
+
+    def mount(self, request, **kwargs):
+        s3 = self._get_s3()  # Temporary variable, not stored in state
+        # Use s3 here to fetch data
+```
+
+Or suppress if you know the object is serializable:
+
+```python
+self.api_client = MySerializableClient()  # noqa: V006
+```
+
+**Related**: [Working with External Services](services.md)
+
+---
+
+### V007: Event handler missing **kwargs
+
+**Severity**: Warning
+
+**What causes it**: An `@event_handler` decorated method does not include `**kwargs` in its signature. Event handlers receive all event parameters from the client, and without `**kwargs`, extra parameters will cause errors.
+
+**Fix**:
+
+```python
+# WRONG - will fail if client sends unexpected parameters
+@event_handler()
+def search(self, query: str = ""):
+    self.results = search(query)
+
+# CORRECT
+@event_handler()
+def search(self, query: str = "", **kwargs):
+    self.results = search(query)
+```
+
+---
+
+### V008: Non-primitive type in mount()
+
+**Severity**: Info
+
+**What causes it**: AST analysis detected an assignment in `mount()` that instantiates a non-primitive type (not `list`, `dict`, `set`, `tuple`, `str`, `int`, `float`, `bool`). This may indicate a non-serializable object being stored in LiveView state.
+
+**What you see**: Similar to V006, but catches a broader range of types. You may see runtime warnings about non-serializable values, or `AttributeError` after deserialization.
+
+**Fix**: If the type is not JSON-serializable, use a private variable or helper method:
+
+```python
+# WRONG
+class MyView(LiveView):
+    def mount(self, request, **kwargs):
+        self.processor = DataProcessor()  # May not be serializable
+
+# CORRECT - private variable
+class MyView(LiveView):
+    def mount(self, request, **kwargs):
+        self._processor = DataProcessor()  # Private, not serialized
+
+# OR - if it IS serializable, suppress the check
+class MyView(LiveView):
+    def mount(self, request, **kwargs):
+        self.config = MySerializableConfig()  # noqa: V008
+```
+
+V008 is broader than V006 and will flag any custom class instantiation, not just service-like names. This helps catch subtle serialization bugs early.
+
+**Related**: [Working with External Services](services.md)
+
+---
+
 ## Security Errors (S0xx)
 
 ### S001: mark_safe() with f-string
@@ -422,6 +513,8 @@ class PublicCounterView(LiveView):
     login_required = False  # Explicitly public
 ```
 
+**Note**: Prior to [#303](https://github.com/djust-org/djust/issues/303), this check incorrectly warned on views with `login_required = False`. The check now correctly distinguishes between intentionally public views (`False`) and views that haven't addressed authentication at all (`None`).
+
 **Related**: [Authentication Guide](authentication.md)
 
 ---
@@ -497,6 +590,69 @@ document.addEventListener('djust:push_event', (e) => { ... });
 window.addEventListener('djust:push_event', (e) => { ... });
 </script>
 ```
+
+---
+
+### T005: dj-view and dj-root on different elements
+
+**Severity**: Warning
+
+**What causes it**: A template has `dj-view` on one element and `dj-root` on a different element. These attributes must be on the same root element.
+
+**What you see**: VDOM patches may not be applied correctly, or updates fail silently.
+
+**Fix**:
+
+```html
+<!-- WRONG -- different elements -->
+<div dj-view="myapp.views.MyView">
+    <div dj-root>
+        <p>Content</p>
+    </div>
+</div>
+
+<!-- CORRECT -- same element -->
+<div dj-view="myapp.views.MyView" dj-root>
+    <p>Content</p>
+</div>
+```
+
+---
+
+### T010: dj-click used for navigation
+
+**Severity**: Warning
+
+**What causes it**: A template element uses `dj-click` together with navigation-related data attributes (`data-view`, `data-tab`, `data-page`, or `data-section`). This pattern suggests you're implementing navigation, which should use `dj-patch` instead for proper URL updates and browser history support.
+
+**What you see**: Navigation works but the browser URL doesn't update, and the back button doesn't work as expected. Users cannot bookmark or share specific views.
+
+**Fix**:
+
+```html
+<!-- WRONG -- dj-click for navigation -->
+<button dj-click="show_settings" data-view="settings">Settings</button>
+
+<!-- CORRECT -- use dj-patch for navigation -->
+<a href="?view=settings" dj-patch="handle_params">Settings</a>
+```
+
+In your LiveView, handle the URL parameter:
+
+```python
+from djust.decorators import event_handler
+
+class MyView(LiveView):
+    def mount(self, request, **kwargs):
+        self.current_view = request.GET.get('view', 'dashboard')
+
+    @event_handler()
+    def handle_params(self, **kwargs):
+        # Called when URL changes via dj-patch
+        self.current_view = self.request.GET.get('view', 'dashboard')
+```
+
+**Related**: [Navigation Guide](navigation.md)
 
 ---
 

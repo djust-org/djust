@@ -132,7 +132,9 @@ impl Template {
 fn render_template(source: String, context: HashMap<String, Value>) -> PyResult<String> {
     let template = Template::new(&source)?;
     let ctx = Context::from_dict(context);
-    Ok(template.render(&ctx)?)
+    let result = template.render(&ctx)?;
+    // Strip VDOM placeholder comments in standalone rendering
+    Ok(result.replace("<!--dj-if-->", ""))
 }
 
 /// Python module for template functionality

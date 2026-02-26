@@ -61,9 +61,9 @@ from djust.components.base import LiveComponent
 
 ### Class Attributes
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `template` | `str` | Inline HTML template |
+| Attribute       | Type  | Description             |
+| --------------- | ----- | ----------------------- |
+| `template`      | `str` | Inline HTML template    |
 | `template_name` | `str` | Path to a template file |
 
 ### Abstract Methods (must implement)
@@ -97,6 +97,7 @@ Re-render this component and push the diff to the client. Call after changing st
 Send an event to the parent LiveView.
 
 **Parameters:**
+
 - `event_name` (`str`) — Event name string
 - `data` (`dict`) — Event payload
 
@@ -118,7 +119,8 @@ Every element in a LiveComponent template that has a `dj-*` event attribute **mu
 ```python
 # Component sends event up:
 class CounterWidget(LiveComponent):
-    def increment(self):
+    @event_handler()
+    def increment(self, **kwargs):
         self.count += 1
         self.trigger_update()
         self.send_parent("count_changed", {"count": self.count})

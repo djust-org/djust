@@ -87,7 +87,7 @@ async function handleEvent(eventName, params = {}) {
     }
 
     // Fallback to HTTP
-    console.log('[LiveView] WebSocket unavailable, falling back to HTTP');
+    if (globalThis.djustDebug) console.log('[LiveView] WebSocket unavailable, falling back to HTTP');
 
     try {
         const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value

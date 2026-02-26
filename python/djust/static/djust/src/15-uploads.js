@@ -327,6 +327,7 @@
                 // Validate client-side
                 if (config) {
                     if (file.size > config.max_file_size) {
+                        // codeql[js/log-injection] -- file.name and file.size come from the browser FileList API, not from untrusted network input
                         console.warn(`[Upload] File too large: ${file.name} (${file.size} > ${config.max_file_size})`);
                         window.dispatchEvent(new CustomEvent('djust:upload:error', {
                             detail: { file: file.name, error: 'File too large' }

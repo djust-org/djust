@@ -36,6 +36,7 @@ In the template: `{{ status_dot }}` — calls `__str__()` → `render()`.
 ### Rendering Priority
 
 Stateless components try rendering methods in order (fastest first):
+
 1. `_rust_impl_class` — Pure Rust implementation (~1μs)
 2. `template` string — Rust template engine (~5-10μs)
 3. `_render_custom()` — Python method (~50-100μs)
@@ -46,6 +47,7 @@ LiveComponents have their own mount/render lifecycle and can handle events indep
 
 ```python
 from djust.components.base import LiveComponent
+from djust.decorators import event_handler
 
 class CounterWidget(LiveComponent):
     template = """
@@ -62,16 +64,19 @@ class CounterWidget(LiveComponent):
     def get_context_data(self):
         return {"count": self.count}
 
-    def increment(self):
+    @event_handler()
+    def increment(self, **kwargs):
         self.count += 1
         self.trigger_update()
 
-    def decrement(self):
+    @event_handler()
+    def decrement(self, **kwargs):
         self.count -= 1
         self.trigger_update()
 ```
 
 **Critical rules:**
+
 - `data-component-id="{{ component_id }}"` on **every** element with `dj-*` events — without it, events route to the parent LiveView instead
 - Call `self.trigger_update()` after changing state
 - `mount()` and `get_context_data()` are required
@@ -82,7 +87,8 @@ Send events from a LiveComponent to its parent LiveView:
 
 ```python
 class CounterWidget(LiveComponent):
-    def increment(self):
+    @event_handler()
+    def increment(self, **kwargs):
         self.count += 1
         self.trigger_update()
         self.send_parent("count_changed", {"count": self.count})

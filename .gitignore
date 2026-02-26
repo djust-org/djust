@@ -67,3 +67,6 @@ wheels/
 # Claude Code
 .claude/
 pr/
+outreach/
+packages/
+.playwright-mcp/

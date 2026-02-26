@@ -20,7 +20,7 @@ Example Usage:
         safe_setattr(obj, key, value)
 
     # Safe logging (strips control chars, truncates)
-    logger.info(f"User searched for: {sanitize_for_log(user_query)}")
+    logger.info("User searched for: %s", sanitize_for_log(user_query))
 
     # Handle exception (logs + creates safe response in one call)
     response = handle_exception(exception, error_type="event", event_name="click")
@@ -34,6 +34,8 @@ from .attribute_guard import (
 )
 from .log_sanitizer import (
     sanitize_for_log,
+    sanitize_dict_for_log,
+    DjustLogSanitizerFilter,
     MAX_LOG_LENGTH,
 )
 from .error_handling import (
@@ -51,6 +53,8 @@ __all__ = [
     "AttributeSecurityError",
     # Log sanitizer
     "sanitize_for_log",
+    "sanitize_dict_for_log",
+    "DjustLogSanitizerFilter",
     "MAX_LOG_LENGTH",
     # Error handling
     "create_safe_error_response",

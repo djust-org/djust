@@ -213,7 +213,7 @@ impl RustLiveViewBackend {
                 None
             };
 
-        // Serialize VDOM back to HTML with data-dj-id attributes
+        // Serialize VDOM back to HTML with dj-id attributes
         let hydrated_html = new_vdom.to_html();
 
         self.last_vdom = Some(new_vdom);
@@ -272,7 +272,7 @@ impl RustLiveViewBackend {
             None
         };
 
-        // Serialize VDOM back to HTML with data-dj-id attributes for reliable patch targeting
+        // Serialize VDOM back to HTML with dj-id attributes for reliable patch targeting
         let hydrated_html = new_vdom.to_html();
 
         self.last_vdom = Some(new_vdom);
@@ -423,7 +423,9 @@ fn render_template(template_source: String, context: HashMap<String, Value>) -> 
     };
 
     let ctx = Context::from_dict(context);
-    Ok(template_arc.render(&ctx)?)
+    let result = template_arc.render(&ctx)?;
+    // Strip VDOM placeholder comments in standalone rendering
+    Ok(result.replace("<!--dj-if-->", ""))
 }
 
 /// Fast template rendering with template directories for {% include %} support

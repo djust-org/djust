@@ -123,7 +123,7 @@ class DjustTemplate:
         """
         if not JIT_AVAILABLE:
             # Fallback to DjangoJSONEncoder
-            logger.debug(f"[JIT] Not available, using DjangoJSONEncoder for '{variable_name}'")
+            logger.debug("[JIT] Not available, using DjangoJSONEncoder for '%s'", variable_name)
             return [normalize_django_value(obj) for obj in queryset]
 
         try:
@@ -133,7 +133,9 @@ class DjustTemplate:
 
             if not paths_for_var:
                 # No template access detected, use default serialization
-                logger.debug(f"[JIT] No paths found for '{variable_name}', using DjangoJSONEncoder")
+                logger.debug(
+                    "[JIT] No paths found for '%s', using DjangoJSONEncoder", variable_name
+                )
                 return [normalize_django_value(obj) for obj in queryset]
 
             # Generate cache key (includes model hash for invalidation on model changes)
@@ -145,19 +147,22 @@ class DjustTemplate:
             # Check cache
             if cache_key in _jit_serializer_cache:
                 paths_for_var, optimization = _jit_serializer_cache[cache_key]
-                logger.debug(f"[JIT] Cache HIT for '{variable_name}' - paths: {paths_for_var}")
+                logger.debug("[JIT] Cache HIT for '%s' - paths: %s", variable_name, paths_for_var)
             else:
                 # Analyze and cache optimization
                 optimization = analyze_queryset_optimization(model_class, paths_for_var)
 
                 logger.debug(
-                    f"[JIT] Cache MISS for '{variable_name}' ({model_class.__name__}) - "
-                    f"paths: {paths_for_var}"
+                    "[JIT] Cache MISS for '%s' (%s) - paths: %s",
+                    variable_name,
+                    model_class.__name__,
+                    paths_for_var,
                 )
                 if optimization:
                     logger.debug(
-                        f"[JIT] Query optimization: select_related={sorted(optimization.select_related)}, "
-                        f"prefetch_related={sorted(optimization.prefetch_related)}"
+                        "[JIT] Query optimization: select_related=%s, prefetch_related=%s",
+                        sorted(optimization.select_related),
+                        sorted(optimization.prefetch_related),
                     )
 
                 _jit_serializer_cache[cache_key] = (paths_for_var, optimization)
@@ -169,12 +174,16 @@ class DjustTemplate:
             # Serialize with Rust (5-10x faster)
             result = serialize_queryset(list(queryset), paths_for_var)
 
-            logger.debug(f"[JIT] Serialized {len(result)} objects for '{variable_name}' using Rust")
+            logger.debug(
+                "[JIT] Serialized %s objects for '%s' using Rust", len(result), variable_name
+            )
             return result
 
         except Exception as e:
             # Graceful fallback
-            logger.warning(f"[JIT] Serialization failed for '{variable_name}': {e}", exc_info=True)
+            logger.warning(
+                "[JIT] Serialization failed for '%s': %s", variable_name, e, exc_info=True
+            )
             return [normalize_django_value(obj) for obj in queryset]
 
     def _jit_serialize_model(self, model_instance: models.Model, variable_name: str) -> dict:
@@ -195,7 +204,7 @@ class DjustTemplate:
         try:
             return normalize_django_value(model_instance)
         except Exception as e:
-            logger.warning(f"Model serialization failed for '{variable_name}': {e}")
+            logger.warning("Model serialization failed for '%s': %s", variable_name, e)
             return {"id": str(model_instance.pk), "__str__": str(model_instance)}
 
     def _resolve_template_inheritance(self) -> str:
@@ -653,7 +662,7 @@ class DjustTemplate:
         try:
             resolved_template = self._resolve_template_inheritance()
         except Exception as e:
-            logger.warning(f"Template inheritance resolution failed: {e}")
+            logger.warning("Template inheritance resolution failed: %s", e)
             resolved_template = self.template_string
 
         # Convert context to dict
@@ -734,6 +743,18 @@ class DjustTemplate:
                 template_dirs,
                 safe_keys or None,
             )
+
+            # In DEBUG mode, inject data-dj-src attributes for template source mapping.
+            # This adds the template filename to opening HTML element tags, enabling
+            # the djust-browser-mcp find_by_template tool to link DOM elements back
+            # to their source templates.
+            from django.conf import settings
+
+            if getattr(settings, "DEBUG", False) and self.origin:
+                template_name = getattr(self.origin, "template_name", None)
+                if template_name:
+                    html = self._inject_source_mapping(html, template_name)
+
             return SafeString(html)
         except Exception as e:
             # Provide helpful error message with template location
@@ -752,6 +773,34 @@ class DjustTemplate:
                 ) from e
 
             raise Exception(f"Error rendering template{origin_info}: {error_msg}") from e
+
+    # Regex to match opening HTML element tags (not comments, not closing tags, not doctypes)
+    _OPENING_TAG_RE = re.compile(
+        r"<([a-zA-Z][a-zA-Z0-9]*)"  # Tag name
+        r"(\s|>|/>)",  # Followed by whitespace, >, or />
+    )
+
+    def _inject_source_mapping(self, html: str, template_name: str) -> str:
+        """
+        Inject data-dj-src attributes into opening HTML element tags.
+
+        Only adds to root-level elements (depth 0) to avoid excessive bloat.
+        The attribute value is the template filename (e.g., "dashboard.html").
+
+        This enables the djust-browser-mcp find_by_template tool to link
+        DOM elements back to their source template files.
+        """
+        # Escape the template name for use in HTML attributes
+        safe_name = template_name.replace('"', "&quot;")
+        attr = f' data-dj-src="{safe_name}"'
+
+        # Add data-dj-src to the first opening tag only (root element).
+        # This avoids bloating every element while still enabling template lookup.
+        return self._OPENING_TAG_RE.sub(
+            lambda m: f"<{m.group(1)}{attr}{m.group(2)}",
+            html,
+            count=1,  # Only first match
+        )
 
     def _get_context_processor(self, processor_path: str):
         """Import and return a context processor function."""

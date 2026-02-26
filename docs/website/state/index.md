@@ -148,6 +148,7 @@ window.djustDebug = true;
 ```
 
 You'll see logs like:
+
 ```
 [djust:debounce] Waiting 500ms for search(value=laptop)
 [djust:cache] Cache hit for search(value=laptop) - age: 45s / TTL: 300s
@@ -156,15 +157,16 @@ You'll see logs like:
 
 ## Full Reference
 
-| Decorator | Parameters | Use case |
-|-----------|-----------|---------|
-| `@debounce(wait)` | `wait`: seconds (float) | Search, autosave |
-| `@throttle(interval)` | `interval`: seconds (float) | Scroll, resize |
-| `@loading(attr)` | `attr`: attribute name (str) | Long operations |
-| `@optimistic` | — | Toggles, counters |
-| `@cache(ttl, key_params)` | `ttl`: seconds, `key_params`: list[str] | Expensive queries |
-| `@client_state(keys)` | `keys`: list[str] | Multi-component sync |
-| `DraftModeMixin` | `draft_fields`, `draft_ttl` | Auto-save forms |
+| Decorator                 | Parameters                              | Use case             |
+| ------------------------- | --------------------------------------- | -------------------- |
+| `@debounce(wait)`         | `wait`: seconds (float)                 | Search, autosave     |
+| `@throttle(interval)`     | `interval`: seconds (float)             | Scroll, resize       |
+| `@loading(attr)`          | `attr`: attribute name (str)            | Long operations      |
+| `@background`             | —                                       | API calls, AI gen    |
+| `@optimistic`             | —                                       | Toggles, counters    |
+| `@cache(ttl, key_params)` | `ttl`: seconds, `key_params`: list[str] | Expensive queries    |
+| `@client_state(keys)`     | `keys`: list[str]                       | Multi-component sync |
+| `DraftModeMixin`          | `draft_fields`, `draft_ttl`             | Auto-save forms      |
 
 For detailed API docs, see [API Reference: Decorators](../api-reference/decorators.md).
 

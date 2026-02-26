@@ -15,7 +15,7 @@ function sanitizeIdForLog(id) {
  * Resolve a DOM node using ID-based lookup (primary) or path traversal (fallback).
  *
  * Resolution strategy:
- * 1. If djustId is provided, try querySelector('[data-dj-id="..."]') - O(1), reliable
+ * 1. If djustId is provided, try querySelector('[dj-id="..."]') - O(1), reliable
  * 2. Fall back to index-based path traversal
  *
  * @param {Array<number>} path - Index-based path (fallback)
@@ -25,7 +25,7 @@ function sanitizeIdForLog(id) {
 function getNodeByPath(path, djustId = null) {
     // Strategy 1: ID-based resolution (fast, reliable)
     if (djustId) {
-        const byId = document.querySelector(`[data-dj-id="${CSS.escape(djustId)}"]`);
+        const byId = document.querySelector(`[dj-id="${CSS.escape(djustId)}"]`);
         if (byId) {
             return byId;
         }
@@ -336,25 +336,17 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
     if (vnode.attrs) {
         for (const [key, value] of Object.entries(vnode.attrs)) {
             // Set all attributes on the element (including dj-* attributes).
-            // For dj-* event attributes, bind the event listener immediately and
-            // mark as bound in the WeakMap to prevent bindLiveViewEvents() from
-            // adding duplicate listeners. This ensures VDOM-inserted elements
-            // are properly bound without double-binding.
+            // Event listeners for dj-* attributes are attached by bindLiveViewEvents()
+            // after patches are applied, which already uses _markHandlerBound to
+            // prevent double-binding on subsequent calls.
             if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
                 elem.value = value;
             }
             elem.setAttribute(key, value);
 
-            // Bind dj-* event handlers for VDOM-created elements
-            if (key.startsWith('dj-')) {
-                const eventType = key.substring(3); // e.g., 'dj-click' -> 'click'
-                // Only bind standard djust events, skip special attributes like dj-root, dj-view, dj-model, etc.
-                const EVENT_TYPES = ['click', 'submit', 'change', 'input', 'blur', 'focus', 'keydown', 'keyup'];
-                if (EVENT_TYPES.includes(eventType)) {
-                    // Mark as bound immediately to prevent bindLiveViewEvents() from re-binding
-                    window.djust._markHandlerBound(elem, eventType);
-                }
-            }
+            // Note: dj-* event listeners are attached by bindLiveViewEvents() after
+            // patch application. Do NOT pre-mark elements here — that would prevent
+            // bindLiveViewEvents() from ever attaching the listener.
         }
     }
 
@@ -719,7 +711,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                     if (newChild.id && !existingChildIds.has(newChild.id)) {
                         // Clone and append new child
                         existingElement.appendChild(newChild.cloneNode(true));
-                        console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
+                        if (globalThis.djustDebug) {
+                            console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
+                        }
                     }
                 }
                 break;
@@ -738,7 +732,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                     if (newChild.id && !existingChildIds.has(newChild.id)) {
                         // Clone and prepend new child
                         existingElement.insertBefore(newChild.cloneNode(true), firstExisting);
-                        console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
+                        if (globalThis.djustDebug) {
+                            console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
+                        }
                     }
                 }
                 break;
@@ -746,7 +742,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
 
             case 'ignore':
                 // Don't update this element at all
-                console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
+                if (globalThis.djustDebug) {
+                    console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
+                }
                 break;
 
             case 'replace':
@@ -810,9 +808,9 @@ function applyDjUpdateElements(existingRoot, newRoot) {
 }
 
 /**
- * Stamp data-dj-id attributes from server HTML onto existing pre-rendered DOM.
+ * Stamp dj-id attributes from server HTML onto existing pre-rendered DOM.
  * This avoids replacing innerHTML (which destroys whitespace in code blocks).
- * Walks both trees in parallel and copies data-dj-id from server elements to DOM elements.
+ * Walks both trees in parallel and copies dj-id from server elements to DOM elements.
  * Note: serverHtml is trusted (comes from our own WebSocket mount response).
  */
 function _stampDjIds(serverHtml, container) {
@@ -823,6 +821,7 @@ function _stampDjIds(serverHtml, container) {
     if (!container) return;
 
     const parser = new DOMParser();
+    // codeql[js/xss] -- serverHtml is rendered by the trusted Django/Rust template engine
     const doc = parser.parseFromString('<div>' + serverHtml + '</div>', 'text/html');
     const serverRoot = doc.body.firstChild;
 
@@ -833,9 +832,9 @@ function _stampDjIds(serverHtml, container) {
         // Bail out if structure diverges (e.g. browser extension injected elements)
         if (domNode.tagName !== serverNode.tagName) return;
 
-        const djId = serverNode.getAttribute('data-dj-id');
+        const djId = serverNode.getAttribute('dj-id');
         if (djId) {
-            domNode.setAttribute('data-dj-id', djId);
+            domNode.setAttribute('dj-id', djId);
         }
         // Also stamp data-dj-src (template source mapping) if present
         const djSrc = serverNode.getAttribute('data-dj-src');
@@ -1100,9 +1099,9 @@ function applySinglePatch(patch) {
             case 'MoveChild': {
                 let child;
                 if (patch.child_d) {
-                    // ID-based resolution: find direct child by data-dj-id (resilient to index shifts)
+                    // ID-based resolution: find direct child by dj-id (resilient to index shifts)
                     const escaped = CSS.escape(patch.child_d);
-                    child = node.querySelector(`:scope > [data-dj-id="${escaped}"]`);
+                    child = node.querySelector(`:scope > [dj-id="${escaped}"]`);
                 }
                 if (!child) {
                     // Fallback: index-based

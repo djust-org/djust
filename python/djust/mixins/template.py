@@ -102,8 +102,16 @@ class TemplateMixin:
                     # Store full template for initial GET rendering
                     self._full_template = resolved
 
-                    # For VDOM tracking, extract liveview-root from the RESOLVED template
-                    vdom_template = self._extract_liveview_root_with_wrapper(resolved)
+                    # For VDOM tracking, prefer the child template source — it contains
+                    # the dj-root block directly without base template surrounding HTML,
+                    # making extraction simpler and immune to Issue #365 miscount.
+                    # Fall back to resolved if dj-root is only in the base template.
+                    vdom_source = (
+                        template_source
+                        if ("dj-root" in template_source or "dj-view" in template_source)
+                        else resolved
+                    )
+                    vdom_template = self._extract_liveview_root_with_wrapper(vdom_source)
 
                     # CRITICAL: Strip comments and whitespace from template BEFORE Rust VDOM sees it
                     vdom_template = self._strip_comments_and_whitespace(vdom_template)
@@ -120,7 +128,9 @@ class TemplateMixin:
                     # Fallback to raw template if Rust resolution fails
                     logger.debug("[LiveView] Template inheritance resolution failed: %s", e)
                     logger.debug("[LiveView] Falling back to raw template source")
-                    self._full_template = template_source
+                    # Set to None so render_full_template won't try to render a template
+                    # that contains {% extends %} tags as a standalone document.
+                    self._full_template = None
                     extracted = self._extract_liveview_root_with_wrapper(template_source)
                     extracted = self._strip_comments_and_whitespace(extracted)
 
@@ -192,7 +202,7 @@ class TemplateMixin:
             logger.debug("[LiveView] No handler metadata to inject, skipping script injection")
             return html
 
-        logger.debug(f"[LiveView] Injecting handler metadata script for {len(metadata)} handlers")
+        logger.debug("[LiveView] Injecting handler metadata script for %s handlers", len(metadata))
 
         # Build script tag
         script = f"""
@@ -269,29 +279,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         start_pos = opening_match.end()
 
-        # Count nested divs to find the matching closing tag
-        depth = 1
-        pos = start_pos
-
-        while depth > 0 and pos < len(html):
-            open_match = re.search(r"<div\b", html[pos:], re.IGNORECASE)
-            close_match = re.search(r"</div>", html[pos:], re.IGNORECASE)
-
-            if close_match is None:
-                break
-
-            close_pos = pos + close_match.start()
-            open_pos = pos + open_match.start() if open_match else float("inf")
-
-            if open_pos < close_pos:
-                depth += 1
-                pos = open_pos + 4
-            else:
-                depth -= 1
-                if depth == 0:
-                    return html[start_pos:close_pos]
-                pos = close_pos + 6
-
+        result = TemplateMixin._find_closing_div_pos(html, start_pos)
+        if result[0] is not None:
+            return html[start_pos : result[0]]
         return html
 
     def _extract_liveview_root_with_wrapper(self, template: str) -> str:
@@ -311,29 +301,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         start_pos = opening_match.start()
         inner_start_pos = opening_match.end()
 
-        depth = 1
-        pos = inner_start_pos
-
-        while depth > 0 and pos < len(template):
-            open_match = re.search(r"<div\b", template[pos:], re.IGNORECASE)
-            close_match = re.search(r"</div>", template[pos:], re.IGNORECASE)
-
-            if close_match is None:
-                break
-
-            close_pos = pos + close_match.start()
-            open_pos = pos + open_match.start() if open_match else float("inf")
-
-            if open_pos < close_pos:
-                depth += 1
-                pos = open_pos + 4
-            else:
-                depth -= 1
-                if depth == 0:
-                    end_pos = pos + close_match.end()
-                    return template[start_pos:end_pos]
-                pos = close_pos + 6
-
+        result = TemplateMixin._find_closing_div_pos(template, inner_start_pos)
+        if result[1] is not None:
+            return template[start_pos : result[1]]
         return template
 
     def _extract_liveview_template_content(self, template: str) -> str:
@@ -351,8 +321,38 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         start_pos = opening_match.end()
 
+        result = TemplateMixin._find_closing_div_pos(template, start_pos)
+        if result[0] is not None:
+            return template[start_pos : result[0]]
+        return template
+
+    @staticmethod
+    def _find_closing_div_pos(
+        template: str, inner_start: int
+    ) -> "tuple[int, int] | tuple[None, None]":
+        """
+        Find the </div> that closes the div opened just before inner_start.
+
+        Returns (close_start, close_end) or (None, None) if not found.
+
+        Handles Django {% if/else/elif/endif %} branching correctly: when
+        {% else %} or {% elif %} is encountered, depth is restored to what
+        it was at the matching {% if %}, so mutually-exclusive branches that
+        each open a <div> are counted only once.
+        """
+        # Pre-scan for if/elif/else/endif tags in the region being searched.
+        flow_tags = [
+            (inner_start + m.start(), inner_start + m.end(), m.group(1))
+            for m in re.finditer(
+                r"\{%-?\s*(if|elif|else|endif)\b.*?-?%\}",
+                template[inner_start:],
+                re.DOTALL,
+            )
+        ]
+
+        branch_stack: list[int] = []
         depth = 1
-        pos = start_pos
+        pos = inner_start
 
         while depth > 0 and pos < len(template):
             open_match = re.search(r"<div\b", template[pos:], re.IGNORECASE)
@@ -363,6 +363,22 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
             close_pos = pos + close_match.start()
             open_pos = pos + open_match.start() if open_match else float("inf")
+            next_pos = min(open_pos, close_pos)  # type: ignore[type-var]
+
+            # Process any flow-control tags that fall before the next div tag.
+            pending = [(ts, te, tt) for ts, te, tt in flow_tags if pos <= ts < next_pos]
+            if pending:
+                ts, te, tag_type = pending[0]
+                if tag_type == "if":
+                    branch_stack.append(depth)
+                elif tag_type in ("else", "elif"):
+                    if branch_stack:
+                        depth = branch_stack[-1]  # undo this branch's depth changes
+                elif tag_type == "endif":
+                    if branch_stack:
+                        branch_stack.pop()
+                pos = te
+                continue
 
             if open_pos < close_pos:
                 depth += 1
@@ -370,10 +386,10 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             else:
                 depth -= 1
                 if depth == 0:
-                    return template[start_pos:close_pos]
+                    return close_pos, pos + close_match.end()
                 pos = close_pos + 6
 
-        return template
+        return None, None
 
     def _strip_liveview_root_in_html(self, html: str) -> str:
         """
@@ -391,31 +407,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         start_pos = opening_match.start()
         inner_start_pos = opening_match.end()
 
-        depth = 1
-        pos = inner_start_pos
-
-        while depth > 0 and pos < len(html):
-            open_match = re.search(r"<div\b", html[pos:], re.IGNORECASE)
-            close_match = re.search(r"</div>", html[pos:], re.IGNORECASE)
-
-            if close_match is None:
-                break
-
-            close_pos = pos + close_match.start()
-            open_pos = pos + open_match.start() if open_match else float("inf")
-
-            if open_pos < close_pos:
-                depth += 1
-                pos = open_pos + 4
-            else:
-                depth -= 1
-                if depth == 0:
-                    end_pos = pos + close_match.end()
-                    liveview_div = html[start_pos:end_pos]
-                    stripped_div = self._strip_comments_and_whitespace(liveview_div)
-                    return html[:start_pos] + stripped_div + html[end_pos:]
-                pos = close_pos + 6
-
+        result = TemplateMixin._find_closing_div_pos(html, inner_start_pos)
+        if result[1] is not None:
+            liveview_div = html[start_pos : result[1]]
+            stripped_div = self._strip_comments_and_whitespace(liveview_div)
+            return html[: start_pos] + stripped_div + html[result[1] :]
         return html
 
     def render_full_template(self, request=None, serialized_context=None) -> str:
@@ -432,7 +428,6 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # Check if we have a full template from template inheritance
         if hasattr(self, "_full_template") and self._full_template:
             from djust._rust import RustLiveView
-            from django.utils.safestring import SafeString
 
             template_dirs = get_template_dirs()
             temp_rust = RustLiveView(self._full_template, template_dirs)
@@ -440,10 +435,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             safe_keys = []
             if serialized_context is not None:
                 json_compatible_context = serialized_context
-                # Detect SafeStrings in the pre-serialized context
+                # Recursively detect SafeStrings in the pre-serialized context
+                from ..mixins.rust_bridge import _collect_safe_keys
+
                 for key, value in serialized_context.items():
-                    if isinstance(value, SafeString):
-                        safe_keys.append(key)
+                    safe_keys.extend(_collect_safe_keys(value, key))
             else:
                 from ..components.base import Component, LiveComponent
 
@@ -459,13 +455,15 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     elif isinstance(value, (Component, LiveComponent)):
                         rendered_context[key] = {"render": str(value.render())}
                         safe_keys.append(key)
-                    elif isinstance(value, SafeString):
-                        rendered_context[key] = value
-                        safe_keys.append(key)
                     else:
                         rendered_context[key] = value
 
                 from ..serialization import normalize_django_value
+                from ..mixins.rust_bridge import _collect_safe_keys
+
+                # Recursively detect SafeStrings in rendered context (including top-level)
+                for key, value in rendered_context.items():
+                    safe_keys.extend(_collect_safe_keys(value, key))
 
                 json_compatible_context = normalize_django_value(rendered_context)
 

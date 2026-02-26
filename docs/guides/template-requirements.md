@@ -188,10 +188,12 @@ Relevant checks:
 
 | Check ID | What It Detects |
 |----------|-----------------|
-| `djust.T002` | LiveView template missing `dj-view` or `dj-root` attribute |
 | `djust.T001` | Deprecated `@click` syntax (should be `dj-click`) |
+| `djust.T002` | LiveView template missing `dj-view` or `dj-root` attribute |
 | `djust.T003` | Wrapper template using `{% include %}` instead of `{{ liveview_content\|safe }}` |
 | `djust.T004` | `document.addEventListener` for djust events (should be `window`) |
+| `djust.T005` | `dj-view` and `dj-root` on different elements (must be on same element) |
+| `djust.T010` | `dj-click` used for navigation (should use `dj-patch` for URL updates) |
 
 ---
 

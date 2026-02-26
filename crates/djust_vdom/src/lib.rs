@@ -178,12 +178,21 @@ impl VNode {
         self.tag == "#text"
     }
 
+    pub fn is_comment(&self) -> bool {
+        self.tag == "#comment"
+    }
+
     /// Serialize the VNode back to HTML string.
-    /// This includes data-dj-id attributes for reliable patch targeting.
+    /// This includes dj-id attributes for reliable patch targeting.
     pub fn to_html(&self) -> String {
         if self.is_text() {
             // Text nodes: escape HTML entities
             return html_escape(&self.text.clone().unwrap_or_default());
+        }
+
+        if self.is_comment() {
+            // Comment nodes: render as HTML comments
+            return format!("<!--{}-->", self.text.clone().unwrap_or_default());
         }
 
         let mut html = String::new();
