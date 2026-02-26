@@ -3,6 +3,17 @@
 //! This crate provides a high-performance template engine that is compatible
 //! with Django template syntax, including variables, filters, tags, and
 //! template inheritance.
+//!
+//! ## Restrictions
+//!
+//! `{% if %}`, `{% elif %}`, `{% else %}`, `{% endif %}`, `{% for %}`, and
+//! `{% endfor %}` block tags **cannot** appear inside HTML attribute values
+//! (e.g. `class="base {% if cond %}extra{% endif %}"`). Such templates are
+//! rejected at compile time by [`Template::new`] with a
+//! `DjangoRustError::TemplateError`. Use inline conditionals instead:
+//! `class="base {{ 'extra' if cond else '' }}"`.
+//!
+//! See [`lexer::validate_no_block_tags_in_attrs`] for details.
 
 // PyResult type annotations are required by PyO3 API
 #![allow(clippy::useless_conversion)]
@@ -44,6 +55,7 @@ pub struct Template {
 
 impl Template {
     pub fn new(source: &str) -> Result<Self> {
+        lexer::validate_no_block_tags_in_attrs(source)?;
         let tokens = lexer::tokenize(source)?;
         let nodes = parser::parse(&tokens)?;
 
