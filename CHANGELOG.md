@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`djust-deploy` CLI** — new `python/djust/deploy_cli.py` module providing deployment commands for [djustlive.com](https://djustlive.com). Available via the `djust-deploy` entry point after installation:
+  - `djust-deploy login` — prompts for email/password, authenticates against djustlive.com, and stores the token in `~/.djustlive/credentials` (mode `0o600`)
+  - `djust-deploy logout` — calls the server logout endpoint and removes the local credentials file
+  - `djust-deploy status [project]` — fetches current deployment state; optionally filtered by project slug
+  - `djust-deploy deploy <project-slug>` — validates the git working tree is clean, triggers a production deployment, and streams build logs to stdout
+  - `--server` flag / `DJUST_SERVER` env var to override the default server URL (`https://djustlive.com`)
+
 ## [0.3.5rc1] - 2026-02-26
 
 ### Added
