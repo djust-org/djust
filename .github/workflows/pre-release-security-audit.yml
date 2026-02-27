@@ -221,7 +221,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Download all reports
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: reports
           merge-multiple: true
