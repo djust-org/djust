@@ -36,6 +36,8 @@ dependencies = [
     "Django>=3.2",
     "channels[daphne]>=4.0.0",
     "msgpack>=1.0.0",
+    "click>=8.0",
+    "requests>=2.28",
 ]
 
 [project.optional-dependencies]
@@ -65,10 +67,12 @@ dev = [
     "watchdog>=3.0.0",  # File system monitoring for hot reload
     "zstandard>=0.22.0",  # Compression support
     "orjson>=3.9.0",  # Fast JSON
+    "requests-mock>=1.11",  # HTTP mocking for tests
 ]
 
 [project.scripts]
 djust = "djust.cli:main"
+djust-deploy = "djust.deploy_cli:cli"
 
 [project.urls]
 Homepage = "https://djust.org"
