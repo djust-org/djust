@@ -845,7 +845,12 @@ def check_liveviews(app_configs, **kwargs):
 
 
 def _check_service_instances_in_mount(errors):
-    """V006: Detect service/client/session instantiation in mount() methods via AST."""
+    """V006 (Warning): Detect service/client/session instantiation in mount() methods via AST.
+
+    High-confidence subset of V008. Fires for names matching _SERVICE_INSTANCE_KEYWORDS
+    (Service, Client, Session, API, Connection). Because V006 already emits a Warning for
+    these patterns, V008 explicitly skips them so developers see only one message per line.
+    """
     app_dirs = _get_project_app_dirs()
     if not app_dirs:
         return
@@ -908,10 +913,20 @@ def _check_service_instances_in_mount(errors):
 def _check_non_primitive_assignments_in_mount(errors):
     """V008: Detect assignments of non-primitive types in mount() methods via AST.
 
-    This is a broader check than V006 which only catches service instances.
+    This is a broader, lower-confidence check than V006. V006 covers a specific
+    well-known pattern (service/client/session names → Warning); V008 catches
+    *all* non-primitive call results that V006 doesn't already flag (→ Info).
+
+    The two checks are deliberately non-overlapping:
+    - Assignments whose call name matches _SERVICE_INSTANCE_KEYWORDS are left
+      to V006 (Warning), so developers see one message, not two.
+    - Everything else that is not a primitive literal is reported by V008 (Info)
+      because it *might* be serializable (e.g. a dataclass) but needs annotation.
+
     Catches assignments like:
     - self.items = []  (OK - primitive)
-    - self.data = CustomClass()  (WARNING - likely non-serializable)
+    - self.data = CustomClass()  (V008 Info - check serialisability)
+    - self.service = PaymentService()  (V006 Warning - skipped here)
     - self.count = 0  (OK - primitive)
 
     Related to issue #292: Silent str() fallback when non-serializable objects
@@ -966,25 +981,9 @@ def _check_non_primitive_assignments_in_mount(errors):
 
         relpath = os.path.relpath(filepath)
 
-        # Build a set of function names in this file that are annotated as
-        # returning a primitive type.  We use bare name annotations only
-        # (e.g. ``-> str``, ``-> int``); subscripted generics (``-> list[str]``)
-        # are not yet resolved but are uncommon in mount() return patterns.
-        primitive_return_funcs: set = set()
-        for fn_node in ast.walk(tree):
-            if not isinstance(fn_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            if fn_node.returns is None:
-                continue
-            ret = fn_node.returns
-            ret_name = None
-            if isinstance(ret, ast.Constant) and isinstance(ret.value, str):
-                # String-quoted annotation: def f() -> "str"
-                ret_name = ret.value
-            elif isinstance(ret, ast.Name):
-                ret_name = ret.id
-            if ret_name in _PRIMITIVE_RETURN_ANNOTATIONS:
-                primitive_return_funcs.add(fn_node.name)
+        # Build a set of module-level function names whose return annotation is a
+        # primitive type.  Calls to these functions are safe to assign in mount().
+        primitive_return_funcs = _build_primitive_return_funcs(tree)
 
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
@@ -1011,14 +1010,18 @@ def _check_non_primitive_assignments_in_mount(errors):
                         if target.attr.startswith("_"):
                             continue
 
-                        # Check if the value is a Call (instantiation)
+                        # Check if the value is a Call (instantiation or function call)
                         if not isinstance(stmt.value, ast.Call):
                             continue
 
                         call_name = _get_call_name(stmt.value)
                         if call_name and call_name not in SAFE_TYPES:
-                            # Skip if the called function is annotated as returning
-                            # a primitive type in this same file.
+                            # Skip patterns already reported by V006 (Warning) to
+                            # avoid emitting a duplicate V008 (Info) for the same line.
+                            if _SERVICE_INSTANCE_KEYWORDS.search(call_name):
+                                continue
+                            # Skip calls to module-level functions whose return
+                            # annotation declares a primitive type (e.g. -> str).
                             if call_name in primitive_return_funcs:
                                 continue
                             # This is a non-primitive instantiation
@@ -1064,12 +1067,126 @@ def _get_call_name(call_node):
     return None
 
 
+_PRIMITIVE_ANNOTATION_NAMES = frozenset(
+    {
+        "str",
+        "int",
+        "bool",
+        "float",
+        "bytes",
+        "list",
+        "dict",
+        "set",
+        "tuple",
+        "List",
+        "Dict",
+        "Set",
+        "Tuple",
+    }
+)
+
+
+def _build_primitive_return_funcs(tree):
+    """Return the set of top-level function names whose return annotation is a primitive type.
+
+    Only inspects module-level (top-level) function definitions.  If a function
+    is annotated with ``-> str``, ``-> int``, ``-> bool``, ``-> float``,
+    ``-> bytes``, or any of the collection primitives (``list``, ``dict``,
+    ``set``, ``tuple`` and their capitalised aliases), its name is included in
+    the returned set.
+
+    This is used by the V008 check to avoid false-positive warnings when
+    ``mount()`` assigns the result of a helper function that is provably
+    primitive because of its return-type annotation.
+    """
+    safe_funcs = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.returns is None:
+            continue
+        annotation = node.returns
+        ann_name = None
+        if isinstance(annotation, ast.Name):
+            ann_name = annotation.id
+        elif isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+            # PEP 563 / ``from __future__ import annotations`` stringifies all annotations
+            ann_name = annotation.value
+        if ann_name in _PRIMITIVE_ANNOTATION_NAMES:
+            safe_funcs.add(node.name)
+    return safe_funcs
+
+
+def _collect_patch_param_names(class_node, original_source):
+    """Collect URL param names from self.patch() calls in a class.
+
+    Inspects all methods in the class for ``self.patch(...)`` calls and extracts
+    param names from dict-style (``{"tab": ...}``) and query-string-style
+    (``"?tab=value"`` or f-strings) arguments.
+
+    Returns a set of lowercase param name strings, e.g. ``{"tab", "view"}``.
+    """
+    param_names = set()
+    for method in class_node.body:
+        if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for call_node in ast.walk(method):
+            if not isinstance(call_node, ast.Call):
+                continue
+            func = call_node.func
+            # Match self.patch(...)
+            if not (
+                isinstance(func, ast.Attribute)
+                and func.attr == "patch"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "self"
+            ):
+                continue
+            if not call_node.args:
+                continue
+            first_arg = call_node.args[0]
+            # Dict-style: self.patch({"tab": val, ...})
+            if isinstance(first_arg, ast.Dict):
+                for key in first_arg.keys:
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        param_names.add(key.value)
+            # Constant string: self.patch("?tab=value")
+            elif isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
+                for m in re.finditer(r"[?&](\w+)=", first_arg.value):
+                    param_names.add(m.group(1))
+            # f-string: self.patch(f"?tab={val}") — extract from the source segment
+            elif isinstance(first_arg, ast.JoinedStr):
+                seg = ast.get_source_segment(original_source, first_arg) or ""
+                for m in re.finditer(r"[?&](\w+)=", seg):
+                    param_names.add(m.group(1))
+    return param_names
+
+
+def _nav_var_matches_patch_params(var_name, param_names):
+    """Return True if *var_name* plausibly corresponds to a URL param in *param_names*.
+
+    Checks direct match and simple prefix/suffix stripping so that, for example,
+    ``active_tab`` matches a param named ``tab``.
+    """
+    if var_name in param_names:
+        return True
+    # Strip common adjective prefixes: active_, current_, selected_
+    base = var_name.split("_")[-1]  # "active_tab" → "tab", "current_view" → "view"
+    return base in param_names
+
+
 def _check_navigation_state_in_handlers(errors):
     """Q010: Heuristic to detect event handlers that set navigation state without patching.
 
     Lower-confidence check that looks for @event_handler methods whose body primarily
     sets navigation state variables (self.active_view, self.current_tab, etc.) without
     using patch() or handle_params(). Suggests converting to dj-patch pattern.
+
+    To reduce false positives, Q010 only fires when the class already uses
+    ``self.patch()`` with URL params somewhere, AND the nav variable name matches
+    one of those param names.  Variables that merely sound like navigation but are
+    not URL params (e.g. ``self.active_tab`` for CSS toggling) are therefore
+    silently skipped.
 
     This is INFO level as it's a heuristic and may have false positives.
     """
@@ -1101,6 +1218,11 @@ def _check_navigation_state_in_handlers(errors):
             if not isinstance(node, ast.ClassDef):
                 continue
 
+            # Cross-reference: collect URL param names from self.patch() calls in
+            # this class.  Only flag variables whose names appear in this set so
+            # we avoid false positives for nav-sounding names that are not URL state.
+            patch_params = _collect_patch_param_names(node, original_source)
+
             # Check each method in the class
             for item in node.body:
                 if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -1119,12 +1241,23 @@ def _check_navigation_state_in_handlers(errors):
 
                 # Check if the method body sets navigation state
                 method_source = ast.get_source_segment(original_source, item) or ""
-                has_nav_state = NAV_STATE_VARS.search(method_source)
+                nav_match = NAV_STATE_VARS.search(method_source)
+
+                if not nav_match:
+                    continue
+
+                var_name = nav_match.group(1)
+
+                # Only flag when the variable name is confirmed to be a URL param
+                # used elsewhere via self.patch() — prevents false positives for
+                # nav-sounding names that are not URL state.
+                if not patch_params or not _nav_var_matches_patch_params(var_name, patch_params):
+                    continue
 
                 # Check if it uses patch() or handle_params (indicators it's already using patching)
                 has_patch_pattern = "patch(" in method_source or "handle_params" in method_source
 
-                if has_nav_state and not has_patch_pattern:
+                if not has_patch_pattern:
                     # Check for noqa on function definition line or any decorator line
                     has_noqa_suppression = False
                     for deco in item.decorator_list:
@@ -1135,9 +1268,6 @@ def _check_navigation_state_in_handlers(errors):
                         has_noqa_suppression = True
 
                     if not has_noqa_suppression:
-                        nav_match = NAV_STATE_VARS.search(method_source)
-                        var_name = nav_match.group(1) if nav_match else "navigation state"
-
                         errors.append(
                             DjustInfo(
                                 "%s:%d -- Event handler '%s.%s()' sets %s without using patch(). "
@@ -1430,8 +1560,7 @@ def check_templates(app_configs, **kwargs):
         # T013 -- dj-view with empty or invalid value
         for match in re.finditer(r'dj-view="([^"]*)"', content):
             value = match.group(1)
-            # Allow Django template variable syntax — dj-view="{{ view_path }}" is a
-            # valid pattern where the view path is injected from context by a wrapper.
+            # {{ ... }} is a valid dynamic injection pattern (base-template use case)
             if re.match(r"^\s*\{\{.*\}\}\s*$", value):
                 continue
             if not value or "." not in value:
