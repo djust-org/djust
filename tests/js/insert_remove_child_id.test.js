@@ -1,7 +1,7 @@
 /**
  * Tests for InsertChild with ref_d and RemoveChild with child_d (ID-based resolution).
  *
- * Verifies that InsertChild/RemoveChild resolve by data-dj-id
+ * Verifies that InsertChild/RemoveChild resolve by dj-id
  * instead of stale index when ref_d/child_d is provided.
  * Fixes Issue #410.
  */
@@ -47,20 +47,20 @@ function attachToDOM(parent) {
 }
 
 describe('RemoveChild with child_d — ID-based resolution (#410)', () => {
-    it('should resolve child by data-dj-id when child_d is provided', () => {
+    it('should resolve child by dj-id when child_d is provided', () => {
         // DOM: [div(a), div(b), div(c)]
         // Remove div(b) by child_d, even if index is wrong
         const parent = document.createElement('div');
-        parent.setAttribute('data-dj-id', 'root');
+        parent.setAttribute('dj-id', 'root');
 
         const a = document.createElement('div');
-        a.setAttribute('data-dj-id', 'a');
+        a.setAttribute('dj-id', 'a');
         a.textContent = 'A';
         const b = document.createElement('div');
-        b.setAttribute('data-dj-id', 'b');
+        b.setAttribute('dj-id', 'b');
         b.textContent = 'B';
         const c = document.createElement('div');
-        c.setAttribute('data-dj-id', 'c');
+        c.setAttribute('dj-id', 'c');
         c.textContent = 'C';
 
         parent.appendChild(a);
@@ -91,11 +91,11 @@ describe('RemoveChild with child_d — ID-based resolution (#410)', () => {
         //   With child_d='c', finds div(c) correctly
 
         const parent = document.createElement('div');
-        parent.setAttribute('data-dj-id', 'root');
+        parent.setAttribute('dj-id', 'root');
 
         const elems = ['a', 'b', 'c', 'd'].map(id => {
             const el = document.createElement('div');
-            el.setAttribute('data-dj-id', id);
+            el.setAttribute('dj-id', id);
             el.textContent = id.toUpperCase();
             parent.appendChild(el);
             return el;
@@ -128,7 +128,7 @@ describe('RemoveChild with child_d — ID-based resolution (#410)', () => {
 
     it('should fall back to index-based resolution when child_d is absent', () => {
         const parent = document.createElement('div');
-        parent.setAttribute('data-dj-id', 'root');
+        parent.setAttribute('dj-id', 'root');
 
         const a = document.createElement('div');
         a.textContent = 'A';
@@ -158,13 +158,13 @@ describe('InsertChild with ref_d — ID-based resolution (#410)', () => {
         // DOM: [div(a), div(c)]
         // Insert div(b) before div(c) using ref_d='c'
         const parent = document.createElement('div');
-        parent.setAttribute('data-dj-id', 'root');
+        parent.setAttribute('dj-id', 'root');
 
         const a = document.createElement('div');
-        a.setAttribute('data-dj-id', 'a');
+        a.setAttribute('dj-id', 'a');
         a.textContent = 'A';
         const c = document.createElement('div');
-        c.setAttribute('data-dj-id', 'c');
+        c.setAttribute('dj-id', 'c');
         c.textContent = 'C';
 
         parent.appendChild(a);
@@ -177,7 +177,7 @@ describe('InsertChild with ref_d — ID-based resolution (#410)', () => {
             d: 'root',
             index: 1,
             ref_d: 'c',
-            node: { tag: 'div', attrs: { 'data-dj-id': 'b' }, children: [{ tag: '#text', text: 'B' }] },
+            node: { tag: 'div', attrs: { 'dj-id': 'b' }, children: [{ tag: '#text', text: 'B' }] },
         });
 
         const children = getSignificantChildren(parent);
@@ -195,16 +195,16 @@ describe('InsertChild with ref_d — ID-based resolution (#410)', () => {
         //   With ref_d='c', inserts before div(c) correctly
 
         const parent = document.createElement('div');
-        parent.setAttribute('data-dj-id', 'root');
+        parent.setAttribute('dj-id', 'root');
 
         const a = document.createElement('div');
-        a.setAttribute('data-dj-id', 'a');
+        a.setAttribute('dj-id', 'a');
         a.textContent = 'A';
         const b = document.createElement('div');
-        b.setAttribute('data-dj-id', 'b');
+        b.setAttribute('dj-id', 'b');
         b.textContent = 'B';
         const c = document.createElement('div');
-        c.setAttribute('data-dj-id', 'c');
+        c.setAttribute('dj-id', 'c');
         c.textContent = 'C';
 
         parent.appendChild(a);
@@ -219,7 +219,7 @@ describe('InsertChild with ref_d — ID-based resolution (#410)', () => {
             d: 'root',
             index: 1,
             ref_d: 'b',
-            node: { tag: 'div', attrs: { 'data-dj-id': 'x' }, children: [{ tag: '#text', text: 'X' }] },
+            node: { tag: 'div', attrs: { 'dj-id': 'x' }, children: [{ tag: '#text', text: 'X' }] },
         });
 
         // Insert 2: new Y before div(c) — stale index 2 would be div(b), but ref_d finds div(c)
@@ -229,7 +229,7 @@ describe('InsertChild with ref_d — ID-based resolution (#410)', () => {
             d: 'root',
             index: 2,
             ref_d: 'c',
-            node: { tag: 'div', attrs: { 'data-dj-id': 'y' }, children: [{ tag: '#text', text: 'Y' }] },
+            node: { tag: 'div', attrs: { 'dj-id': 'y' }, children: [{ tag: '#text', text: 'Y' }] },
         });
 
         const children = getSignificantChildren(parent);
@@ -243,7 +243,7 @@ describe('InsertChild with ref_d — ID-based resolution (#410)', () => {
 
     it('should fall back to index-based resolution when ref_d is absent', () => {
         const parent = document.createElement('div');
-        parent.setAttribute('data-dj-id', 'root');
+        parent.setAttribute('dj-id', 'root');
 
         const a = document.createElement('div');
         a.textContent = 'A';
@@ -272,7 +272,7 @@ describe('InsertChild with ref_d — ID-based resolution (#410)', () => {
 
     it('should append when ref_d is not provided and index is beyond children', () => {
         const parent = document.createElement('div');
-        parent.setAttribute('data-dj-id', 'root');
+        parent.setAttribute('dj-id', 'root');
 
         const a = document.createElement('div');
         a.textContent = 'A';
@@ -303,16 +303,16 @@ describe('Combined InsertChild/RemoveChild with conditional {% if %} blocks (#41
         // Patches: RemoveChild(child_d='error')
 
         const parent = document.createElement('div');
-        parent.setAttribute('data-dj-id', 'root');
+        parent.setAttribute('dj-id', 'root');
 
         const error = document.createElement('div');
-        error.setAttribute('data-dj-id', 'error');
+        error.setAttribute('dj-id', 'error');
         error.textContent = 'Error message';
         const content = document.createElement('div');
-        content.setAttribute('data-dj-id', 'content');
+        content.setAttribute('dj-id', 'content');
         content.textContent = 'Content';
         const footer = document.createElement('div');
-        footer.setAttribute('data-dj-id', 'footer');
+        footer.setAttribute('dj-id', 'footer');
         footer.textContent = 'Footer';
 
         parent.appendChild(error);
@@ -344,13 +344,13 @@ describe('Combined InsertChild/RemoveChild with conditional {% if %} blocks (#41
         // Patches: InsertChild(ref_d='content') at index 0
 
         const parent = document.createElement('div');
-        parent.setAttribute('data-dj-id', 'root');
+        parent.setAttribute('dj-id', 'root');
 
         const content = document.createElement('div');
-        content.setAttribute('data-dj-id', 'content');
+        content.setAttribute('dj-id', 'content');
         content.textContent = 'Content';
         const footer = document.createElement('div');
-        footer.setAttribute('data-dj-id', 'footer');
+        footer.setAttribute('dj-id', 'footer');
         footer.textContent = 'Footer';
 
         parent.appendChild(content);
@@ -364,7 +364,7 @@ describe('Combined InsertChild/RemoveChild with conditional {% if %} blocks (#41
             d: 'root',
             index: 0,
             ref_d: 'content',
-            node: { tag: 'div', attrs: { 'data-dj-id': 'error' }, children: [{ tag: '#text', text: 'Error message' }] },
+            node: { tag: 'div', attrs: { 'dj-id': 'error' }, children: [{ tag: '#text', text: 'Error message' }] },
         });
 
         const children = getSignificantChildren(parent);

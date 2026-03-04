@@ -190,6 +190,7 @@ pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
                     path: parent_path.to_vec(),
                     d: parent_id.clone(),
                     index: child_idx,
+                    child_d: old.djust_id.clone(),
                 });
 
                 // InsertChild to add the actual content
@@ -198,6 +199,7 @@ pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
                     d: parent_id,
                     index: child_idx,
                     node: new.clone(),
+                    ref_d: None,
                 });
 
                 return patches;
@@ -222,6 +224,7 @@ pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
                     path: parent_path.to_vec(),
                     d: parent_id.clone(),
                     index: child_idx,
+                    child_d: old.djust_id.clone(),
                 });
 
                 patches.push(Patch::InsertChild {
@@ -229,6 +232,7 @@ pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
                     d: parent_id,
                     index: child_idx,
                     node: new.clone(),
+                    ref_d: None,
                 });
 
                 return patches;

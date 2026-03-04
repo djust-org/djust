@@ -3958,9 +3958,9 @@ function applySinglePatch(patch) {
                 const newChild = createNodeFromVNode(patch.node, isInSvgContext(node));
                 let refChild = null;
                 if (patch.ref_d) {
-                    // ID-based resolution: find sibling by data-dj-id (resilient to index shifts)
+                    // ID-based resolution: find sibling by dj-id (resilient to index shifts)
                     const escaped = CSS.escape(patch.ref_d);
-                    refChild = node.querySelector(`:scope > [data-dj-id="${escaped}"]`);
+                    refChild = node.querySelector(`:scope > [dj-id="${escaped}"]`);
                 }
                 if (!refChild) {
                     // Fallback: index-based
@@ -3984,9 +3984,9 @@ function applySinglePatch(patch) {
             case 'RemoveChild': {
                 let child = null;
                 if (patch.child_d) {
-                    // ID-based resolution: find child by data-dj-id (resilient to index shifts)
+                    // ID-based resolution: find child by dj-id (resilient to index shifts)
                     const escaped = CSS.escape(patch.child_d);
-                    child = node.querySelector(`:scope > [data-dj-id="${escaped}"]`);
+                    child = node.querySelector(`:scope > [dj-id="${escaped}"]`);
                 }
                 if (!child) {
                     // Fallback: index-based
