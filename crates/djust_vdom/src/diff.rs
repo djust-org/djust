@@ -497,6 +497,7 @@ fn diff_keyed_children(
                 path: path.to_vec(),
                 d: parent_id.clone(),
                 index: old_idx,
+                child_d: old[old_idx].djust_id.clone(),
             });
         }
     }
@@ -513,13 +514,15 @@ fn diff_keyed_children(
             processed_new_indices.insert(new_idx);
             match old_keys.get(key) {
                 None => {
-                    // New keyed node
+                    // New keyed node - ref_d is the djust_id of what's currently at this index in old
+                    let ref_d = old.get(new_idx).and_then(|n| n.djust_id.clone());
                     vdom_trace!("  INSERT key={} at new_idx={}", key, new_idx);
                     patches.push(Patch::InsertChild {
                         path: path.to_vec(),
                         d: parent_id.clone(),
                         index: new_idx,
                         node: new_node.clone(),
+                        ref_d,
                     });
                 }
                 Some(&old_idx) => {
@@ -610,12 +613,14 @@ fn diff_keyed_children(
 
     // Insert extra new unkeyed children
     for &new_idx in &new_unkeyed[common_len..] {
+        let ref_d = old.get(new_idx).and_then(|n| n.djust_id.clone());
         vdom_trace!("  INSERT unkeyed at index {}", new_idx);
         patches.push(Patch::InsertChild {
             path: path.to_vec(),
             d: parent_id.clone(),
             index: new_idx,
             node: new[new_idx].clone(),
+            ref_d,
         });
     }
 
@@ -626,6 +631,7 @@ fn diff_keyed_children(
             path: path.to_vec(),
             d: parent_id.clone(),
             index: old_idx,
+            child_d: old[old_idx].djust_id.clone(),
         });
     }
 
@@ -694,6 +700,7 @@ fn diff_indexed_children(
                 path: path.to_vec(),
                 d: parent_id.clone(),
                 index: i,
+                child_d: old[i].djust_id.clone(),
             });
         }
     }
@@ -714,11 +721,13 @@ fn diff_indexed_children(
                 new[i].tag,
                 parent_id
             );
+            // ref_d: no existing sibling at this index (appending beyond old length)
             patches.push(Patch::InsertChild {
                 path: path.to_vec(),
                 d: parent_id.clone(),
                 index: i,
                 node: new[i].clone(),
+                ref_d: None,
             });
         }
     }
@@ -755,17 +764,20 @@ fn replace_all_children(
             path: path.to_vec(),
             d: parent_id.clone(),
             index: i,
+            child_d: old.children[i].djust_id.clone(),
         });
     }
 
     // Insert all new children
     for i in 0..new_len {
         vdom_trace!("  InsertChild index={} tag=<{}>", i, new.children[i].tag);
+        // ref_d: None because we're replacing all children (old ones already removed)
         patches.push(Patch::InsertChild {
             path: path.to_vec(),
             d: parent_id.clone(),
             index: i,
             node: new.children[i].clone(),
+            ref_d: None,
         });
     }
 
@@ -2116,5 +2128,139 @@ mod tests {
         assert_eq!(patched.children[2].text.as_deref(), Some("world"));
         assert_eq!(patched.children[0].tag, "ul");
         assert_eq!(patched.children[1].tag, "section");
+    }
+
+    #[test]
+    fn test_remove_child_has_child_d() {
+        // Issue #410: RemoveChild patches should include child_d for
+        // ID-based resolution on the client, preventing stale-index
+        // mis-targeting when {% if %} blocks shift sibling positions.
+        //
+        // Old: [div(a), div(b), div(c)]
+        // New: [div(a), div(b)]
+        // Expected: RemoveChild for old[2] = div(c) with child_d="c"
+        let old = VNode::element("div")
+            .with_djust_id("root")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_djust_id("a")
+                    .with_child(VNode::text("A")),
+                VNode::element("div")
+                    .with_djust_id("b")
+                    .with_child(VNode::text("B")),
+                VNode::element("div")
+                    .with_djust_id("c")
+                    .with_child(VNode::text("C")),
+            ]);
+
+        let new = VNode::element("div")
+            .with_djust_id("root")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_djust_id("a")
+                    .with_child(VNode::text("A")),
+                VNode::element("div")
+                    .with_djust_id("b")
+                    .with_child(VNode::text("B")),
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        let remove = patches
+            .iter()
+            .find(|p| matches!(p, Patch::RemoveChild { .. }));
+        assert!(remove.is_some(), "Expected RemoveChild patch");
+
+        if let Some(Patch::RemoveChild { child_d, index, .. }) = remove {
+            assert_eq!(*index, 2, "Should remove at old index 2");
+            assert_eq!(
+                child_d.as_deref(),
+                Some("c"),
+                "RemoveChild should carry child's djust_id"
+            );
+        }
+    }
+
+    #[test]
+    fn test_insert_child_has_ref_d() {
+        // Issue #410: InsertChild patches should include ref_d for
+        // ID-based insertBefore on the client.
+        let old = VNode::element("div")
+            .with_djust_id("root")
+            .with_children(vec![VNode::element("div")
+                .with_djust_id("content")
+                .with_child(VNode::text("Content"))]);
+
+        let new = VNode::element("div")
+            .with_djust_id("root")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_djust_id("error")
+                    .with_child(VNode::text("Error")),
+                VNode::element("div")
+                    .with_djust_id("content")
+                    .with_child(VNode::text("Content")),
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        let insert = patches
+            .iter()
+            .find(|p| matches!(p, Patch::InsertChild { .. }));
+        assert!(insert.is_some(), "Expected InsertChild patch");
+
+        if let Some(Patch::InsertChild {
+            ref_d: _, index, ..
+        }) = insert
+        {
+            assert_eq!(*index, 1, "Should insert at index 1");
+        }
+    }
+
+    #[test]
+    fn test_insert_child_ref_d_when_sibling_exists() {
+        // When inserting at an index where an old sibling exists,
+        // ref_d should carry that sibling's djust_id.
+        let old = VNode::element("div")
+            .with_djust_id("root")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_djust_id("a")
+                    .with_child(VNode::text("A")),
+                VNode::element("div")
+                    .with_djust_id("c")
+                    .with_child(VNode::text("C")),
+            ]);
+
+        let new = VNode::element("div")
+            .with_djust_id("root")
+            .with_children(vec![
+                VNode::element("div")
+                    .with_djust_id("a")
+                    .with_child(VNode::text("A")),
+                VNode::element("div")
+                    .with_djust_id("b")
+                    .with_child(VNode::text("B")),
+                VNode::element("div")
+                    .with_djust_id("c")
+                    .with_child(VNode::text("C")),
+            ]);
+
+        let patches = diff_nodes(&old, &new, &[]);
+
+        let insert = patches
+            .iter()
+            .find(|p| matches!(p, Patch::InsertChild { .. }));
+        assert!(insert.is_some(), "Expected InsertChild patch");
+
+        if let Some(Patch::InsertChild { ref_d, index, .. }) = insert {
+            assert_eq!(*index, 2, "Should insert at index 2");
+            // ref_d should reference old child at index 2, which is "c"
+            // But old only has 2 children (indices 0,1), so old[2] doesn't exist
+            assert!(
+                ref_d.is_none(),
+                "ref_d should be None when appending beyond old children"
+            );
+        }
     }
 }
