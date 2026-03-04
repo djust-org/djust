@@ -93,12 +93,11 @@ describe('RemoveChild with child_d — ID-based resolution (#410)', () => {
         const parent = document.createElement('div');
         parent.setAttribute('dj-id', 'root');
 
-        const elems = ['a', 'b', 'c', 'd'].map(id => {
+        ['a', 'b', 'c', 'd'].forEach(id => {
             const el = document.createElement('div');
             el.setAttribute('dj-id', id);
             el.textContent = id.toUpperCase();
             parent.appendChild(el);
-            return el;
         });
         attachToDOM(parent);
 
