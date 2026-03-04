@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `djust-deploy status [project]` — fetches current deployment state; optionally filtered by project slug
   - `djust-deploy deploy <project-slug>` — validates the git working tree is clean, triggers a production deployment, and streams build logs to stdout
 
+### Fixed
+
+- **`dj-hook` elements now initialize after `dj-navigate` navigation** — `updateHooks()` is called after `live_redirect_mount` replaces DOM content via WebSocket and SSE mount handlers. Previously, hook lifecycle callbacks (`mounted()`, `destroyed()`) were skipped after client-side navigation, leaving hook-dependent elements (e.g., Chart.js canvases) uninitialized.
+
 ## [0.3.5rc2] - 2026-03-04
 
 ### Fixed

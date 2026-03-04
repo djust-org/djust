@@ -112,7 +112,7 @@ function _createHookInstance(hookDef, el) {
 
 /**
  * Scan the DOM for elements with dj-hook and mount their hooks.
- * Called on init and after DOM patches.
+ * Called on init. For post-patch and post-navigation updates, use updateHooks().
  */
 function mountHooks(root) {
     _ensureHooksInit();
