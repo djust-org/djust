@@ -3956,8 +3956,17 @@ function applySinglePatch(patch) {
 
             case 'InsertChild': {
                 const newChild = createNodeFromVNode(patch.node, isInSvgContext(node));
-                const children = getSignificantChildren(node);
-                const refChild = children[patch.index];
+                let refChild = null;
+                if (patch.ref_d) {
+                    // ID-based resolution: find sibling by dj-id (resilient to index shifts)
+                    const escaped = CSS.escape(patch.ref_d);
+                    refChild = node.querySelector(`:scope > [dj-id="${escaped}"]`);
+                }
+                if (!refChild) {
+                    // Fallback: index-based
+                    const children = getSignificantChildren(node);
+                    refChild = children[patch.index] || null;
+                }
                 if (refChild) {
                     node.insertBefore(newChild, refChild);
                 } else {
@@ -3973,8 +3982,17 @@ function applySinglePatch(patch) {
             }
 
             case 'RemoveChild': {
-                const children = getSignificantChildren(node);
-                const child = children[patch.index];
+                let child = null;
+                if (patch.child_d) {
+                    // ID-based resolution: find child by dj-id (resilient to index shifts)
+                    const escaped = CSS.escape(patch.child_d);
+                    child = node.querySelector(`:scope > [dj-id="${escaped}"]`);
+                }
+                if (!child) {
+                    // Fallback: index-based
+                    const children = getSignificantChildren(node);
+                    child = children[patch.index] || null;
+                }
                 if (child) {
                     const wasTextNode = child.nodeType === Node.TEXT_NODE;
                     const parentTag = node.tagName;
