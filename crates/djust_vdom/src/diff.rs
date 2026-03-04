@@ -2209,11 +2209,13 @@ mod tests {
             .find(|p| matches!(p, Patch::InsertChild { .. }));
         assert!(insert.is_some(), "Expected InsertChild patch");
 
-        if let Some(Patch::InsertChild {
-            ref_d: _, index, ..
-        }) = insert
-        {
+        if let Some(Patch::InsertChild { ref_d, index, .. }) = insert {
             assert_eq!(*index, 1, "Should insert at index 1");
+            // Old has only 1 child (index 0), so old[1] doesn't exist → ref_d is None
+            assert!(
+                ref_d.is_none(),
+                "ref_d should be None when inserting beyond old children count"
+            );
         }
     }
 

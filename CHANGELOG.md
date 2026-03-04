@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **VDOM patching with conditional `{% if %}` blocks** — `InsertChild` and `RemoveChild` patches now include `ref_d` and `child_d` fields for ID-based DOM resolution, preventing stale-index mis-targeting when `{% if %}` blocks add or remove elements that shift sibling positions. Falls back to index-based resolution for backwards compatibility. ([#410](https://github.com/djust-org/djust/issues/410))
+
 ## [0.3.5rc1] - 2026-02-26
 
 ### Added
