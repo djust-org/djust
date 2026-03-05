@@ -1584,47 +1584,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # Note: patch_list can be [] (empty list) which is valid - means no changes needed
                     # Only send full HTML if patches is None (not just falsy)
                     if patches is not None and patch_list is not None:
-                        # Detect 0-change diffs: event handler modified state outside
-                        # the <div dj-root> boundary (e.g. in base.html while
-                        # VDOM root is in the child template).
                         if len(patch_list) == 0 and version > 1:
-                            _template = (
-                                getattr(self.view_instance, "template_name", None)
-                                or "<inline template>"
-                            )
-                            logger.warning(
-                                "[djust] Event '%s' on %s produced no DOM changes (DJE-053). "
-                                "Template: %s. "
-                                "Debugging steps: "
-                                "(1) Ensure the modified state variable is rendered inside "
-                                "<div dj-root> in your template. "
-                                "(2) Check that your template has the dj-root attribute "
-                                "on the outermost container div. "
-                                "(3) If this event only updates client-side state, use "
-                                "push_event + _skip_render = True instead. "
-                                "(4) Run with DJUST_VDOM_TRACE=1 for detailed diff output. "
-                                "(5) Run 'python manage.py check --tag djust' to detect "
-                                "common configuration issues. "
-                                "See: https://djust.org/errors/DJE-053",
+                            # Empty diff is normal and expected for idempotent handlers
+                            # (e.g. toggle clicked when already in target state, debounced
+                            # input with unchanged results, side-effect-only handlers).
+                            # Phoenix LiveView silently drops these — we do the same.
+                            logger.debug(
+                                "[djust] Event '%s' on %s produced no DOM changes (empty diff). "
+                                "This is normal for idempotent handlers. "
+                                "If state changes are not reflected in the UI, ensure the "
+                                "modified variable is rendered inside <div dj-root> and "
+                                "run 'python manage.py check --tag djust'.",
                                 event_name,
                                 self.view_instance.__class__.__name__,
-                                _template,
                             )
-                            if not component_id:
-                                # Build diagnostic snapshot for debugging
-                                _ctx = context if context else {}
-                                _snapshot = _build_context_snapshot(_ctx)
-                                _prev_html = getattr(self.view_instance, "_previous_html", None)
-                                _emit_full_html_update(
-                                    self.view_instance,
-                                    "no_change",
-                                    event_name,
-                                    html,  # pass actual rendered HTML, not ""
-                                    version,
-                                    context_snapshot=_snapshot,
-                                    html_snippet=html[:500] if html else "",
-                                    previous_html_snippet=(_prev_html[:500] if _prev_html else ""),
-                                )
 
                         # Calculate timing for JSON mode
                         timing["total"] = (

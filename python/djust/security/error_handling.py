@@ -185,7 +185,7 @@ def handle_exception(
     This is the recommended single entry point for exception handling.
     It automatically:
     - Determines DEBUG mode from Django settings
-    - Logs with stack trace only in DEBUG mode
+    - Logs exception type, message, and stack trace at ERROR level
     - Returns a safe response (detailed in DEBUG, generic in production)
 
     Args:
@@ -242,7 +242,8 @@ def handle_exception(
     # Log message — sanitize to break taint chain from caller input
     msg = sanitize_for_log(log_message) if log_message else "Error occurred"
 
-    # Log with exc_info only in DEBUG mode (don't fill prod logs with stack traces).
+    # Always log with exc_info so handler exceptions are visible in server logs
+    # regardless of DEBUG mode. Client responses stay generic in production.
     # sanitize_for_log() is applied to user-controlled values to break CodeQL taint chains;
     # DjustLogSanitizerFilter (installed in AppConfig.ready()) provides an additional layer.
     safe_exc = sanitize_for_log(str(exception))
@@ -270,8 +271,17 @@ def handle_exception(
                 exc_info=True,
             )
     else:
-        # Minimal logging in production - just exception type, no stack trace
-        logger.error("%s%s: %s", msg, context, type(exception).__name__)
+        # Production: log exception type + message + traceback so developers
+        # can diagnose handler errors from server logs (client response stays
+        # generic via create_safe_error_response).
+        logger.error(
+            "%s%s: %s: %s",
+            msg,
+            context,
+            type(exception).__name__,
+            safe_exc,
+            exc_info=True,
+        )
 
     # Create and return safe response
     return create_safe_error_response(
