@@ -1,4 +1,7 @@
-//! Template lexer for tokenizing Django template syntax
+//! Template lexer for tokenizing Django template syntax.
+//!
+//! Tag arguments are split with [`split_tag_args`], which respects quoted
+//! strings so that values like `name="My App"` remain a single token.
 
 use djust_core::Result;
 
@@ -166,6 +169,50 @@ fn parse_jsx_component(chars: &mut std::iter::Peekable<std::str::Chars>) -> Resu
     })
 }
 
+/// Split tag content into arguments, respecting quoted strings.
+///
+/// Handles both single and double quotes so that spaces inside quoted values
+/// are preserved as part of the argument.
+///
+/// # Examples
+/// ```text
+/// "djust_pwa_head name=\"My App\" theme_color=\"#09090b\""
+/// → ["djust_pwa_head", "name=\"My App\"", "theme_color=\"#09090b\""]
+/// ```
+fn split_tag_args(content: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut in_quote: Option<char> = None;
+
+    for ch in content.chars() {
+        match in_quote {
+            Some(q) => {
+                current.push(ch);
+                if ch == q {
+                    in_quote = None;
+                }
+            }
+            None => {
+                if ch == '"' || ch == '\'' {
+                    current.push(ch);
+                    in_quote = Some(ch);
+                } else if ch.is_whitespace() {
+                    if !current.is_empty() {
+                        parts.push(current.clone());
+                        current.clear();
+                    }
+                } else {
+                    current.push(ch);
+                }
+            }
+        }
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    parts
+}
+
 pub fn tokenize(source: &str) -> Result<Vec<Token>> {
     let mut tokens = Vec::new();
     let mut chars = source.chars().peekable();
@@ -227,10 +274,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>> {
                         while let Some(ch) = chars.next() {
                             if ch == '%' && chars.peek() == Some(&'}') {
                                 chars.next(); // consume }
-                                let parts: Vec<String> = tag_content
-                                    .split_whitespace()
-                                    .map(|s| s.to_string())
-                                    .collect();
+                                let parts: Vec<String> = split_tag_args(&tag_content);
 
                                 if let Some(tag_name) = parts.first() {
                                     tokens.push(Token::Tag(tag_name.clone(), parts[1..].to_vec()));
@@ -364,6 +408,66 @@ mod tests {
             assert_eq!(children.len(), 1);
         } else {
             panic!("Expected JsxComponent token");
+        }
+    }
+
+    #[test]
+    fn test_split_tag_args_simple() {
+        let args = split_tag_args(" url 'post_detail' post.slug ");
+        assert_eq!(args, vec!["url", "'post_detail'", "post.slug"]);
+    }
+
+    #[test]
+    fn test_split_tag_args_quoted_with_spaces() {
+        let input = r##" djust_pwa_head name="My App" theme_color="#09090b" "##;
+        let args = split_tag_args(input);
+        assert_eq!(args[0], "djust_pwa_head");
+        assert_eq!(args[1], r##"name="My App""##);
+        assert_eq!(args[2], r##"theme_color="#09090b""##);
+        assert_eq!(args.len(), 3);
+    }
+
+    #[test]
+    fn test_split_tag_args_single_quotes_with_spaces() {
+        let args = split_tag_args(" mytag label='Hello World' ");
+        assert_eq!(args, vec!["mytag", "label='Hello World'"]);
+    }
+
+    #[test]
+    fn test_split_tag_args_empty() {
+        let args = split_tag_args("   ");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn test_split_tag_args_no_quotes() {
+        let args = split_tag_args(" for item in items ");
+        assert_eq!(args, vec!["for", "item", "in", "items"]);
+    }
+
+    #[test]
+    fn test_split_tag_args_mixed_quotes() {
+        let args = split_tag_args(r#" tag key="value with spaces" plain 'another arg' "#);
+        assert_eq!(
+            args,
+            vec![
+                "tag",
+                r#"key="value with spaces""#,
+                "plain",
+                "'another arg'"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_tokenize_tag_with_quoted_spaces() {
+        let tokens = tokenize(r#"{% djust_pwa_head name="My App" %}"#).unwrap();
+        assert_eq!(tokens.len(), 1);
+        if let Token::Tag(name, args) = &tokens[0] {
+            assert_eq!(name, "djust_pwa_head");
+            assert_eq!(args, &vec![r#"name="My App""#]);
+        } else {
+            panic!("Expected Tag token, got {:?}", tokens[0]);
         }
     }
 }
