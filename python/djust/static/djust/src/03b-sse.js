@@ -122,6 +122,7 @@ class LiveViewSSE {
                             container.innerHTML = data.html;
                         }
                         bindLiveViewEvents();
+                        if (typeof updateHooks === 'function') { updateHooks(); }
                     }
                 }
                 break;
