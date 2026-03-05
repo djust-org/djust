@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-03-05
+
 ### Added
 
 - **`djust-deploy` CLI** — new `python/djust/deploy_cli.py` module providing deployment commands for [djustlive.com](https://djustlive.com). Install with `pip install djust[deploy]`. Available via the `djust-deploy` entry point:
