@@ -17,7 +17,9 @@ class TestBasicEvaluation:
         assert result == "active"
 
     def test_false_branch(self):
-        result = render_template('{{ "active" if is_active else "inactive" }}', {"is_active": False})
+        result = render_template(
+            '{{ "active" if is_active else "inactive" }}', {"is_active": False}
+        )
         assert result == "inactive"
 
     def test_no_else_true(self):
@@ -35,7 +37,9 @@ class TestVariableBranches:
         assert result == "Alice"
 
     def test_variable_in_false_branch(self):
-        result = render_template('{{ "Alice" if show else fallback }}', {"show": False, "fallback": "nobody"})
+        result = render_template(
+            '{{ "Alice" if show else fallback }}', {"show": False, "fallback": "nobody"}
+        )
         assert result == "nobody"
 
 
@@ -49,7 +53,9 @@ class TestComparisonConditions:
         assert result == "none"
 
     def test_equality(self):
-        result = render_template('{{ "dark-theme" if mode == "dark" else "light-theme" }}', {"mode": "dark"})
+        result = render_template(
+            '{{ "dark-theme" if mode == "dark" else "light-theme" }}', {"mode": "dark"}
+        )
         assert result == "dark-theme"
 
     def test_inequality(self):
@@ -85,7 +91,9 @@ class TestHtmlAttributeContext:
 
 class TestXssAutoEscaping:
     def test_variable_output_is_escaped(self):
-        result = render_template('{{ val if show else "" }}', {"show": True, "val": "<script>xss</script>"})
+        result = render_template(
+            '{{ val if show else "" }}', {"show": True, "val": "<script>xss</script>"}
+        )
         assert "<script>" not in result
         assert "&lt;script&gt;" in result
 

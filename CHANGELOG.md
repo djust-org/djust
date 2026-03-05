@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`dj-hook` elements now initialize after `dj-navigate` navigation** — `updateHooks()` is called after `live_redirect_mount` replaces DOM content via WebSocket and SSE mount handlers. Previously, hook lifecycle callbacks (`mounted()`, `destroyed()`) were skipped after client-side navigation, leaving hook-dependent elements (e.g., Chart.js canvases) uninitialized.
 - **VDOM parser discarded `dj-root` content on full-page templates** — `find_root()` returned only the first element child of `<body>`, so when elements like `<nav>` preceded `<div dj-root>`, the LiveView subtree was lost. During `live_redirect_mount` this caused corrupted HTML (e.g. `<div>` siblings absorbed into `<option>` tags). Fixed by searching for `[dj-root]`/`[dj-view]` in the parsed document before falling back to first body child.
 - **V008 false positives for service patterns and primitive-return functions** — V008 no longer duplicates V006 warnings for service/client/session patterns, and skips calls to module-level functions annotated with a primitive return type (e.g. `-> str`, `-> int`).
 - **Q010 false positives for CSS-toggle variables** — Q010 now only fires when the class already uses `self.patch()` with URL params and the navigation variable name matches one of those params.

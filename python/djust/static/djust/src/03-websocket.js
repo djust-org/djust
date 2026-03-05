@@ -229,6 +229,7 @@ class LiveViewWebSocket {
                     }
                     this.skipMountHtml = false;
                     bindLiveViewEvents();
+                    if (typeof updateHooks === 'function') { updateHooks(); }
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
@@ -242,6 +243,7 @@ class LiveViewWebSocket {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         container.innerHTML = data.html;
                         bindLiveViewEvents();
+                        if (typeof updateHooks === 'function') { updateHooks(); }
                     }
                     this.skipMountHtml = false;
                 }
