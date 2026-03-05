@@ -6,6 +6,7 @@ Entry point: djust-deploy
 
 import json
 import logging
+import os
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -31,12 +32,13 @@ def credentials_path() -> Path:
 
 
 def save_credentials(token: str, email: str, server_url: str) -> None:
-    """Write credentials to disk with mode 0o600."""
+    """Write credentials to disk with mode 0o600 (created atomically)."""
     path = credentials_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     data = {"token": token, "email": email, "server_url": server_url}
-    path.write_text(json.dumps(data))
-    path.chmod(0o600)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps(data))
 
 
 def load_credentials() -> dict:
@@ -45,6 +47,13 @@ def load_credentials() -> dict:
     if not path.exists():
         raise click.ClickException("Not logged in. Run `djust-deploy login` first.")
     return json.loads(path.read_text())
+
+
+def _resolve_server(ctx: click.Context, creds: dict) -> str:
+    """Return server URL: --server flag > stored creds > default."""
+    if ctx.obj.get("server_explicit"):
+        return ctx.obj["server"]
+    return creds.get("server_url", ctx.obj["server"])
 
 
 def _api_headers(token: str) -> dict:
@@ -96,6 +105,7 @@ def _check_git_clean() -> None:
 def cli(ctx: click.Context, server: Optional[str]) -> None:
     """djust deploy — manage deployments on djustlive.com."""
     ctx.ensure_object(dict)
+    ctx.obj["server_explicit"] = server is not None
     ctx.obj["server"] = (server or DEFAULT_SERVER).rstrip("/")
 
 
@@ -122,7 +132,10 @@ def login(ctx: click.Context) -> None:
         raise click.ClickException(f"Request failed: {exc}") from exc
 
     if resp.status_code != 200:
-        body = resp.json() if resp.content else {}
+        try:
+            body = resp.json() if resp.content else {}
+        except (ValueError, json.JSONDecodeError):
+            body = {}
         detail = body.get("detail") or body.get("non_field_errors") or resp.text
         raise click.ClickException(f"Login failed: {detail}")
 
@@ -149,7 +162,7 @@ def logout(ctx: click.Context) -> None:
         click.echo("Not logged in.")
         return
 
-    server = creds.get("server_url", ctx.obj["server"])
+    server = _resolve_server(ctx, creds)
     token = creds["token"]
 
     try:
@@ -179,7 +192,7 @@ def logout(ctx: click.Context) -> None:
 def status(ctx: click.Context, project: Optional[str]) -> None:
     """Show current deployment status. Optionally filter by PROJECT slug."""
     creds = load_credentials()
-    server = ctx.obj["server"]
+    server = _resolve_server(ctx, creds)
     token = creds["token"]
 
     params = {}
@@ -216,7 +229,7 @@ def deploy(ctx: click.Context, project_slug: str) -> None:
     _check_git_clean()
 
     creds = load_credentials()
-    server = ctx.obj["server"]
+    server = _resolve_server(ctx, creds)
     token = creds["token"]
 
     url = f"{server}/api/v1/projects/{project_slug}/environments/production/deploy/"
