@@ -303,6 +303,11 @@ pub enum Patch {
         d: Option<String>,
         index: usize,
         node: VNode,
+        /// The djust_id of the sibling currently at `index` (the reference node).
+        /// The client can use this for ID-based insertBefore instead of index-based,
+        /// preventing mis-targeting when earlier patches shift sibling positions.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ref_d: Option<String>,
     },
     /// Remove a child at index (d = parent's djust_id)
     RemoveChild {
@@ -310,6 +315,10 @@ pub enum Patch {
         #[serde(skip_serializing_if = "Option::is_none")]
         d: Option<String>,
         index: usize,
+        /// The child's djust_id for ID-based resolution on the client.
+        /// Prevents stale-index mis-targeting when earlier patches shift sibling positions.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        child_d: Option<String>,
     },
     /// Move a child from one index to another (d = parent's djust_id)
     MoveChild {
