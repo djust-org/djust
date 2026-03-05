@@ -650,6 +650,14 @@ class LiveViewWebSocket {
                     // codeql[js/log-injection] -- data.traceback is a server-provided stack trace, not user input
                     console.error('Traceback:', data.traceback);
                 }
+
+                // Non-recoverable errors (e.g. server restart lost state) — auto-reload
+                if (data.recoverable === false) {
+                    console.warn('[LiveView] Non-recoverable error, reloading page...');
+                    window.location.reload();
+                    break;
+                }
+
                 // Dispatch event for dev tools (debug panel, toasts)
                 window.dispatchEvent(new CustomEvent('djust:error', {
                     detail: {
