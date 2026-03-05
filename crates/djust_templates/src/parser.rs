@@ -31,6 +31,9 @@ pub enum Node {
         only: bool,                       // if true, only pass with_vars, not parent context
     },
     Comment,
+    /// {% load library_name %} — preserved so inheritance reconstruction can
+    /// re-emit the tag for downstream Django rendering.
+    Load(Vec<String>),
     CsrfToken,
     Static(String), // Path to static file
     With {
@@ -469,10 +472,9 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                 }
 
                 "load" => {
-                    // {% load static %} - For now, just treat as a no-op comment
-                    // In full Django, this loads template tag libraries
-                    // Our static files are handled via {% static %} tag
-                    Ok(Some(Node::Comment))
+                    // {% load static %} — preserve library names so inheritance
+                    // reconstruction can re-emit the tag for Django rendering.
+                    Ok(Some(Node::Load(args.clone())))
                 }
 
                 "widthratio" => {
@@ -1236,10 +1238,10 @@ mod tests {
         let tokens = tokenize("{% load static %}").unwrap();
         let nodes = parse(&tokens).unwrap();
         assert_eq!(nodes.len(), 1);
-        // Load is treated as a comment (no-op)
+        // Load preserves library names
         match &nodes[0] {
-            Node::Comment => (),
-            _ => panic!("Expected Comment node for load tag"),
+            Node::Load(libs) => assert_eq!(libs, &["static"]),
+            _ => panic!("Expected Load node for load tag"),
         }
     }
 

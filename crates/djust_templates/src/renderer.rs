@@ -419,6 +419,7 @@ fn render_node_with_loader<L: TemplateLoader>(
         }
 
         Node::Comment => Ok(String::new()),
+        Node::Load(_) => Ok(String::new()), // No-op at render time; preserved for reconstruction
 
         Node::WidthRatio {
             value,
