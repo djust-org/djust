@@ -2327,9 +2327,9 @@ class TestV008NonPrimitiveInMount:
             _check_non_primitive_assignments_in_mount(errors)
 
         v008 = [e for e in errors if e.id == "djust.V008"]
-        assert len(v008) == 0, (
-            "V008 should not duplicate V006 warnings for service/client/session patterns"
-        )
+        assert (
+            len(v008) == 0
+        ), "V008 should not duplicate V006 warnings for service/client/session patterns"
 
     def test_v008_fires_for_non_service_non_primitive(self, tmp_path):
         """V008 fires for custom types that are not in V006's service-pattern list."""
@@ -3509,12 +3509,12 @@ class TestV008PrimitiveReturnAnnotation:
         py_file = tmp_path / "views.py"
         py_file.write_text(
             textwrap.dedent("""\
-                def build_client():
-                    return SomeClient()
+                def build_widget():
+                    return SomeWidget()
 
                 class MyView:
                     def mount(self, request, **kwargs):
-                        self.client = build_client()
+                        self.widget = build_widget()
             """)
         )
 
@@ -3532,12 +3532,12 @@ class TestV008PrimitiveReturnAnnotation:
         py_file = tmp_path / "views.py"
         py_file.write_text(
             textwrap.dedent("""\
-                def get_client() -> SomeClient:
-                    return SomeClient()
+                def get_widget() -> SomeWidget:
+                    return SomeWidget()
 
                 class MyView:
                     def mount(self, request, **kwargs):
-                        self.client = get_client()
+                        self.widget = get_widget()
             """)
         )
 
