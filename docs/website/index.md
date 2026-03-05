@@ -64,10 +64,11 @@ How to build specific features.
 
 |                                          |                                               |
 | ---------------------------------------- | --------------------------------------------- |
-| **[Deployment](guides/deployment.md)**         | Deploy to production (uvicorn, nginx, Docker)      |
-| **[djust-deploy CLI](guides/djust-deploy.md)** | Deploy to djustlive.com from the command line      |
-| **[PWA](guides/pwa.md)**                       | Build offline-first Progressive Web Apps            |
-| **[Error Codes](guides/error-codes.md)**       | Complete error code reference with fixes            |
+| **[Deployment](guides/deployment.md)**                    | Deploy to production (uvicorn, nginx, Docker)      |
+| **[djust-deploy CLI](guides/djust-deploy.md)**            | Deploy to djustlive.com from the command line      |
+| **[Template Cheat Sheet](guides/template-cheatsheet.md)** | Quick reference for all directives and filters     |
+| **[PWA](guides/pwa.md)**                                  | Build offline-first Progressive Web Apps           |
+| **[Error Codes](guides/error-codes.md)**                  | Complete error code reference with fixes           |
 
 ---
 
