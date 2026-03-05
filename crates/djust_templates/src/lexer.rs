@@ -450,7 +450,12 @@ mod tests {
         let args = split_tag_args(r#" tag key="value with spaces" plain 'another arg' "#);
         assert_eq!(
             args,
-            vec!["tag", r#"key="value with spaces""#, "plain", "'another arg'"]
+            vec![
+                "tag",
+                r#"key="value with spaces""#,
+                "plain",
+                "'another arg'"
+            ]
         );
     }
 
