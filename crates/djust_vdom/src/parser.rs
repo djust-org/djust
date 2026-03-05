@@ -465,7 +465,11 @@ mod tests {
             Some(&String::new()),
             "Root should have dj-root attribute"
         );
-        assert_eq!(vnode.children.len(), 2, "dj-root should have aside + div.main-content");
+        assert_eq!(
+            vnode.children.len(),
+            2,
+            "dj-root should have aside + div.main-content"
+        );
         assert_eq!(vnode.children[0].tag, "aside");
         assert_eq!(vnode.children[1].tag, "div");
 
@@ -549,7 +553,11 @@ mod tests {
         // Verify select has 3 options, not a <div> child
         let select = &vnode.children[0].children[0];
         assert_eq!(select.tag, "select");
-        assert_eq!(select.children.len(), 3, "select should have 3 option children");
+        assert_eq!(
+            select.children.len(),
+            3,
+            "select should have 3 option children"
+        );
         for opt in &select.children {
             assert_eq!(opt.tag, "option", "all select children must be <option>");
         }
