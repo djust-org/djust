@@ -67,21 +67,6 @@ djust-deploy status <project-slug>
 
 Returns JSON with deployment details (state, timestamps, etc.).
 
-## Custom Server
-
-By default all commands target `https://djustlive.com`. To use a different server (e.g., a staging instance):
-
-```bash
-# Via flag
-djust-deploy --server https://staging.djustlive.com deploy my-app
-
-# Via environment variable
-export DJUST_SERVER=https://staging.djustlive.com
-djust-deploy deploy my-app
-```
-
-The server URL is saved with your credentials at login time. When you pass `--server` explicitly, it overrides the stored URL for that command.
-
 ## Credential Storage
 
 Credentials are stored at `~/.djustlive/credentials` as JSON:
@@ -89,8 +74,7 @@ Credentials are stored at `~/.djustlive/credentials` as JSON:
 ```json
 {
   "token": "...",
-  "email": "you@example.com",
-  "server_url": "https://djustlive.com"
+  "email": "you@example.com"
 }
 ```
 

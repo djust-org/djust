@@ -14,7 +14,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `djust-deploy logout` — calls the server logout endpoint and removes the local credentials file
   - `djust-deploy status [project]` — fetches current deployment state; optionally filtered by project slug
   - `djust-deploy deploy <project-slug>` — validates the git working tree is clean, triggers a production deployment, and streams build logs to stdout
-  - `--server` flag / `DJUST_SERVER` env var to override the default server URL (`https://djustlive.com`)
 
 ## [0.3.5rc2] - 2026-03-04
 
