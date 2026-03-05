@@ -18,9 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **VDOM parser discarded `dj-root` content on full-page templates** — `find_root()` returned only the first element child of `<body>`, so when elements like `<nav>` preceded `<div dj-root>`, the LiveView subtree was lost. During `live_redirect_mount` this caused corrupted HTML (e.g. `<div>` siblings absorbed into `<option>` tags). Fixed by searching for `[dj-root]`/`[dj-view]` in the parsed document before falling back to first body child.
-- **V008 false positives for service-like names** — V008 (Info) no longer fires for assignments already flagged by V006 (Warning), avoiding duplicate diagnostics for the same line.
-- **Q010 false positives for navigation state** — Reduced false positives in Q010 quality check.
-- **T013 false positives for `{{ view_path }}`** — `dj-view="{{ view_path }}"` patterns correctly recognised as valid dynamic injection.
+- **V008 false positives for service patterns and primitive-return functions** — V008 no longer duplicates V006 warnings for service/client/session patterns, and skips calls to module-level functions annotated with a primitive return type (e.g. `-> str`, `-> int`).
+- **Q010 false positives for CSS-toggle variables** — Q010 now only fires when the class already uses `self.patch()` with URL params and the navigation variable name matches one of those params.
+- **T013 false positives for `{{ view_path }}`** — `dj-view="{{ view_path }}"` (Django template variable injection) is now correctly recognised as valid by T013.
 
 ## [0.3.5rc2] - 2026-03-04
 
