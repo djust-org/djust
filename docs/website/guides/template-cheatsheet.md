@@ -2,7 +2,7 @@
 title: "Template Cheat Sheet"
 slug: template-cheatsheet
 section: guides
-order: 10
+order: 11
 level: beginner
 description: "Quick reference for all djust template directives, event attributes, loading states, and common pitfalls."
 ---
@@ -357,24 +357,17 @@ djust.hooks.chart = {
 
 ### `{% if %}` inside attribute values
 
-**Problem:** Using `{% if %}` (or `{% elif %}`, `{% else %}`, `{% endif %}`, `{% for %}`) inside an HTML attribute value is a **compile-time error** in djust. The template engine rejects it immediately with a clear error message.
+**Problem:** Using `{% if %}` inside an HTML attribute value works, but can produce unnecessary VDOM comment anchors. Inline conditionals are the recommended alternative — they produce cleaner output.
 
 ```html
-<!-- ERROR: block tag inside attribute value -->
+<!-- Works, but not recommended -->
 <div class="card {% if active %}active{% endif %}">
-<a class="nav-link {% if active_view == 'brain' %}active{% endif %}">
-```
 
-The reason: block tags in attribute values would require inserting `<!--dj-if-->` comment anchors that browsers cannot place inside attribute values — they become literal class text. This causes VDOM path index mismatches, making all subsequent patches land on the wrong nodes.
-
-**Fix:** Use an **inline conditional** (`{{ expr if condition else '' }}`) inside the attribute:
-
-```html
-<!-- CORRECT: inline conditional inside attribute value -->
+<!-- Recommended: inline conditional -->
 <div class="{{ 'card active' if active else 'card' }}">
 <div class="card {{ 'active' if active else '' }}">
 
-<!-- CORRECT: move the entire conditional outside the tag -->
+<!-- Also fine: move the conditional outside the tag -->
 {% if active %}
 <div class="card active">
 {% else %}
@@ -384,7 +377,7 @@ The reason: block tags in attribute values would require inserting `<!--dj-if-->
 </div>
 ```
 
-`{% if %}` blocks between elements (not inside attribute values) work fine as always.
+`{{ expr if condition else '' }}` is resolved entirely in the template engine — no DOM comment anchors are inserted, so VDOM path indices stay correct.
 
 ### Form field values during VDOM patch
 

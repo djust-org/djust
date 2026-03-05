@@ -2216,13 +2216,17 @@ class TestV008NonPrimitiveInMount:
     """V008 -- Detect non-primitive type assignments in mount()."""
 
     def test_non_primitive_instantiation_in_mount(self, tmp_path):
-        """Warn when non-primitive types are instantiated in mount()."""
+        """Warn when non-primitive, non-service types are instantiated in mount().
+
+        Note: service-pattern names (e.g. APIClient) are handled by V006, not V008.
+        V008 covers types that fall outside V006's keyword list.
+        """
         py_file = tmp_path / "views.py"
         py_file.write_text(
             textwrap.dedent("""\
                 class MyView:
                     def mount(self, request, **kwargs):
-                        self.api_client = APIClient()
+                        self.report = ReportBuilder()
             """)
         )
 
@@ -2234,8 +2238,8 @@ class TestV008NonPrimitiveInMount:
 
         v008 = [e for e in errors if e.id == "djust.V008"]
         assert len(v008) == 1
-        assert "APIClient" in v008[0].msg
-        assert "api_client" in v008[0].msg
+        assert "ReportBuilder" in v008[0].msg
+        assert "report" in v008[0].msg
 
     def test_primitive_types_allowed(self, tmp_path):
         """Primitive type assignments don't trigger warning."""
@@ -2302,6 +2306,168 @@ class TestV008NonPrimitiveInMount:
         v008 = [e for e in errors if e.id == "djust.V008"]
         # Should be suppressed by noqa
         assert len(v008) == 0
+
+    def test_v008_does_not_fire_for_service_patterns(self, tmp_path):
+        """V008 must not fire for patterns already reported by V006 (no duplicate)."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.service = PaymentService()
+                        self.client = boto3.client('s3')
+                        self.session = requests.Session()
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        assert (
+            len(v008) == 0
+        ), "V008 should not duplicate V006 warnings for service/client/session patterns"
+
+    def test_v008_fires_for_non_service_non_primitive(self, tmp_path):
+        """V008 fires for custom types that are not in V006's service-pattern list."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.report = ReportBuilder()
+                        self.items = list()
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        assert len(v008) == 1
+        assert "ReportBuilder" in v008[0].msg
+        assert "report" in v008[0].msg
+
+    def test_v008_no_false_positive_for_primitive_return_annotation(self, tmp_path):
+        """V008 must not fire when the called function has a -> primitive return annotation."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                def get_route_map_script() -> str:
+                    return "<script>...</script>"
+
+                def build_greeting(name: str) -> str:
+                    return "Hello " + name
+
+                def compute_count() -> int:
+                    return 42
+
+                def is_active() -> bool:
+                    return True
+
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.route_map = get_route_map_script()
+                        self.greeting = build_greeting("world")
+                        self.count = compute_count()
+                        self.active = is_active()
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        assert len(v008) == 0, (
+            "V008 must not fire for calls to functions annotated -> primitive: "
+            + ", ".join(e.msg for e in v008)
+        )
+
+    def test_v008_still_fires_for_unannotated_function(self, tmp_path):
+        """V008 fires for calls to functions without a return annotation."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                def get_widget():
+                    return Widget()
+
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.widget = get_widget()
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        assert len(v008) == 1
+        assert "get_widget" in v008[0].msg
+
+    def test_v008_still_fires_for_non_primitive_return_annotation(self, tmp_path):
+        """V008 fires when the return annotation is a non-primitive type."""
+        py_file = tmp_path / "views.py"
+        py_file.write_text(
+            textwrap.dedent("""\
+                def build_report() -> Report:
+                    return Report()
+
+                class MyView:
+                    def mount(self, request, **kwargs):
+                        self.report = build_report()
+            """)
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        assert len(v008) == 1
+        assert "build_report" in v008[0].msg
+
+    def test_build_primitive_return_funcs_all_primitives(self, tmp_path):
+        """_build_primitive_return_funcs recognises all expected primitive annotation names."""
+        import ast
+
+        from djust.checks import _build_primitive_return_funcs
+
+        source = textwrap.dedent("""\
+            def a() -> str: ...
+            def b() -> int: ...
+            def c() -> bool: ...
+            def d() -> float: ...
+            def e() -> bytes: ...
+            def f() -> list: ...
+            def g() -> dict: ...
+            def h() -> set: ...
+            def i() -> tuple: ...
+            def j() -> List: ...
+            def k() -> Dict: ...
+            def l() -> Set: ...
+            def m() -> Tuple: ...
+            def n() -> Widget: ...   # non-primitive
+            def o(): ...             # no annotation
+        """)
+        tree = ast.parse(source)
+        result = _build_primitive_return_funcs(tree)
+        assert result == {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m"}
+        assert "n" not in result
+        assert "o" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -2602,7 +2768,7 @@ class TestQ010NavigationStateInHandlers:
     """Q010 -- event handlers that set navigation state without patching."""
 
     def test_q010_detects_active_view_in_handler(self, tmp_path):
-        """Q010 should flag event handlers that set self.active_view."""
+        """Q010 should flag event handlers that set self.active_view when class uses patch()."""
         app_dir = tmp_path / "testapp"
         app_dir.mkdir()
         (app_dir / "__init__.py").write_text("")
@@ -2616,6 +2782,13 @@ class TestQ010NavigationStateInHandlers:
                 @event_handler()
                 def switch_view(self, view_name="", **kwargs):
                     self.active_view = view_name
+
+                def handle_params(self, view="home", **kwargs):
+                    self.active_view = view
+
+                @event_handler()
+                def go_home(self, **kwargs):
+                    self.patch({"view": "home"})
             """
             )
         )
@@ -2631,7 +2804,7 @@ class TestQ010NavigationStateInHandlers:
             assert "dj-patch" in q010[0].hint
 
     def test_q010_detects_current_tab_in_handler(self, tmp_path):
-        """Q010 should flag event handlers that set self.current_tab."""
+        """Q010 should flag event handlers that set self.current_tab when class uses patch()."""
         app_dir = tmp_path / "testapp"
         app_dir.mkdir()
         (app_dir / "__init__.py").write_text("")
@@ -2645,6 +2818,10 @@ class TestQ010NavigationStateInHandlers:
                 @event_handler()
                 def select_tab(self, tab="", **kwargs):
                     self.current_tab = tab
+
+                @event_handler()
+                def go_first(self, **kwargs):
+                    self.patch("?tab=first")
             """
             )
         )
@@ -2656,6 +2833,63 @@ class TestQ010NavigationStateInHandlers:
             q010 = [e for e in errors if e.id == "djust.Q010"]
             assert len(q010) == 1
             assert "current_tab" in q010[0].msg
+
+    def test_q010_no_false_positive_without_patch_in_class(self, tmp_path):
+        """Q010 should NOT fire for nav-sounding names when class never calls patch()."""
+        app_dir = tmp_path / "testapp"
+        app_dir.mkdir()
+        (app_dir / "__init__.py").write_text("")
+        (app_dir / "views.py").write_text(
+            textwrap.dedent(
+                """
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class TabView(LiveView):
+                @event_handler()
+                def select_tab(self, tab="", **kwargs):
+                    # active_tab used only for CSS class toggling, not URL state
+                    self.active_tab = tab
+            """
+            )
+        )
+
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(app_dir)]):
+            from djust.checks import check_code_quality
+
+            errors = check_code_quality(None)
+            q010 = [e for e in errors if e.id == "djust.Q010"]
+            assert len(q010) == 0, "Should not flag nav-sounding vars when no patch() in class"
+
+    def test_q010_no_false_positive_unrelated_patch_params(self, tmp_path):
+        """Q010 should NOT fire when patch() param names don't match the nav var name."""
+        app_dir = tmp_path / "testapp"
+        app_dir.mkdir()
+        (app_dir / "__init__.py").write_text("")
+        (app_dir / "views.py").write_text(
+            textwrap.dedent(
+                """
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class MyView(LiveView):
+                @event_handler()
+                def select_tab(self, **kwargs):
+                    self.active_tab = "overview"  # not a URL param
+
+                @event_handler()
+                def change_section(self, **kwargs):
+                    self.patch({"section": "detail"})  # param is "section", not "tab"
+            """
+            )
+        )
+
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(app_dir)]):
+            from djust.checks import check_code_quality
+
+            errors = check_code_quality(None)
+            q010 = [e for e in errors if e.id == "djust.Q010"]
+            assert len(q010) == 0, "Should not flag active_tab when only 'section' is a patch param"
 
     def test_q010_passes_handler_with_patch_usage(self, tmp_path):
         """Q010 should NOT flag handlers that use patch() or handle_params()."""
@@ -2866,6 +3100,44 @@ class TestT013InvalidViewPath:
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
         (tpl_dir / "valid.html").write_text('<div dj-view="myapp.views.MyView">content</div>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t013 = [e for e in errors if e.id == "djust.T013"]
+        assert len(t013) == 0
+
+    def test_t013_passes_template_variable(self, tmp_path, settings):
+        """T013 should not fire for {{ view_path }} dynamic injection pattern."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "base.html").write_text(
+            '<div dj-view="{{ view_path }}" dj-root>{% block content %}{% endblock %}</div>'
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t013 = [e for e in errors if e.id == "djust.T013"]
+        assert len(t013) == 0, f"T013 should not flag {{'{{view_path}}'}} but got: {t013}"
+
+    def test_t013_passes_template_variable_with_spaces(self, tmp_path, settings):
+        """T013 should not fire for {{ view_path }} with extra whitespace."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "base.html").write_text('<div dj-view="{{  view_path  }}" dj-root></div>')
         settings.TEMPLATES = [
             {
                 "DIRS": [str(tpl_dir)],
@@ -3237,12 +3509,12 @@ class TestV008PrimitiveReturnAnnotation:
         py_file = tmp_path / "views.py"
         py_file.write_text(
             textwrap.dedent("""\
-                def build_client():
-                    return SomeClient()
+                def build_widget():
+                    return SomeWidget()
 
                 class MyView:
                     def mount(self, request, **kwargs):
-                        self.client = build_client()
+                        self.widget = build_widget()
             """)
         )
 
@@ -3260,12 +3532,12 @@ class TestV008PrimitiveReturnAnnotation:
         py_file = tmp_path / "views.py"
         py_file.write_text(
             textwrap.dedent("""\
-                def get_client() -> SomeClient:
-                    return SomeClient()
+                def get_widget() -> SomeWidget:
+                    return SomeWidget()
 
                 class MyView:
                     def mount(self, request, **kwargs):
-                        self.client = get_client()
+                        self.widget = get_widget()
             """)
         )
 

@@ -164,16 +164,16 @@ class HelloView(LiveView):
 
 ## Conditional Class Attributes
 
-`{% if %}` block tags **cannot** appear inside attribute values — this is a compile-time error. Use inline conditionals instead:
+While `{% if %}` inside attribute values works, **inline conditionals are recommended** because they produce cleaner VDOM output with no comment anchors:
 
 ```html
-<!-- ERROR: block tag inside attribute value -->
+<!-- Works, but not recommended — may produce unnecessary VDOM anchors -->
 <a class="nav-link {% if active %}active{% endif %}">
 
-<!-- CORRECT: inline conditional -->
+<!-- Recommended: inline conditional -->
 <a class="nav-link {{ 'active' if active else '' }}">
 
-<!-- CORRECT: full ternary -->
+<!-- Recommended: full ternary -->
 <div class="{{ 'card-active' if selected else 'card' }}">
 ```
 

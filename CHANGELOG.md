@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `djust-deploy status [project]` — fetches current deployment state; optionally filtered by project slug
   - `djust-deploy deploy <project-slug>` — validates the git working tree is clean, triggers a production deployment, and streams build logs to stdout
 
+### Fixed
+
+- **VDOM parser discarded `dj-root` content on full-page templates** — `find_root()` returned only the first element child of `<body>`, so when elements like `<nav>` preceded `<div dj-root>`, the LiveView subtree was lost. During `live_redirect_mount` this caused corrupted HTML (e.g. `<div>` siblings absorbed into `<option>` tags). Fixed by searching for `[dj-root]`/`[dj-view]` in the parsed document before falling back to first body child.
+- **V008 false positives for service patterns and primitive-return functions** — V008 no longer duplicates V006 warnings for service/client/session patterns, and skips calls to module-level functions annotated with a primitive return type (e.g. `-> str`, `-> int`).
+- **Q010 false positives for CSS-toggle variables** — Q010 now only fires when the class already uses `self.patch()` with URL params and the navigation variable name matches one of those params.
+- **T013 false positives for `{{ view_path }}`** — `dj-view="{{ view_path }}"` (Django template variable injection) is now correctly recognised as valid by T013.
+
 ## [0.3.5rc2] - 2026-03-04
 
 ### Fixed
