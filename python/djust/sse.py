@@ -162,7 +162,10 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
     # ---- Security: module allowlist ----
     allowed_modules = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", [])
     if allowed_modules and not any(view_path.startswith(m) for m in allowed_modules):
-        logger.warning("SSE: blocked attempt to mount view from unauthorized module: %s", sanitize_for_log(view_path))
+        logger.warning(
+            "SSE: blocked attempt to mount view from unauthorized module: %s",
+            sanitize_for_log(view_path),
+        )
         session.push(
             {
                 "type": "error",
@@ -301,7 +304,11 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
         mount_msg["cache_config"] = cache_config
 
     session.push(mount_msg)
-    logger.info("SSE: mounted view %s (session %s)", sanitize_for_log(view_path), sanitize_for_log(session.session_id))
+    logger.info(
+        "SSE: mounted view %s (session %s)",
+        sanitize_for_log(view_path),
+        sanitize_for_log(session.session_id),
+    )
 
 
 def _extract_cache_config(view_instance) -> Optional[Dict[str, Any]]:
@@ -384,7 +391,8 @@ async def _sse_handle_event(session: SSESession, event_name: str, params: Dict[s
             event_name=event_name,
             view_class=view_instance.__class__.__name__,
             logger=logger,
-            log_message="Error in SSE event handler %s.%s()" % (view_instance.__class__.__name__, sanitize_for_log(event_name)),
+            log_message="Error in SSE event handler %s.%s()"
+            % (view_instance.__class__.__name__, sanitize_for_log(event_name)),
         )
         session.push(response)
         return
@@ -752,7 +760,6 @@ class DjustSSEEventView(View):
 
         await _sse_handle_event(session, event_name, params)
         return JsonResponse({"ok": True})
-
 
 
 # ------------------------------------------------------------------ #

@@ -126,6 +126,7 @@ class TestBackgroundDecorator:
     def test_background_decorator_exists(self):
         """@background decorator should be importable."""
         from djust.decorators import background
+
         assert callable(background)
 
     def test_background_creates_async_task(self):

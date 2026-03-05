@@ -37,8 +37,8 @@ class TestFindClosingDivPos:
             "<div dj-root>"
             "{% if a %}<div class='a'>{% else %}<div class='b'>{% endif %}"
             "content"
-            "</div>"   # closes div a OR div b
-            "</div>"   # closes dj-root
+            "</div>"  # closes div a OR div b
+            "</div>"  # closes dj-root
         )
         close, end = self._find(t)
         assert t[end:] == ""  # matched the outermost close
@@ -73,8 +73,8 @@ class TestFindClosingDivPos:
             "{% else %}<div class='c'>"
             "{% endif %}"
             "content"
-            "</div>"   # closes one of the three branches
-            "</div>"   # closes dj-root
+            "</div>"  # closes one of the three branches
+            "</div>"  # closes dj-root
         )
         close, end = self._find(t)
         assert t[end:] == ""
@@ -106,8 +106,8 @@ class TestExtractLiveviewRootWithWrapper:
             "<div dj-root>"
             "{% if priority %}<div class='high'>{% else %}<div class='normal'>{% endif %}"
             "content"
-            "</div>"    # closes the if/else div
-            "</div>"    # closes dj-root
+            "</div>"  # closes the if/else div
+            "</div>"  # closes dj-root
         )
         mixin = TemplateMixin()
         result = mixin._extract_liveview_root_with_wrapper(template)
@@ -133,8 +133,8 @@ class TestExtractLiveviewRootWithWrapper:
             "{% else %}<div class='c'>"
             "{% endif %}"
             "content"
-            "</div>"    # closes whichever branch was taken
-            "</div>"    # closes dj-root
+            "</div>"  # closes whichever branch was taken
+            "</div>"  # closes dj-root
         )
         mixin = TemplateMixin()
         result = mixin._extract_liveview_root_with_wrapper(template)

@@ -585,7 +585,6 @@ class LiveViewWebSocket {
                     }
                     this.skipMountHtml = false;
                     bindLiveViewEvents();
-                    if (typeof updateHooks === 'function') { updateHooks(); }
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
@@ -599,7 +598,6 @@ class LiveViewWebSocket {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         container.innerHTML = data.html;
                         bindLiveViewEvents();
-                        if (typeof updateHooks === 'function') { updateHooks(); }
                     }
                     this.skipMountHtml = false;
                 }
@@ -1135,7 +1133,6 @@ class LiveViewSSE {
                             container.innerHTML = data.html;
                         }
                         bindLiveViewEvents();
-                        if (typeof updateHooks === 'function') { updateHooks(); }
                     }
                 }
                 break;
@@ -5751,7 +5748,7 @@ function _createHookInstance(hookDef, el) {
 
 /**
  * Scan the DOM for elements with dj-hook and mount their hooks.
- * Called on init and after DOM patches.
+ * Called on init. For post-patch and post-navigation updates, use updateHooks().
  */
 function mountHooks(root) {
     _ensureHooksInit();

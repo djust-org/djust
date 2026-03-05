@@ -246,8 +246,7 @@ class DjustLogSanitizerFilter(logging.Filter):
                 }
             elif isinstance(record.args, tuple):
                 record.args = tuple(
-                    sanitize_for_log(v) if isinstance(v, str) else v
-                    for v in record.args
+                    sanitize_for_log(v) if isinstance(v, str) else v for v in record.args
                 )
             elif isinstance(record.args, str):
                 record.args = sanitize_for_log(record.args)

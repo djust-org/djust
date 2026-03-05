@@ -411,7 +411,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         if result[1] is not None:
             liveview_div = html[start_pos : result[1]]
             stripped_div = self._strip_comments_and_whitespace(liveview_div)
-            return html[: start_pos] + stripped_div + html[result[1] :]
+            return html[:start_pos] + stripped_div + html[result[1] :]
         return html
 
     def render_full_template(self, request=None, serialized_context=None) -> str:
