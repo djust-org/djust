@@ -2150,7 +2150,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         version = getattr(self, "_recovery_version", 0)
 
         if not html:
-            await self.send_error("No recovery HTML available")
+            await self.send_error(
+                "Recovery HTML unavailable — the server may have restarted. "
+                "A page reload will fix this.",
+                recoverable=False,
+            )
             return
 
         html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
