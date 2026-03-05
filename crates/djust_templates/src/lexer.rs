@@ -358,6 +358,40 @@ mod tests {
     }
 
     #[test]
+    fn test_tokenize_tag_quoted_arg_with_space() {
+        // Regression: {% djust_pwa_head name="My App" %} must NOT split "My App"
+        // into two tokens. Before the fix, split_whitespace() produced
+        // ["name=\"My", "App\""] instead of ["name=\"My App\""].
+        let tokens =
+            tokenize(r##"{% djust_pwa_head name="My App" theme_color="#09090b" %}"##).unwrap();
+        assert_eq!(
+            tokens[0],
+            Token::Tag(
+                "djust_pwa_head".to_string(),
+                vec![
+                    r#"name="My App""#.to_string(),
+                    r##"theme_color="#09090b""##.to_string(),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn test_split_tag_args_helper() {
+        // Unit-test the helper directly
+        let args = split_tag_args(r##"name="My App" theme_color="#09090b""##);
+        assert_eq!(args, vec![r#"name="My App""#, r##"theme_color="#09090b""##]);
+
+        // Single-quoted value with space
+        let args2 = split_tag_args("name='Hello World' other=simple");
+        assert_eq!(args2, vec!["name='Hello World'", "other=simple"]);
+
+        // No quotes – should behave like split_whitespace
+        let args3 = split_tag_args("foo bar baz");
+        assert_eq!(args3, vec!["foo", "bar", "baz"]);
+    }
+
+    #[test]
     fn test_tokenize_comment() {
         let tokens = tokenize("Hello {# comment #} World").unwrap();
         assert_eq!(

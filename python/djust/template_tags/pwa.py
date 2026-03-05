@@ -70,9 +70,9 @@ def _render_django_tag(tag_name: str, kwargs: Dict[str, str]) -> str:
     tpl_str = _build_django_tag(tag_name, kwargs)
     try:
         return Template(tpl_str).render(DjangoContext({}))
-    except Exception as e:
-        logger.error("Error rendering {%% %s %%}: %s", tag_name, e)
-        return ""
+    except Exception:
+        logger.exception("Error rendering {%% %s %%}", tag_name)
+        return "<!-- djust: %s render failed (check server logs) -->" % tag_name
 
 
 def _extract_kwargs(

@@ -390,7 +390,11 @@ fn node_to_template_string(node: &Node) -> String {
             result.push_str("{% endwith %}");
             result
         }
-        Node::Comment => String::new(),    // Comments are stripped
+        Node::Comment => String::new(), // Comments are stripped
+        Node::Load(libs) => {
+            // Preserve {% load %} tags so downstream Django rendering can resolve them
+            format!("{{% load {} %}}", libs.join(" "))
+        }
         Node::Extends(_) => String::new(), // Extends is already processed
         Node::Include {
             template,
