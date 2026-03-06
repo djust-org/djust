@@ -17,7 +17,7 @@
  *
  *   { "files": ["node_modules/djust/static/djust/djust.d.ts"] }
  *
- * @version 0.3.2
+ * @version 0.3.4
  * @see https://djust.org
  */
 
@@ -409,11 +409,13 @@ interface DjustStreamOp {
   /** CSS selector for the target element. */
   target: string;
   /** Operation to perform. */
-  op: "append" | "prepend" | "replace" | "delete" | "text" | "error";
+  op: "append" | "prepend" | "replace" | "delete" | "text" | "error" | "done" | "start";
   /** HTML content for append/prepend/replace. */
   html?: string;
   /** Plain text content for the "text" op (used for LLM token streaming). */
   text?: string;
+  /** Text insertion mode for the "text" op. Defaults to "append". */
+  mode?: "append" | "replace" | "prepend";
   /** Error message for the "error" op. */
   error?: string;
 }
@@ -595,9 +597,9 @@ interface Djust {
   /**
    * Get all currently active stream states.
    *
-   * @returns Map of stream name to stream info.
+   * @returns Object mapping stream name to stream info.
    */
-  getActiveStreams(): Map<string, DjustStreamInfo>;
+  getActiveStreams(): Record<string, DjustStreamInfo>;
 
   // -------------------------------------------------------------------------
   // File Uploads
