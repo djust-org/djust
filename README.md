@@ -456,7 +456,7 @@ djust supports Django template syntax with event binding:
 <p>{{ text|upper }}</p>
 <p>{{ description|truncatewords:20 }}</p>
 <a href="?q={{ query|urlencode }}">Search</a>
-{{ body|urlize }}  {# urlize handles its own escaping — do not add |safe #}
+{{ body|urlize }}  {# No |safe needed — djust's Rust engine auto-marks urlize output as safe via safe_output_filters. Unlike standard Django where you'd add |safe, djust handles this automatically. #}
 
 <!-- Control flow -->
 {% if show %}
@@ -1074,7 +1074,7 @@ Areas we'd love help with:
 
 - CSRF protection via Django middleware
 - XSS protection via automatic template escaping (Rust engine escapes all variables by default)
-- HTML-producing filters (`urlize`, `unordered_list`) handle their own escaping internally
+- HTML-producing filters (`urlize`, `urlizetrunc`, `unordered_list`) handle their own escaping internally — the Rust engine's `safe_output_filters` whitelist prevents double-escaping, so `|safe` is never needed with these filters
 - WebSocket authentication via Django sessions
 - WebSocket origin validation and HMAC message signing (v0.2.1)
 - Per-view and global rate limiting support

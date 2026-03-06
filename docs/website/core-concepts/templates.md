@@ -133,7 +133,7 @@ See [Hooks guide](../guides/hooks.md) for details.
 
 All 57 Django built-in filters are supported. Some notes:
 
-- HTML-producing filters (`urlize`, `urlizetrunc`, `unordered_list`) handle their own escaping internally — do not pipe them through `|safe` or you'll double-escape
+- HTML-producing filters (`urlize`, `urlizetrunc`, `unordered_list`) are in the Rust engine's `safe_output_filters` whitelist — they're automatically marked as safe without requiring `|safe`. Do not pipe them through `|safe` or you'll double-escape. *(Standard Django achieves this via `SafeData` type-checking; djust uses an explicit whitelist instead.)*
 - `|safe` works as expected for pre-escaped HTML strings
 - Custom template filters defined with `@register.filter` in Python work automatically
 

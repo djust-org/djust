@@ -394,15 +394,17 @@ djust's VDOM preserves text input values during patches by default. However, if 
 
 ### Double-escaping HTML filters
 
-`urlize`, `urlizetrunc`, and `unordered_list` handle their own HTML escaping. **Do not** pipe them through `|safe`:
+`urlize`, `urlizetrunc`, and `unordered_list` are in djust's `safe_output_filters` whitelist — the Rust engine automatically marks their output as safe without requiring `|safe`. **Do not** pipe them through `|safe` or you'll double-escape:
 
 ```html
 <!-- WRONG: double-escapes the output -->
 {{ text|urlize|safe }}
 
-<!-- CORRECT: urlize already produces safe HTML -->
+<!-- CORRECT: djust's Rust engine auto-marks urlize output as safe -->
 {{ text|urlize }}
 ```
+
+*Note:* Standard Django achieves this via `SafeData` type-checking. djust implements it as an explicit whitelist, so users coming from Django don't need `|safe` with these filters.
 
 ### `{% elif %}` in inline templates
 
