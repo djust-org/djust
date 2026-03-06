@@ -5,7 +5,7 @@
  * - createNodeFromVNode: syncs checked on INPUT, selected on OPTION
  * - SetAttr/RemoveAttr: selected on OPTION elements
  * - Radio inputs: checked property sync
- * - activeElement guard: checked updates even when focused (unlike value)
+ * - activeElement guard: SetAttr/RemoveAttr checked update even when focused (unlike value)
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
@@ -175,6 +175,17 @@ describe('SetAttr checked updates even when element is activeElement', () => {
         _applySinglePatch({ type: 'SetAttr', d: 'chk-focused', path: [], key: 'checked', value: '' });
 
         expect(checkbox.checked).toBe(true);
+    });
+
+    it('RemoveAttr checked updates el.checked when checkbox is document.activeElement', () => {
+        setup();
+        checkbox.checked = true;
+        checkbox.setAttribute('checked', '');
+        expect(dom.window.document.activeElement).toBe(checkbox);
+
+        _applySinglePatch({ type: 'RemoveAttr', d: 'chk-focused', path: [], key: 'checked' });
+
+        expect(checkbox.checked).toBe(false);
     });
 
     it('SetAttr value skips el.value update when input is document.activeElement', () => {
