@@ -54,6 +54,7 @@ def saved_creds(creds_dir):
     creds = {
         "token": "test-token-abc",
         "email": "user@example.com",
+        "server_url": "https://djustlive.com",
     }
     cred_file = creds_dir / "credentials"
     cred_file.write_text(json.dumps(creds))
@@ -76,36 +77,48 @@ class TestCredentialHelpers:
     def test_save_credentials_creates_file(self, tmp_path, monkeypatch):
         cred_file = tmp_path / ".djustlive" / "credentials"
         monkeypatch.setattr("djust.deploy_cli.credentials_path", lambda: cred_file)
-        save_credentials("tok123", "a@b.com")
+        save_credentials("tok123", "a@b.com", "https://djustlive.com")
         assert cred_file.exists()
 
     def test_save_credentials_creates_parent_dir(self, tmp_path, monkeypatch):
         cred_file = tmp_path / ".djustlive" / "credentials"
         monkeypatch.setattr("djust.deploy_cli.credentials_path", lambda: cred_file)
-        save_credentials("tok123", "a@b.com")
+        save_credentials("tok123", "a@b.com", "https://djustlive.com")
         assert cred_file.parent.is_dir()
 
     def test_save_credentials_file_mode_0o600(self, tmp_path, monkeypatch):
         cred_file = tmp_path / ".djustlive" / "credentials"
         monkeypatch.setattr("djust.deploy_cli.credentials_path", lambda: cred_file)
-        save_credentials("tok123", "a@b.com")
+        save_credentials("tok123", "a@b.com", "https://djustlive.com")
         file_mode = stat.S_IMODE(cred_file.stat().st_mode)
         assert file_mode == 0o600
 
     def test_save_credentials_json_content(self, tmp_path, monkeypatch):
         cred_file = tmp_path / ".djustlive" / "credentials"
         monkeypatch.setattr("djust.deploy_cli.credentials_path", lambda: cred_file)
-        save_credentials("tok123", "a@b.com")
+        save_credentials("tok123", "a@b.com", "https://myserver.com")
         data = json.loads(cred_file.read_text())
         assert data == {
             "token": "tok123",
             "email": "a@b.com",
+            "server_url": "https://myserver.com",
         }
+
+    def test_save_credentials_overwrites_existing(self, tmp_path, monkeypatch):
+        cred_file = tmp_path / ".djustlive" / "credentials"
+        monkeypatch.setattr("djust.deploy_cli.credentials_path", lambda: cred_file)
+        save_credentials("tok1", "a@a.com", "https://s1.com")
+        save_credentials("tok2", "b@b.com", "https://s2.com")
+        data = json.loads(cred_file.read_text())
+        assert data["token"] == "tok2"
+        assert data["email"] == "b@b.com"
 
     def test_load_credentials_returns_dict(self, tmp_path, monkeypatch):
         cred_file = tmp_path / ".djustlive" / "credentials"
         cred_file.parent.mkdir(parents=True, exist_ok=True)
-        cred_file.write_text(json.dumps({"token": "t", "email": "e@e.com"}))
+        cred_file.write_text(
+            json.dumps({"token": "t", "email": "e@e.com", "server_url": "https://s"})
+        )
         monkeypatch.setattr("djust.deploy_cli.credentials_path", lambda: cred_file)
         creds = load_credentials()
         assert creds["token"] == "t"
@@ -141,6 +154,7 @@ class TestLoginCommand:
         data = json.loads(cred_file.read_text())
         assert data["token"] == "server-token-xyz"
         assert data["email"] == "user@example.com"
+        assert data["server_url"] == "https://djustlive.com"
 
     def test_login_success_prints_success_message(self, runner, creds_dir, requests_mock):
         requests_mock.post(
@@ -175,6 +189,44 @@ class TestLoginCommand:
             or "error" in result.output.lower()
             or "failed" in result.output.lower()
         )
+
+    def test_login_custom_server_flag(self, runner, creds_dir, requests_mock):
+        requests_mock.post(
+            "https://myserver.example.com/api/v1/auth/login/",
+            json={"token": "custom-token"},
+            status_code=200,
+        )
+        result = runner.invoke(
+            cli,
+            ["--server", "https://myserver.example.com", "login"],
+            input="u@u.com\npass\n",
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads((creds_dir / "credentials").read_text())
+        assert data["server_url"] == "https://myserver.example.com"
+
+    def test_login_server_env_var(self, runner, creds_dir, requests_mock):
+        requests_mock.post(
+            "https://env-server.com/api/v1/auth/login/",
+            json={"token": "env-token"},
+            status_code=200,
+        )
+        result = runner.invoke(
+            cli,
+            ["login"],
+            input="u@u.com\npass\n",
+            env={"DJUST_SERVER": "https://env-server.com"},
+        )
+        assert result.exit_code == 0, result.output
+
+    def test_login_empty_email_prompts(self, runner, creds_dir, requests_mock):
+        requests_mock.post(
+            "https://djustlive.com/api/v1/auth/login/",
+            json={"token": "t"},
+            status_code=200,
+        )
+        result = runner.invoke(cli, ["login"], input="test@test.com\npass\n")
+        assert result.exit_code == 0
 
 
 # ---------------------------------------------------------------------------
@@ -323,3 +375,18 @@ class TestDeployCommand:
         with patch("djust.deploy_cli._check_git_clean"):
             result = runner.invoke(cli, ["deploy", "bad-slug"])
         assert result.exit_code != 0
+
+    def test_deploy_server_flag_overrides_default(
+        self, runner, creds_dir, saved_creds, requests_mock
+    ):
+        adapter = requests_mock.post(
+            "https://other-server.com/api/v1/projects/proj/environments/production/deploy/",
+            text="ok\n",
+            status_code=200,
+        )
+        with patch("djust.deploy_cli._check_git_clean"):
+            runner.invoke(
+                cli,
+                ["--server", "https://other-server.com", "deploy", "proj"],
+            )
+        assert adapter.called
