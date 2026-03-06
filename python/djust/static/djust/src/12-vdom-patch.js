@@ -341,6 +341,10 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
             // prevent double-binding on subsequent calls.
             if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
                 elem.value = value;
+            } else if (key === 'checked' && elem.tagName === 'INPUT') {
+                elem.checked = true;
+            } else if (key === 'selected' && elem.tagName === 'OPTION') {
+                elem.selected = true;
             }
             elem.setAttribute(key, value);
 
@@ -1047,6 +1051,12 @@ function applySinglePatch(patch) {
                         node.value = patch.value;
                     }
                     node.setAttribute(patch.key, patch.value);
+                } else if (patch.key === 'checked' && node.tagName === 'INPUT') {
+                    node.checked = true;
+                    node.setAttribute('checked', '');
+                } else if (patch.key === 'selected' && node.tagName === 'OPTION') {
+                    node.selected = true;
+                    node.setAttribute('selected', '');
                 } else {
                     node.setAttribute(patch.key, patch.value);
                 }
@@ -1058,6 +1068,11 @@ function applySinglePatch(patch) {
                 // Also preserve data-dj-src (template source mapping).
                 if (patch.key && (patch.key.startsWith('dj-') || patch.key === 'data-dj-src')) {
                     break;
+                }
+                if (patch.key === 'checked' && node.tagName === 'INPUT') {
+                    node.checked = false;
+                } else if (patch.key === 'selected' && node.tagName === 'OPTION') {
+                    node.selected = false;
                 }
                 node.removeAttribute(patch.key);
                 break;
