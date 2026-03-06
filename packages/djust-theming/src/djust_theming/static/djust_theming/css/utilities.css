@@ -1,0 +1,96 @@
+/**
+ * djust Utility Classes
+ *
+ * Helper classes for common patterns and overrides.
+ * All utilities use CSS variables from theme.css.
+ */
+
+/* ============================================
+   ANIMATIONS
+   ============================================ */
+
+.fade-in-modern {
+    animation: fadeInUp 0.6s ease-out;
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ============================================
+   ICONS
+   ============================================ */
+
+.check-icon-modern {
+    color: var(--color-success);
+    font-weight: 600;
+}
+
+.x-icon-modern {
+    color: var(--color-text-subtle);
+}
+
+/* ============================================
+   TAILWIND/BOOTSTRAP OVERRIDES
+   Theme-aware overrides for framework classes
+   ============================================ */
+
+.bg-white {
+    background: var(--color-bg-elevated) !important;
+}
+
+.text-gray-900 {
+    color: var(--color-text) !important;
+}
+
+.text-gray-600,
+.text-gray-700 {
+    color: var(--color-text-muted) !important;
+}
+
+.text-gray-500 {
+    color: var(--color-text-subtle) !important;
+}
+
+.border-gray-200 {
+    border-color: var(--color-border) !important;
+}
+
+.bg-blue-100 {
+    background: rgba(59, 130, 246, 0.1) !important;
+}
+
+.text-blue-600 {
+    color: var(--color-accent) !important;
+}
+
+.bg-green-100 {
+    background: rgba(16, 185, 129, 0.1) !important;
+}
+
+.text-green-600 {
+    color: var(--color-success) !important;
+}
+
+.bg-purple-100 {
+    background: rgba(139, 92, 246, 0.1) !important;
+}
+
+.text-purple-600 {
+    color: #a78bfa !important;
+}
+
+.bg-indigo-600 {
+    background: var(--color-accent) !important;
+}
+
+.text-indigo-600 {
+    color: var(--color-accent) !important;
+}
