@@ -31,11 +31,11 @@ def credentials_path() -> Path:
     return Path.home() / _CREDS_DIR_NAME / _CREDS_FILE_NAME
 
 
-def save_credentials(token: str, email: str) -> None:
+def save_credentials(token: str, email: str, server_url: str) -> None:
     """Write credentials to disk with mode 0o600 (created atomically)."""
     path = credentials_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    data = {"token": token, "email": email}
+    data = {"token": token, "email": email, "server_url": server_url}
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(json.dumps(data))
@@ -47,11 +47,6 @@ def load_credentials() -> dict:
     if not path.exists():
         raise click.ClickException("Not logged in. Run `djust-deploy login` first.")
     return json.loads(path.read_text())
-
-
-def _server_url() -> str:
-    """Return server URL. Uses DJUST_SERVER env var if set (internal use only)."""
-    return os.environ.get("DJUST_SERVER", DEFAULT_SERVER).rstrip("/")
 
 
 def _api_headers(token: str) -> dict:
@@ -92,8 +87,18 @@ def _check_git_clean() -> None:
 
 
 @click.group()
-def cli() -> None:
+@click.option(
+    "--server",
+    default=None,
+    envvar="DJUST_SERVER",
+    help="djustlive server URL (default: https://djustlive.com).",
+    metavar="URL",
+)
+@click.pass_context
+def cli(ctx: click.Context, server: Optional[str]) -> None:
     """djust deploy — manage deployments on djustlive.com."""
+    ctx.ensure_object(dict)
+    ctx.obj["server"] = (server or DEFAULT_SERVER).rstrip("/")
 
 
 # ---------------------------------------------------------------------------
@@ -102,9 +107,10 @@ def cli() -> None:
 
 
 @cli.command()
-def login() -> None:
+@click.pass_context
+def login(ctx: click.Context) -> None:
     """Log in to djustlive.com and store credentials."""
-    server = _server_url()
+    server = ctx.obj["server"]
     email = click.prompt("Email")
     password = click.prompt("Password", hide_input=True)
 
@@ -129,7 +135,7 @@ def login() -> None:
     if not token:
         raise click.ClickException("Server did not return a token.")
 
-    save_credentials(token, email)
+    save_credentials(token, email, server)
     click.echo(f"Logged in as {email}.")
 
 
@@ -139,7 +145,8 @@ def login() -> None:
 
 
 @cli.command()
-def logout() -> None:
+@click.pass_context
+def logout(ctx: click.Context) -> None:
     """Log out and remove stored credentials."""
     try:
         creds = load_credentials()
@@ -147,7 +154,7 @@ def logout() -> None:
         click.echo("Not logged in.")
         return
 
-    server = _server_url()
+    server = creds.get("server_url", ctx.obj["server"])
     token = creds["token"]
 
     try:
@@ -173,10 +180,11 @@ def logout() -> None:
 
 @cli.command()
 @click.argument("project", required=False, default=None)
-def status(project: Optional[str]) -> None:
+@click.pass_context
+def status(ctx: click.Context, project: Optional[str]) -> None:
     """Show current deployment status. Optionally filter by PROJECT slug."""
     creds = load_credentials()
-    server = _server_url()
+    server = ctx.obj["server"]
     token = creds["token"]
 
     params = {}
@@ -207,12 +215,13 @@ def status(project: Optional[str]) -> None:
 
 @cli.command()
 @click.argument("project_slug")
-def deploy(project_slug: str) -> None:
+@click.pass_context
+def deploy(ctx: click.Context, project_slug: str) -> None:
     """Deploy PROJECT_SLUG to production on djustlive.com."""
     _check_git_clean()
 
     creds = load_credentials()
-    server = _server_url()
+    server = ctx.obj["server"]
     token = creds["token"]
 
     url = f"{server}/api/v1/projects/{project_slug}/environments/production/deploy/"
