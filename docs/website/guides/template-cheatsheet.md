@@ -2,7 +2,7 @@
 title: "Template Cheat Sheet"
 slug: template-cheatsheet
 section: guides
-order: 11
+order: 10
 level: beginner
 description: "Quick reference for all djust template directives, event attributes, loading states, and common pitfalls."
 ---
@@ -355,19 +355,22 @@ djust.hooks.chart = {
 
 ## Common Pitfalls
 
-### `{% if %}` inside attribute values
+### One-sided `{% if %}` in class attributes
 
-**Problem:** Using `{% if %}` inside an HTML attribute value works, but can produce unnecessary VDOM comment anchors. Inline conditionals are the recommended alternative — they produce cleaner output.
+**Problem:** Using `{% if %}` without `{% else %}` inside an HTML attribute can confuse djust's branch-aware div-depth counter, causing VDOM patching misalignment.
 
 ```html
-<!-- Works, but not recommended -->
+<!-- WRONG: one-sided if inside class attribute -->
 <div class="card {% if active %}active{% endif %}">
+```
 
-<!-- Recommended: inline conditional -->
-<div class="{{ 'card active' if active else 'card' }}">
-<div class="card {{ 'active' if active else '' }}">
+**Fix:** Use a separate attribute or a full `{% if/else %}` expression:
 
-<!-- Also fine: move the conditional outside the tag -->
+```html
+<!-- CORRECT: full if/else -->
+<div class="card {% if active %}active{% else %}{% endif %}">
+
+<!-- ALSO CORRECT: move the conditional outside -->
 {% if active %}
 <div class="card active">
 {% else %}
@@ -377,7 +380,7 @@ djust.hooks.chart = {
 </div>
 ```
 
-`{{ expr if condition else '' }}` is resolved entirely in the template engine — no DOM comment anchors are inserted, so VDOM path indices stay correct.
+This limitation applies specifically to class and other attribute values — `{% if %}` blocks in element content work fine.
 
 ### Form field values during VDOM patch
 

@@ -165,6 +165,109 @@ Targets for interactive updates:
 - **List update**: 5-20 patches, < 5 ms
 - **Full refresh**: 50+ patches -- consider optimizing if > 10 ms
 
+## Template Attributes
+
+### `dj-root` — Reactive Boundary
+
+`dj-root` marks the DOM subtree that djust manages. Only HTML inside `dj-root` is diffed and patched. Everything outside (static headers, navbars, footers) is never touched.
+
+```html
+<body dj-view="{{ dj_view_id }}">   {# Identifies WebSocket session #}
+    <header>Static header — never patched</header>
+    <div dj-root>
+        {# Everything here is managed by the VDOM #}
+        {{ count }}
+        <button dj-click="increment">+</button>
+    </div>
+</body>
+```
+
+The VDOM baseline is established for the `dj-root` subtree at mount time. On every event, the Rust engine diffs the new render of this subtree against the stored baseline and emits minimal patches.
+
+### `dj-key` / `data-key` — Stable List Identity
+
+Without a key, children are compared by position (indexed diffing). Insertions and deletions cause cascading replacements for all subsequent siblings.
+
+With `data-key` or `dj-key`, the diff algorithm uses keyed diffing: it maps old keys to new keys and emits `MoveChild` patches instead of remove-then-insert pairs. This preserves DOM state (input focus, scroll position, CSS animations) across reorders.
+
+```html
+{# Without key: position-based, produces extra mutations on reorder #}
+{% for item in items %}
+<div>{{ item.name }}</div>
+{% endfor %}
+
+{# With data-key: move-aware, O(n) keyed diff #}
+{% for item in items %}
+<div data-key="{{ item.id }}">{{ item.name }}</div>
+{% endfor %}
+
+{# dj-key is equivalent to data-key #}
+{% for item in items %}
+<li dj-key="{{ item.id }}">{{ item.name }}</li>
+{% endfor %}
+```
+
+Keys must be unique within the parent element. Use the item's primary key or a stable string identifier.
+
+### Opting Out of VDOM Patching
+
+For subtrees managed by external JavaScript (chart libraries, rich text editors, map widgets), use `dj-update="ignore"` to prevent djust from patching them:
+
+```html
+<div dj-update="ignore" id="my-chart">
+    {# Chart.js or similar owns this DOM — djust will not touch it #}
+</div>
+```
+
+---
+
+## Known Pitfalls
+
+### One-Sided `{% if %}` in Attribute Values
+
+djust's template preprocessor counts `{% if %}` / `{% endif %}` pairs to track div depth during rendering. When `{% if %}` appears inside an HTML **attribute value** without a matching `{% else %}`, the depth counter can fall out of sync, causing VDOM patching misalignment after the first render where the branch evaluates to false.
+
+```html
+{# WRONG: one-sided if inside class attribute #}
+<div class="card {% if active %}active{% endif %}">
+    ...
+</div>
+```
+
+**Fix:** Use a full `{% if/else %}` pair inside the attribute, or move the conditional outside the tag:
+
+```html
+{# CORRECT: full if/else inside attribute #}
+<div class="card {% if active %}active{% else %}{% endif %}">
+
+{# ALSO CORRECT: conditional wraps the entire tag #}
+{% if active %}
+<div class="card active">
+{% else %}
+<div class="card">
+{% endif %}
+    ...
+</div>
+```
+
+This limitation applies only to attribute values. `{% if %}` blocks in element text content work correctly.
+
+### Form Field Value Preservation
+
+djust's VDOM preserves the live value of `<input>`, `<textarea>`, and `<select>` elements during patches. If the user has typed into a field and the server re-renders that field with the same `value=` attribute, the user's draft is kept.
+
+However, if the server sends a **different** `value=`, the server value wins. This is intentional — it allows server-side validation to correct invalid input.
+
+To prevent djust from patching a form field entirely (e.g., a rich text editor), wrap it in `dj-update="ignore"`:
+
+```html
+<div dj-update="ignore">
+    <textarea id="body"></textarea>
+</div>
+```
+
+---
+
 ## Debugging
 
 Enable VDOM tracing to see every diff decision:
