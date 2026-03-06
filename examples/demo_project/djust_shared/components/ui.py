@@ -38,6 +38,7 @@ class CodeBlock(Component):
         show_header: bool = True,
         theme: str = "atom-one-dark"
     ):
+        super().__init__()
         self.code = code
         self.language = language
         self.filename = filename
@@ -95,6 +96,7 @@ class HeroSection(Component):
         icon: Optional[str] = None,
         padding: str = "4rem 0 2rem"
     ):
+        super().__init__()
         self.title = title
         self.subtitle = subtitle
         self.icon = icon
@@ -145,6 +147,7 @@ class Card(Component):
         header_color: Optional[str] = None,
         show_header: bool = True
     ):
+        super().__init__()
         self.content = content
         self.title = title
         self.subtitle = subtitle
@@ -192,6 +195,7 @@ class FeatureCard(Component):
     """
 
     def __init__(self, icon: str, title: str, description: str):
+        super().__init__()
         self.icon = icon
         self.title = title
         self.description = description
@@ -222,6 +226,7 @@ class FeatureGrid(Component):
     """
 
     def __init__(self, features: List[Component], columns: int = 3):
+        super().__init__()
         self.features = features
         self.columns = columns
 
@@ -274,6 +279,7 @@ class Button(Component):
         icon_svg: Optional[str] = None,
         extra_attrs: Optional[str] = None
     ):
+        super().__init__()
         self.text = text
         self.event = event
         self.variant = variant
@@ -325,6 +331,7 @@ class Section(Component):
         padding: str = "4rem 0",
         max_width: str = "1200px"
     ):
+        super().__init__()
         self.content = content
         self.title = title
         self.subtitle = subtitle
@@ -362,6 +369,7 @@ class BackButton(Component):
     """
 
     def __init__(self, href: str = "/demos/", text: str = "Back to Demos"):
+        super().__init__()
         self.href = href
         self.text = text
 

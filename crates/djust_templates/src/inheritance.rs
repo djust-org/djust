@@ -119,10 +119,12 @@ impl InheritanceChain {
                 condition,
                 true_nodes,
                 false_nodes,
+                in_tag_context,
             } => Node::If {
                 condition: condition.clone(),
                 true_nodes: self.apply_block_overrides(true_nodes),
                 false_nodes: self.apply_block_overrides(false_nodes),
+                in_tag_context: *in_tag_context,
             },
             Node::For {
                 var_names,
@@ -343,6 +345,7 @@ fn node_to_template_string(node: &Node) -> String {
             condition,
             true_nodes,
             false_nodes,
+            ..
         } => {
             let mut result = format!("{{% if {condition} %}}");
             result.push_str(&nodes_to_template_string(true_nodes));
@@ -387,7 +390,11 @@ fn node_to_template_string(node: &Node) -> String {
             result.push_str("{% endwith %}");
             result
         }
-        Node::Comment => String::new(),    // Comments are stripped
+        Node::Comment => String::new(), // Comments are stripped
+        Node::Load(libs) => {
+            // Preserve {% load %} tags so downstream Django rendering can resolve them
+            format!("{{% load {} %}}", libs.join(" "))
+        }
         Node::Extends(_) => String::new(), // Extends is already processed
         Node::Include {
             template,
@@ -438,6 +445,36 @@ fn node_to_template_string(node: &Node) -> String {
             }
             result.push_str(" %}");
             result
+        }
+        Node::WidthRatio {
+            value,
+            max_value,
+            max_width,
+        } => {
+            format!("{{% widthratio {value} {max_value} {max_width} %}}")
+        }
+        Node::FirstOf { args } => {
+            format!("{{% firstof {} %}}", args.join(" "))
+        }
+        Node::TemplateTag(name) => {
+            format!("{{% templatetag {name} %}}")
+        }
+        Node::Spaceless { nodes } => {
+            let mut result = "{% spaceless %}".to_string();
+            result.push_str(&nodes_to_template_string(nodes));
+            result.push_str("{% endspaceless %}");
+            result
+        }
+        Node::Cycle { values, name } => {
+            let mut result = format!("{{% cycle {}", values.join(" "));
+            if let Some(n) = name {
+                result.push_str(&format!(" as {n}"));
+            }
+            result.push_str(" %}");
+            result
+        }
+        Node::Now(format) => {
+            format!("{{% now \"{format}\" %}}")
         }
     }
 }
@@ -582,6 +619,7 @@ mod tests {
             condition: "user.is_authenticated".to_string(),
             true_nodes: vec![Node::Text("Welcome!".to_string())],
             false_nodes: vec![Node::Text("Please login".to_string())],
+            in_tag_context: false,
         }];
 
         let result = nodes_to_template_string(&nodes);
@@ -686,6 +724,7 @@ mod tests {
                     empty_nodes: vec![],
                 }],
                 false_nodes: vec![Node::Text("<p>No items</p>".to_string())],
+                in_tag_context: false,
             }],
         }];
 
@@ -947,6 +986,7 @@ mod tests {
                 nodes: vec![Node::Text("PARENT_CONTENT".to_string())],
             }],
             false_nodes: vec![Node::Text("hidden".to_string())],
+            in_tag_context: false,
         }];
 
         let child_nodes = vec![

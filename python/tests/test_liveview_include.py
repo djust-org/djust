@@ -221,7 +221,7 @@ class TestUnsupportedTagWarning:
         class MyView(LiveView):
             template = """
             <div dj-root>
-                {% spaceless %}content{% endspaceless %}
+                {% ifchanged %}content{% endifchanged %}
             </div>
             """
 
@@ -230,4 +230,4 @@ class TestUnsupportedTagWarning:
 
         # Should contain HTML comments for the unsupported tags
         assert "<!-- djust: unsupported tag" in html
-        assert "spaceless" in html
+        assert "ifchanged" in html

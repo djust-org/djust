@@ -969,6 +969,9 @@ variables = extract_template_variables(template_source)
 
 ## Changelog
 
+### v0.3.3 (2026-02-26)
+- **`{% if %}` in attribute values** no longer emits `<!--dj-if-->` comment anchors (issue #388). The renderer outputs an empty string for false branches in attribute contexts, keeping VDOM path indices correct. Inline conditionals (`{{ 'cls' if cond else '' }}`) are recommended as the cleaner alternative.
+
 ### v0.1.7 (2026-01-24)
 - Added `optimize_ast()` function to merge adjacent Text nodes (5-15% render speedup)
 - Added `parse_html_continue()` for ID counter continuity across parsing operations

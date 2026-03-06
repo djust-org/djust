@@ -23,7 +23,7 @@ class TestStartAsync:
         # Check that _async_tasks dict was created with default name
         assert hasattr(view, "_async_tasks")
         assert len(view._async_tasks) == 1
-        task_name, (cb, args, kwargs) = list(view._async_tasks.items())[0]
+        _, (cb, args, kwargs) = list(view._async_tasks.items())[0]
         assert cb is callback
         assert args == ("arg1",)
         assert kwargs == {"key": "val"}
@@ -126,6 +126,7 @@ class TestBackgroundDecorator:
     def test_background_decorator_exists(self):
         """@background decorator should be importable."""
         from djust.decorators import background
+
         assert callable(background)
 
     def test_background_creates_async_task(self):

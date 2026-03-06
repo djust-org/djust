@@ -1,7 +1,7 @@
 /**
  * Tests for MoveChild with child_d (ID-based child resolution).
  *
- * Verifies that MoveChild resolves the child to move by data-dj-id
+ * Verifies that MoveChild resolves the child to move by dj-id
  * instead of stale index when child_d is provided.
  * Regression test for Issue #225.
  */
@@ -47,15 +47,15 @@ function attachToDOM(parent) {
 }
 
 describe('MoveChild with child_d — ID-based resolution (#225)', () => {
-    it('should resolve child by data-dj-id when child_d is provided', () => {
+    it('should resolve child by dj-id when child_d is provided', () => {
         const parent = document.createElement('div');
-        parent.setAttribute('data-dj-id', 'root');
+        parent.setAttribute('dj-id', 'root');
 
         const text = document.createTextNode('hello');
         const section = document.createElement('section');
-        section.setAttribute('data-dj-id', 's1');
+        section.setAttribute('dj-id', 's1');
         const ul = document.createElement('ul');
-        ul.setAttribute('data-dj-id', 'u1');
+        ul.setAttribute('dj-id', 'u1');
 
         parent.appendChild(text);
         parent.appendChild(section);
@@ -85,13 +85,13 @@ describe('MoveChild with child_d — ID-based resolution (#225)', () => {
         //   With child_d="s1", finds section correctly
 
         const parent = document.createElement('div');
-        parent.setAttribute('data-dj-id', 'root');
+        parent.setAttribute('dj-id', 'root');
 
         const text = document.createTextNode('hello');
         const section = document.createElement('section');
-        section.setAttribute('data-dj-id', 's1');
+        section.setAttribute('dj-id', 's1');
         const ul = document.createElement('ul');
-        ul.setAttribute('data-dj-id', 'u1');
+        ul.setAttribute('dj-id', 'u1');
 
         parent.appendChild(text);
         parent.appendChild(section);
@@ -125,7 +125,7 @@ describe('MoveChild with child_d — ID-based resolution (#225)', () => {
 
     it('should fall back to index-based resolution when child_d is absent', () => {
         const parent = document.createElement('div');
-        parent.setAttribute('data-dj-id', 'p1');
+        parent.setAttribute('dj-id', 'p1');
 
         const a = document.createElement('div');
         a.textContent = 'A';

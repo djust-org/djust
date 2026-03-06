@@ -221,36 +221,78 @@ pub fn parse_html_continue(html: &str) -> Result<VNode> {
 
 fn find_root(handle: &Handle) -> Handle {
     // html5ever wraps fragments in <html><head/><body>content</body></html>
-    // We want to find the actual content element, not the html wrapper
+    // We want to find the actual content, not the html wrapper.
+    //
+    // Strategy:
+    // 1. Find <body> in the parsed document
+    // 2. Search for [dj-root] or [dj-view] element — this is the LiveView root
+    //    whose innerHTML matches the client DOM. Using it as VDOM root ensures
+    //    dj-id attributes stay in sync between server VDOM and client DOM.
+    // 3. If no [dj-root]/[dj-view] found, fall back to first element child of <body>
+    //    (handles plain fragment inputs with no LiveView wrapper).
 
-    // First, find the <html> element
-    for child in handle.children.borrow().iter() {
-        if let NodeData::Element { ref name, .. } = child.data {
-            if name.local.as_ref() == "html" {
-                // Found <html>, now look for <body>
-                for html_child in child.children.borrow().iter() {
-                    if let NodeData::Element { ref name, .. } = html_child.data {
-                        if name.local.as_ref() == "body" {
-                            // Found <body>, return its first element child
-                            for body_child in html_child.children.borrow().iter() {
-                                if let NodeData::Element { .. } = body_child.data {
-                                    return body_child.clone();
-                                }
-                            }
-                        }
-                    }
-                }
+    // First, find the <body> element
+    let body = find_body(handle);
+    if let Some(ref body_handle) = body {
+        // Search for [dj-root] or [dj-view] inside <body>
+        if let Some(root) = find_liveview_root(body_handle) {
+            return root;
+        }
+
+        // No [dj-root]/[dj-view] found — return first element child of <body>
+        for body_child in body_handle.children.borrow().iter() {
+            if let NodeData::Element { .. } = body_child.data {
+                return body_child.clone();
             }
         }
     }
 
-    // Fallback: return first element found
+    // Fallback: return first element found at document level
     for child in handle.children.borrow().iter() {
         if let NodeData::Element { .. } = child.data {
             return child.clone();
         }
     }
     handle.clone()
+}
+
+/// Find the <body> element inside the document.
+fn find_body(handle: &Handle) -> Option<Handle> {
+    for child in handle.children.borrow().iter() {
+        if let NodeData::Element { ref name, .. } = child.data {
+            if name.local.as_ref() == "html" {
+                for html_child in child.children.borrow().iter() {
+                    if let NodeData::Element { ref name, .. } = html_child.data {
+                        if name.local.as_ref() == "body" {
+                            return Some(html_child.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Recursively search for an element with `dj-root` or `dj-view` attribute.
+/// Returns the first match (depth-first).
+fn find_liveview_root(handle: &Handle) -> Option<Handle> {
+    for child in handle.children.borrow().iter() {
+        if let NodeData::Element { ref attrs, .. } = child.data {
+            let has_liveview_attr = attrs.borrow().iter().any(|a| {
+                let name = a.name.local.as_ref();
+                name == "dj-root" || name == "dj-view"
+            });
+            if has_liveview_attr {
+                return Some(child.clone());
+            }
+            // Recurse into children
+            if let Some(found) = find_liveview_root(child) {
+                return Some(found);
+            }
+        }
+    }
+    None
 }
 
 fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
@@ -287,10 +329,11 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                 let attr_value = attr.value.to_string();
 
                 // Extract dj-key or data-key for efficient list diffing (explicit opt-in only)
-                if (attr_name_lower == "dj-key" || attr_name_lower == "data-key") && !attr_value.is_empty() {
-                    if key.is_none() {
-                        key = Some(attr_value.clone());
-                    }
+                if (attr_name_lower == "dj-key" || attr_name_lower == "data-key")
+                    && !attr_value.is_empty()
+                    && key.is_none()
+                {
+                    key = Some(attr_value.clone());
                 }
 
                 // Don't overwrite our generated dj-id if template already has one
@@ -408,6 +451,130 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_find_root_full_page_with_dj_root() {
+        // When body has multiple children, find_root should locate [dj-root]
+        // not just return the first element child (which would be <nav>).
+        let html = r#"<!DOCTYPE html><html><head><title>Test</title></head><body><nav>Nav</nav><div dj-root="" dj-view="app.views.MyView"><aside><select><option value="">All</option><option value="1">Item 1</option></select></aside><div class="main-content"><header>Title</header><main>Content</main></div></div><footer>Footer</footer></body></html>"#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.tag, "div", "Root should be <div dj-root>, not <nav>");
+        assert_eq!(
+            vnode.attrs.get("dj-root"),
+            Some(&String::new()),
+            "Root should have dj-root attribute"
+        );
+        assert_eq!(
+            vnode.children.len(),
+            2,
+            "dj-root should have aside + div.main-content"
+        );
+        assert_eq!(vnode.children[0].tag, "aside");
+        assert_eq!(vnode.children[1].tag, "div");
+
+        // Verify round-trip preserves structure
+        let html_out = vnode.to_html();
+        assert!(
+            html_out.contains("</select></aside><div"),
+            "div.main-content should be sibling of aside, not inside select/option"
+        );
+    }
+
+    #[test]
+    fn test_find_root_nested_dj_root() {
+        // dj-root nested inside wrapper divs should still be found
+        let html = r#"<!DOCTYPE html><html><head></head><body><div class="wrapper"><div class="container"><div dj-root="" dj-view="app.views.X"><p>Content</p></div></div></div></body></html>"#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.tag, "div");
+        assert_eq!(
+            vnode.attrs.get("dj-root"),
+            Some(&String::new()),
+            "Should find nested dj-root"
+        );
+        assert_eq!(vnode.children.len(), 1);
+        assert_eq!(vnode.children[0].tag, "p");
+    }
+
+    #[test]
+    fn test_find_root_fragment_no_dj_root() {
+        // Plain fragment without dj-root should still work (backward compat)
+        let html = "<div><span>Hello</span></div>";
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.tag, "div");
+        assert_eq!(vnode.children.len(), 1);
+        assert_eq!(vnode.children[0].tag, "span");
+    }
+
+    #[test]
+    fn test_find_root_dj_view_fallback() {
+        // dj-view (without dj-root) should also be found
+        let html = r#"<!DOCTYPE html><html><head></head><body><header>H</header><div dj-view="app.views.X"><p>Content</p></div></body></html>"#;
+        let vnode = parse_html(html).unwrap();
+
+        assert_eq!(vnode.tag, "div");
+        assert!(vnode.attrs.contains_key("dj-view"));
+    }
+
+    #[test]
+    fn test_find_root_select_with_options_full_page() {
+        // Full reproduction of the bug: full page with select/option inside dj-root,
+        // followed by sibling div.main-content. The div should NOT be absorbed into option.
+        let html = concat!(
+            "<!DOCTYPE html><html><head><title>App</title></head><body>",
+            "<nav><a href=\"/\">Home</a></nav>",
+            "<div dj-root=\"\" dj-view=\"app.views.Dashboard\">",
+            "<aside><select><option value=\"\">All</option>",
+            "<option value=\"1\">Cat A</option>",
+            "<option value=\"2\">Cat B</option>",
+            "</select></aside>",
+            "<div class=\"main-content\"><header>Dashboard</header>",
+            "<main>Content here</main></div>",
+            "</div>",
+            "<footer>Footer</footer></body></html>"
+        );
+        let vnode = parse_html(html).unwrap();
+
+        // Root must be dj-root div, not <nav>
+        assert_eq!(vnode.tag, "div");
+        assert!(vnode.attrs.contains_key("dj-root"));
+
+        // Must have exactly 2 children: aside + div.main-content
+        assert_eq!(vnode.children.len(), 2);
+        assert_eq!(vnode.children[0].tag, "aside");
+        assert_eq!(vnode.children[1].tag, "div");
+        assert_eq!(
+            vnode.children[1].attrs.get("class"),
+            Some(&"main-content".to_string())
+        );
+
+        // Verify select has 3 options, not a <div> child
+        let select = &vnode.children[0].children[0];
+        assert_eq!(select.tag, "select");
+        assert_eq!(
+            select.children.len(),
+            3,
+            "select should have 3 option children"
+        );
+        for opt in &select.children {
+            assert_eq!(opt.tag, "option", "all select children must be <option>");
+        }
+
+        // Round-trip must produce valid HTML with proper structure
+        let html_out = vnode.to_html();
+        assert!(
+            html_out.contains("</select></aside><div"),
+            "div.main-content must follow </aside>, got: {}",
+            html_out
+        );
+        assert!(
+            !html_out.contains("<option<") && !html_out.contains("<option <"),
+            "option tags must not absorb div: {}",
+            html_out
+        );
+    }
 
     #[test]
     fn test_parse_simple_html() {

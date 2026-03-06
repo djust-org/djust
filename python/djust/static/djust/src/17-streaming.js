@@ -69,6 +69,7 @@ function _applyStreamOp(op, streamName) {
 
     switch (op.op) {
         case 'replace':
+            // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
             el.innerHTML = op.html || '';
             _removeStreamError(el);
             _dispatchStreamEvent(el, 'stream:update', { op: 'replace', stream: streamName });
@@ -197,6 +198,7 @@ function _dispatchStreamEvent(el, eventName, detail) {
  */
 function _htmlToFragment(html) {
     const template = document.createElement('template');
+    // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
     template.innerHTML = html || '';
     return template.content;
 }

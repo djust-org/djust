@@ -119,7 +119,8 @@ Every element in a LiveComponent template that has a `dj-*` event attribute **mu
 ```python
 # Component sends event up:
 class CounterWidget(LiveComponent):
-    def increment(self):
+    @event_handler()
+    def increment(self, **kwargs):
         self.count += 1
         self.trigger_update()
         self.send_parent("count_changed", {"count": self.count})

@@ -9,7 +9,6 @@ Covers:
 - Event dispatch: handler security, renders patch/html_update
 """
 
-import asyncio
 import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch

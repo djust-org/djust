@@ -140,7 +140,7 @@ class TestAsyncWorkIntegration:
         assert "background_work" in view._async_tasks
 
         # The callback should be executable
-        task_name, (callback, args, kwargs) = list(view._async_tasks.items())[0]
+        _, (callback, args, kwargs) = list(view._async_tasks.items())[0]
         assert callable(callback)
 
     async def test_multiple_concurrent_tasks(self):

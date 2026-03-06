@@ -18,6 +18,7 @@ A practical guide to building reactive LiveView applications with djust.
 - [Forms](#forms)
 - [Testing](#testing)
 - [Debugging](#debugging)
+- [Navigation](#navigation)
 - [Common Pitfalls](#common-pitfalls)
 
 ---
@@ -676,22 +677,32 @@ class MyView(LiveView):
 {% endif %}
 ```
 
-**Note**: If you need URL updates and browser history support for tabs (so users can bookmark specific tabs or use the back button), use `dj-patch` instead:
+**Better approach**: If you need URL updates and browser history support for tabs (so users can bookmark specific tabs or use the back button), use `dj-patch` instead of `dj-click`. This avoids fragile data attributes, supports back/forward navigation, and makes tabs bookmarkable:
 
 ```html
 <div class="tabs">
-    <a href="?tab=overview" dj-patch="handle_params"
+    <a dj-patch="?tab=overview"
        class="{% if active_tab == 'overview' %}active{% endif %}">
         Overview
     </a>
-    <a href="?tab=settings" dj-patch="handle_params"
+    <a dj-patch="?tab=settings"
        class="{% if active_tab == 'settings' %}active{% endif %}">
         Settings
     </a>
 </div>
 ```
 
-System check `djust.T010` will warn if you use `dj-click` with `data-tab` attributes (and other navigation-related patterns) to help catch cases where URL navigation would be more appropriate.
+Then handle URL changes in `handle_params()`:
+
+```python
+class MyView(NavigationMixin, LiveView):
+    def handle_params(self, params, uri):
+        tab = params.get("tab", "overview")
+        if tab in ("overview", "settings", "logs"):
+            self.active_tab = tab
+```
+
+System check `djust.T010` will warn if you use `dj-click` with `data-tab` attributes (and other navigation-related patterns) to help catch cases where URL navigation would be more appropriate. See the [Navigation & URL State](../website/guides/navigation.md) guide for a full walkthrough.
 
 ### Toast notifications
 
@@ -868,6 +879,20 @@ logger = logging.getLogger(__name__)
 def my_handler(self, **kwargs):
     logger.debug("Handler called with %s", kwargs)
 ```
+
+---
+
+## Navigation
+
+For in-view navigation (tabs, filters, pagination), use `dj-patch` instead of `dj-click` with data attributes. This gives you URL updates, browser history, and bookmarkable state for free.
+
+| Directive | Use for |
+|---|---|
+| `dj-click` | Actions that modify state (increment counter, delete item, toggle) |
+| `dj-patch` | Navigation that should update the URL (tabs, filters, pagination) |
+| `dj-navigate` | Full page navigation to a different LiveView |
+
+System check `djust.T010` detects `dj-click` used for navigation and suggests `dj-patch`. For a complete walkthrough with examples, see the [Navigation & URL State](../website/guides/navigation.md) guide.
 
 ---
 
@@ -1263,6 +1288,7 @@ When building a djust LiveView:
 - [ ] Use `@debounce` on search/filter inputs to reduce server load
 - [ ] Add `{% csrf_token %}` to all forms
 - [ ] Validate user input in event handlers
+- [ ] Use `dj-patch` for tab/view navigation instead of `dj-click` with data attributes
 - [ ] Use `dj-confirm` for destructive actions
 - [ ] Check authentication/authorization in `mount()` and handlers
 - [ ] Configure WebSocket routing in `asgi.py` with `ProtocolTypeRouter`

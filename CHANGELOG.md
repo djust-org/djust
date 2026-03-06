@@ -7,6 +7,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Auto-reload on unrecoverable VDOM state** — When VDOM patch recovery fails because recovery HTML is unavailable (e.g. after server restart), the client now auto-reloads the page instead of showing a confusing error overlay. The server sends `recoverable: false` to signal the client.
+- **`{% djust_pwa_head %}` and other custom tags with quoted arguments containing spaces now render correctly** — The Rust template lexer used `split_whitespace()` to tokenize tag arguments, which broke quoted values like `name="My App"` into separate tokens (`name="My` and `App"`). This caused the downstream Python handler to receive malformed arguments, silently returning empty output. Replaced with a quote-aware splitter (`split_tag_args`) that preserves quoted strings as single arguments.
+- **`{% load %}` tags stripped during template inheritance, breaking inclusion tags** — The Rust parser treated `{% load %}` as `Node::Comment`, which `nodes_to_template_string()` discarded during inheritance reconstruction. When the resolved template was re-parsed, custom tags that relied on Django tag libraries (e.g. `{% djust_pwa_head %}`) could silently fail. Fixed by adding a dedicated `Node::Load` variant that preserves library names through reconstruction. Also improved `_render_django_tag()` error handling: failures now log a full traceback via `logger.exception()` and return a visible HTML comment instead of an empty string.
+- **Checkbox/radio `checked` and `<option>` `selected` state not updated by VDOM patches** — `SetAttr` and `RemoveAttr` patches only called `setAttribute`/`removeAttribute`, which updates the HTML attribute but not the DOM property. After user interaction the browser separates the two, so server-driven state changes via `dj-click` had no visible effect on checkboxes, radios, or select options. Fixed by syncing the DOM property alongside the attribute. Also fixed `createNodeFromVNode` to set `.checked`/`.selected` when creating new elements. (#422)
+
+## [0.3.5] - 2026-03-05
+
+### Added
+
+- **`djust-deploy` CLI** — new `python/djust/deploy_cli.py` module providing deployment commands for [djustlive.com](https://djustlive.com). Install with `pip install djust[deploy]`. Available via the `djust-deploy` entry point:
+  - `djust-deploy login` — prompts for email/password, authenticates against djustlive.com, and stores the token in `~/.djustlive/credentials` (mode `0o600`)
+  - `djust-deploy logout` — calls the server logout endpoint and removes the local credentials file
+  - `djust-deploy status [project]` — fetches current deployment state; optionally filtered by project slug
+  - `djust-deploy deploy <project-slug>` — validates the git working tree is clean, triggers a production deployment, and streams build logs to stdout
+
+### Fixed
+
+- **`dj-hook` elements now initialize after `dj-navigate` navigation** — `updateHooks()` is called after `live_redirect_mount` replaces DOM content via WebSocket and SSE mount handlers. Previously, hook lifecycle callbacks (`mounted()`, `destroyed()`) were skipped after client-side navigation, leaving hook-dependent elements (e.g., Chart.js canvases) uninitialized.
+- **Event handler exceptions now logged with full traceback in production** — Previously, `handle_exception()` only logged the exception class name (e.g. `ValueError`) when `DEBUG=False`, hiding the error message and stack trace. Now logs type, message, and traceback at `ERROR` level regardless of `DEBUG` mode. Client responses remain generic in production.
+- **DJE-053 no longer fires as a warning for idempotent event handlers** — When an `@event_handler` runs successfully but produces no DOM changes (e.g. toggle clicked in target state, debounced input with unchanged results, side-effect-only handlers), the empty diff is now silently dropped at `DEBUG` level rather than logged as a `WARNING`. This matches Phoenix LiveView behaviour. The `WARNING`-level DJE-053 is preserved for genuine VDOM failures (`patches=None`), which fall back to a full HTML update and risk losing event listeners.
+
+## [0.3.5rc2] - 2026-03-04
+
+### Fixed
+
+- **VDOM patching with conditional `{% if %}` blocks** — `InsertChild` and `RemoveChild` patches now include `ref_d` and `child_d` fields for ID-based DOM resolution, preventing stale-index mis-targeting when `{% if %}` blocks add or remove elements that shift sibling positions. Falls back to index-based resolution for backwards compatibility. ([#410](https://github.com/djust-org/djust/issues/410))
+
+## [0.3.5rc1] - 2026-02-26
+
+### Added
+
+- **Type stubs for Rust-injected LiveView methods** — `.pyi` stubs for `live_redirect`, `live_patch`, `push_event`, `stream`, and related methods so mypy/pyright catch typos at lint time. ([#390](https://github.com/djust-org/djust/pull/390))
+- **Navigation Patterns guide** — Documents when to use `dj-navigate` vs `live_redirect` vs `live_patch`. ([#390](https://github.com/djust-org/djust/pull/390))
+- **Testing guide** — Django testing best practices and pytest setup for djust applications. ([#390](https://github.com/djust-org/djust/pull/390))
+- **System checks reference** — New `docs/system-checks.md` covering all 37 check IDs (C/V/S/T/Q) with severity, detection method, suppression patterns, and known false positives. ([#398](https://github.com/djust-org/djust/pull/398))
+
+### Security
+
+- **`mark_safe(f"...")` eliminated in core framework** — `components/base.py` now uses `format_html()` to avoid XSS risk in component rendering. ([#390](https://github.com/djust-org/djust/pull/390))
+- **Exception details no longer exposed in production** — `render_template()` previously returned `f"<div>Error: {e}</div>"` unconditionally, leaking internal Rust template engine details. Now returns a generic message in production; error details are only shown when `settings.DEBUG = True`. ([#385](https://github.com/djust-org/djust/pull/385))
+- **Playground XSS fixed** — Replaced `innerHTML` assignment with a sandboxed iframe for user-editable preview content. ([#384](https://github.com/djust-org/djust/pull/384))
+- **Prototype pollution guard** — Added safeguards against prototype pollution in client-side JS. ([#384](https://github.com/djust-org/djust/pull/384))
+
+### Fixed
+
+- **`{% if %}` inside attribute values no longer shifts VDOM path indices** — Conditional attribute fragments were causing off-by-one errors in VDOM diffing. ([#390](https://github.com/djust-org/djust/pull/390))
+- **`super().__init__()` added to component and backend subclasses** — `TenantAwareRedisBackend`, `TenantAwareMemoryBackend`, and several example components were missing `super().__init__()` calls, causing MRO issues. ([#386](https://github.com/djust-org/djust/pull/386))
+- **Unused `escape` import removed from `data_table.py`** — CodeQL alert resolved. ([#387](https://github.com/djust-org/djust/pull/387))
+- **`render_full_template` signature mismatch fixed** — `no_template_demo.py` override now correctly accepts `serialized_context`. ([#387](https://github.com/djust-org/djust/pull/387))
+- **V004 false positives on lifecycle methods** — `handle_params()`, `handle_disconnect()`, `handle_connect()`, and `handle_event()` no longer incorrectly trigger the V004 system check. ([#398](https://github.com/djust-org/djust/pull/398))
+- **T013 false positives for `{{ view_path }}`** — `dj-view="{{ view_path }}"` (Django template variable injection) is now correctly recognised as valid by T013. ([#398](https://github.com/djust-org/djust/pull/398))
+- **V008 false positives for `-> str`-annotated functions** — Functions with primitive return-type annotations (e.g. `-> str`, `-> int`) no longer trigger V008 when their result is assigned in `mount()`. ([#398](https://github.com/djust-org/djust/pull/398))
+- **Test isolation** — `test_checks.py` and `double_bind.test.js` no longer fail when run as part of the full suite. ([#390](https://github.com/djust-org/djust/pull/390))
+
+## [0.3.4] - 2026-02-24
+
+Stable release — promotes 0.3.3rc1 through 0.3.3rc3. All changes below were present in the RC series; this entry summarises them for the stable changelog.
+
+### Added
+
+- **6 new Django template tags in Rust renderer** — `{% widthratio %}`, `{% firstof %}`, `{% templatetag %}`, `{% spaceless %}`, `{% cycle %}`, `{% now %}`. ([#329](https://github.com/djust-org/djust/issues/329))
+- **System checks `djust.T011` / `T012` / `T013`** — Warns at startup for unsupported Rust template tags, missing `dj-view`, and invalid `dj-view` paths. ([#293](https://github.com/djust-org/djust/issues/293), [#329](https://github.com/djust-org/djust/issues/329))
+- **Deployment guides** — Railway, Render, and Fly.io. ([#247](https://github.com/djust-org/djust/issues/247))
+- **Navigation and LiveView invariants documentation.** ([#304](https://github.com/djust-org/djust/issues/304), [#316](https://github.com/djust-org/djust/issues/316))
+
+### Fixed
+
+- **#380: `{% if %}` in HTML attribute values no longer emits `<!--dj-if-->` comment** — Produced malformed HTML (e.g. `class="btn <!--dj-if-->"`). Empty string is emitted instead; text-node VDOM anchor is unaffected. ([#381](https://github.com/djust-org/djust/pull/381))
+- **#382: `{% elif %}` chains in attribute values propagate `in_tag_context`** — All elif nodes in a chain now inherit the outer `{% if %}`'s attribute context. ([#383](https://github.com/djust-org/djust/pull/383))
+- **`{% if/else %}` branches miscounting div depth in template extraction.** ([#365](https://github.com/djust-org/djust/issues/365))
+- **VDOM extraction used fully-merged `{% extends %}` document.** ([#366](https://github.com/djust-org/djust/issues/366))
+- **`TypeError: Illegal invocation` in debug panel on Chrome/Edge.** ([#367](https://github.com/djust-org/djust/issues/367))
+- **`dj-patch('/')` now correctly updates browser URL to root path.** ([#307](https://github.com/djust-org/djust/issues/307))
+- **`live_patch` routing restored** — `handleNavigation` dispatch now fires correctly. ([#307](https://github.com/djust-org/djust/issues/307))
+- **T003 false positives eliminated** — `{% include %}` check now examines the include path, not whole-file content. ([#331](https://github.com/djust-org/djust/issues/331))
+
+## [0.3.3rc3] - 2026-02-24
+
+### Fixed
+
+- **#382: `{% elif %}` inside HTML attribute values propagates `in_tag_context`** — When `{% if a %}...{% elif b %}...{% endif %}` appears inside an attribute value and all conditions are false, the elif node previously emitted `<!--dj-if-->` (malformed HTML). Fixed by threading `in_tag_context` as a parameter into `parse_if_block()` so elif nodes inherit the outer if's attribute context. ([#382](https://github.com/djust-org/djust/issues/382))
+
+## [0.3.3rc2] - 2026-02-24
+
+### Fixed
+
+- **`{% if/else %}` branches miscounting div depth in template extraction** — `_extract_liveview_root_with_wrapper` and the other extraction methods treated both branches of a `{% if/else %}` block as independent div opens, causing depth to never reach 0 when both branches opened a div sharing a single closing `</div>`. This caused the entire template to be returned as root, making the view non-reactive. Fixed with a shared `_find_closing_div_pos()` static method that uses a branch stack to restore depth at `{% else %}`/`{% elif %}` tags, so mutually-exclusive branches are counted as one open. ([#365](https://github.com/djust-org/djust/issues/365))
+- **VDOM extraction used fully-merged `{% extends %}` document** — For inherited templates, `get_template()` extracted the VDOM root from the fully-resolved document (base HTML + inlined blocks), which contains surrounding HTML that the depth counter could trip over. Now prefers the child template source when it contains `dj-root`/`dj-view`, which holds exactly the block content needed. Also fixes the exception fallback path: the raw child source (containing `{% extends %}`) was incorrectly stored in `_full_template`, causing `render_full_template` to attempt rendering a non-standalone template. ([#366](https://github.com/djust-org/djust/issues/366))
+- **`TypeError: Illegal invocation` in debug panel on Chrome/Edge** — `_hookExistingWebSocket` called native WebSocket getter/setter functions via `Function.prototype.call()` from external code, which fails V8's brand check on IDL-generated bindings. Fixed by using normal property access (`ws.onmessage`) and assignment (`ws.onmessage = handler`) instead of `desc.get/set.call(ws)`. ([#367](https://github.com/djust-org/djust/issues/367))
+
+## [0.3.3rc1] - 2026-02-21
+
+### Added
+
+- **6 new Django template tags in Rust renderer** — Implemented `{% widthratio %}`, `{% firstof %}`, `{% templatetag %}`, `{% spaceless %}`, `{% cycle %}`, and `{% now %}` in the Rust template engine. These tags were previously rendered as HTML comments with warnings. ([#329](https://github.com/djust-org/djust/issues/329))
+- **System check `djust.T011` for unsupported template tags** — Warns at startup when templates use Django tags not yet implemented in the Rust renderer (`ifchanged`, `regroup`, `resetcycle`, `lorem`, `debug`, `filter`, `autoescape`). Suppressible with `{# noqa: T011 #}`. ([#329](https://github.com/djust-org/djust/issues/329))
+- **System check `djust.T012` for missing `dj-view`** — Detects templates that use `dj-*` event directives without a `dj-view` attribute, which would silently fail at runtime. ([#293](https://github.com/djust-org/djust/issues/293))
+- **System check `djust.T013` for invalid `dj-view` paths** — Detects empty or malformed `dj-view` attribute values. ([#293](https://github.com/djust-org/djust/issues/293))
+- **`{% now %}` supports 35+ Django date format specifiers** — Including `S` (ordinal suffix), `t` (days in month), `w`/`W` (weekday/week number), `L` (leap year), `c` (ISO 8601), `r` (RFC 2822), `U` (Unix timestamp), and Django's special `P` format (noon/midnight).
+- **Deployment guides** — Added deployment documentation for Railway, Render, and Fly.io. ([#247](https://github.com/djust-org/djust/issues/247))
+- **Navigation best practices documentation** — Documented `dj-patch` vs `dj-click` for client-side navigation, with `handle_params()` patterns. ([#304](https://github.com/djust-org/djust/issues/304))
+- **LiveView invariants documentation** — Documented root container requirement and `**kwargs` convention for event handlers. ([#316](https://github.com/djust-org/djust/issues/316))
+
+### Fixed
+
+- **#380: `{% if %}` inside HTML attribute values no longer emits `<!--dj-if-->` comment** — When a `{% if %}` block with no else branch evaluates to false inside an HTML attribute value (e.g. `class="btn {% if active %}active{% endif %}"`), the Rust renderer now emits an empty string instead of the `<!--dj-if-->` VDOM placeholder. The placeholder is only meaningful as a DOM child node; inside an attribute it produced malformed HTML (e.g. `class="btn <!--dj-if-->"`). Text-node context is unaffected — the anchor comment is still emitted there for VDOM stability (fix for DJE-053 / #295).
+- **False `{% if %}` blocks now emit `<!--dj-if-->` placeholder instead of empty string** — Gives the VDOM diffing engine a stable DOM anchor to target when the condition later becomes true, resolving DJE-053 / issue #295.
+- **`dj-patch('/')` now correctly updates the browser URL to the root path** — Removed the `url.pathname !== '/'` guard in `bindNavigationDirectives` that prevented the browser URL from being updated when patching to `/`. The guard was silently ignoring root-path patches. ([#307](https://github.com/djust-org/djust/issues/307))
+- **`live_patch` routing restored — `handleNavigation` dispatch now fires correctly** — Fixed dict merge order in `_flush_navigation` so `type: 'navigation'` is no longer overwritten by `**cmd`. Added an `action` field to carry the nav sub-type (`live_patch` / `live_redirect`); `handleNavigation` now dispatches on `data.action` instead of `data.type`. Previously the client `switch case 'navigation':` never matched because `type` was being overwritten with `"live_patch"`. **Note:** `data.action || data.type` fallback is kept for old JS clients that send messages without an `action` field — this fallback is planned for removal in the next minor release. ([#307](https://github.com/djust-org/djust/issues/307))
+- **T003 false positives eliminated** — The `{% include %}` check now examines the include path instead of the whole file content, preventing false warnings on templates that include SVGs or modals alongside `dj-*` directives. ([#331](https://github.com/djust-org/djust/issues/331))
+
+## [0.3.2] - 2026-02-18
+
 ### Added
 
 - **TypeScript definitions (`djust.d.ts`)** — Comprehensive ambient TypeScript declaration file shipped with the Python package at `static/djust/djust.d.ts`. Covers: `window.djust` namespace, `LiveViewWebSocket` and `LiveViewSSE` transport classes, `DjustHook` lifecycle interface (`mounted`, `beforeUpdate`, `updated`, `destroyed`, `disconnected`, `reconnected`), `DjustHookContext` (`this.el`, `this.pushEvent`, `this.handleEvent`), `dj-model` binding types, streaming API types (`DjustStreamMessage`, `DjustStreamOp`), upload progress event types (`DjustUploadEntry`, `DjustUploadConfig`, `DjustUploadProgressEventDetail`), and the `djust:upload:progress` custom DOM event. Use via `/// <reference path="..." />` or add to `tsconfig.json`.
@@ -20,6 +135,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Loading state re-scan after DOM patches** — `scanAndRegister()` is called after every `bindLiveViewEvents()` so dynamically rendered elements (e.g., inside modals) get loading state registration. Stale entries for disconnected elements are cleaned up automatically. ([#314](https://github.com/djust-org/djust/pull/314))
 - **System check `djust.T010` for dj-click navigation antipattern** — Detects elements using `dj-click` with navigation-related data attributes (`data-view`, `data-tab`, `data-page`, `data-section`). This pattern should use `dj-patch` instead for proper URL updates, browser history support, and bookmarkable views. Warning severity. ([#305](https://github.com/djust-org/djust/issues/305))
 - **System check `djust.Q010` for navigation state in event handlers** — Heuristic INFO-level check that detects `@event_handler` methods setting navigation state variables (`self.active_view`, `self.current_tab`, etc.) without using `patch()` or `handle_params()`. Suggests converting to `dj-patch` pattern for URL updates and back-button support. Can be suppressed with `# noqa: Q010`. ([#305](https://github.com/djust-org/djust/issues/305))
+- **Type stubs for Rust extension and LiveView** — Added `.pyi` type stub files for `_rust` module and `LiveView` class, enabling IDE autocomplete, mypy/pyright type checking, and catching typos like `live_navigate` (should be `live_patch`) at lint time. Includes `py.typed` marker for PEP 561 compliance and comprehensive documentation in `docs/TYPE_STUBS.md`.
 
 ### Deprecated
 
@@ -39,6 +155,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - **F-strings in logging calls** — Converted 9 logger calls to use %-style formatting (`logger.error("msg %s", val)`) instead of f-strings (`logger.error(f"msg {val}")`). F-strings defeat lazy evaluation, causing string interpolation before the log level check, potentially exposing sensitive data and wasting CPU. Affected files: `mixins/template.py`, `security/__init__.py`, `security/error_handling.py`, `template_tags/__init__.py`, `template_tags/static.py`, `template_tags/url.py`.
+
+### Tests
+
+- **Regression tests for `|safe` filter with nested dicts** — Added comprehensive tests verifying that `|safe` filter works correctly for HTML content in nested dict/list values, preventing issue [#317](https://github.com/djust-org/djust/issues/317) from recurring
 
 ## [0.3.2rc1] - 2026-02-15
 
@@ -103,10 +223,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Automatic change tracking** — Phoenix-style render optimization. The framework automatically detects which context values changed between renders and only sends those to Rust's `update_state()`. Replaces the manual `static_assigns` API. Two-layer detection: snapshot comparison for instance attributes, `id()` reference comparison for computed values (e.g., `@lru_cache` results). Immutable types (`str`, `int`, `float`, `bool`, `None`, `bytes`, `tuple`, `frozenset`) skip `deepcopy` in snapshots.
-
-### Fixed
-
-- **Developer Tools Events tab not capturing events** — The debug panel loaded after the WebSocket connected, so its prototype hooks missed the existing connection's `onmessage` handler. Fixed `_hookExistingWebSocket()` to wrap the existing handler using the original property descriptor. Also added `html_update` to event response type matching.
 
 ### Removed
 

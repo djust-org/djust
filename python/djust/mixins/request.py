@@ -347,7 +347,7 @@ class RequestMixin:
                     "event": event_name,
                     "params": params,
                 }
-                return JsonResponse(error_details, status=500)
+                return JsonResponse(error_details, status=500)  # nosec B105 -- only returned when DEBUG=True
             else:
                 return JsonResponse(
                     {

@@ -131,8 +131,10 @@
                 return JSON.parse(JSON.stringify(state));
             } catch (e) {
                 // Fallback for non-serializable values
-                const clone = {};
-                for (const key in state) {
+                const clone = Object.create(null); // no prototype to pollute
+                const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+                for (const key of Object.keys(state)) {
+                    if (UNSAFE_KEYS.has(key)) continue; // skip prototype-polluting keys
                     try {
                         clone[key] = JSON.parse(JSON.stringify(state[key]));
                     } catch {

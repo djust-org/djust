@@ -242,18 +242,18 @@ describe('_stampDjIds', () => {
         if (container) container.remove();
     });
 
-    it('should stamp data-dj-id attributes onto existing DOM elements', () => {
+    it('should stamp dj-id attributes onto existing DOM elements', () => {
         const container = document.createElement('div');
         container.setAttribute('dj-root', '');
         container.innerHTML = '<main><div><span>Hello</span></div></main>';
         document.body.appendChild(container);
 
-        const serverHtml = '<main data-dj-id="1"><div data-dj-id="2"><span data-dj-id="3">Hello</span></div></main>';
+        const serverHtml = '<main dj-id="1"><div dj-id="2"><span dj-id="3">Hello</span></div></main>';
         _stampDjIds(serverHtml);
 
-        expect(container.querySelector('main').getAttribute('data-dj-id')).toBe('1');
-        expect(container.querySelector('div').getAttribute('data-dj-id')).toBe('2');
-        expect(container.querySelector('span').getAttribute('data-dj-id')).toBe('3');
+        expect(container.querySelector('main').getAttribute('dj-id')).toBe('1');
+        expect(container.querySelector('div').getAttribute('dj-id')).toBe('2');
+        expect(container.querySelector('span').getAttribute('dj-id')).toBe('3');
     });
 
     it('should preserve whitespace in code blocks while stamping IDs', () => {
@@ -263,13 +263,13 @@ describe('_stampDjIds', () => {
         const originalText = container.querySelector('code').textContent;
         document.body.appendChild(container);
 
-        const serverHtml = '<pre data-dj-id="1"><code data-dj-id="2"><span data-dj-id="3"></span><span data-dj-id="4">return</span></code></pre>';
+        const serverHtml = '<pre dj-id="1"><code dj-id="2"><span dj-id="3"></span><span dj-id="4">return</span></code></pre>';
         _stampDjIds(serverHtml);
 
         // Whitespace must be preserved from original DOM
         expect(container.querySelector('code').textContent).toBe(originalText);
         // IDs should be stamped
-        expect(container.querySelector('pre').getAttribute('data-dj-id')).toBe('1');
+        expect(container.querySelector('pre').getAttribute('dj-id')).toBe('1');
     });
 
     it('should handle mismatched child counts gracefully', () => {
@@ -278,13 +278,13 @@ describe('_stampDjIds', () => {
         container.innerHTML = '<div><span>A</span><span>B</span><span>C</span></div>';
         document.body.appendChild(container);
 
-        const serverHtml = '<div data-dj-id="1"><span data-dj-id="2">A</span><span data-dj-id="3">B</span></div>';
+        const serverHtml = '<div dj-id="1"><span dj-id="2">A</span><span dj-id="3">B</span></div>';
         _stampDjIds(serverHtml);
 
         const spans = container.querySelectorAll('span');
-        expect(spans[0].getAttribute('data-dj-id')).toBe('2');
-        expect(spans[1].getAttribute('data-dj-id')).toBe('3');
-        expect(spans[2].getAttribute('data-dj-id')).toBeNull();
+        expect(spans[0].getAttribute('dj-id')).toBe('2');
+        expect(spans[1].getAttribute('dj-id')).toBe('3');
+        expect(spans[2].getAttribute('dj-id')).toBeNull();
     });
 
     it('should bail out on tag-name mismatch', () => {
@@ -294,11 +294,11 @@ describe('_stampDjIds', () => {
         document.body.appendChild(container);
 
         // Server has a <p> where DOM has <span> — should not stamp
-        const serverHtml = '<div data-dj-id="1"><p data-dj-id="2">A</p></div>';
+        const serverHtml = '<div dj-id="1"><p dj-id="2">A</p></div>';
         _stampDjIds(serverHtml);
 
-        expect(container.querySelector('div').getAttribute('data-dj-id')).toBe('1');
-        expect(container.querySelector('span').getAttribute('data-dj-id')).toBeNull();
+        expect(container.querySelector('div').getAttribute('dj-id')).toBe('1');
+        expect(container.querySelector('span').getAttribute('dj-id')).toBeNull();
     });
 
     it('should handle no container in DOM gracefully', () => {
@@ -307,6 +307,6 @@ describe('_stampDjIds', () => {
         if (existing) existing.remove();
 
         // Should not throw
-        expect(() => _stampDjIds('<div data-dj-id="1">test</div>')).not.toThrow();
+        expect(() => _stampDjIds('<div dj-id="1">test</div>')).not.toThrow();
     });
 });

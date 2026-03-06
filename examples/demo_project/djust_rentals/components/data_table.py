@@ -6,7 +6,7 @@ Used for property lists, tenant lists, lease lists, maintenance lists, etc.
 """
 
 from djust.components.base import Component
-from django.utils.html import format_html, escape
+from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from typing import List, Dict, Any, Optional
 
@@ -47,6 +47,7 @@ class DataTable(Component):
         hover: bool = True,
         striped: bool = False
     ):
+        super().__init__()
         self.headers = headers
         self.rows = rows
         self.empty_message = empty_message

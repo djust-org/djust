@@ -2163,8 +2163,18 @@ def handle_button_click(self):
             // Update preview
             function updatePreview() {
                 const code = codeTextarea.value;
-                // Sanitize and render the code
-                previewContent.innerHTML = code;
+                // Use a sandboxed iframe so arbitrary HTML is previewed safely
+                // without scripts executing in the parent document context.
+                let iframe = previewContent.querySelector('iframe.djust-preview-sandbox');
+                if (!iframe) {
+                    iframe = document.createElement('iframe');
+                    iframe.className = 'djust-preview-sandbox';
+                    iframe.setAttribute('sandbox', 'allow-same-origin'); // no scripts
+                    iframe.style.cssText = 'width:100%;border:none;min-height:200px';
+                    previewContent.innerHTML = '';
+                    previewContent.appendChild(iframe);
+                }
+                iframe.srcdoc = code;
             }
 
             // Reset to original code

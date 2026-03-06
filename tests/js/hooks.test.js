@@ -304,6 +304,56 @@ describe('hooks', () => {
         });
     });
 
+    describe('hooks after mount message (live_redirect_mount)', () => {
+        it('calls updateHooks after innerHTML mount via WS', async () => {
+            // Simulate: initial page has a hook element, then WS mount message
+            // replaces innerHTML with new HTML containing a different hook element.
+            const { window, document } = createEnv(
+                '<div dj-view="myapp.views.OldView"><canvas dj-hook="OldChart"></canvas></div>'
+            );
+
+            const oldMounted = vi.fn();
+            const oldDestroyed = vi.fn();
+            const newMounted = vi.fn();
+
+            window.djust.hooks = {
+                OldChart: { mounted: oldMounted, destroyed: oldDestroyed },
+                NewChart: { mounted: newMounted },
+            };
+
+            // Mount initial hooks
+            window.djust.mountHooks(document);
+            expect(oldMounted).toHaveBeenCalledTimes(1);
+
+            // Simulate WS mount message: replace container innerHTML
+            const container = document.querySelector('[dj-view]') || document.querySelector('[dj-root]');
+            container.innerHTML = '<canvas dj-hook="NewChart"></canvas>';
+
+            // After innerHTML replacement, updateHooks should mount new + destroy old
+            window.djust.updateHooks(document);
+
+            expect(oldDestroyed).toHaveBeenCalledTimes(1);
+            expect(newMounted).toHaveBeenCalledTimes(1);
+        });
+
+        it('calls updateHooks after skipMountHtml branch', () => {
+            // When pre-rendered content is kept (skipMountHtml), updateHooks
+            // should still run to initialize any hook elements already in DOM.
+            const { window, document } = createEnv(
+                '<div dj-view="myapp.views.TestView"><div dj-hook="PreRenderedHook"></div></div>'
+            );
+
+            const mountedFn = vi.fn();
+            window.djust.hooks = {
+                PreRenderedHook: { mounted: mountedFn },
+            };
+
+            // updateHooks on pre-rendered content should mount hooks
+            window.djust.updateHooks(document);
+            expect(mountedFn).toHaveBeenCalledTimes(1);
+        });
+    });
+
     describe('exports', () => {
         it('exposes all expected functions', () => {
             const { window } = createEnv();

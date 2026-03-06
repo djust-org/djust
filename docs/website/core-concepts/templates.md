@@ -162,6 +162,23 @@ class HelloView(LiveView):
 {% if not a and b %}...{% endif %}
 ```
 
+## Conditional Class Attributes
+
+While `{% if %}` inside attribute values works, **inline conditionals are recommended** because they produce cleaner VDOM output with no comment anchors:
+
+```html
+<!-- Works, but not recommended — may produce unnecessary VDOM anchors -->
+<a class="nav-link {% if active %}active{% endif %}">
+
+<!-- Recommended: inline conditional -->
+<a class="nav-link {{ 'active' if active else '' }}">
+
+<!-- Recommended: full ternary -->
+<div class="{{ 'card-active' if selected else 'card' }}">
+```
+
+`{{ expr if condition else fallback }}` is resolved entirely in the template engine — no DOM comment anchors are inserted, so VDOM path indices stay correct. The `else` branch is optional and defaults to empty string.
+
 ## Template Requirements (Legacy)
 
 Some older setups used `dj-view` and `dj-root` differently. The required pattern is:

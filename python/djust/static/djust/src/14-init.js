@@ -83,7 +83,7 @@ function djustInit() {
 
     // Only initialize WebSocket if there are eager containers AND WebSocket is enabled
     const wsEnabled = window.DJUST_USE_WEBSOCKET !== false;
-    const sseAvailable = typeof window.djust.LiveViewSSE !== 'undefined';
+    const sseAvailable = typeof window.djust.LiveViewSSE !== 'undefined' && typeof EventSource !== 'undefined';
 
     if (eagerContainers.length > 0 && wsEnabled) {
         // Initialize WebSocket

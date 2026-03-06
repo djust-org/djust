@@ -223,12 +223,13 @@ class LiveViewWebSocket {
                     // This preserves whitespace (e.g. in code blocks) that innerHTML would destroy
                     if (hasDataDjAttrs && data.html) {
                         if (globalThis.djustDebug) console.log('[LiveView] Stamping dj-id attributes onto pre-rendered DOM');
-                        _stampDjIds(data.html);
+                        _stampDjIds(data.html); // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                     } else {
                         if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
                     }
                     this.skipMountHtml = false;
                     bindLiveViewEvents();
+                    if (typeof updateHooks === 'function') { updateHooks(); }
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
@@ -239,8 +240,10 @@ class LiveViewWebSocket {
                         container = document.querySelector('[dj-root]');
                     }
                     if (container) {
+                        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         container.innerHTML = data.html;
                         bindLiveViewEvents();
+                        if (typeof updateHooks === 'function') { updateHooks(); }
                     }
                     this.skipMountHtml = false;
                 }
@@ -264,6 +267,7 @@ class LiveViewWebSocket {
                 // Server response to request_html — morph DOM with recovered HTML.
                 // Bypasses normal version tracking to avoid mismatch loops.
                 const parser = new DOMParser();
+                // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                 const doc = parser.parseFromString(data.html, 'text/html');
                 const liveviewRoot = getLiveViewRoot();
                 if (!liveviewRoot) {
@@ -277,16 +281,27 @@ class LiveViewWebSocket {
                 initTodoItems();
                 bindLiveViewEvents();
                 if (globalThis.djustDebug) {
-                    if (globalThis.djustDebug) console.log('[LiveView] DOM recovered via morph, version:', data.version);
+                    // codeql[js/log-injection] -- data.version is a server-controlled integer
+                    console.log('[LiveView] DOM recovered via morph, version:', data.version);
                 }
                 break;
             }
 
             case 'error':
+                // codeql[js/log-injection] -- data.error and data.traceback are server-provided error messages, not user input
                 console.error('[LiveView] Server error:', data.error);
                 if (data.traceback) {
+                    // codeql[js/log-injection] -- data.traceback is a server-provided stack trace, not user input
                     console.error('Traceback:', data.traceback);
                 }
+
+                // Non-recoverable errors (e.g. server restart lost state) — auto-reload
+                if (data.recoverable === false) {
+                    console.warn('[LiveView] Non-recoverable error, reloading page...');
+                    window.location.reload();
+                    break;
+                }
+
                 // Dispatch event for dev tools (debug panel, toasts)
                 window.dispatchEvent(new CustomEvent('djust:error', {
                     detail: {
@@ -318,6 +333,7 @@ class LiveViewWebSocket {
 
             case 'upload_registered':
                 // Upload registration acknowledged
+                // codeql[js/log-injection] -- data.ref and data.upload_name are server-assigned upload identifiers
                 if (globalThis.djustDebug) console.log('[Upload] Registered:', data.ref, 'for', data.upload_name);
                 break;
 
@@ -369,6 +385,7 @@ class LiveViewWebSocket {
 
             case 'rate_limit_exceeded':
                 // Server is dropping events due to rate limiting — show brief warning, do NOT retry
+                // codeql[js/log-injection] -- data.message is a server-controlled rate limit message
                 console.warn('[LiveView] Rate limited:', data.message || 'Too many events');
                 this._showRateLimitWarning();
                 // Stop loading state if applicable
@@ -535,19 +552,23 @@ class LiveViewWebSocket {
         const viewId = data.view_id;
         const html = data.html;
         if (!viewId || html === undefined) {
+            // codeql[js/log-injection] -- data is a server WebSocket message, not user input
             console.warn('[LiveView] Invalid embedded_update message:', data);
             return;
         }
 
         const container = document.querySelector(`[data-djust-embedded="${CSS.escape(viewId)}"]`);
         if (!container) {
+            // codeql[js/log-injection] -- viewId is a server-assigned embedded view identifier
             console.warn(`[LiveView] Embedded view container not found: ${viewId}`);
             return;
         }
 
         const _morphTemp = document.createElement('div');
+        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
         _morphTemp.innerHTML = html;
         morphChildren(container, _morphTemp);
+        // codeql[js/log-injection] -- viewId is a server-assigned embedded view identifier
         if (globalThis.djustDebug) console.log(`[LiveView] Updated embedded view: ${viewId}`);
 
         // Re-bind events within the updated container

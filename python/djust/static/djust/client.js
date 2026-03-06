@@ -183,7 +183,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 expiresAt
             });
             if (globalThis.djustDebug) {
-                if (globalThis.djustDebug) console.log(`[LiveView:cache] Cached patches: ${cacheKey} (TTL: ${ttl}s)`);
+                console.log(`[LiveView:cache] Cached patches: ${cacheKey} (TTL: ${ttl}s)`);
             }
             pendingCacheRequests.delete(data.cache_request_id);
         }
@@ -344,7 +344,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 globalLoadingManager.stopLoading(loadingEventName, triggerElement);
             }
         } else if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
+            console.log('[LiveView] Keeping loading state — async work pending');
         }
         return true;
 
@@ -371,6 +371,10 @@ class LiveViewWebSocket {
         this._intentionalDisconnect = false;  // Set by disconnect() to suppress error overlay
         this.lastEventName = null;  // Phase 5: Track last event for loading state
         this.lastTriggerElement = null;  // Phase 5: Track trigger element for scoped loading
+        // Optional callback invoked when all reconnect attempts are exhausted.
+        // If set, it is called instead of _showConnectionErrorOverlay(), allowing
+        // 14-init.js to switch to the SSE fallback transport.
+        this.onTransportFailed = null;
 
         // WebSocket statistics tracking (Phase 2.1: WebSocket Inspector)
         this.stats = {
@@ -494,9 +498,16 @@ class LiveViewWebSocket {
                 if (globalThis.djustDebug) console.log(`[LiveView] Reconnecting in ${delay}ms...`);
                 setTimeout(() => this.connect(url), delay);
             } else {
-                console.warn('[LiveView] Max reconnection attempts reached. Falling back to HTTP mode.');
+                console.warn('[LiveView] Max reconnection attempts reached.');
                 this.enabled = false;
-                this._showConnectionErrorOverlay();
+                // If an SSE fallback is configured, hand off to it instead of
+                // showing the connection error overlay.
+                if (typeof this.onTransportFailed === 'function') {
+                    if (globalThis.djustDebug) console.log('[LiveView] Invoking onTransportFailed for SSE fallback');
+                    this.onTransportFailed();
+                } else {
+                    this._showConnectionErrorOverlay();
+                }
             }
         };
 
@@ -568,12 +579,13 @@ class LiveViewWebSocket {
                     // This preserves whitespace (e.g. in code blocks) that innerHTML would destroy
                     if (hasDataDjAttrs && data.html) {
                         if (globalThis.djustDebug) console.log('[LiveView] Stamping dj-id attributes onto pre-rendered DOM');
-                        _stampDjIds(data.html);
+                        _stampDjIds(data.html); // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                     } else {
                         if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
                     }
                     this.skipMountHtml = false;
                     bindLiveViewEvents();
+                    if (typeof updateHooks === 'function') { updateHooks(); }
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
@@ -584,8 +596,10 @@ class LiveViewWebSocket {
                         container = document.querySelector('[dj-root]');
                     }
                     if (container) {
+                        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         container.innerHTML = data.html;
                         bindLiveViewEvents();
+                        if (typeof updateHooks === 'function') { updateHooks(); }
                     }
                     this.skipMountHtml = false;
                 }
@@ -609,6 +623,7 @@ class LiveViewWebSocket {
                 // Server response to request_html — morph DOM with recovered HTML.
                 // Bypasses normal version tracking to avoid mismatch loops.
                 const parser = new DOMParser();
+                // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                 const doc = parser.parseFromString(data.html, 'text/html');
                 const liveviewRoot = getLiveViewRoot();
                 if (!liveviewRoot) {
@@ -622,16 +637,27 @@ class LiveViewWebSocket {
                 initTodoItems();
                 bindLiveViewEvents();
                 if (globalThis.djustDebug) {
-                    if (globalThis.djustDebug) console.log('[LiveView] DOM recovered via morph, version:', data.version);
+                    // codeql[js/log-injection] -- data.version is a server-controlled integer
+                    console.log('[LiveView] DOM recovered via morph, version:', data.version);
                 }
                 break;
             }
 
             case 'error':
+                // codeql[js/log-injection] -- data.error and data.traceback are server-provided error messages, not user input
                 console.error('[LiveView] Server error:', data.error);
                 if (data.traceback) {
+                    // codeql[js/log-injection] -- data.traceback is a server-provided stack trace, not user input
                     console.error('Traceback:', data.traceback);
                 }
+
+                // Non-recoverable errors (e.g. server restart lost state) — auto-reload
+                if (data.recoverable === false) {
+                    console.warn('[LiveView] Non-recoverable error, reloading page...');
+                    window.location.reload();
+                    break;
+                }
+
                 // Dispatch event for dev tools (debug panel, toasts)
                 window.dispatchEvent(new CustomEvent('djust:error', {
                     detail: {
@@ -663,6 +689,7 @@ class LiveViewWebSocket {
 
             case 'upload_registered':
                 // Upload registration acknowledged
+                // codeql[js/log-injection] -- data.ref and data.upload_name are server-assigned upload identifiers
                 if (globalThis.djustDebug) console.log('[Upload] Registered:', data.ref, 'for', data.upload_name);
                 break;
 
@@ -714,6 +741,7 @@ class LiveViewWebSocket {
 
             case 'rate_limit_exceeded':
                 // Server is dropping events due to rate limiting — show brief warning, do NOT retry
+                // codeql[js/log-injection] -- data.message is a server-controlled rate limit message
                 console.warn('[LiveView] Rate limited:', data.message || 'Too many events');
                 this._showRateLimitWarning();
                 // Stop loading state if applicable
@@ -880,19 +908,23 @@ class LiveViewWebSocket {
         const viewId = data.view_id;
         const html = data.html;
         if (!viewId || html === undefined) {
+            // codeql[js/log-injection] -- data is a server WebSocket message, not user input
             console.warn('[LiveView] Invalid embedded_update message:', data);
             return;
         }
 
         const container = document.querySelector(`[data-djust-embedded="${CSS.escape(viewId)}"]`);
         if (!container) {
+            // codeql[js/log-injection] -- viewId is a server-assigned embedded view identifier
             console.warn(`[LiveView] Embedded view container not found: ${viewId}`);
             return;
         }
 
         const _morphTemp = document.createElement('div');
+        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
         _morphTemp.innerHTML = html;
         morphChildren(container, _morphTemp);
+        // codeql[js/log-injection] -- viewId is a server-assigned embedded view identifier
         if (globalThis.djustDebug) console.log(`[LiveView] Updated embedded view: ${viewId}`);
 
         // Re-bind events within the updated container
@@ -988,6 +1020,291 @@ window.LiveViewWebSocket = LiveViewWebSocket;
 // Global WebSocket instance
 let liveViewWS = null;
 
+// ============================================================================
+// SSE (Server-Sent Events) Transport for djust LiveView
+//
+// Fallback transport used when WebSocket is unavailable (e.g. corporate proxies).
+// Architecture:
+//   Server → Client : EventSource (text/event-stream at /djust/sse/<session_id>/)
+//   Client → Server : HTTP POST  to /djust/sse/<session_id>/event/
+//
+// Feature limitations vs WebSocket transport (documented in docs/sse-transport.md):
+//   - No binary file uploads
+//   - No presence tracking
+//   - No actor-based state management
+//   - No MessagePack binary encoding
+// ============================================================================
+
+class LiveViewSSE {
+    constructor() {
+        this.sessionId = null;
+        this.eventSource = null;
+        this.sseBaseUrl = null;
+        this.enabled = true;
+        this.viewMounted = false;
+        this.lastEventName = null;
+        this.lastTriggerElement = null;
+        // Mirror LiveViewWebSocket interface for interoperability
+        this.stats = { sent: 0, received: 0, sentBytes: 0, receivedBytes: 0 };
+    }
+
+    /**
+     * Open an SSE stream and mount the view.
+     *
+     * @param {string} viewPath  Dotted Python path to the LiveView class
+     * @param {Object} params    URL query params forwarded to mount()
+     */
+    connect(viewPath, params = {}) {
+        if (!this.enabled) return;
+        if (globalThis.djustDebug) console.log('[SSE] Connecting, view:', viewPath);
+
+        // Session ID is generated client-side; the server stores it as the
+        // lookup key so event POSTs can reach the right session.
+        this.sessionId = this._generateSessionId();
+        this.sseBaseUrl = `/djust/sse/${this.sessionId}/`;
+
+        const urlParams = new URLSearchParams(params);
+        urlParams.set('view', viewPath);
+        const streamUrl = `${this.sseBaseUrl}?${urlParams.toString()}`;
+
+        this.eventSource = new EventSource(streamUrl);
+
+        this.eventSource.onmessage = (event) => {
+            try {
+                this.stats.received++;
+                this.stats.receivedBytes += event.data.length;
+                const data = JSON.parse(event.data);
+                this.handleMessage(data);
+            } catch (err) {
+                console.error('[SSE] Failed to parse message:', err);
+            }
+        };
+
+        this.eventSource.onerror = (_err) => {
+            // EventSource auto-reconnects; we only disable on persistent failure.
+            // onerror fires on every connection hiccup, so guard against noise.
+            if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED) {
+                console.warn('[SSE] EventSource closed unexpectedly.');
+                this.enabled = false;
+            }
+        };
+    }
+
+    /**
+     * Cleanly close the SSE stream (e.g. during TurboNav page transitions).
+     */
+    disconnect() {
+        if (this.eventSource) {
+            this.eventSource.close();
+            this.eventSource = null;
+        }
+        this.viewMounted = false;
+        this.sessionId = null;
+        if (globalThis.djustDebug) console.log('[SSE] Disconnected');
+    }
+
+    /**
+     * Handle a server-pushed message.
+     * The message format is identical to the WebSocket protocol so that
+     * 02-response-handler.js and all other message-handling modules work
+     * without modification.
+     */
+    handleMessage(data) {
+        if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
+
+        switch (data.type) {
+
+            case 'sse_connect':
+                // Session ID confirmation from server (informational only — we
+                // already know our session ID since we generated it).
+                if (globalThis.djustDebug) console.log('[SSE] Connection acknowledged, session:', data.session_id);
+                break;
+
+            case 'mount':
+                this.viewMounted = true;
+                if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
+
+                if (data.version !== undefined) {
+                    clientVdomVersion = data.version;
+                }
+                if (data.cache_config) {
+                    setCacheConfig(data.cache_config);
+                }
+
+                if (data.html) {
+                    let container = document.querySelector('[dj-view]');
+                    if (!container) container = document.querySelector('[dj-root]');
+                    if (container) {
+                        const hasDataDjAttrs = data.has_ids === true;
+                        if (hasDataDjAttrs) {
+                            _stampDjIds(data.html);
+                        } else {
+                            // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                            container.innerHTML = data.html;
+                        }
+                        bindLiveViewEvents();
+                        if (typeof updateHooks === 'function') { updateHooks(); }
+                    }
+                }
+                break;
+
+            case 'patch':
+                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                this.lastEventName = null;
+                this.lastTriggerElement = null;
+                break;
+
+            case 'html_update':
+                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                this.lastEventName = null;
+                this.lastTriggerElement = null;
+                break;
+
+            case 'error':
+                console.error('[SSE] Server error:', data.error);
+                window.dispatchEvent(new CustomEvent('djust:error', {
+                    detail: { error: data.error, traceback: data.traceback || null }
+                }));
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
+            case 'noop':
+                if (this.lastEventName) {
+                    if (!data.async_pending) {
+                        globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    }
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
+            case 'push_event':
+                window.dispatchEvent(new CustomEvent('djust:push_event', {
+                    detail: { event: data.event, payload: data.payload }
+                }));
+                if (typeof dispatchPushEventToHooks === 'function') {
+                    dispatchPushEventToHooks(data.event, data.payload);
+                }
+                globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                break;
+
+            case 'navigation':
+                if (window.djust.navigation) {
+                    window.djust.navigation.handleNavigation(data);
+                }
+                break;
+
+            case 'navigate':
+                // Auth redirect (sent by server when auth check fails)
+                window.location.href = data.to;
+                break;
+
+            case 'stream':
+                if (window.djust.handleStreamMessage) {
+                    window.djust.handleStreamMessage(data);
+                }
+                break;
+
+            case 'accessibility':
+                if (window.djust.accessibility) {
+                    window.djust.accessibility.processAnnouncements(data.announcements);
+                }
+                break;
+
+            case 'focus':
+                if (window.djust.accessibility) {
+                    window.djust.accessibility.processFocus([data.selector, data.options]);
+                }
+                break;
+
+            case 'reload':
+                window.location.reload();
+                break;
+
+            default:
+                if (globalThis.djustDebug) console.log('[SSE] Unknown message type:', data.type);
+        }
+    }
+
+    /**
+     * Send an event to the server via HTTP POST.
+     *
+     * Returns true if the event was dispatched, false if not (mirrors
+     * LiveViewWebSocket.sendEvent so 11-event-handler.js works unchanged).
+     *
+     * @param {string}      eventName      Handler name on the LiveView
+     * @param {Object}      params         Event parameters
+     * @param {Element|null} triggerElement DOM element that triggered the event
+     */
+    sendEvent(eventName, params = {}, triggerElement = null) {
+        if (!this.enabled || !this.viewMounted) {
+            return false;
+        }
+
+        this.lastEventName = eventName;
+        this.lastTriggerElement = triggerElement;
+
+        const body = JSON.stringify({ event: eventName, params });
+        this.stats.sent++;
+        this.stats.sentBytes += body.length;
+
+        fetch(`${this.sseBaseUrl}event/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+        })
+            .then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.json();
+            })
+            .catch(err => {
+                console.error('[SSE] Event POST failed:', err);
+                globalLoadingManager.stopLoading(eventName, triggerElement);
+                this.lastEventName = null;
+                this.lastTriggerElement = null;
+            });
+
+        return true;
+    }
+
+    /**
+     * No-op: SSE keepalives are handled server-side via comment lines.
+     * This method exists so callers that call liveViewWS.startHeartbeat() work
+     * without branching.
+     */
+    startHeartbeat() {
+        // SSE transport uses server-side keepalive comments — no client heartbeat needed.
+    }
+
+    // ------------------------------------------------------------------ //
+    // Private helpers
+    // ------------------------------------------------------------------ //
+
+    _generateSessionId() {
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+            return crypto.randomUUID();
+        }
+        // Fallback using crypto.getRandomValues() — cryptographically secure,
+        // available in all modern environments (IE 11+, Node 15+).
+        if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+            const buf = new Uint8Array(16);
+            crypto.getRandomValues(buf);
+            buf[6] = (buf[6] & 0x0f) | 0x40; // UUID version 4
+            buf[8] = (buf[8] & 0x3f) | 0x80; // UUID variant bits
+            const hex = Array.from(buf, b => b.toString(16).padStart(2, '0')).join('');
+            return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+        }
+        throw new Error('djust: Web Crypto API is required but not available in this environment.');
+    }
+}
+
+// Expose to window for 14-init.js transport negotiation
+window.djust.LiveViewSSE = LiveViewSSE;
+
 // === HTTP Fallback LiveView Client ===
 
 // Track VDOM version for synchronization
@@ -1022,7 +1339,7 @@ function addToCache(cacheKey, value) {
         const oldestKey = resultCache.keys().next().value;
         resultCache.delete(oldestKey);
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[LiveView:cache] Evicted (LRU): ${oldestKey}`);
+            console.log(`[LiveView:cache] Evicted (LRU): ${oldestKey}`);
         }
     }
 
@@ -1039,7 +1356,7 @@ function setCacheConfig(config) {
     Object.entries(config).forEach(([handlerName, handlerConfig]) => {
         cacheConfig.set(handlerName, handlerConfig);
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[LiveView:cache] Configured cache for ${handlerName}:`, handlerConfig);
+            console.log(`[LiveView:cache] Configured cache for ${handlerName}:`, handlerConfig);
         }
     });
 }
@@ -1127,7 +1444,7 @@ function clearCache() {
     const size = resultCache.size;
     resultCache.clear();
     if (globalThis.djustDebug) {
-        if (globalThis.djustDebug) console.log(`[LiveView:cache] Cleared all ${size} cached entries`);
+        console.log(`[LiveView:cache] Cleared all ${size} cached entries`);
     }
 }
 
@@ -1157,7 +1474,7 @@ function invalidateCache(pattern) {
     }
 
     if (globalThis.djustDebug) {
-        if (globalThis.djustDebug) console.log(`[LiveView:cache] Invalidated ${count} entries matching: ${pattern}`);
+        console.log(`[LiveView:cache] Invalidated ${count} entries matching: ${pattern}`);
     }
 
     return count;
@@ -1178,7 +1495,7 @@ class StateBus {
         const oldValue = this.state.get(key);
         this.state.set(key, value);
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[StateBus] Set: ${key} =`, value, `(was:`, oldValue, `)`);
+            console.log(`[StateBus] Set: ${key} =`, value, `(was:`, oldValue, `)`);
         }
         this.notify(key, value, oldValue);
     }
@@ -1193,14 +1510,14 @@ class StateBus {
         }
         this.subscribers.get(key).add(callback);
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[StateBus] Subscribed to: ${key} (${this.subscribers.get(key).size} subscribers)`);
+            console.log(`[StateBus] Subscribed to: ${key} (${this.subscribers.get(key).size} subscribers)`);
         }
         return () => {
             const subs = this.subscribers.get(key);
             if (subs) {
                 subs.delete(callback);
                 if (globalThis.djustDebug) {
-                    if (globalThis.djustDebug) console.log(`[StateBus] Unsubscribed from: ${key} (${subs.size} remaining)`);
+                    console.log(`[StateBus] Unsubscribed from: ${key} (${subs.size} remaining)`);
                 }
             }
         };
@@ -1209,7 +1526,7 @@ class StateBus {
     notify(key, newValue, oldValue) {
         const callbacks = this.subscribers.get(key) || new Set();
         if (callbacks.size > 0 && globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[StateBus] Notifying ${callbacks.size} subscribers of: ${key}`);
+            console.log(`[StateBus] Notifying ${callbacks.size} subscribers of: ${key}`);
         }
         callbacks.forEach(callback => {
             try {
@@ -1224,7 +1541,7 @@ class StateBus {
         this.state.clear();
         this.subscribers.clear();
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log('[StateBus] Cleared all state');
+            console.log('[StateBus] Cleared all state');
         }
     }
 
@@ -1256,7 +1573,7 @@ class DraftManager {
                 localStorage.setItem(`djust_draft_${draftKey}`, JSON.stringify(draftData));
 
                 if (globalThis.djustDebug) {
-                    if (globalThis.djustDebug) console.log(`[DraftMode] Saved draft: ${draftKey}`, data);
+                    console.log(`[DraftMode] Saved draft: ${draftKey}`, data);
                 }
             } catch (error) {
                 console.error(`[DraftMode] Failed to save draft ${draftKey}:`, error);
@@ -1278,7 +1595,7 @@ class DraftManager {
 
             if (globalThis.djustDebug) {
                 const age = Math.round((Date.now() - draftData.timestamp) / 1000);
-                if (globalThis.djustDebug) console.log(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
+                console.log(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
             }
 
             return draftData.data;
@@ -1298,7 +1615,7 @@ class DraftManager {
             localStorage.removeItem(`djust_draft_${draftKey}`);
 
             if (globalThis.djustDebug) {
-                if (globalThis.djustDebug) console.log(`[DraftMode] Cleared draft: ${draftKey}`);
+                console.log(`[DraftMode] Cleared draft: ${draftKey}`);
             }
         } catch (error) {
             console.error(`[DraftMode] Failed to clear draft ${draftKey}:`, error);
@@ -1325,7 +1642,7 @@ class DraftManager {
         keys.forEach(key => this.clearDraft(key));
 
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[DraftMode] Cleared all ${keys.length} drafts`);
+            console.log(`[DraftMode] Cleared all ${keys.length} drafts`);
         }
     }
 }
@@ -1455,7 +1772,7 @@ function restoreFormData(container, data) {
     });
 
     if (globalThis.djustDebug) {
-        if (globalThis.djustDebug) console.log('[DraftMode] Restored form data:', data);
+        console.log('[DraftMode] Restored form data:', data);
     }
 }
 
@@ -2041,7 +2358,7 @@ function bindLiveViewEvents() {
                 }
 
                 if (globalThis.djustDebug) {
-                    if (globalThis.djustDebug) console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
+                    console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
                 }
                 await handleEvent(parsedChange.name, params);
             };
@@ -2319,7 +2636,7 @@ const globalLoadingManager = {
         if (modifiers.length > 0) {
             this.registeredElements.set(element, { eventName, modifiers, originalState });
             if (globalThis.djustDebug) {
-                if (globalThis.djustDebug) console.log(`[Loading] Registered element for "${eventName}":`, modifiers);
+                console.log(`[Loading] Registered element for "${eventName}":`, modifiers);
             }
         }
     },
@@ -2363,7 +2680,7 @@ const globalLoadingManager = {
             }
         });
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[Loading] Scanned ${this.registeredElements.size} elements with dj-loading attributes`);
+            console.log(`[Loading] Scanned ${this.registeredElements.size} elements with dj-loading attributes`);
         }
     },
 
@@ -2377,8 +2694,8 @@ const globalLoadingManager = {
             // Check if trigger element has dj-loading.disable
             const hasDisable = triggerElement.hasAttribute('dj-loading.disable');
             if (globalThis.djustDebug) {
-                if (globalThis.djustDebug) console.log(`[Loading] triggerElement:`, triggerElement);
-                if (globalThis.djustDebug) console.log(`[Loading] hasAttribute('dj-loading.disable'):`, hasDisable);
+                console.log(`[Loading] triggerElement:`, triggerElement);
+                console.log(`[Loading] hasAttribute('dj-loading.disable'):`, hasDisable);
             }
             if (hasDisable) {
                 triggerElement.disabled = true;
@@ -2395,7 +2712,7 @@ const globalLoadingManager = {
         document.body.classList.add('djust-global-loading');
 
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[Loading] Started: ${eventName}`);
+            console.log(`[Loading] Started: ${eventName}`);
         }
     },
 
@@ -2422,7 +2739,7 @@ const globalLoadingManager = {
         document.body.classList.remove('djust-global-loading');
 
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[Loading] Stopped: ${eventName}`);
+            console.log(`[Loading] Stopped: ${eventName}`);
         }
     },
 
@@ -2470,7 +2787,7 @@ function generateCacheRequestId() {
 // Main Event Handler
 async function handleEvent(eventName, params = {}) {
     if (globalThis.djustDebug) {
-        if (globalThis.djustDebug) console.log(`[LiveView] Handling event: ${eventName}`, params);
+        console.log(`[LiveView] Handling event: ${eventName}`, params);
     }
 
     // Extract client-only properties before sending to server.
@@ -2498,7 +2815,7 @@ async function handleEvent(eventName, params = {}) {
     if (cached) {
         // Cache hit! Apply cached patches without server round-trip
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[LiveView:cache] Cache hit: ${cacheKey}`);
+            console.log(`[LiveView:cache] Cache hit: ${cacheKey}`);
         }
 
         // Still show brief loading state for UX consistency
@@ -2518,7 +2835,7 @@ async function handleEvent(eventName, params = {}) {
 
     // Cache miss - need to fetch from server
     if (globalThis.djustDebug && cacheConfig.has(eventName)) {
-        if (globalThis.djustDebug) console.log(`[LiveView:cache] Cache miss: ${cacheKey}`);
+        console.log(`[LiveView:cache] Cache miss: ${cacheKey}`);
     }
 
     if (!skipLoading) globalLoadingManager.startLoading(eventName, triggerElement);
@@ -2537,7 +2854,7 @@ async function handleEvent(eventName, params = {}) {
             if (pendingCacheRequests.has(cacheRequestId)) {
                 pendingCacheRequests.delete(cacheRequestId);
                 if (globalThis.djustDebug) {
-                    if (globalThis.djustDebug) console.log(`[LiveView:cache] Cleaned up stale pending request: ${cacheRequestId}`);
+                    console.log(`[LiveView:cache] Cleaned up stale pending request: ${cacheRequestId}`);
                 }
             }
         }, PENDING_CACHE_TIMEOUT);
@@ -2618,7 +2935,7 @@ function getNodeByPath(path, djustId = null) {
         // ID not found - fall through to path-based
         if (globalThis.djustDebug) {
             // Log without user data to avoid log injection
-            if (globalThis.djustDebug) console.log('[LiveView] ID lookup failed, trying path fallback');
+            console.log('[LiveView] ID lookup failed, trying path fallback');
         }
     }
 
@@ -2633,11 +2950,6 @@ function getNodeByPath(path, djustId = null) {
         const index = path[i]; // eslint-disable-line security/detect-object-injection -- path is a server-provided integer array
         const children = Array.from(node.childNodes).filter(child => {
             if (child.nodeType === Node.ELEMENT_NODE) return true;
-            if (child.nodeType === Node.COMMENT_NODE) {
-                // Include dj-if placeholder comments — they are significant position
-                // anchors used by RemoveChild/InsertChild patches (see baa3ca8).
-                return child.nodeValue === 'dj-if';
-            }
             if (child.nodeType === Node.TEXT_NODE) {
                 // Preserve non-breaking spaces (\u00A0) as significant, matching Rust VDOM parser.
                 // Only filter out ASCII whitespace-only text nodes (space, tab, newline, CR).
@@ -2896,10 +3208,6 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
         return document.createTextNode(vnode.text || '');
     }
 
-    if (vnode.tag === '#comment') {
-        return document.createComment(vnode.text || '');
-    }
-
     // Validate tag name against whitelist (security: prevents script injection)
     // Convert to lowercase for consistent matching
     const tagLower = String(vnode.tag || '').toLowerCase();
@@ -2930,10 +3238,22 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
 
     if (vnode.attrs) {
         for (const [key, value] of Object.entries(vnode.attrs)) {
+            // Set all attributes on the element (including dj-* attributes).
+            // Event listeners for dj-* attributes are attached by bindLiveViewEvents()
+            // after patches are applied, which already uses _markHandlerBound to
+            // prevent double-binding on subsequent calls.
             if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
                 elem.value = value;
+            } else if (key === 'checked' && elem.tagName === 'INPUT') {
+                elem.checked = true;
+            } else if (key === 'selected' && elem.tagName === 'OPTION') {
+                elem.selected = true;
             }
             elem.setAttribute(key, value);
+
+            // Note: dj-* event listeners are attached by bindLiveViewEvents() after
+            // patch application. Do NOT pre-mark elements here — that would prevent
+            // bindLiveViewEvents() from ever attaching the listener.
         }
     }
 
@@ -3299,7 +3619,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                         // Clone and append new child
                         existingElement.appendChild(newChild.cloneNode(true));
                         if (globalThis.djustDebug) {
-                            if (globalThis.djustDebug) console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
+                            console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
                         }
                     }
                 }
@@ -3320,7 +3640,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                         // Clone and prepend new child
                         existingElement.insertBefore(newChild.cloneNode(true), firstExisting);
                         if (globalThis.djustDebug) {
-                            if (globalThis.djustDebug) console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
+                            console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
                         }
                     }
                 }
@@ -3330,7 +3650,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
             case 'ignore':
                 // Don't update this element at all
                 if (globalThis.djustDebug) {
-                    if (globalThis.djustDebug) console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
+                    console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
                 }
                 break;
 
@@ -3408,6 +3728,7 @@ function _stampDjIds(serverHtml, container) {
     if (!container) return;
 
     const parser = new DOMParser();
+    // codeql[js/xss] -- serverHtml is rendered by the trusted Django/Rust template engine
     const doc = parser.parseFromString('<div>' + serverHtml + '</div>', 'text/html');
     const serverRoot = doc.body.firstChild;
 
@@ -3456,13 +3777,6 @@ function getSignificantChildren(node) {
 
     return Array.from(node.childNodes).filter(child => {
         if (child.nodeType === Node.ELEMENT_NODE) return true;
-        if (child.nodeType === Node.COMMENT_NODE) {
-            // Include dj-if placeholder comments as significant children.
-            // These are stable position anchors emitted by the template engine
-            // when {% if %} conditions are false (baa3ca8). RemoveChild and
-            // InsertChild patches target them by index, so they must be counted.
-            return child.nodeValue === 'dj-if';
-        }
         if (child.nodeType === Node.TEXT_NODE) {
             // Preserve all text nodes inside pre/code/textarea
             if (preserveWhitespace) return true;
@@ -3640,6 +3954,12 @@ function applySinglePatch(patch) {
                         node.value = patch.value;
                     }
                     node.setAttribute(patch.key, patch.value);
+                } else if (patch.key === 'checked' && node.tagName === 'INPUT') {
+                    node.checked = true;
+                    node.setAttribute('checked', '');
+                } else if (patch.key === 'selected' && node.tagName === 'OPTION') {
+                    node.selected = true;
+                    node.setAttribute('selected', '');
                 } else {
                     node.setAttribute(patch.key, patch.value);
                 }
@@ -3652,13 +3972,27 @@ function applySinglePatch(patch) {
                 if (patch.key && (patch.key.startsWith('dj-') || patch.key === 'data-dj-src')) {
                     break;
                 }
+                if (patch.key === 'checked' && node.tagName === 'INPUT') {
+                    node.checked = false;
+                } else if (patch.key === 'selected' && node.tagName === 'OPTION') {
+                    node.selected = false;
+                }
                 node.removeAttribute(patch.key);
                 break;
 
             case 'InsertChild': {
                 const newChild = createNodeFromVNode(patch.node, isInSvgContext(node));
-                const children = getSignificantChildren(node);
-                const refChild = children[patch.index];
+                let refChild = null;
+                if (patch.ref_d) {
+                    // ID-based resolution: find sibling by dj-id (resilient to index shifts)
+                    const escaped = CSS.escape(patch.ref_d);
+                    refChild = node.querySelector(`:scope > [dj-id="${escaped}"]`);
+                }
+                if (!refChild) {
+                    // Fallback: index-based
+                    const children = getSignificantChildren(node);
+                    refChild = children[patch.index] || null;
+                }
                 if (refChild) {
                     node.insertBefore(newChild, refChild);
                 } else {
@@ -3674,8 +4008,17 @@ function applySinglePatch(patch) {
             }
 
             case 'RemoveChild': {
-                const children = getSignificantChildren(node);
-                const child = children[patch.index];
+                let child = null;
+                if (patch.child_d) {
+                    // ID-based resolution: find child by dj-id (resilient to index shifts)
+                    const escaped = CSS.escape(patch.child_d);
+                    child = node.querySelector(`:scope > [dj-id="${escaped}"]`);
+                }
+                if (!child) {
+                    // Fallback: index-based
+                    const children = getSignificantChildren(node);
+                    child = children[patch.index] || null;
+                }
                 if (child) {
                     const wasTextNode = child.nodeType === Node.TEXT_NODE;
                     const parentTag = node.tagName;
@@ -3955,7 +4298,7 @@ const lazyHydrationManager = {
         }
 
         if (globalThis.djustDebug) {
-            if (globalThis.djustDebug) console.log(`[LiveView:lazy] Registered element for lazy hydration (mode: ${lazyMode})`, element);
+            console.log(`[LiveView:lazy] Registered element for lazy hydration (mode: ${lazyMode})`, element);
         }
     },
 
@@ -4054,6 +4397,44 @@ const lazyHydrationManager = {
 // Expose lazy hydration API
 window.djust.lazyHydration = lazyHydrationManager;
 
+// ============================================================================
+// SSE Transport Fallback
+// ============================================================================
+
+/**
+ * Switch the active transport to SSE.
+ *
+ * Called either when WebSocket exhausts all reconnect attempts (automatic
+ * fallback) or directly when WebSocket is disabled and SSE is available.
+ * Replaces the global liveViewWS instance with a LiveViewSSE instance and
+ * mounts the view via the SSE stream endpoint.
+ */
+function _switchToSSETransport() {
+    const container = document.querySelector('[dj-view]');
+    if (!container) {
+        console.warn('[SSE] No [dj-view] container found, cannot switch to SSE transport');
+        return;
+    }
+    const viewPath = container.getAttribute('dj-view');
+    if (!viewPath) {
+        console.warn('[SSE] [dj-view] has no view path attribute, cannot switch to SSE transport');
+        return;
+    }
+
+    if (globalThis.djustDebug) console.log('[SSE] Switching to SSE transport for view:', viewPath);
+
+    const sseInstance = new window.djust.LiveViewSSE();
+    liveViewWS = sseInstance;
+    window.djust.liveViewInstance = sseInstance;
+
+    const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+    sseInstance.connect(viewPath, urlParams);
+}
+
+// Expose for tests and manual override
+window.djust._switchToSSETransport = _switchToSSETransport;
+
+// ============================================================================
 // Auto-stamp dj-root and dj-liveview-root on [dj-view]
 // elements so developers only need to write dj-view (#258).
 // Extracted as a helper so both djustInit() and reinitLiveViewForTurboNav() can call it.
@@ -4100,14 +4481,27 @@ function djustInit() {
 
     // Only initialize WebSocket if there are eager containers AND WebSocket is enabled
     const wsEnabled = window.DJUST_USE_WEBSOCKET !== false;
+    const sseAvailable = typeof window.djust.LiveViewSSE !== 'undefined' && typeof EventSource !== 'undefined';
+
     if (eagerContainers.length > 0 && wsEnabled) {
         // Initialize WebSocket
         liveViewWS = new LiveViewWebSocket();
         window.djust.liveViewInstance = liveViewWS;
+
+        // Wire SSE fallback: if WebSocket exhausts all reconnect attempts AND
+        // the SSE transport is available, switch over automatically.
+        if (sseAvailable) {
+            liveViewWS.onTransportFailed = () => _switchToSSETransport();
+        }
+
         liveViewWS.connect();
 
         // Start heartbeat
         liveViewWS.startHeartbeat();
+    } else if (eagerContainers.length > 0 && !wsEnabled && sseAvailable) {
+        // use_websocket: false but SSE is available — skip WebSocket entirely
+        if (globalThis.djustDebug) console.log('[LiveView] WebSocket disabled, using SSE transport directly');
+        _switchToSSETransport();
     } else if (eagerContainers.length > 0 && !wsEnabled) {
         // HTTP-only mode: create WS instance but disable it so sendEvent() falls through to HTTP
         liveViewWS = new LiveViewWebSocket();
@@ -4482,6 +4876,7 @@ if (document.readyState === 'loading') {
                 // Validate client-side
                 if (config) {
                     if (file.size > config.max_file_size) {
+                        // codeql[js/log-injection] -- file.name and file.size come from the browser FileList API, not from untrusted network input
                         console.warn(`[Upload] File too large: ${file.name} (${file.size} > ${config.max_file_size})`);
                         window.dispatchEvent(new CustomEvent('djust:upload:error', {
                             detail: { file: file.name, error: 'File too large' }
@@ -4865,6 +5260,7 @@ function _applyStreamOp(op, streamName) {
 
     switch (op.op) {
         case 'replace':
+            // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
             el.innerHTML = op.html || '';
             _removeStreamError(el);
             _dispatchStreamEvent(el, 'stream:update', { op: 'replace', stream: streamName });
@@ -4993,6 +5389,7 @@ function _dispatchStreamEvent(el, eventName, detail) {
  */
 function _htmlToFragment(html) {
     const template = document.createElement('template');
+    // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
     template.innerHTML = html || '';
     return template.content;
 }
@@ -5044,6 +5441,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // Use data.action (set by server alongside type:"navigation") to distinguish
         // live_patch from live_redirect. Falls back to data.type for any legacy messages
         // that were sent without an action field.
+        // TODO(deprecation): data.type fallback for pre-#307 clients — remove in next minor release
         const action = data.action || data.type;
         if (action === 'live_patch') {
             handleLivePatch(data);
@@ -5376,7 +5774,7 @@ function _createHookInstance(hookDef, el) {
 
 /**
  * Scan the DOM for elements with dj-hook and mount their hooks.
- * Called on init and after DOM patches.
+ * Called on init. For post-patch and post-navigation updates, use updateHooks().
  */
 function mountHooks(root) {
     _ensureHooksInit();

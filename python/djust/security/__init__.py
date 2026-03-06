@@ -34,6 +34,8 @@ from .attribute_guard import (
 )
 from .log_sanitizer import (
     sanitize_for_log,
+    sanitize_dict_for_log,
+    DjustLogSanitizerFilter,
     MAX_LOG_LENGTH,
 )
 from .error_handling import (
@@ -51,6 +53,8 @@ __all__ = [
     "AttributeSecurityError",
     # Log sanitizer
     "sanitize_for_log",
+    "sanitize_dict_for_log",
+    "DjustLogSanitizerFilter",
     "MAX_LOG_LENGTH",
     # Error handling
     "create_safe_error_response",

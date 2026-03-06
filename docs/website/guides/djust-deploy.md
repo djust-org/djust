@@ -1,0 +1,81 @@
+---
+title: "djust-deploy CLI"
+slug: djust-deploy
+section: guides
+order: 10
+level: intermediate
+description: "Deploy djust apps to djustlive.com from the command line"
+---
+
+# djust-deploy CLI
+
+The `djust-deploy` command-line tool manages deployments to [djustlive.com](https://djustlive.com), the managed hosting platform for djust applications.
+
+## Installation
+
+The CLI requires the `deploy` optional dependency:
+
+```bash
+pip install djust[deploy]
+```
+
+This installs the `djust-deploy` entry point along with the `click` and `requests` packages.
+
+## Authentication
+
+### Login
+
+```bash
+djust-deploy login
+```
+
+Prompts for your email and password, authenticates against djustlive.com, and stores the API token locally at `~/.djustlive/credentials` (file mode `0600`).
+
+### Logout
+
+```bash
+djust-deploy logout
+```
+
+Revokes the server session and removes the local credentials file.
+
+## Commands
+
+### `deploy`
+
+Trigger a production deployment for a project:
+
+```bash
+djust-deploy deploy <project-slug>
+```
+
+Before deploying, the CLI verifies that your git working tree is clean. If you have uncommitted changes, the deploy is aborted — commit or stash first.
+
+Build logs are streamed to stdout in real time.
+
+### `status`
+
+Check the current deployment state:
+
+```bash
+# All projects
+djust-deploy status
+
+# Specific project
+djust-deploy status <project-slug>
+```
+
+Returns JSON with deployment details (state, timestamps, etc.).
+
+## Credential Storage
+
+Credentials are stored at `~/.djustlive/credentials` as JSON:
+
+```json
+{
+  "token": "...",
+  "email": "you@example.com"
+}
+```
+
+The directory is created with mode `0700` and the file with mode `0600` (owner-only access).

@@ -491,6 +491,24 @@ class TestPwaTagHandlers:
         assert "My PWA" in result
         assert "#ff0000" in result
 
+    def test_pwa_head_quoted_args_through_rust_renderer(self):
+        """Quoted args with spaces survive Rust lexer round-trip (issue: split_whitespace)."""
+        from djust._rust import render_template
+
+        result = render_template('{% djust_pwa_head name="My App" theme_color="#09090b" %}', {})
+        assert "My App" in result
+        assert "#09090b" in result
+        assert "theme-color" in result
+        assert "manifest.json" in result
+
+    def test_pwa_head_no_args_through_rust_renderer(self):
+        """{% djust_pwa_head %} with no args renders default values through Rust."""
+        from djust._rust import render_template
+
+        result = render_template("{% djust_pwa_head %}", {})
+        assert "theme-color" in result
+        assert "serviceWorker" in result
+
 
 class TestTemplatetagHandler:
     """Tests for the templatetag handler."""

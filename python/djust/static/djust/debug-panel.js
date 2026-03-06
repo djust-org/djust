@@ -2193,8 +2193,10 @@
                 return JSON.parse(JSON.stringify(state));
             } catch (e) {
                 // Fallback for non-serializable values
-                const clone = {};
-                for (const key in state) {
+                const clone = Object.create(null); // no prototype to pollute
+                const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+                for (const key of Object.keys(state)) {
+                    if (UNSAFE_KEYS.has(key)) continue; // skip prototype-polluting keys
                     try {
                         clone[key] = JSON.parse(JSON.stringify(state[key]));
                     } catch {
@@ -2643,9 +2645,6 @@
                 // Hook into onmessage property setter to capture messages
                 // assigned via ws.onmessage = handler (bypasses addEventListener)
                 const onmessageDescriptor = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
-                // Save original descriptor for _hookExistingWebSocket to use
-                // when wrapping an already-assigned onmessage handler
-                this._originalOnmessageDescriptor = onmessageDescriptor;
                 if (onmessageDescriptor) {
                     Object.defineProperty(WebSocket.prototype, 'onmessage', {
                         set(handler) {
@@ -2691,20 +2690,21 @@
                 return originalSend(data);
             };
 
-            // Wrap the existing onmessage handler to capture received messages.
-            // The onmessage was set BEFORE hookIntoLiveView() ran, so the
-            // prototype setter hook didn't intercept it. Use the original
-            // property descriptor to read/write the raw handler and avoid
-            // double-wrapping through our own setter hook.
-            const desc = this._originalOnmessageDescriptor;
-            if (desc) {
-                const currentHandler = desc.get.call(ws);
-                if (currentHandler) {
-                    desc.set.call(ws, function(event) {
-                        self._handleReceivedMessage(event);
-                        return currentHandler.call(this, event);
-                    });
-                }
+            // Hook the existing onmessage handler by reassigning it through our
+            // patched WebSocket.prototype.onmessage setter. This causes the setter
+            // to wrap the handler with _handleReceivedMessage so future received
+            // messages are captured.
+            //
+            // We MUST NOT call native WebSocket/EventTarget functions via .call()
+            // from external code — V8 throws "Illegal invocation" because native
+            // bindings only pass their brand check when invoked through property
+            // access/assignment, not through explicit Function.prototype.call().
+            // Property access (ws.onmessage) triggers the patched getter which
+            // itself calls the native getter internally — that works because it's
+            // within the getter body where V8 has already validated the receiver.
+            const currentOnmessage = ws.onmessage;
+            if (currentOnmessage) {
+                ws.onmessage = currentOnmessage;
             }
 
             ws._djustDebugHooked = true;
@@ -2820,12 +2820,22 @@
 
             const stats = footer.querySelector('.djust-stats');
             if (stats && performance) {
-                stats.innerHTML = `
-                    <div class="djust-stat">Events:<span>${performance.event_count || 0}</span></div>
-                    <div class="djust-stat">Patches:<span>${performance.patch_count || 0}</span></div>
-                    <div class="djust-stat">Renders:<span>${performance.render_count || 0}</span></div>
-                    <div class="djust-stat">Render Time:<span>${performance.render_time ? performance.render_time.toFixed(2) + 'ms' : 'N/A'}</span></div>
-                `;
+                const metrics = [
+                    ['Events', performance.event_count || 0],
+                    ['Patches', performance.patch_count || 0],
+                    ['Renders', performance.render_count || 0],
+                    ['Render Time', performance.render_time ? performance.render_time.toFixed(2) + 'ms' : 'N/A'],
+                ];
+                stats.innerHTML = ''; // clear only once, with no interpolation
+                for (const [label, value] of metrics) {
+                    const div = document.createElement('div');
+                    div.className = 'djust-stat';
+                    div.textContent = label + ':';
+                    const span = document.createElement('span');
+                    span.textContent = value;
+                    div.appendChild(span);
+                    stats.appendChild(div);
+                }
             }
         }
 

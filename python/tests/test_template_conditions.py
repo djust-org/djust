@@ -23,6 +23,8 @@ class TestGreaterThan:
         template = "{% if count > 10 %}many{% endif %}"
         context = {"count": 5}
         result = render_template(template, context)
+        # render_template strips dj-if placeholders for standalone rendering (VDOM detail hidden from API)
+
         assert result == ""
 
     def test_greater_than_equal_values(self):
@@ -55,6 +57,8 @@ class TestLessThan:
         template = "{% if age < 18 %}minor{% endif %}"
         context = {"age": 21}
         result = render_template(template, context)
+        # render_template strips dj-if placeholders for standalone rendering (VDOM detail hidden from API)
+
         assert result == ""
 
     def test_less_than_equal_values(self):
@@ -87,6 +91,8 @@ class TestGreaterThanOrEqual:
         template = "{% if price >= 100 %}expensive{% endif %}"
         context = {"price": 50}
         result = render_template(template, context)
+        # render_template strips dj-if placeholders for standalone rendering (VDOM detail hidden from API)
+
         assert result == ""
 
 
@@ -112,6 +118,8 @@ class TestLessThanOrEqual:
         template = "{% if score <= 50 %}failing{% endif %}"
         context = {"score": 80}
         result = render_template(template, context)
+        # render_template strips dj-if placeholders for standalone rendering (VDOM detail hidden from API)
+
         assert result == ""
 
 
@@ -130,6 +138,8 @@ class TestNotEqual:
         template = '{% if status != "active" %}inactive{% endif %}'
         context = {"status": "active"}
         result = render_template(template, context)
+        # render_template strips dj-if placeholders for standalone rendering (VDOM detail hidden from API)
+
         assert result == ""
 
     def test_not_equal_numbers(self):
@@ -155,6 +165,8 @@ class TestEqual:
         template = '{% if status == "active" %}is active{% endif %}'
         context = {"status": "pending"}
         result = render_template(template, context)
+        # render_template strips dj-if placeholders for standalone rendering (VDOM detail hidden from API)
+
         assert result == ""
 
     def test_equal_numbers(self):
@@ -256,6 +268,78 @@ class TestEdgeCases:
         context = {"value": -5}
         result = render_template(template, context)
         assert result == "negative"
+
+
+class TestIfInHtmlAttribute:
+    """Regression tests for issue #380: {% if %} inside HTML attribute values."""
+
+    def test_if_in_attribute_false_no_comment(self):
+        """#380: {% if %} false inside attribute must not produce <!--dj-if--> in output."""
+        template = '<div class="btn {% if active %}active{% endif %}"></div>'
+        result = render_template(template, {"active": False})
+        assert "<!--" not in result
+        assert 'class="btn "' in result
+
+    def test_if_in_attribute_true_renders_content(self):
+        """#380: {% if %} true inside attribute must render the branch content."""
+        template = '<div class="btn {% if active %}active{% endif %}"></div>'
+        result = render_template(template, {"active": True})
+        assert 'class="btn active"' in result
+
+    def test_if_in_text_node_no_comment_via_api(self):
+        """render_template API strips <!--dj-if--> for standalone use."""
+        template = "<div>{% if show %}yes{% endif %}</div>"
+        result = render_template(template, {"show": False})
+        # Python-facing API strips placeholder comments
+        assert "<!--dj-if-->" not in result
+        assert result == "<div></div>"
+
+    def test_multiple_ifs_in_attributes(self):
+        """#380: Multiple {% if %} blocks inside attributes all stay clean."""
+        template = (
+            '<a class="{% if active %}active{% endif %} '
+            '{% if disabled %}disabled{% endif %}">link</a>'
+        )
+        result = render_template(template, {"active": False, "disabled": False})
+        assert "<!--" not in result
+
+    def test_if_in_attribute_with_else(self):
+        """#380: {% if %}...{% else %} inside attribute uses the else branch normally."""
+        template = '<div class="{% if active %}on{% else %}off{% endif %}"></div>'
+        result = render_template(template, {"active": False})
+        assert 'class="off"' in result
+        assert "<!--" not in result
+
+
+class TestElifInHtmlAttribute:
+    """Regression tests for issue #382: {% elif %} inside HTML attribute values."""
+
+    def test_elif_both_false_no_comment(self):
+        """#382: {% if %}...{% elif %}...{% endif %} in attribute with both false must not emit <!--dj-if-->."""
+        template = '<div class="{% if a %}one{% elif b %}two{% endif %}"></div>'
+        result = render_template(template, {"a": False, "b": False})
+        assert "<!--" not in result
+        assert 'class=""' in result
+
+    def test_elif_branch_renders_when_true(self):
+        """#382: elif branch content must render when elif condition is true."""
+        template = '<div class="{% if a %}one{% elif b %}two{% endif %}"></div>'
+        result = render_template(template, {"a": False, "b": True})
+        assert 'class="two"' in result
+        assert "<!--" not in result
+
+    def test_if_branch_renders_when_true(self):
+        """#382: if branch content still renders normally when if condition is true."""
+        template = '<div class="{% if a %}one{% elif b %}two{% endif %}"></div>'
+        result = render_template(template, {"a": True, "b": False})
+        assert 'class="one"' in result
+
+    def test_multiple_elif_all_false_no_comment(self):
+        """#382: Multiple elif branches — all false — must not emit <!--dj-if-->."""
+        template = '<div class="{% if a %}a{% elif b %}b{% elif c %}c{% endif %}"></div>'
+        result = render_template(template, {"a": False, "b": False, "c": False})
+        assert "<!--" not in result
+        assert 'class=""' in result
 
 
 if __name__ == "__main__":

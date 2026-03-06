@@ -12,12 +12,23 @@ Covers:
 import json
 from unittest.mock import MagicMock, patch
 
+from django.db import models as _django_models
+
 from djust.optimization.codegen import (
     _build_path_tree,
     generate_serializer_code,
     compile_serializer,
 )
 from djust.serialization import DjangoJSONEncoder
+
+
+# Create a single mock Model class at module level to avoid re-registration warnings.
+# Django's app registry warns when the same (app_label, model_name) pair is registered twice.
+_MockModelClass = type(
+    "MockModel",
+    (_django_models.Model,),
+    {"__module__": "test", "Meta": type("Meta", (), {"app_label": "test"})},
+)
 
 
 # --- Fix 1: Codegen .all() with subtree generates list iteration ---
@@ -75,15 +86,9 @@ class TestCodegenAllWithSubtree:
 class TestDeepDictSerialization:
     def _make_model(self, **kwargs):
         """Create a mock Django Model instance."""
-        from django.db import models as django_models
-
         obj = MagicMock()
         # Make isinstance(obj, models.Model) return True
-        obj.__class__ = type(
-            "MockModel",
-            (django_models.Model,),
-            {"__module__": "test", "Meta": type("Meta", (), {"app_label": "test"})},
-        )
+        obj.__class__ = _MockModelClass
         obj.pk = 1
         obj.__str__ = MagicMock(return_value="MockModel")
         obj._meta = MagicMock()
@@ -131,35 +136,30 @@ class TestDeepDictSerialization:
 # --- Fix 3: @property in fallback serialization ---
 
 
+class _FakeModel(_django_models.Model):
+    """Module-level model class to avoid re-registration warnings."""
+
+    class Meta:
+        app_label = "test"
+
+    @property
+    def url(self):
+        return "/posts/1"
+
+    @property
+    def failing_prop(self):
+        raise RuntimeError("boom")
+
+    @property
+    def list_prop(self):
+        return [1, 2, 3]
+
+
 class TestPropertySerialization:
-    def _make_model_class(self):
-        """Create a real Django model subclass with @property."""
-        from django.db import models as django_models
-
-        # Use a real model-like class with MRO that includes models.Model
-        class FakeModel(django_models.Model):
-            class Meta:
-                app_label = "test"
-
-            @property
-            def url(self):
-                return "/posts/1"
-
-            @property
-            def failing_prop(self):
-                raise RuntimeError("boom")
-
-            @property
-            def list_prop(self):
-                return [1, 2, 3]
-
-        return FakeModel
-
     def test_encoder_includes_property_values(self):
         """Model with @property url → result['url'] present."""
         encoder = DjangoJSONEncoder()
-        ModelClass = self._make_model_class()
-        obj = ModelClass.__new__(ModelClass)
+        obj = _FakeModel.__new__(_FakeModel)
         obj.pk = 1
         obj.__dict__["id"] = 1
 
@@ -170,8 +170,7 @@ class TestPropertySerialization:
     def test_encoder_skips_failing_property(self):
         """@property that raises → silently skipped."""
         encoder = DjangoJSONEncoder()
-        ModelClass = self._make_model_class()
-        obj = ModelClass.__new__(ModelClass)
+        obj = _FakeModel.__new__(_FakeModel)
 
         result = {}
         encoder._add_property_values(obj, result)
@@ -180,8 +179,7 @@ class TestPropertySerialization:
     def test_encoder_skips_non_primitive_property(self):
         """@property returning list → not included (only primitives)."""
         encoder = DjangoJSONEncoder()
-        ModelClass = self._make_model_class()
-        obj = ModelClass.__new__(ModelClass)
+        obj = _FakeModel.__new__(_FakeModel)
 
         result = {}
         encoder._add_property_values(obj, result)
@@ -191,28 +189,25 @@ class TestPropertySerialization:
 # --- Fix 3b: @property cache avoids duplicate evaluation ---
 
 
+class _CountingModel(_django_models.Model):
+    """Module-level model class to avoid re-registration warnings."""
+
+    class Meta:
+        app_label = "test"
+
+    _call_count = 0
+
+    @property
+    def expensive_prop(self):
+        _CountingModel._call_count += 1
+        return 42
+
+
 class TestPropertyCache:
-    def _make_model_class(self):
-        from django.db import models as django_models
-
-        class CountingModel(django_models.Model):
-            class Meta:
-                app_label = "test"
-
-            _call_count = 0
-
-            @property
-            def expensive_prop(self):
-                CountingModel._call_count += 1
-                return 42
-
-        return CountingModel
-
     def test_property_cache_populated_on_first_access(self):
         """First _add_property_values call populates _djust_prop_cache."""
         encoder = DjangoJSONEncoder()
-        ModelClass = self._make_model_class()
-        obj = ModelClass.__new__(ModelClass)
+        obj = _CountingModel.__new__(_CountingModel)
         obj.pk = 1
         obj.__dict__["id"] = 1
 
@@ -225,20 +220,19 @@ class TestPropertyCache:
     def test_property_cache_avoids_reeval(self):
         """Second _add_property_values call reads from cache, not property."""
         encoder = DjangoJSONEncoder()
-        ModelClass = self._make_model_class()
-        obj = ModelClass.__new__(ModelClass)
+        obj = _CountingModel.__new__(_CountingModel)
         obj.pk = 1
         obj.__dict__["id"] = 1
 
-        ModelClass._call_count = 0
+        _CountingModel._call_count = 0
 
         result1 = {}
         encoder._add_property_values(obj, result1)
-        first_count = ModelClass._call_count
+        first_count = _CountingModel._call_count
 
         result2 = {}
         encoder._add_property_values(obj, result2)
-        second_count = ModelClass._call_count
+        second_count = _CountingModel._call_count
 
         assert result1["expensive_prop"] == 42
         assert result2["expensive_prop"] == 42

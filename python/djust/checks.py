@@ -710,7 +710,20 @@ def check_liveviews(app_configs, **kwargs):
                 continue
             if not callable(method):
                 continue
-            if name in ("mount", "get_context_data", "dispatch", "setup", "get", "post"):
+            # Skip known lifecycle methods — these are called by the framework, not
+            # by user events, and should never carry @event_handler.
+            if name in (
+                "mount",
+                "get_context_data",
+                "dispatch",
+                "setup",
+                "get",
+                "post",
+                "handle_params",
+                "handle_disconnect",
+                "handle_connect",
+                "handle_event",
+            ):
                 continue
             if is_event_handler(method):
                 continue
@@ -832,7 +845,12 @@ def check_liveviews(app_configs, **kwargs):
 
 
 def _check_service_instances_in_mount(errors):
-    """V006: Detect service/client/session instantiation in mount() methods via AST."""
+    """V006 (Warning): Detect service/client/session instantiation in mount() methods via AST.
+
+    High-confidence subset of V008. Fires for names matching _SERVICE_INSTANCE_KEYWORDS
+    (Service, Client, Session, API, Connection). Because V006 already emits a Warning for
+    these patterns, V008 explicitly skips them so developers see only one message per line.
+    """
     app_dirs = _get_project_app_dirs()
     if not app_dirs:
         return
@@ -895,10 +913,20 @@ def _check_service_instances_in_mount(errors):
 def _check_non_primitive_assignments_in_mount(errors):
     """V008: Detect assignments of non-primitive types in mount() methods via AST.
 
-    This is a broader check than V006 which only catches service instances.
+    This is a broader, lower-confidence check than V006. V006 covers a specific
+    well-known pattern (service/client/session names → Warning); V008 catches
+    *all* non-primitive call results that V006 doesn't already flag (→ Info).
+
+    The two checks are deliberately non-overlapping:
+    - Assignments whose call name matches _SERVICE_INSTANCE_KEYWORDS are left
+      to V006 (Warning), so developers see one message, not two.
+    - Everything else that is not a primitive literal is reported by V008 (Info)
+      because it *might* be serializable (e.g. a dataclass) but needs annotation.
+
     Catches assignments like:
     - self.items = []  (OK - primitive)
-    - self.data = CustomClass()  (WARNING - likely non-serializable)
+    - self.data = CustomClass()  (V008 Info - check serialisability)
+    - self.service = PaymentService()  (V006 Warning - skipped here)
     - self.count = 0  (OK - primitive)
 
     Related to issue #292: Silent str() fallback when non-serializable objects
@@ -927,12 +955,35 @@ def _check_non_primitive_assignments_in_mount(errors):
         "Tuple",
     }
 
+    # Primitive return-type annotation names — functions annotated with these
+    # return serialisable values even if their name looks non-primitive.
+    _PRIMITIVE_RETURN_ANNOTATIONS = {
+        "str",
+        "int",
+        "float",
+        "bool",
+        "list",
+        "dict",
+        "tuple",
+        "set",
+        "None",
+        "List",
+        "Dict",
+        "Tuple",
+        "Set",
+        "Optional",
+    }
+
     for filepath in _iter_python_files(app_dirs):
         tree, source_lines = _parse_python_file(filepath)
         if tree is None:
             continue
 
         relpath = os.path.relpath(filepath)
+
+        # Build a set of module-level function names whose return annotation is a
+        # primitive type.  Calls to these functions are safe to assign in mount().
+        primitive_return_funcs = _build_primitive_return_funcs(tree)
 
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
@@ -959,12 +1010,20 @@ def _check_non_primitive_assignments_in_mount(errors):
                         if target.attr.startswith("_"):
                             continue
 
-                        # Check if the value is a Call (instantiation)
+                        # Check if the value is a Call (instantiation or function call)
                         if not isinstance(stmt.value, ast.Call):
                             continue
 
                         call_name = _get_call_name(stmt.value)
                         if call_name and call_name not in SAFE_TYPES:
+                            # Skip patterns already reported by V006 (Warning) to
+                            # avoid emitting a duplicate V008 (Info) for the same line.
+                            if _SERVICE_INSTANCE_KEYWORDS.search(call_name):
+                                continue
+                            # Skip calls to module-level functions whose return
+                            # annotation declares a primitive type (e.g. -> str).
+                            if call_name in primitive_return_funcs:
+                                continue
                             # This is a non-primitive instantiation
                             if not _has_noqa(source_lines, stmt.lineno, "V008"):
                                 errors.append(
@@ -1008,12 +1067,126 @@ def _get_call_name(call_node):
     return None
 
 
+_PRIMITIVE_ANNOTATION_NAMES = frozenset(
+    {
+        "str",
+        "int",
+        "bool",
+        "float",
+        "bytes",
+        "list",
+        "dict",
+        "set",
+        "tuple",
+        "List",
+        "Dict",
+        "Set",
+        "Tuple",
+    }
+)
+
+
+def _build_primitive_return_funcs(tree):
+    """Return the set of top-level function names whose return annotation is a primitive type.
+
+    Only inspects module-level (top-level) function definitions.  If a function
+    is annotated with ``-> str``, ``-> int``, ``-> bool``, ``-> float``,
+    ``-> bytes``, or any of the collection primitives (``list``, ``dict``,
+    ``set``, ``tuple`` and their capitalised aliases), its name is included in
+    the returned set.
+
+    This is used by the V008 check to avoid false-positive warnings when
+    ``mount()`` assigns the result of a helper function that is provably
+    primitive because of its return-type annotation.
+    """
+    safe_funcs = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.returns is None:
+            continue
+        annotation = node.returns
+        ann_name = None
+        if isinstance(annotation, ast.Name):
+            ann_name = annotation.id
+        elif isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+            # PEP 563 / ``from __future__ import annotations`` stringifies all annotations
+            ann_name = annotation.value
+        if ann_name in _PRIMITIVE_ANNOTATION_NAMES:
+            safe_funcs.add(node.name)
+    return safe_funcs
+
+
+def _collect_patch_param_names(class_node, original_source):
+    """Collect URL param names from self.patch() calls in a class.
+
+    Inspects all methods in the class for ``self.patch(...)`` calls and extracts
+    param names from dict-style (``{"tab": ...}``) and query-string-style
+    (``"?tab=value"`` or f-strings) arguments.
+
+    Returns a set of lowercase param name strings, e.g. ``{"tab", "view"}``.
+    """
+    param_names = set()
+    for method in class_node.body:
+        if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for call_node in ast.walk(method):
+            if not isinstance(call_node, ast.Call):
+                continue
+            func = call_node.func
+            # Match self.patch(...)
+            if not (
+                isinstance(func, ast.Attribute)
+                and func.attr == "patch"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "self"
+            ):
+                continue
+            if not call_node.args:
+                continue
+            first_arg = call_node.args[0]
+            # Dict-style: self.patch({"tab": val, ...})
+            if isinstance(first_arg, ast.Dict):
+                for key in first_arg.keys:
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        param_names.add(key.value)
+            # Constant string: self.patch("?tab=value")
+            elif isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
+                for m in re.finditer(r"[?&](\w+)=", first_arg.value):
+                    param_names.add(m.group(1))
+            # f-string: self.patch(f"?tab={val}") — extract from the source segment
+            elif isinstance(first_arg, ast.JoinedStr):
+                seg = ast.get_source_segment(original_source, first_arg) or ""
+                for m in re.finditer(r"[?&](\w+)=", seg):
+                    param_names.add(m.group(1))
+    return param_names
+
+
+def _nav_var_matches_patch_params(var_name, param_names):
+    """Return True if *var_name* plausibly corresponds to a URL param in *param_names*.
+
+    Checks direct match and simple prefix/suffix stripping so that, for example,
+    ``active_tab`` matches a param named ``tab``.
+    """
+    if var_name in param_names:
+        return True
+    # Strip common adjective prefixes: active_, current_, selected_
+    base = var_name.split("_")[-1]  # "active_tab" → "tab", "current_view" → "view"
+    return base in param_names
+
+
 def _check_navigation_state_in_handlers(errors):
     """Q010: Heuristic to detect event handlers that set navigation state without patching.
 
     Lower-confidence check that looks for @event_handler methods whose body primarily
     sets navigation state variables (self.active_view, self.current_tab, etc.) without
     using patch() or handle_params(). Suggests converting to dj-patch pattern.
+
+    To reduce false positives, Q010 only fires when the class already uses
+    ``self.patch()`` with URL params somewhere, AND the nav variable name matches
+    one of those param names.  Variables that merely sound like navigation but are
+    not URL params (e.g. ``self.active_tab`` for CSS toggling) are therefore
+    silently skipped.
 
     This is INFO level as it's a heuristic and may have false positives.
     """
@@ -1045,6 +1218,11 @@ def _check_navigation_state_in_handlers(errors):
             if not isinstance(node, ast.ClassDef):
                 continue
 
+            # Cross-reference: collect URL param names from self.patch() calls in
+            # this class.  Only flag variables whose names appear in this set so
+            # we avoid false positives for nav-sounding names that are not URL state.
+            patch_params = _collect_patch_param_names(node, original_source)
+
             # Check each method in the class
             for item in node.body:
                 if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -1052,7 +1230,8 @@ def _check_navigation_state_in_handlers(errors):
 
                 # Skip non-event-handler methods
                 if not any(
-                    isinstance(deco, ast.Name) and deco.id == "event_handler"
+                    isinstance(deco, ast.Name)
+                    and deco.id == "event_handler"
                     or isinstance(deco, ast.Call)
                     and isinstance(deco.func, ast.Name)
                     and deco.func.id == "event_handler"
@@ -1062,12 +1241,23 @@ def _check_navigation_state_in_handlers(errors):
 
                 # Check if the method body sets navigation state
                 method_source = ast.get_source_segment(original_source, item) or ""
-                has_nav_state = NAV_STATE_VARS.search(method_source)
+                nav_match = NAV_STATE_VARS.search(method_source)
+
+                if not nav_match:
+                    continue
+
+                var_name = nav_match.group(1)
+
+                # Only flag when the variable name is confirmed to be a URL param
+                # used elsewhere via self.patch() — prevents false positives for
+                # nav-sounding names that are not URL state.
+                if not patch_params or not _nav_var_matches_patch_params(var_name, patch_params):
+                    continue
 
                 # Check if it uses patch() or handle_params (indicators it's already using patching)
                 has_patch_pattern = "patch(" in method_source or "handle_params" in method_source
 
-                if has_nav_state and not has_patch_pattern:
+                if not has_patch_pattern:
                     # Check for noqa on function definition line or any decorator line
                     has_noqa_suppression = False
                     for deco in item.decorator_list:
@@ -1078,9 +1268,6 @@ def _check_navigation_state_in_handlers(errors):
                         has_noqa_suppression = True
 
                     if not has_noqa_suppression:
-                        nav_match = NAV_STATE_VARS.search(method_source)
-                        var_name = nav_match.group(1) if nav_match else "navigation state"
-
                         errors.append(
                             DjustInfo(
                                 "%s:%d -- Event handler '%s.%s()' sets %s without using patch(). "
@@ -1089,7 +1276,7 @@ def _check_navigation_state_in_handlers(errors):
                                 hint=(
                                     "Navigation state changes are better handled with dj-patch + handle_params(). "
                                     "This enables URL updates and back-button support. "
-                                    "Example: Replace dj-click with dj-patch=\"?tab=value\" and handle in handle_params()."
+                                    'Example: Replace dj-click with dj-patch="?tab=value" and handle in handle_params().'
                                 ),
                                 id="djust.Q010",
                                 fix_hint=(
@@ -1167,13 +1354,9 @@ def check_security(app_configs, **kwargs):
                         if (
                             node.body
                             and isinstance(node.body[0], ast.Expr)
-                            and isinstance(node.body[0].value, (ast.Constant, ast.Str))
+                            and isinstance(node.body[0].value, ast.Constant)
                         ):
-                            doc = (
-                                node.body[0].value.value
-                                if isinstance(node.body[0].value, ast.Constant)
-                                else node.body[0].value.s
-                            )
+                            doc = node.body[0].value.value
                             if "csrf" in doc.lower():
                                 has_justification = True
                         if not has_justification and not _has_noqa(
@@ -1234,6 +1417,10 @@ _INCLUDE_RE = re.compile(r"\{%\s*include\s+")
 _LIVEVIEW_CONTENT_RE = re.compile(r"\{\{\s*liveview_content\s*\|\s*safe\s*\}\}")
 _DOC_DJUST_EVENT_RE = re.compile(r"""document\s*\.\s*addEventListener\s*\(\s*['"]djust:""")
 _NAV_DATA_ATTRS = re.compile(r"data-(view|tab|page|section)")  # Navigation-style data attributes
+_DJ_EVENT_DIRECTIVES_RE = re.compile(
+    r"dj-(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave)="
+)
+_DJ_COMPONENT_RE = re.compile(r"dj-component")
 _DEPRECATED_DATA_DJ_ID_RE = re.compile(r"""data-dj-id\s*=\s*["'][^"']*["']""")
 
 
@@ -1301,8 +1488,13 @@ def check_templates(app_configs, **kwargs):
         if _INCLUDE_RE.search(content) and not _LIVEVIEW_CONTENT_RE.search(content):
             # Only flag if file appears to be a wrapper (has a block named "content" or similar)
             if re.search(r"\{%\s*block\s+(content|body|main)\s*%\}", content):
-                # Check if it's actually wrapping liveview content
-                if re.search(r"liveview|live_view|djust", content, re.IGNORECASE):
+                # Check if any {% include %} path mentions liveview/live_view
+                include_paths = re.findall(r'\{%\s*include\s+["\']([^"\']+)["\']', content)
+                has_liveview_include = any(
+                    re.search(r"liveview|live_view", path, re.IGNORECASE) for path in include_paths
+                )
+                has_noqa = "{# noqa: T003 #}" in content or "{# noqa #}" in content
+                if has_liveview_include and not has_noqa:
                     errors.append(
                         DjustInfo(
                             "%s -- wrapper template may be using {%% include %%} instead of {{ liveview_content|safe }}."
@@ -1345,7 +1537,46 @@ def check_templates(app_configs, **kwargs):
         # T010 -- dj-click used for navigation instead of dj-patch
         _check_click_for_navigation(content, relpath, filepath, errors)
 
-        # T011 -- deprecated data-dj-id attribute (renamed to dj-id in v1.0)
+        # T011 -- unsupported Django template tags (not implemented in Rust renderer)
+        _check_unsupported_tags(content, relpath, filepath, errors)
+
+        # T012 -- template uses dj-* event directives but missing dj-view
+        if _DJ_EVENT_DIRECTIVES_RE.search(content) and not _DJ_VIEW_RE.search(content):
+            # Only fire if this isn't a component template (components don't need dj-view)
+            if not _DJ_COMPONENT_RE.search(content):
+                errors.append(
+                    DjustWarning(
+                        "%s -- template uses dj-* event directives but has no dj-view attribute."
+                        % relpath,
+                        hint=(
+                            'Add dj-view="yourapp.views.YourView" to the root element, '
+                            "or this template won't be connected to a LiveView."
+                        ),
+                        id="djust.T012",
+                        file_path=filepath,
+                    )
+                )
+
+        # T013 -- dj-view with empty or invalid value
+        for match in re.finditer(r'dj-view="([^"]*)"', content):
+            value = match.group(1)
+            # {{ ... }} is a valid dynamic injection pattern (base-template use case)
+            if re.match(r"^\s*\{\{.*\}\}\s*$", value):
+                continue
+            if not value or "." not in value:
+                lineno = content[: match.start()].count("\n") + 1
+                errors.append(
+                    DjustWarning(
+                        "%s:%d -- dj-view has empty or invalid value '%s'."
+                        % (relpath, lineno, value),
+                        hint="dj-view should be a dotted Python path like 'myapp.views.MyView'.",
+                        id="djust.T013",
+                        file_path=filepath,
+                        line_number=lineno,
+                    )
+                )
+
+        # T014 -- deprecated data-dj-id attribute (renamed to dj-id in v1.0)
         _check_deprecated_data_dj_id(content, relpath, filepath, errors)
 
     return errors
@@ -1390,6 +1621,45 @@ def _check_view_root_same_element(content, relpath, filepath, errors):
         )
 
 
+# Tags still unsupported by the Rust renderer (after implementing widthratio,
+# firstof, templatetag, spaceless, cycle, now in v0.3.3).
+# Only opening tags are matched — end tags always accompany their openers.
+#
+# NOTE: {% extends %} and {% block %} are FULLY SUPPORTED since template
+# inheritance was implemented (PR #272). Do not add them here.
+_UNSUPPORTED_TAGS_RE = re.compile(
+    r"\{%\s*(ifchanged|regroup|resetcycle|lorem|debug|filter|autoescape)\b"
+)
+
+
+def _check_unsupported_tags(content, relpath, filepath, errors):
+    """T011: Detect unsupported Django template tags in LiveView templates.
+
+    The Rust renderer silently ignores these tags, rendering an HTML comment
+    instead. This check warns developers at startup so they can use workarounds.
+    """
+    has_noqa = "{# noqa: T011 #}" in content or "{# noqa #}" in content
+    if has_noqa:
+        return
+
+    for match in _UNSUPPORTED_TAGS_RE.finditer(content):
+        tag_name = match.group(1)
+        lineno = content[: match.start()].count("\n") + 1
+        errors.append(
+            DjustWarning(
+                "%s:%d -- unsupported template tag '{%% %s %%}' will be silently "
+                "ignored by Rust renderer." % (relpath, lineno, tag_name),
+                hint=(
+                    "Pre-compute the value in your view and pass it as a context "
+                    "variable, or use a supported alternative."
+                ),
+                id="djust.T011",
+                file_path=filepath,
+                line_number=lineno,
+            )
+        )
+
+
 def _check_click_for_navigation(content, relpath, filepath, errors):
     """T010: Detect dj-click with navigation-style data attributes.
 
@@ -1416,14 +1686,13 @@ def _check_click_for_navigation(content, relpath, filepath, errors):
                     hint=(
                         "Navigation actions should use dj-patch instead of dj-click. "
                         "dj-patch updates the URL and enables back-button support. "
-                        "Example: <button dj-patch=\"/view?tab=settings\">Settings</button>\n"
+                        'Example: <button dj-patch="/view?tab=settings">Settings</button>\n'
                         "See: https://docs.djust.dev/guides/navigation"
                     ),
                     id="djust.T010",
                     fix_hint=(
                         "Replace dj-click with dj-patch at line %d in `%s` and handle "
-                        "navigation parameters in handle_params() method."
-                        % (lineno, relpath)
+                        "navigation parameters in handle_params() method." % (lineno, relpath)
                     ),
                     file_path=filepath,
                     line_number=lineno,
@@ -1432,7 +1701,7 @@ def _check_click_for_navigation(content, relpath, filepath, errors):
 
 
 def _check_deprecated_data_dj_id(content, relpath, filepath, errors):
-    """T011: Detect deprecated data-dj-id attribute (renamed to dj-id in v1.0).
+    """T014: Detect deprecated data-dj-id attribute (renamed to dj-id in v1.0).
 
     data-dj-id was the internal VDOM tracking attribute in pre-1.0 versions.
     It has been renamed to dj-id to be consistent with all other dj- prefixed
@@ -1449,10 +1718,9 @@ def _check_deprecated_data_dj_id(content, relpath, filepath, errors):
                     "If this is hand-authored HTML, replace data-dj-id with dj-id. "
                     "If it is generated by djust, upgrade to v1.0."
                 ),
-                id="djust.T011",
+                id="djust.T014",
                 fix_hint=(
-                    "Replace 'data-dj-id=' with 'dj-id=' at line %d in `%s`."
-                    % (lineno, relpath)
+                    "Replace 'data-dj-id=' with 'dj-id=' at line %d in `%s`." % (lineno, relpath)
                 ),
                 file_path=filepath,
                 line_number=lineno,

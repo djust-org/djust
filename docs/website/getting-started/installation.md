@@ -90,7 +90,7 @@ start:
 If you're contributing to djust or want the latest unreleased version:
 
 ```bash
-git clone https://github.com/johnrtipton/djust.git
+git clone https://github.com/djust-org/djust.git
 cd djust
 
 # Install Rust (if needed)

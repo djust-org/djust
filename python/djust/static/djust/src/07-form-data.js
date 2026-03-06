@@ -61,6 +61,6 @@ function restoreFormData(container, data) {
     });
 
     if (globalThis.djustDebug) {
-        if (globalThis.djustDebug) console.log('[DraftMode] Restored form data:', data);
+        console.log('[DraftMode] Restored form data:', data);
     }
 }

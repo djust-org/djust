@@ -347,6 +347,7 @@ mod tests {
             d: Some("0".to_string()),
             index: 0,
             node: VNode::text("child"),
+            ref_d: None,
         };
 
         apply_patch(&mut root, &patch);

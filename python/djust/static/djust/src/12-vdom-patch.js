@@ -32,7 +32,7 @@ function getNodeByPath(path, djustId = null) {
         // ID not found - fall through to path-based
         if (globalThis.djustDebug) {
             // Log without user data to avoid log injection
-            if (globalThis.djustDebug) console.log('[LiveView] ID lookup failed, trying path fallback');
+            console.log('[LiveView] ID lookup failed, trying path fallback');
         }
     }
 
@@ -335,10 +335,22 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
 
     if (vnode.attrs) {
         for (const [key, value] of Object.entries(vnode.attrs)) {
+            // Set all attributes on the element (including dj-* attributes).
+            // Event listeners for dj-* attributes are attached by bindLiveViewEvents()
+            // after patches are applied, which already uses _markHandlerBound to
+            // prevent double-binding on subsequent calls.
             if (key === 'value' && (elem.tagName === 'INPUT' || elem.tagName === 'TEXTAREA')) {
                 elem.value = value;
+            } else if (key === 'checked' && elem.tagName === 'INPUT') {
+                elem.checked = true;
+            } else if (key === 'selected' && elem.tagName === 'OPTION') {
+                elem.selected = true;
             }
             elem.setAttribute(key, value);
+
+            // Note: dj-* event listeners are attached by bindLiveViewEvents() after
+            // patch application. Do NOT pre-mark elements here — that would prevent
+            // bindLiveViewEvents() from ever attaching the listener.
         }
     }
 
@@ -704,7 +716,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                         // Clone and append new child
                         existingElement.appendChild(newChild.cloneNode(true));
                         if (globalThis.djustDebug) {
-                            if (globalThis.djustDebug) console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
+                            console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
                         }
                     }
                 }
@@ -725,7 +737,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                         // Clone and prepend new child
                         existingElement.insertBefore(newChild.cloneNode(true), firstExisting);
                         if (globalThis.djustDebug) {
-                            if (globalThis.djustDebug) console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
+                            console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
                         }
                     }
                 }
@@ -735,7 +747,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
             case 'ignore':
                 // Don't update this element at all
                 if (globalThis.djustDebug) {
-                    if (globalThis.djustDebug) console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
+                    console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
                 }
                 break;
 
@@ -813,6 +825,7 @@ function _stampDjIds(serverHtml, container) {
     if (!container) return;
 
     const parser = new DOMParser();
+    // codeql[js/xss] -- serverHtml is rendered by the trusted Django/Rust template engine
     const doc = parser.parseFromString('<div>' + serverHtml + '</div>', 'text/html');
     const serverRoot = doc.body.firstChild;
 
@@ -1038,6 +1051,12 @@ function applySinglePatch(patch) {
                         node.value = patch.value;
                     }
                     node.setAttribute(patch.key, patch.value);
+                } else if (patch.key === 'checked' && node.tagName === 'INPUT') {
+                    node.checked = true;
+                    node.setAttribute('checked', '');
+                } else if (patch.key === 'selected' && node.tagName === 'OPTION') {
+                    node.selected = true;
+                    node.setAttribute('selected', '');
                 } else {
                     node.setAttribute(patch.key, patch.value);
                 }
@@ -1050,13 +1069,27 @@ function applySinglePatch(patch) {
                 if (patch.key && (patch.key.startsWith('dj-') || patch.key === 'data-dj-src')) {
                     break;
                 }
+                if (patch.key === 'checked' && node.tagName === 'INPUT') {
+                    node.checked = false;
+                } else if (patch.key === 'selected' && node.tagName === 'OPTION') {
+                    node.selected = false;
+                }
                 node.removeAttribute(patch.key);
                 break;
 
             case 'InsertChild': {
                 const newChild = createNodeFromVNode(patch.node, isInSvgContext(node));
-                const children = getSignificantChildren(node);
-                const refChild = children[patch.index];
+                let refChild = null;
+                if (patch.ref_d) {
+                    // ID-based resolution: find sibling by dj-id (resilient to index shifts)
+                    const escaped = CSS.escape(patch.ref_d);
+                    refChild = node.querySelector(`:scope > [dj-id="${escaped}"]`);
+                }
+                if (!refChild) {
+                    // Fallback: index-based
+                    const children = getSignificantChildren(node);
+                    refChild = children[patch.index] || null;
+                }
                 if (refChild) {
                     node.insertBefore(newChild, refChild);
                 } else {
@@ -1072,8 +1105,17 @@ function applySinglePatch(patch) {
             }
 
             case 'RemoveChild': {
-                const children = getSignificantChildren(node);
-                const child = children[patch.index];
+                let child = null;
+                if (patch.child_d) {
+                    // ID-based resolution: find child by dj-id (resilient to index shifts)
+                    const escaped = CSS.escape(patch.child_d);
+                    child = node.querySelector(`:scope > [dj-id="${escaped}"]`);
+                }
+                if (!child) {
+                    // Fallback: index-based
+                    const children = getSignificantChildren(node);
+                    child = children[patch.index] || null;
+                }
                 if (child) {
                     const wasTextNode = child.nodeType === Node.TEXT_NODE;
                     const parentTag = node.tagName;

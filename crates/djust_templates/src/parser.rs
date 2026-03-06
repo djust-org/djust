@@ -11,6 +11,7 @@ pub enum Node {
         condition: String,
         true_nodes: Vec<Node>,
         false_nodes: Vec<Node>,
+        in_tag_context: bool,
     },
     For {
         var_names: Vec<String>, // Supports tuple unpacking: {% for a, b in items %}
@@ -30,6 +31,9 @@ pub enum Node {
         only: bool,                       // if true, only pass with_vars, not parent context
     },
     Comment,
+    /// {% load library_name %} — preserved so inheritance reconstruction can
+    /// re-emit the tag for downstream Django rendering.
+    Load(Vec<String>),
     CsrfToken,
     Static(String), // Path to static file
     With {
@@ -58,13 +62,36 @@ pub enum Node {
         /// Arguments from the template tag as raw strings
         args: Vec<String>,
     },
+    /// {% widthratio value max_value max_width %} - calculates round(value/max_value * max_width)
+    WidthRatio {
+        value: String,
+        max_value: String,
+        max_width: String,
+    },
+    /// {% firstof var1 var2 ... "fallback" %} - outputs first truthy variable
+    FirstOf {
+        args: Vec<String>,
+    },
+    /// {% templatetag name %} - outputs literal template syntax characters
+    TemplateTag(String),
+    /// {% spaceless %}...{% endspaceless %} - removes whitespace between HTML tags
+    Spaceless {
+        nodes: Vec<Node>,
+    },
+    /// {% cycle val1 val2 ... %} - cycles through values in a for loop
+    Cycle {
+        values: Vec<String>,
+        name: Option<String>,
+    },
+    /// {% now "format" %} - outputs current date/time with given format
+    Now(String),
     /// Unsupported template tag - renders as HTML comment with warning.
     ///
     /// This is used for Django template tags that don't have a registered
     /// handler. Instead of silently failing, it outputs a visible warning
     /// in development to help developers identify missing tag implementations.
     UnsupportedTag {
-        /// Tag name (e.g., "spaceless", "verbatim")
+        /// Tag name (e.g., "ifchanged", "regroup")
         name: String,
         /// Original arguments from the tag
         args: Vec<String>,
@@ -84,6 +111,43 @@ pub enum Node {
         false_expr: String,
         filters: Vec<(String, Option<String>)>,
     },
+}
+
+/// Returns true if `text` ends inside an unclosed HTML opening tag.
+///
+/// Used to detect whether a `{% if %}` tag appears inside an attribute value,
+/// e.g. `<div class="btn {% if active %}`. In that context the VDOM placeholder
+/// comment `<!--dj-if-->` must NOT be emitted because HTML comments inside
+/// attribute values produce malformed HTML (fix for issue #380).
+///
+/// Scans left-to-right with quote state tracking so that `>` characters
+/// inside quoted attribute values (e.g. `title="a > b "`) are not mistaken
+/// for tag-closing `>` characters.
+///
+/// Known limitation: does not track JavaScript/CSS template literals or
+/// CDATA sections — these are not expected in Django template attribute values.
+fn is_inside_html_tag(text: &str) -> bool {
+    let mut in_tag = false;
+    let mut in_quote: Option<char> = None;
+
+    for ch in text.chars() {
+        match (in_tag, in_quote, ch) {
+            // Opening < starts a tag (only when not inside a quoted attribute)
+            (false, None, '<') => in_tag = true,
+            // Closing > ends a tag (only when not inside a quoted attribute)
+            (true, None, '>') => in_tag = false,
+            // Enter a double-quoted attribute value
+            (true, None, '"') => in_quote = Some('"'),
+            // Enter a single-quoted attribute value
+            (true, None, '\'') => in_quote = Some('\''),
+            // Exit a quoted attribute value (matching quote character)
+            (true, Some(q), c) if c == q => in_quote = None,
+            // All other characters — no state change
+            _ => {}
+        }
+    }
+
+    in_tag
 }
 
 pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
@@ -140,12 +204,26 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
             match tag_name.as_str() {
                 "if" => {
                     let condition = args.join(" ");
-                    let (true_nodes, false_nodes, end_pos) = parse_if_block(tokens, *i + 1)?;
+                    // Capture attribute context BEFORE advancing i.
+                    // If the immediately preceding token is text that ends inside an
+                    // unclosed HTML tag (e.g. `<div class="`), we are inside an
+                    // attribute value and must not emit <!--dj-if--> when false.
+                    let in_tag_context = if *i > 0 {
+                        match &tokens[*i - 1] {
+                            Token::Text(t) => is_inside_html_tag(t),
+                            _ => false,
+                        }
+                    } else {
+                        false
+                    };
+                    let (true_nodes, false_nodes, end_pos) =
+                        parse_if_block(tokens, *i + 1, in_tag_context)?;
                     *i = end_pos;
                     Ok(Some(Node::If {
                         condition,
                         true_nodes,
                         false_nodes,
+                        in_tag_context,
                     }))
                 }
 
@@ -394,10 +472,85 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                 }
 
                 "load" => {
-                    // {% load static %} - For now, just treat as a no-op comment
-                    // In full Django, this loads template tag libraries
-                    // Our static files are handled via {% static %} tag
-                    Ok(Some(Node::Comment))
+                    // {% load static %} — preserve library names so inheritance
+                    // reconstruction can re-emit the tag for Django rendering.
+                    Ok(Some(Node::Load(args.clone())))
+                }
+
+                "widthratio" => {
+                    // {% widthratio value max_value max_width %}
+                    if args.len() < 3 {
+                        return Err(DjangoRustError::TemplateError(
+                            "widthratio tag requires 3 arguments: {% widthratio value max_value max_width %}"
+                                .to_string(),
+                        ));
+                    }
+                    Ok(Some(Node::WidthRatio {
+                        value: args[0].clone(),
+                        max_value: args[1].clone(),
+                        max_width: args[2].clone(),
+                    }))
+                }
+
+                "firstof" => {
+                    // {% firstof var1 var2 ... "fallback" %}
+                    if args.is_empty() {
+                        return Err(DjangoRustError::TemplateError(
+                            "firstof tag requires at least one argument".to_string(),
+                        ));
+                    }
+                    Ok(Some(Node::FirstOf { args: args.clone() }))
+                }
+
+                "templatetag" => {
+                    // {% templatetag openblock %}
+                    if args.is_empty() {
+                        return Err(DjangoRustError::TemplateError(
+                            "templatetag requires an argument".to_string(),
+                        ));
+                    }
+                    Ok(Some(Node::TemplateTag(args[0].clone())))
+                }
+
+                "spaceless" => {
+                    // {% spaceless %} ... {% endspaceless %}
+                    let (nodes, end_pos) = parse_spaceless_block(tokens, *i + 1)?;
+                    *i = end_pos;
+                    Ok(Some(Node::Spaceless { nodes }))
+                }
+
+                "endspaceless" => {
+                    // Handled by spaceless tag
+                    Ok(None)
+                }
+
+                "cycle" => {
+                    // {% cycle val1 val2 ... %} or {% cycle val1 val2 as cyclename %}
+                    if args.is_empty() {
+                        return Err(DjangoRustError::TemplateError(
+                            "cycle tag requires at least one argument".to_string(),
+                        ));
+                    }
+                    // Check for "as name" at the end
+                    let (values, name) = if args.len() >= 3 && args[args.len() - 2] == "as" {
+                        let name = args.last().unwrap().clone();
+                        let values = args[..args.len() - 2].to_vec();
+                        (values, Some(name))
+                    } else {
+                        (args.clone(), None)
+                    };
+                    Ok(Some(Node::Cycle { values, name }))
+                }
+
+                "now" => {
+                    // {% now "format_string" %}
+                    if args.is_empty() {
+                        return Err(DjangoRustError::TemplateError(
+                            "now tag requires a format string argument".to_string(),
+                        ));
+                    }
+                    let format = args[0].trim_matches(|c| c == '"' || c == '\'').to_string();
+                    Ok(Some(Node::Now(format)))
                 }
 
                 "endif" | "endfor" | "endblock" | "else" | "elif" => {
@@ -458,7 +611,11 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
     }
 }
 
-fn parse_if_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, Vec<Node>, usize)> {
+fn parse_if_block(
+    tokens: &[Token],
+    start: usize,
+    in_tag_context: bool,
+) -> Result<(Vec<Node>, Vec<Node>, usize)> {
     let mut true_nodes = Vec::new();
     let mut false_nodes = Vec::new();
     let mut in_else = false;
@@ -481,11 +638,13 @@ fn parse_if_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, Vec<Node
                 // elif is equivalent to: else + nested if
                 // {% elif condition %} becomes {% else %}{% if condition %}...{% endif %}
                 let elif_condition = args.join(" ");
-                let (elif_true, elif_false, end_pos) = parse_if_block(tokens, i + 1)?;
+                let (elif_true, elif_false, end_pos) =
+                    parse_if_block(tokens, i + 1, in_tag_context)?;
                 false_nodes.push(Node::If {
                     condition: elif_condition,
                     true_nodes: elif_true,
                     false_nodes: elif_false,
+                    in_tag_context,
                 });
                 return Ok((true_nodes, false_nodes, end_pos));
             }
@@ -587,6 +746,28 @@ fn parse_with_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)
     ))
 }
 
+fn parse_spaceless_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, usize)> {
+    let mut nodes = Vec::new();
+    let mut i = start;
+
+    while i < tokens.len() {
+        if let Token::Tag(name, _) = &tokens[i] {
+            if name == "endspaceless" {
+                return Ok((nodes, i));
+            }
+        }
+
+        if let Some(node) = parse_token(tokens, &mut i)? {
+            nodes.push(node);
+        }
+        i += 1;
+    }
+
+    Err(DjangoRustError::TemplateError(
+        "Unclosed spaceless tag".to_string(),
+    ))
+}
+
 /// Extract all variable paths from a Django template for JIT serialization.
 ///
 /// Parses the template and returns a mapping of root variable names to their access paths.
@@ -675,6 +856,7 @@ fn extract_from_nodes(
                 condition,
                 true_nodes,
                 false_nodes,
+                ..
             } => {
                 // Extract from condition: {% if variable.path %}
                 extract_from_expression(condition, variables);
@@ -796,7 +978,39 @@ fn extract_from_nodes(
                     }
                 }
             }
-            // Text, Comment, CsrfToken, Static, Include, Extends don't contain variable references
+            Node::WidthRatio {
+                value,
+                max_value,
+                max_width,
+            } => {
+                extract_from_variable(value, variables);
+                extract_from_variable(max_value, variables);
+                extract_from_variable(max_width, variables);
+            }
+            Node::FirstOf { args } => {
+                for arg in args {
+                    if !((arg.starts_with('"') && arg.ends_with('"'))
+                        || (arg.starts_with('\'') && arg.ends_with('\''))
+                        || arg.chars().all(|c| c.is_numeric() || c == '.'))
+                    {
+                        extract_from_variable(arg, variables);
+                    }
+                }
+            }
+            Node::Spaceless { nodes } => {
+                extract_from_nodes(nodes, variables);
+            }
+            Node::Cycle { values, .. } => {
+                for val in values {
+                    if !((val.starts_with('"') && val.ends_with('"'))
+                        || (val.starts_with('\'') && val.ends_with('\'')))
+                    {
+                        extract_from_variable(val, variables);
+                    }
+                }
+            }
+            // Text, Comment, CsrfToken, Static, Include, Extends, TemplateTag, Now
+            // don't contain variable references
             _ => {}
         }
     }
@@ -1024,10 +1238,10 @@ mod tests {
         let tokens = tokenize("{% load static %}").unwrap();
         let nodes = parse(&tokens).unwrap();
         assert_eq!(nodes.len(), 1);
-        // Load is treated as a comment (no-op)
+        // Load preserves library names
         match &nodes[0] {
-            Node::Comment => (),
-            _ => panic!("Expected Comment node for load tag"),
+            Node::Load(libs) => assert_eq!(libs, &["static"]),
+            _ => panic!("Expected Load node for load tag"),
         }
     }
 
@@ -1441,6 +1655,7 @@ mod tests {
                 condition,
                 true_nodes,
                 false_nodes,
+                ..
             } => {
                 assert_eq!(condition, "a");
                 assert_eq!(true_nodes.len(), 1);
@@ -1451,6 +1666,7 @@ mod tests {
                         condition: elif_cond,
                         true_nodes: elif_true,
                         false_nodes: elif_false,
+                        ..
                     } => {
                         assert_eq!(elif_cond, "b");
                         assert_eq!(elif_true.len(), 1);
@@ -1473,6 +1689,7 @@ mod tests {
                 condition,
                 true_nodes,
                 false_nodes,
+                ..
             } => {
                 assert_eq!(condition, "a");
                 assert_eq!(true_nodes.len(), 1);
@@ -1483,6 +1700,7 @@ mod tests {
                         condition: elif_cond,
                         true_nodes: elif_true,
                         false_nodes: elif_false,
+                        ..
                     } => {
                         assert_eq!(elif_cond, "b");
                         assert_eq!(elif_true.len(), 1);
@@ -1566,6 +1784,7 @@ mod tests {
                 condition,
                 true_nodes,
                 false_nodes,
+                ..
             } => {
                 assert_eq!(condition, r#"icon == "arrow-left""#);
                 // Verify true branch has "ARROW"
@@ -1579,6 +1798,7 @@ mod tests {
                         condition: elif_cond,
                         true_nodes: elif_true,
                         false_nodes: elif_false,
+                        ..
                     } => {
                         assert_eq!(elif_cond, r#"icon == "close""#);
                         match &elif_true[0] {
@@ -1636,7 +1856,12 @@ mod tests {
         let nodes = parse(&tokens).unwrap();
         assert_eq!(nodes.len(), 1);
         match &nodes[0] {
-            Node::InlineIf { true_expr, condition, false_expr, filters } => {
+            Node::InlineIf {
+                true_expr,
+                condition,
+                false_expr,
+                filters,
+            } => {
                 assert_eq!(true_expr, "'btn--active'");
                 assert_eq!(condition, "view_mode == 'day'");
                 assert_eq!(false_expr, "''");
@@ -1652,7 +1877,12 @@ mod tests {
         let nodes = parse(&tokens).unwrap();
         assert_eq!(nodes.len(), 1);
         match &nodes[0] {
-            Node::InlineIf { true_expr, condition, false_expr, .. } => {
+            Node::InlineIf {
+                true_expr,
+                condition,
+                false_expr,
+                ..
+            } => {
                 assert_eq!(true_expr, "'active'");
                 assert_eq!(condition, "is_active");
                 assert_eq!(false_expr, "");

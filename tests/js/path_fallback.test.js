@@ -140,10 +140,10 @@ describe('getNodeByPath - path fallback with whitespace nodes (#198)', () => {
     });
 
     it('prefers ID-based lookup over path fallback', () => {
-        root.innerHTML = '<div data-dj-id="abc">target</div><div>other</div>';
+        root.innerHTML = '<div dj-id="abc">target</div><div>other</div>';
 
         const node = _getNodeByPath([99], 'abc'); // bad path, good ID
         expect(node).not.toBeNull();
-        expect(node.getAttribute('data-dj-id')).toBe('abc');
+        expect(node.getAttribute('dj-id')).toBe('abc');
     });
 });

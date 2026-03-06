@@ -97,8 +97,8 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --extra dev
 
-      - name: Install pytest-xdist for parallel execution
-        run: uv pip install pytest-xdist
+      - name: Install test tools
+        run: uv pip install pytest-xdist mypy
 
       - name: Run Python tests (parallel with pytest-xdist)
         run: |

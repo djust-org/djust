@@ -41,6 +41,7 @@ class PageHeader(Component):
         icon: Optional[str] = None,
         actions: Optional[List[Dict[str, str]]] = None
     ):
+        super().__init__()
         self.title = title
         self.subtitle = subtitle
         self.icon = icon

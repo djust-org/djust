@@ -34,6 +34,7 @@ class CodeHighlightingSetup(Component):
             theme: highlight.js theme name (default: atom-one-dark)
                    See: https://highlightjs.org/static/demo/
         """
+        super().__init__()
         self.theme = theme
 
     def render(self) -> str:
@@ -104,6 +105,7 @@ class CodeBlockWithHighlighting(Component):
 
     def __init__(self, code: str, language: str = "python", filename: str = None,
                  show_header: bool = True, theme: str = "atom-one-dark"):
+        super().__init__()
         from .ui import CodeBlock
         self.code_block = CodeBlock(code, language, filename, show_header)
         self.setup = CodeHighlightingSetup(theme)

@@ -42,7 +42,11 @@ class TestHandleRequestHtml:
 
         await consumer.handle_request_html({})
 
-        consumer.send_error.assert_called_once_with("No recovery HTML available")
+        consumer.send_error.assert_called_once_with(
+            "Recovery HTML unavailable — the server may have restarted. "
+            "A page reload will fix this.",
+            recoverable=False,
+        )
         consumer.send_json.assert_not_called()
 
     @pytest.mark.asyncio
@@ -103,5 +107,9 @@ class TestHandleRequestHtml:
         consumer.send_error.reset_mock()
         await consumer.handle_request_html({})
 
-        consumer.send_error.assert_called_once_with("No recovery HTML available")
+        consumer.send_error.assert_called_once_with(
+            "Recovery HTML unavailable — the server may have restarted. "
+            "A page reload will fix this.",
+            recoverable=False,
+        )
         consumer.send_json.assert_not_called()
