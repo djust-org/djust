@@ -213,6 +213,7 @@ Register a custom adapter to override framework classes:
 from djust.frameworks import BaseAdapter, register_adapter
 
 class MyAdapter(BaseAdapter):
+    # Static HTML only — never interpolate user data here
     required_marker = ' <span class="required">*</span>'
     help_text_class = "hint"
 
