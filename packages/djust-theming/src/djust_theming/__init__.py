@@ -19,5 +19,3 @@ Then in your base template::
     <link rel="stylesheet" href="{% static 'djust_theming/css/utilities.css' %}">
     <script src="{% static 'djust_theming/js/theme-switcher.js' %}"></script>
 """
-
-default_app_config = "djust_theming.apps.DjustThemingConfig"

@@ -74,6 +74,10 @@ Defaults to dark. To default to light, set on `<html>`:
 <html data-theme="light">
 ```
 
+## External Dependencies
+
+`theme.css` imports the Inter and JetBrains Mono fonts from Google Fonts (`fonts.googleapis.com`). If you prefer self-hosted fonts, replace the `@import` line at the top of `theme.css` with local `@font-face` declarations.
+
 ## Requirements
 
 - Django ≥ 3.2
