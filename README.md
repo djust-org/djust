@@ -486,6 +486,12 @@ djust supports Django template syntax with event binding:
 </form>
 ```
 
+> **Django migration note:** In standard Django, `urlize` requires `|safe` to render
+> its HTML output. djust's Rust template engine automatically marks `urlize`,
+> `urlizetrunc`, and `unordered_list` as safe (via `safe_output_filters` in the
+> renderer) because these filters handle their own HTML escaping internally.
+> Adding `|safe` after them is unnecessary.
+
 ### Supported Events
 
 - `dj-click` - Click events
