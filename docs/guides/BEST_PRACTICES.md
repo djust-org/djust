@@ -1197,7 +1197,7 @@ Always add `data-key` to list items:
 **Why it's wrong:**
 - Breaks when extra params are passed from client
 - Not forward-compatible with new framework features
-- System check `djust.V003` warns about this
+- System check `djust.V007` warns about this
 
 **Solution:**
 Always include `**kwargs`:
