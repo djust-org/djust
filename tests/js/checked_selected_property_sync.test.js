@@ -5,6 +5,7 @@
  * - createNodeFromVNode: syncs checked on INPUT, selected on OPTION
  * - SetAttr/RemoveAttr: selected on OPTION elements
  * - Radio inputs: checked property sync
+ * - activeElement guard: checked updates even when focused (unlike value)
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
@@ -147,5 +148,52 @@ describe('SetAttr/RemoveAttr checked on radio input', () => {
         _applySinglePatch({ type: 'RemoveAttr', d: 'rad1', path: [], key: 'checked' });
 
         expect(radio.checked).toBe(false);
+    });
+});
+
+describe('SetAttr checked updates even when element is activeElement', () => {
+    // Intentional behavioral difference: the `value` branch in SetAttr skips
+    // setting el.value when the element is focused (to avoid clobbering in-progress
+    // user input). The `checked` branch does NOT skip focused elements because a
+    // checkbox toggled by the server should always reflect authoritative state —
+    // there is no in-progress "typing" to protect.
+    let checkbox;
+
+    function setup() {
+        checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.setAttribute('dj-id', 'chk-focused');
+        checkbox.checked = false;
+        document.body.appendChild(checkbox);
+        checkbox.focus();
+    }
+
+    it('SetAttr checked updates el.checked when checkbox is document.activeElement', () => {
+        setup();
+        expect(dom.window.document.activeElement).toBe(checkbox);
+
+        _applySinglePatch({ type: 'SetAttr', d: 'chk-focused', path: [], key: 'checked', value: '' });
+
+        expect(checkbox.checked).toBe(true);
+    });
+
+    it('SetAttr value skips el.value update when input is document.activeElement', () => {
+        // Contrasting behavior: focused text inputs are skipped so
+        // in-progress user input is not overwritten.
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.setAttribute('dj-id', 'txt-focused');
+        input.value = 'user typing';
+        document.body.appendChild(input);
+        input.focus();
+
+        expect(dom.window.document.activeElement).toBe(input);
+
+        _applySinglePatch({ type: 'SetAttr', d: 'txt-focused', path: [], key: 'value', value: 'server value' });
+
+        // el.value is NOT updated because the input is focused
+        expect(input.value).toBe('user typing');
+        // But the attribute IS updated
+        expect(input.getAttribute('value')).toBe('server value');
     });
 });
