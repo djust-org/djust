@@ -5,7 +5,7 @@
  * replicating the save/restore behavior from 15-panel-controls.js.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 
 // Replicate save history logic from destroy()
 function saveHistoryToSession(eventHistory, patchHistory, networkHistory, stateHistory) {
