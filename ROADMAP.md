@@ -42,7 +42,7 @@ Understand memory pressure and evaluate client-side or external storage.
 - What is the Redis serialization cost vs memory backend? Is there a hybrid approach?
 - What is a typical session size and how does it scale with concurrent users?
 
-## 3. TurboNav Integration
+## 3. TurboNav Integration — ✅ Complete
 
 Make djust + TurboNav a first-class documented pattern.
 
@@ -51,19 +51,20 @@ Make djust + TurboNav a first-class documented pattern.
 - ✅ Injected scripts need `data-turbo-track="reload"` for `loadPageScripts` to pick them up
 - ✅ Inline `<script>` tags inside `<main>` require explicit execution after `innerHTML` swap
 - ✅ `DOMContentLoaded` doesn't fire on dynamically loaded scripts — must check `document.readyState`
+- ✅ Fixed triple-initialization on navigation (`pendingTurboReinit` guard in `01-dom-helpers-turbo.js`)
+- ✅ Guard against duplicate WebSocket connections — `reinitLiveViewForTurboNav()` disconnects before reconnecting
 
-**Remaining work:**
+**Decisions and documentation:**
 
-- Document the contract: TurboNav swaps `<main>` innerHTML, `loadPageScripts` handles tracked scripts
-- Fix triple-initialization on navigation (console shows 3 rounds of client.js init logs)
-- Guard against duplicate WebSocket connections on repeated navigation
-- Decide: should TurboNav ship with djust or remain a separate integration concern?
-- Write a guide for integrating djust LiveViews into existing Django sites using TurboNav
+- ✅ TurboNav remains a separate integration concern (not bundled with djust)
+- ✅ Contract documented: TurboNav swaps `<main>` innerHTML, `loadPageScripts` handles tracked scripts
+- ✅ Integration guide written: [docs/guides/turbonav-integration.md](docs/guides/turbonav-integration.md)
 
 ## 4. Evaluate & Improve Developer Experience
 
 Lower the barrier to getting started and debugging.
 
+- ✅ Quickstart guide (`docs/guides/QUICKSTART.md`) reviewed and fixed — corrected 6 issues (import paths, mount signatures, template syntax, config examples)
 - Docs are extensive (40+ files) but scattered — consolidate the getting-started path
 - ✅ CLI (`cli.py`) has 8 commands: `stats`, `health`, `profile`, `analyze`, `clear`, `startapp`, `check`, `audit`
 - ~~Error messages from event security now surface in the debug toolbar — verify clarity and usefulness~~ ✅ Done (#112)
