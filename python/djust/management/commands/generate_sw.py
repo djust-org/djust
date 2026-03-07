@@ -81,13 +81,20 @@ class Command(BaseCommand):
         # Generate version
         version = options["version"] or str(int(time.time()))
 
-        # Collect static assets
-        static_assets: List[str] = []
+        # Collect static assets (always include djust core assets)
+        core_assets = self._get_djust_core_assets()
+        static_assets: List[str] = list(core_assets)
         if options["cache_static"]:
-            static_assets = self._collect_static_assets(
+            collected = self._collect_static_assets(
                 extensions=options["static_extensions"].split(","),
                 exclude_patterns=options["exclude_patterns"].split(","),
             )
+            # Merge without duplicates, preserving order
+            seen = set(static_assets)
+            for asset in collected:
+                if asset not in seen:
+                    static_assets.append(asset)
+                    seen.add(asset)
 
         # Collect template URLs
         template_urls: List[str] = []
@@ -115,6 +122,16 @@ class Command(BaseCommand):
         if not os.path.exists(manifest_path):
             self._generate_manifest(manifest_path)
             self.stdout.write(self.style.SUCCESS(f"Generated manifest at: {manifest_path}"))
+
+    def _get_djust_core_assets(self) -> List[str]:
+        """Return djust's own static assets that should always be precached."""
+        static_url = getattr(settings, "STATIC_URL", "/static/")
+        assets = [
+            "%sdjust/client.js" % static_url,
+        ]
+        if getattr(settings, "DEBUG", False):
+            assets.append("%sdjust/debug-panel.js" % static_url)
+        return assets
 
     def _collect_static_assets(
         self, extensions: List[str], exclude_patterns: List[str]
@@ -315,29 +332,38 @@ self.addEventListener('fetch', (event) => {
                     return cachedResponse;
                 }
 
-                return fetch(event.request)
-                    .then((response) => {
-                        // Don't cache non-successful responses
-                        if (!response || response.status !== 200 || response.type !== 'basic') {
+                // Check prefetch cache before going to network
+                return caches.open('djust-prefetch').then(prefetchCache => {
+                    return prefetchCache.match(event.request);
+                }).then(prefetchedResponse => {
+                    if (prefetchedResponse) {
+                        return prefetchedResponse;
+                    }
+
+                    return fetch(event.request)
+                        .then((response) => {
+                            // Don't cache non-successful responses
+                            if (!response || response.status !== 200 || response.type !== 'basic') {
+                                return response;
+                            }
+
+                            // Cache the response
+                            const responseToCache = response.clone();
+                            caches.open(CACHE_NAME)
+                                .then((cache) => {
+                                    cache.put(event.request, responseToCache);
+                                });
+
                             return response;
-                        }
-
-                        // Cache the response
-                        const responseToCache = response.clone();
-                        caches.open(CACHE_NAME)
-                            .then((cache) => {
-                                cache.put(event.request, responseToCache);
-                            });
-
-                        return response;
-                    })
-                    .catch(() => {
-                        // Return offline page for navigation requests
-                        if (event.request.mode === 'navigate') {
-                            return caches.match(OFFLINE_URL);
-                        }
-                        return new Response('Offline', { status: 503 });
-                    });
+                        })
+                        .catch(() => {
+                            // Return offline page for navigation requests
+                            if (event.request.mode === 'navigate') {
+                                return caches.match(OFFLINE_URL);
+                            }
+                            return new Response('Offline', { status: 503 });
+                        });
+                });
             })
     );
 });
@@ -372,6 +398,20 @@ self.addEventListener('message', (event) => {
             case 'CLEAR_CACHE':
                 caches.delete(CACHE_NAME).then(() => {
                     event.ports[0].postMessage({ cleared: true });
+                });
+                break;
+            case 'PREFETCH':
+                var prefetchUrl = event.data.url;
+                caches.open('djust-prefetch').then(function (cache) {
+                    cache.match(prefetchUrl).then(function (existing) {
+                        if (!existing) {
+                            fetch(prefetchUrl, { credentials: 'same-origin' }).then(function (response) {
+                                if (response.ok) {
+                                    cache.put(prefetchUrl, response);
+                                }
+                            }).catch(function () {});
+                        }
+                    });
                 });
                 break;
         }
