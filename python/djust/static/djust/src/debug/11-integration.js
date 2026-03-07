@@ -167,6 +167,14 @@
                 }
             }
 
+            // Update state sizes on DJUST_DEBUG_INFO for the state tab
+            if (debugInfo.state_sizes && window.DJUST_DEBUG_INFO) {
+                window.DJUST_DEBUG_INFO.state_sizes = debugInfo.state_sizes;
+                if (this.state.activeTab === 'state') {
+                    this.renderTabContent();
+                }
+            }
+
             // Update variables and capture state change
             if (debugInfo.variables) {
                 const isMount = this.stateHistory.length === 0 || debugInfo._isMounted;

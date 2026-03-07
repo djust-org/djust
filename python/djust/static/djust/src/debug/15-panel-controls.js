@@ -91,6 +91,24 @@
                     console.warn('[djust] Failed to load debug panel state:', e);
                 }
             }
+
+            // Restore debug history from sessionStorage (TurboNav persistence)
+            const savedHistory = sessionStorage.getItem('djust-debug-history');
+            if (savedHistory) {
+                try {
+                    const historyData = JSON.parse(savedHistory);
+                    // Only restore if recent (within 30 seconds -- TurboNav, not full reload)
+                    if (Date.now() - historyData.timestamp < 30000) {
+                        this.eventHistory = historyData.events || [];
+                        this.patchHistory = historyData.patches || [];
+                        this.networkHistory = historyData.network || [];
+                        this.stateHistory = historyData.stateHistory || [];
+                    }
+                    sessionStorage.removeItem('djust-debug-history');
+                } catch (e) {
+                    // Corrupted data -- ignore
+                }
+            }
         }
 
         // Event listeners
@@ -139,7 +157,7 @@
 
         performSearch() {
             // TODO: Implement search functionality
-            console.log('[djust] Searching for:', this.state.searchQuery);
+            if (globalThis.djustDebug) console.log('[djust] Searching for:', this.state.searchQuery);
         }
 
         export() {
@@ -176,9 +194,9 @@
                             this.networkHistory = data.network || [];
                             this.patchHistory = data.patches || [];
                             this.renderTabContent();
-                            console.log('[djust] Debug session imported successfully');
+                            if (globalThis.djustDebug) console.log('[djust] Debug session imported successfully');
                         } catch (err) {
-                            console.error('[djust] Failed to import debug session:', err);
+                            if (globalThis.djustDebug) console.error('[djust] Failed to import debug session:', err);
                         }
                     };
                     reader.readAsText(file);
@@ -188,6 +206,20 @@
         }
 
         destroy() {
+            // Save debug history to sessionStorage before destroy (TurboNav navigation)
+            const historyData = {
+                events: this.eventHistory.slice(0, 100),
+                patches: this.patchHistory.slice(0, 100),
+                network: this.networkHistory.slice(0, 100),
+                stateHistory: this.stateHistory.slice(0, 50),
+                timestamp: Date.now()
+            };
+            try {
+                sessionStorage.setItem('djust-debug-history', JSON.stringify(historyData));
+            } catch (e) {
+                // sessionStorage full or unavailable -- silently ignore
+            }
+
             // Remove event listeners
             if (this.keydownHandler) {
                 document.removeEventListener('keydown', this.keydownHandler);
@@ -209,7 +241,9 @@
             this.components = null;
             this.variables = {};
 
-            console.log('[djust] Debug panel destroyed');
+            if (globalThis.djustDebug) {
+                console.log('[djust] Debug panel destroyed');
+            }
         }
     }
 
