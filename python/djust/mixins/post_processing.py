@@ -92,9 +92,32 @@ class PostProcessingMixin:
             "view_class": self.__class__.__name__,
             "handlers": handlers,
             "variables": variables,
+            "state_sizes": self._debug_state_sizes(),
             "template": self.template_name if hasattr(self, "template_name") else None,
             "config": {"maxHistory": max_history},
         }
+
+    def _debug_state_sizes(self) -> Dict[str, Dict[str, Any]]:
+        """Return size breakdown of public state variables for debug toolbar."""
+        sizes: Dict[str, Dict[str, Any]] = {}
+        for attr_name in sorted(vars(self)):
+            if attr_name.startswith("_"):
+                continue
+            value = getattr(self, attr_name)
+            if callable(value):
+                continue
+            try:
+                serialized = json.dumps(value, default=str)
+                sizes[attr_name] = {
+                    "memory": sys.getsizeof(value),
+                    "serialized": len(serialized.encode("utf-8")),
+                }
+            except (TypeError, ValueError):
+                sizes[attr_name] = {
+                    "memory": sys.getsizeof(value),
+                    "serialized": None,
+                }
+        return sizes
 
     def get_debug_update(self) -> Dict[str, Any]:
         """
@@ -150,6 +173,7 @@ class PostProcessingMixin:
         return {
             "view_class": self.__class__.__name__,
             "variables": variables,
+            "state_sizes": self._debug_state_sizes(),
         }
 
     def _hydrate_react_components(self, html: str) -> str:

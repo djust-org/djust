@@ -1,7 +1,58 @@
 
+        formatBytes(bytes) {
+            if (bytes === null || bytes === undefined) return 'N/A';
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        renderStateSizeSection() {
+            const debugInfo = window.DJUST_DEBUG_INFO;
+            if (!debugInfo || !debugInfo.state_sizes) return '';
+
+            const sizes = debugInfo.state_sizes;
+            const keys = Object.keys(sizes);
+            if (keys.length === 0) return '';
+
+            const rows = keys.map(key => {
+                const info = sizes[key];
+                return `
+                    <tr>
+                        <td style="padding: 4px 8px; border-bottom: 1px solid #1e293b; font-family: monospace; font-size: 11px;">${this.escapeHtml(key)}</td>
+                        <td style="padding: 4px 8px; border-bottom: 1px solid #1e293b; text-align: right; font-size: 11px;">${this.formatBytes(info.memory)}</td>
+                        <td style="padding: 4px 8px; border-bottom: 1px solid #1e293b; text-align: right; font-size: 11px;">${this.formatBytes(info.serialized)}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            return `
+                <div class="state-size-breakdown" style="margin-bottom: 16px;">
+                    <div class="state-timeline-header" style="margin-bottom: 8px;">
+                        <div class="state-timeline-title">
+                            <span>Size Breakdown</span>
+                            <span class="state-count">${keys.length} variable${keys.length === 1 ? '' : 's'}</span>
+                        </div>
+                    </div>
+                    <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                        <thead>
+                            <tr style="color: #94a3b8; text-transform: uppercase; font-size: 10px;">
+                                <th style="padding: 4px 8px; text-align: left; border-bottom: 1px solid #334155;">Variable</th>
+                                <th style="padding: 4px 8px; text-align: right; border-bottom: 1px solid #334155;">Memory</th>
+                                <th style="padding: 4px 8px; text-align: right; border-bottom: 1px solid #334155;">Serialized</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `;
+        }
+
         renderStateTab() {
+            const sizeSection = this.renderStateSizeSection();
+
             if (this.stateHistory.length === 0) {
                 return `
+                    ${sizeSection}
                     <div class="empty-state">
                         <p>No state changes recorded yet.</p>
                         <p style="font-size: 11px; margin-top: 10px; color: #64748b;">
@@ -12,6 +63,7 @@
             }
 
             return `
+                ${sizeSection}
                 <div class="state-timeline-container">
                     <div class="state-timeline-header">
                         <div class="state-timeline-title">
