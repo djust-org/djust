@@ -79,7 +79,7 @@ jobs:
           echo '```' >> pip-audit-report.md
 
       - name: Upload Python security reports
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: python-security-reports
           path: |
@@ -135,7 +135,7 @@ jobs:
           echo '```' >> clippy-report.md
 
       - name: Upload Rust security reports
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: rust-security-reports
           path: |
@@ -176,7 +176,7 @@ jobs:
           echo '```' >> eslint-report.md
 
       - name: Upload JS security reports
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: js-security-reports
           path: |
@@ -315,7 +315,7 @@ jobs:
             core.notice(`Created security audit issue: ${issue.html_url}`);
 
       - name: Upload full audit report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: security-audit-report
           path: audit-summary.md
