@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `--server` flag / `DJUST_SERVER` env var to override the default server URL (`https://djustlive.com`)
 - **TypeScript type stubs updated** — `DjustStreamOp` now includes `"done"` and `"start"` operation types and an optional `mode` field (`"append" | "replace" | "prepend"`). `getActiveStreams()` return type changed from `Map` to `Record`.
 
+### Performance
+
+- **VDOM keyed list diffing optimized with LIS algorithm** — When reordering large keyed lists (>1000 items), the VDOM differ now computes the Longest Increasing Subsequence to minimize `MoveChild` patches. Elements in the LIS maintain their relative order and don't need explicit moves. Reduces patches from O(n) to O(k) where k is the number of actual moves needed. Example: moving last item to front in 1000-item list now produces 1 move instead of 999. Uses O(n log n) patience-sorting algorithm in `crates/djust_vdom/src/lis.rs`. (#458)
+
 ### Fixed
 
 - **Python 3.14 build fails with PyO3 0.24** — PyO3 0.24 hard-caps support at Python 3.13. Bumped PyO3 from 0.24 to 0.25, which adds native Python 3.14 support. Also bumped `pyo3-async-runtimes` from 0.24 to 0.25 to match. (#416)

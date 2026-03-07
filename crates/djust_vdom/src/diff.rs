@@ -20,8 +20,8 @@
 //! - Child diffing decisions
 //! - Generated patches
 
-use crate::{vdom_trace, Patch, VNode};
-use std::collections::HashMap;
+use crate::{lis::longest_increasing_subsequence, vdom_trace, Patch, VNode};
+use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 
 /// Synchronize IDs from old VDOM to new VDOM for matched (non-replaced) elements.
 ///
@@ -82,8 +82,8 @@ fn sync_ids_keyed(old: &[VNode], new: &mut [VNode]) {
     }
 
     // Track processed indices for unkeyed matching
-    let mut processed_old: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    let mut processed_new: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut processed_old: HashSet<usize> = HashSet::new();
+    let mut processed_new: HashSet<usize> = HashSet::new();
 
     // Sync keyed children
     for (new_idx, new_node) in new.iter_mut().enumerate() {
@@ -507,10 +507,37 @@ fn diff_keyed_children(
     }
 
     // Track which indices have been processed (keyed children)
-    let mut processed_old_indices: std::collections::HashSet<usize> =
-        std::collections::HashSet::new();
-    let mut processed_new_indices: std::collections::HashSet<usize> =
-        std::collections::HashSet::new();
+    let mut processed_old_indices: HashSet<usize> = HashSet::new();
+    let mut processed_new_indices: HashSet<usize> = HashSet::new();
+
+    // Build the sequence of old indices in new-child order (for surviving keyed nodes).
+    // We'll use LIS on this to determine which nodes can stay in place.
+    let mut new_idx_for_surviving: Vec<usize> = Vec::new();
+    let mut old_indices_in_new_order: Vec<usize> = Vec::new();
+
+    for (new_idx, new_node) in new.iter().enumerate() {
+        if let Some(key) = &new_node.key {
+            if let Some(&old_idx) = old_keys.get(key) {
+                new_idx_for_surviving.push(new_idx);
+                old_indices_in_new_order.push(old_idx);
+            }
+        }
+    }
+
+    // Compute LIS of old indices -- these elements maintain their relative order
+    // and don't need MoveChild patches. Only non-LIS elements are moved.
+    let lis_positions = longest_increasing_subsequence(&old_indices_in_new_order);
+    let mut lis_set: HashSet<usize> = HashSet::new();
+    for &lis_pos in &lis_positions {
+        lis_set.insert(new_idx_for_surviving[lis_pos]);
+    }
+
+    vdom_trace!(
+        "  LIS optimization: {} surviving keyed nodes, LIS length={}, moves needed={}",
+        old_indices_in_new_order.len(),
+        lis_positions.len(),
+        old_indices_in_new_order.len() - lis_positions.len()
+    );
 
     // Find keyed nodes to add, move, or diff
     for (new_idx, new_node) in new.iter().enumerate() {
@@ -532,8 +559,15 @@ fn diff_keyed_children(
                 Some(&old_idx) => {
                     processed_old_indices.insert(old_idx);
 
-                    // Existing keyed node - check if it moved
-                    if old_idx != new_idx {
+                    // LIS optimization: elements in the LIS keep their relative
+                    // order and don't need MoveChild patches. All non-LIS
+                    // elements must be moved because other moves may shift
+                    // their positions even when old_idx == new_idx.
+                    if lis_set.contains(&new_idx) {
+                        if old_idx != new_idx {
+                            vdom_trace!("  SKIP MOVE key={} (in LIS, stays in place)", key);
+                        }
+                    } else {
                         vdom_trace!("  MOVE key={} from {} to {}", key, old_idx, new_idx);
                         patches.push(Patch::MoveChild {
                             path: path.to_vec(),
@@ -2268,5 +2302,152 @@ mod tests {
                 "ref_d should be None when appending beyond old children"
             );
         }
+    }
+
+    // =========================================================================
+    // LIS optimization tests
+    // =========================================================================
+
+    /// Helper: create a keyed child element with a djust_id
+    fn keyed_child(key: &str, id: &str) -> VNode {
+        VNode::element("li")
+            .with_key(key)
+            .with_djust_id(id)
+            .with_child(VNode::text(key))
+    }
+
+    /// Helper: count MoveChild patches
+    fn count_move_patches(patches: &[Patch]) -> usize {
+        patches
+            .iter()
+            .filter(|p| matches!(p, Patch::MoveChild { .. }))
+            .count()
+    }
+
+    #[test]
+    fn test_lis_1000_item_single_move() {
+        let n = 1000;
+        let old_children: Vec<VNode> = (0..n)
+            .map(|i| keyed_child(&format!("k{}", i), &format!("id{}", i)))
+            .collect();
+
+        let mut new_order: Vec<usize> = vec![n - 1];
+        new_order.extend(0..n - 1);
+        let new_children: Vec<VNode> = new_order
+            .iter()
+            .map(|&i| keyed_child(&format!("k{}", i), &format!("new_id{}", i)))
+            .collect();
+
+        let old = VNode::element("ul")
+            .with_djust_id("parent")
+            .with_children(old_children);
+        let new = VNode::element("ul")
+            .with_djust_id("parent")
+            .with_children(new_children);
+
+        let patches = diff_nodes(&old, &new, &[]);
+        let moves = count_move_patches(&patches);
+
+        assert_eq!(
+            moves, 1,
+            "Moving one item to front of 1000 should produce 1 MoveChild, got {}",
+            moves
+        );
+    }
+
+    #[test]
+    fn test_lis_reverse_10_items() {
+        let n = 10;
+        let old_children: Vec<VNode> = (0..n)
+            .map(|i| keyed_child(&format!("k{}", i), &format!("id{}", i)))
+            .collect();
+
+        let new_children: Vec<VNode> = (0..n)
+            .rev()
+            .map(|i| keyed_child(&format!("k{}", i), &format!("new_id{}", i)))
+            .collect();
+
+        let old = VNode::element("ul")
+            .with_djust_id("parent")
+            .with_children(old_children);
+        let new = VNode::element("ul")
+            .with_djust_id("parent")
+            .with_children(new_children);
+
+        let patches = diff_nodes(&old, &new, &[]);
+        let moves = count_move_patches(&patches);
+
+        assert_eq!(
+            moves,
+            n - 1,
+            "Reversing {} items should produce {} MoveChild patches, got {}",
+            n,
+            n - 1,
+            moves
+        );
+    }
+
+    #[test]
+    fn test_lis_no_moves_when_same_order() {
+        let n = 100;
+        let old_children: Vec<VNode> = (0..n)
+            .map(|i| keyed_child(&format!("k{}", i), &format!("id{}", i)))
+            .collect();
+
+        let new_children: Vec<VNode> = (0..n)
+            .map(|i| keyed_child(&format!("k{}", i), &format!("new_id{}", i)))
+            .collect();
+
+        let old = VNode::element("ul")
+            .with_djust_id("parent")
+            .with_children(old_children);
+        let new = VNode::element("ul")
+            .with_djust_id("parent")
+            .with_children(new_children);
+
+        let patches = diff_nodes(&old, &new, &[]);
+        let moves = count_move_patches(&patches);
+
+        assert_eq!(moves, 0, "Same order should produce 0 MoveChild patches");
+    }
+
+    #[test]
+    fn test_lis_with_inserts_and_removes() {
+        let old_children = vec![
+            keyed_child("a", "id_a"),
+            keyed_child("b", "id_b"),
+            keyed_child("c", "id_c"),
+            keyed_child("d", "id_d"),
+            keyed_child("e", "id_e"),
+        ];
+
+        let new_children = vec![
+            keyed_child("b", "new_b"),
+            keyed_child("d", "new_d"),
+            keyed_child("f", "new_f"),
+            keyed_child("a", "new_a"),
+        ];
+
+        let old = VNode::element("ul")
+            .with_djust_id("parent")
+            .with_children(old_children);
+        let new = VNode::element("ul")
+            .with_djust_id("parent")
+            .with_children(new_children);
+
+        let patches = diff_nodes(&old, &new, &[]);
+        let moves = count_move_patches(&patches);
+        let removes: usize = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
+            .count();
+        let inserts: usize = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::InsertChild { .. }))
+            .count();
+
+        assert_eq!(moves, 1, "Only 'a' should need a MoveChild, got {}", moves);
+        assert_eq!(removes, 2, "Should remove c and e, got {}", removes);
+        assert_eq!(inserts, 1, "Should insert f, got {}", inserts);
     }
 }
