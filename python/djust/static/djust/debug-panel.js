@@ -8,7 +8,9 @@
 
     // Check if we should load the debug panel
     if (!window.DEBUG_MODE) {
-        console.log('[djust] Debug panel disabled (DEBUG_MODE=false)');
+        if (globalThis.djustDebug) {
+            console.log('[djust] Debug panel disabled (DEBUG_MODE=false)');
+        }
         return;
     }
     class DjustDebugPanel {
@@ -72,7 +74,9 @@
             this.hookIntoLiveView();
             this.loadState();
 
-            console.log('[djust] Developer Bar initialized 🐍');
+            if (globalThis.djustDebug) {
+                console.log('[djust] Developer Bar initialized 🐍');
+            }
         }
 
         createFloatingButton() {
@@ -3640,7 +3644,9 @@
                         }, 0);
                     }
                 } catch (e) {
-                    console.warn('[djust] Failed to load debug panel state:', e);
+                    if (globalThis.djustDebug) {
+                        console.warn('[djust] Failed to load debug panel state:', e);
+                    }
                 }
             }
 

@@ -88,7 +88,9 @@
                         }, 0);
                     }
                 } catch (e) {
-                    console.warn('[djust] Failed to load debug panel state:', e);
+                    if (globalThis.djustDebug) {
+                        console.warn('[djust] Failed to load debug panel state:', e);
+                    }
                 }
             }
 
