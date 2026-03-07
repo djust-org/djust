@@ -69,6 +69,28 @@ export function loadPanel(opts = {}) {
     // Also set on globalThis for new Function() scope
     globalThis.localStorage = window.localStorage;
 
+    // Provide minimal sessionStorage (same pattern as localStorage)
+    const sessionStore = {};
+    const sessionStorageFallback = {
+        getItem: (k) => sessionStore[k] ?? null,
+        setItem: (k, v) => { sessionStore[k] = String(v); },
+        removeItem: (k) => { delete sessionStore[k]; },
+        clear: () => { Object.keys(sessionStore).forEach(k => delete sessionStore[k]); },
+    };
+    try {
+        if (!window.sessionStorage || typeof window.sessionStorage.getItem !== 'function') {
+            window.sessionStorage = sessionStorageFallback;
+        } else {
+            window.sessionStorage.getItem('__test__');
+        }
+    } catch {
+        window.sessionStorage = sessionStorageFallback;
+    }
+    globalThis.sessionStorage = window.sessionStorage;
+
+    // Clear any stale debug history from previous test panel destroy
+    try { window.sessionStorage.removeItem('djust-debug-history'); } catch { /* noop */ }
+
     // Apply any extra globals
     if (opts.globals) {
         Object.assign(window, opts.globals);
