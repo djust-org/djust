@@ -289,6 +289,10 @@ self.addEventListener('activate', (event) => {
                         _log('[djust SW] Deleting old cache:', cacheName);
                         return caches.delete(cacheName);
                     }
+                    // Clear prefetch cache on new SW version
+                    if (cacheName === 'djust-prefetch') {
+                        return caches.delete(cacheName);
+                    }
                 })
             );
         }).then(() => self.clients.claim())
@@ -401,6 +405,7 @@ self.addEventListener('message', (event) => {
                 });
                 break;
             case 'PREFETCH':
+                // Cache cleanup (TTL, size limits) deferred to SW Phase 2
                 var prefetchUrl = event.data.url;
                 caches.open('djust-prefetch').then(function (cache) {
                     cache.match(prefetchUrl).then(function (existing) {

@@ -6139,7 +6139,6 @@ function bindModelElements(root) {
 
 // Export
 window.djust.bindModelElements = bindModelElements;
-} // End of double-load guard
 // ============================================================================
 // Prefetch on Hover
 // ============================================================================
@@ -6201,3 +6200,4 @@ window.djust.bindModelElements = bindModelElements;
         _shouldPrefetch: _shouldPrefetch
     };
 })();
+} // End of double-load guard
