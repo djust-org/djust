@@ -138,7 +138,8 @@ Ongoing effort to harden the VDOM diff and patch pipeline.
 
 **Remaining:**
 
-- Performance optimization for large list diffs (>1000 items)
+- Investigate edge cases surfaced by proptest fuzzing
+- ~~Performance optimization for large list diffs (>1000 items)~~ ✅ Addressed by LIS optimization (#458)
 
 ## 9. Service Worker Enhancements
 

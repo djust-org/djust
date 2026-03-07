@@ -21,7 +21,7 @@
 //! - Generated patches
 
 use crate::{lis::longest_increasing_subsequence, vdom_trace, Patch, VNode};
-use std::collections::HashMap;
+use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 
 /// Synchronize IDs from old VDOM to new VDOM for matched (non-replaced) elements.
 ///
@@ -82,8 +82,8 @@ fn sync_ids_keyed(old: &[VNode], new: &mut [VNode]) {
     }
 
     // Track processed indices for unkeyed matching
-    let mut processed_old: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    let mut processed_new: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut processed_old: HashSet<usize> = HashSet::new();
+    let mut processed_new: HashSet<usize> = HashSet::new();
 
     // Sync keyed children
     for (new_idx, new_node) in new.iter_mut().enumerate() {
@@ -507,10 +507,8 @@ fn diff_keyed_children(
     }
 
     // Track which indices have been processed (keyed children)
-    let mut processed_old_indices: std::collections::HashSet<usize> =
-        std::collections::HashSet::new();
-    let mut processed_new_indices: std::collections::HashSet<usize> =
-        std::collections::HashSet::new();
+    let mut processed_old_indices: HashSet<usize> = HashSet::new();
+    let mut processed_new_indices: HashSet<usize> = HashSet::new();
 
     // Build the sequence of old indices in new-child order (for surviving keyed nodes).
     // We'll use LIS on this to determine which nodes can stay in place.
@@ -529,7 +527,7 @@ fn diff_keyed_children(
     // Compute LIS of old indices -- these elements maintain their relative order
     // and don't need MoveChild patches. Only non-LIS elements are moved.
     let lis_positions = longest_increasing_subsequence(&old_indices_in_new_order);
-    let mut lis_set: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut lis_set: HashSet<usize> = HashSet::new();
     for &lis_pos in &lis_positions {
         lis_set.insert(new_idx_for_surviving[lis_pos]);
     }
