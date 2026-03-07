@@ -2,7 +2,7 @@
  * Tests for prefetch-on-hover (src/22-prefetch.js)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
