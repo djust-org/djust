@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Prefetch on hover** — new `22-prefetch.js` client module posts `PREFETCH` messages to the service worker when users hover over same-origin links, enabling near-instant navigation on click. Supports deduplication, `data-no-prefetch` opt-out, and respects `navigator.connection.saveData`.
+- **Smart static asset caching** — `generate_sw` management command now always includes djust core assets (`client.js`, `debug-panel.js` in DEBUG) in the precache list, and the generated service worker checks a `djust-prefetch` cache before going to network.
+
 ## [0.3.6rc1] - 2026-03-06
 
 ### Added
