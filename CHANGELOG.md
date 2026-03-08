@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6rc2] - 2026-03-07
+
 ### Added
 
 - **Prefetch on hover** — new `22-prefetch.js` client module posts `PREFETCH` messages to the service worker when users hover over same-origin links, enabling near-instant navigation on click. Supports deduplication, `data-no-prefetch` opt-out, and respects `navigator.connection.saveData`.
