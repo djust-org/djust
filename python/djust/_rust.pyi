@@ -312,6 +312,50 @@ def clear_tag_handlers() -> None:
     """
     ...
 
+def register_block_tag_handler(tag_name: str, end_tag: str, handler: Any) -> None:
+    """
+    Register a Python block tag handler for a custom template block tag.
+
+    Block tags wrap content like ``{% modal %}...{% endmodal %}``.
+    The handler receives the pre-rendered HTML of the block body.
+
+    Args:
+        tag_name: Opening tag name (e.g., "modal", "card")
+        end_tag: Closing tag name (e.g., "endmodal", "endcard")
+        handler: Python object with ``render(args, content, context)`` method
+    """
+    ...
+
+def has_block_tag_handler(tag_name: str) -> bool:
+    """
+    Check if a block tag handler is registered for the given tag name.
+
+    Args:
+        tag_name: Tag name to check
+
+    Returns:
+        True if a block handler is registered
+    """
+    ...
+
+def unregister_block_tag_handler(tag_name: str) -> bool:
+    """
+    Unregister a block tag handler.
+
+    Args:
+        tag_name: Name of the tag to unregister
+
+    Returns:
+        True if a handler was removed
+    """
+    ...
+
+def clear_block_tag_handlers() -> None:
+    """
+    Clear all registered block tag handlers (primarily for testing).
+    """
+    ...
+
 # ============================================================================
 # Actor System
 # ============================================================================
@@ -646,12 +690,17 @@ __all__ = [
     "serialize_context",
     "serialize_models_fast",
     "serialize_models_to_list",
-    # Tag handlers
+    # Tag handlers (inline)
     "register_tag_handler",
     "has_tag_handler",
     "get_registered_tags",
     "unregister_tag_handler",
     "clear_tag_handlers",
+    # Block tag handlers
+    "register_block_tag_handler",
+    "has_block_tag_handler",
+    "unregister_block_tag_handler",
+    "clear_block_tag_handlers",
     # Actor system
     "SessionActorHandle",
     "SupervisorStatsPy",

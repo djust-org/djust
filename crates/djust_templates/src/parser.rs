@@ -62,6 +62,20 @@ pub enum Node {
         /// Arguments from the template tag as raw strings
         args: Vec<String>,
     },
+    /// Block custom template tag handled by a Python callback with children.
+    ///
+    /// This is used for Django-compatible block tags like `{% modal %}...{% endmodal %}`
+    /// that wrap content and require Python runtime rendering.
+    ///
+    /// The handler receives the pre-rendered HTML of the block body.
+    BlockCustomTag {
+        /// Opening tag name (e.g., "modal", "card")
+        name: String,
+        /// Arguments from the opening tag as raw strings
+        args: Vec<String>,
+        /// Child nodes (the block body)
+        children: Vec<Node>,
+    },
     /// {% widthratio value max_value max_width %} - calculates round(value/max_value * max_width)
     WidthRatio {
         value: String,
@@ -559,9 +573,17 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                 }
 
                 _ => {
-                    // Check if a Python handler is registered for this tag
-                    if crate::registry::handler_exists(tag_name) {
-                        // Handler exists - create CustomTag node
+                    // Check if a Python block tag handler is registered (tags with children)
+                    if let Some(end_tag) = crate::registry::block_handler_exists(tag_name) {
+                        let (children, end_pos) = parse_block_custom_tag(tokens, *i + 1, &end_tag)?;
+                        *i = end_pos;
+                        Ok(Some(Node::BlockCustomTag {
+                            name: tag_name.clone(),
+                            args: args.clone(),
+                            children,
+                        }))
+                    } else if crate::registry::handler_exists(tag_name) {
+                        // Inline handler exists - create CustomTag node
                         Ok(Some(Node::CustomTag {
                             name: tag_name.clone(),
                             args: args.clone(),
@@ -768,6 +790,36 @@ fn parse_spaceless_block(tokens: &[Token], start: usize) -> Result<(Vec<Node>, u
     ))
 }
 
+/// Parse a custom block tag body until a matching end tag.
+///
+/// Used by `parse_token` when a registered block tag handler is found.
+/// Scans forward collecting child nodes until `end_tag` is encountered.
+fn parse_block_custom_tag(
+    tokens: &[Token],
+    start: usize,
+    end_tag: &str,
+) -> Result<(Vec<Node>, usize)> {
+    let mut nodes = Vec::new();
+    let mut i = start;
+
+    while i < tokens.len() {
+        if let Token::Tag(name, _) = &tokens[i] {
+            if name == end_tag {
+                return Ok((nodes, i));
+            }
+        }
+
+        if let Some(node) = parse_token(tokens, &mut i)? {
+            nodes.push(node);
+        }
+        i += 1;
+    }
+
+    Err(DjangoRustError::TemplateError(format!(
+        "Unclosed block tag, expected {{% {end_tag} %}}"
+    )))
+}
+
 /// Extract all variable paths from a Django template for JIT serialization.
 ///
 /// Parses the template and returns a mapping of root variable names to their access paths.
@@ -952,23 +1004,24 @@ fn extract_from_nodes(
                     extract_from_variable(prop_value, variables);
                 }
             }
-            Node::CustomTag { args, name: _ } => {
-                // Extract variables from custom tag arguments
-                // Arguments may reference context variables (e.g., {% url 'name' post.slug %})
+            Node::CustomTag { args, name: _ }
+            | Node::BlockCustomTag {
+                args,
+                name: _,
+                children: _,
+            } => {
+                // Extract variables from custom/block tag arguments
                 for arg in args {
-                    // Skip string literals
                     if (arg.starts_with('"') && arg.ends_with('"'))
                         || (arg.starts_with('\'') && arg.ends_with('\''))
                     {
                         continue;
                     }
-                    // Skip named parameters (key=value) - extract the value part
                     let value = if let Some(eq_pos) = arg.find('=') {
                         arg[eq_pos + 1..].trim()
                     } else {
                         arg.trim()
                     };
-                    // Check if it looks like a variable (not a number, not a string literal)
                     if !value.is_empty()
                         && !value.starts_with('"')
                         && !value.starts_with('\'')
@@ -976,6 +1029,10 @@ fn extract_from_nodes(
                     {
                         extract_from_variable(value, variables);
                     }
+                }
+                // For block tags, also recurse into children
+                if let Node::BlockCustomTag { children, .. } = node {
+                    extract_from_nodes(children, variables);
                 }
             }
             Node::WidthRatio {

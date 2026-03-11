@@ -476,6 +476,22 @@ fn node_to_template_string(node: &Node) -> String {
         Node::Now(format) => {
             format!("{{% now \"{format}\" %}}")
         }
+        Node::BlockCustomTag {
+            name,
+            args,
+            children,
+        } => {
+            // Reconstruct block custom tag: {% tagname args %}...{% endtagname %}
+            let mut result = format!("{{% {name}");
+            for arg in args {
+                result.push(' ');
+                result.push_str(arg);
+            }
+            result.push_str(" %}");
+            result.push_str(&nodes_to_template_string(children));
+            result.push_str(&format!("{{% end{name} %}}"));
+            result
+        }
     }
 }
 
