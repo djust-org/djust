@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<<<<<<< HEAD
+### Fixed
+
+- **`dj-params` attribute no longer silently dropped** — Between 0.3.2 and 0.3.6rc2, `dj-params` was removed from the client event-binding code. Templates using `dj-params='{"key": value}'` continued to fire click events but the server received `params: {}`. The attribute is now read and merged into the params object for backward compatibility. A `console.warn` is emitted in debug mode (`globalThis.djustDebug`) to notify developers to migrate.
+
+### Deprecated
+
+- **`dj-params` JSON blob attribute** — Use individual `data-*` attributes with optional type-coercion suffixes instead. `dj-params` will be removed in a future release.
+
+  **Migration guide (0.3.2 → 0.3.6):**
+
+  ```html
+  <!-- Before (0.3.2) -->
+  <button dj-click="start_edit" dj-params='{"todo_id": {{ todo.id }}}'>Edit</button>
+  <button dj-click="set_filter" dj-params='{"filter_value": "all"}'>All</button>
+
+  <!-- After (0.3.6+) -->
+  <button dj-click="start_edit" data-todo-id:int="{{ todo.id }}">Edit</button>
+  <button dj-click="set_filter" data-filter-value="all">All</button>
+  ```
+
+  Type-coercion suffixes: `:int`, `:float`, `:bool`, `:json`. Kebab-case attribute names are auto-converted to `snake_case` for server handler parameters.
+=======
 ## [0.3.6rc2] - 2026-03-07
 
 ### Added
@@ -15,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Smart static asset caching** — `generate_sw` management command now always includes djust core assets (`client.js`, `debug-panel.js` in DEBUG) in the precache list, and the generated service worker checks a `djust-prefetch` cache before going to network.
 
 ## [0.3.6rc1] - 2026-03-06
+>>>>>>> origin/main
 
 ### Added
 
