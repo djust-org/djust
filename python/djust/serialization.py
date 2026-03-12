@@ -135,7 +135,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
         the FK ID without triggering a database query.
         """
         result = {
-            "id": str(obj.pk) if obj.pk is not None else None,
+            "id": obj.pk,  # Native type (int/UUID) for {% if %} comparisons
             "pk": obj.pk,
             "__str__": str(obj),
             "__model__": obj.__class__.__name__,
@@ -172,7 +172,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
                         result[field_name] = self._serialize_model_safely(related)
                     elif related:
                         result[field_name] = {
-                            "id": str(related.pk) if related.pk is not None else None,
+                            "id": related.pk,
                             "pk": related.pk,
                             "__str__": str(related),
                         }
@@ -430,7 +430,7 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
         if _depth >= max_depth:
             # At max depth, return a minimal representation
             return {
-                "id": str(value.pk) if value.pk is not None else None,
+                "id": value.pk,
                 "pk": value.pk,
                 "__str__": str(value),
             }
