@@ -950,8 +950,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             from django.contrib.sessions.backends.db import SessionStore
 
             scope_session = self.scope.get("session")
-            if scope_session and hasattr(scope_session, "session_key"):
-                session_key = scope_session.session_key
+            # Django Channels wraps the session in a LazyObject for async
+            # compatibility. hasattr() triggers lazy evaluation and can raise
+            # unexpected exceptions on un-initialised LazyObjects.  Use
+            # getattr() with a sentinel instead so any AttributeError is
+            # handled cleanly without masking real errors elsewhere.
+            session_key = getattr(scope_session, "session_key", None) if scope_session else None
+            if session_key:
                 request.session = SessionStore(session_key=session_key)
             else:
                 request.session = SessionStore()

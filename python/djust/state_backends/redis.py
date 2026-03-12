@@ -243,8 +243,13 @@ class RedisStateBackend(StateBackend):
                 with profiler.profile(profiler.OP_COMPRESSION):
                     data = self._compress(serialized)
 
-                # Store with TTL
-                self._client.setex(redis_key, ttl, data)
+                # Store with TTL.
+                # TTL=0 means "never expire"; use SET without expiry instead of
+                # SETEX (which requires TTL >= 1 and would raise a Redis error).
+                if ttl > 0:
+                    self._client.setex(redis_key, ttl, data)
+                else:
+                    self._client.set(redis_key, data)
 
             except Exception as e:
                 logger.error("Failed to serialize to Redis key '%s': %s", key, e)
