@@ -13,9 +13,11 @@ Major feature release introducing PWA and multi-tenant capabilities:
 
 Identify bottlenecks in the render cycle and optimize.
 
+**Status**: Profiling tooling is complete. Bottleneck analysis remains.
+
+- ✅ Use existing benchmarks in `tests/benchmarks/` (serialization, e2e render, tags, templates) as baselines
+- ✅ Instrument key paths with `performance.py` timing trees and `profiler.py` `@profile` decorator
 - Profile the full request path: HTTP render → WebSocket mount → event → VDOM diff → patch
-- Use existing benchmarks in `tests/benchmarks/` (serialization, e2e render, tags, templates) as baselines
-- Instrument key paths with `performance.py` timing trees and `profiler.py` `@profile` decorator
 - Determine whether Rust VDOM diffs or Python serialization/template rendering is the bottleneck
 - Profile `state_backend.py` — compression overhead for states >10KB, Redis round-trip latency
 - Target: <2ms per patch, <5ms for list updates
@@ -24,12 +26,14 @@ Identify bottlenecks in the render cycle and optimize.
 
 Understand memory pressure and evaluate client-side or external storage.
 
+**Status**: Infrastructure is complete. Analytical questions remain.
+
 **Current architecture** (`state_backends/`):
 
-- Pluggable backends: memory (dev) or Redis (prod)
+- ✅ Pluggable backends: memory (dev) or Redis (prod)
 - Server memory holds: RustLiveView instance, user context, cached decorator values, draft state
-- States >100KB trigger warnings; >10KB get zstd compressed
-- TTL-based expiration with `cleanup_liveview_sessions` management command
+- ✅ States >100KB trigger warnings; >10KB get zstd compressed
+- ✅ TTL-based expiration with `cleanup_liveview_sessions` management command
 
 **Questions to answer:**
 
@@ -44,9 +48,9 @@ Make djust + TurboNav a first-class documented pattern.
 
 **Issues found and fixed:**
 
-- Injected scripts need `data-turbo-track="reload"` for `loadPageScripts` to pick them up
-- Inline `<script>` tags inside `<main>` require explicit execution after `innerHTML` swap
-- `DOMContentLoaded` doesn't fire on dynamically loaded scripts — must check `document.readyState`
+- ✅ Injected scripts need `data-turbo-track="reload"` for `loadPageScripts` to pick them up
+- ✅ Inline `<script>` tags inside `<main>` require explicit execution after `innerHTML` swap
+- ✅ `DOMContentLoaded` doesn't fire on dynamically loaded scripts — must check `document.readyState`
 
 **Remaining work:**
 
@@ -61,11 +65,11 @@ Make djust + TurboNav a first-class documented pattern.
 Lower the barrier to getting started and debugging.
 
 - Docs are extensive (40+ files) but scattered — consolidate the getting-started path
-- CLI (`cli.py`) has `stats`, `health`, `profile`, `analyze`, `clear` — evaluate discoverability
+- ✅ CLI (`cli.py`) has 8 commands: `stats`, `health`, `profile`, `analyze`, `clear`, `startapp`, `check`, `audit`
 - ~~Error messages from event security now surface in the debug toolbar — verify clarity and usefulness~~ ✅ Done (#112)
 - Identify common first-time stumbling blocks: missing `@event_handler` decorator? WebSocket/Channels config? Template syntax?
 - ~~Document `@event` → `@event_handler` migration path~~ ✅ Done (#122, #141)
-- Consider a `django-admin startapp` template with djust boilerplate
+- ✅ `startapp` management command with djust boilerplate template
 - Consider better error pages in DEBUG mode with actionable suggestions
 
 ## 5. Break Up Large Files — ✅ Complete
@@ -96,13 +100,13 @@ Complete the development tools suite.
 - Hot reload with template change detection
 - Performance warnings for patches >16ms
 - Server error display in toolbar (#112)
+- Event filtering by handler name, success/error status (`03-tab-events.js`)
+- Event replay — resend previous events with same parameters (`replayEvent()`)
+- Network tab — WebSocket message inspection, connection status monitoring (`04-tab-network.js`)
+- Performance warnings tab — slow patches, state size alerts (`13-warnings.js`)
 
 **Missing:**
 
-- Event filtering by handler name, success/error status, time range
-- Event replay — resend previous events with same parameters
-- Network tab — raw WebSocket message inspection, connection status monitoring
-- Performance warnings tab — slow patches (>5ms), state size alerts, memory tracking
 - State size visualization — session contents and size breakdown
 - Panel state persistence across TurboNav navigation
 
@@ -135,7 +139,7 @@ Ongoing effort to harden the VDOM diff and patch pipeline.
 **Remaining:**
 
 - Investigate edge cases surfaced by proptest fuzzing
-- Performance optimization for large list diffs (>1000 items)
+- ~~Performance optimization for large list diffs (>1000 items)~~ ✅ Addressed by LIS optimization (#458)
 
 ## 9. Service Worker Enhancements
 

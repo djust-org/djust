@@ -4017,21 +4017,40 @@ function applySinglePatch(patch) {
 
             case 'InsertChild': {
                 const newChild = createNodeFromVNode(patch.node, isInSvgContext(node));
-                let refChild = null;
-                if (patch.ref_d) {
-                    // ID-based resolution: find sibling by dj-id (resilient to index shifts)
-                    const escaped = CSS.escape(patch.ref_d);
-                    refChild = node.querySelector(`:scope > [dj-id="${escaped}"]`);
-                }
-                if (!refChild) {
-                    // Fallback: index-based
-                    const children = getSignificantChildren(node);
-                    refChild = children[patch.index] || null;
-                }
-                if (refChild) {
-                    node.insertBefore(newChild, refChild);
+                // Guard: <select> only accepts <option>/<optgroup> as direct children.
+                // When an adjacent {% if %} block expands, the server may resolve the
+                // parent path to the <select> element rather than the surrounding
+                // container, causing new sibling nodes to be inserted inside the
+                // <select>.  Detect this mismatch and redirect the insert to the
+                // correct parent so the new node becomes a sibling of <select>.
+                let insertTarget = node;
+                let insertRefChild = null;
+                const isSelectNode = node.nodeType === Node.ELEMENT_NODE && node.tagName === 'SELECT';
+                const newChildIsOption = newChild.nodeType === Node.ELEMENT_NODE &&
+                    (newChild.tagName === 'OPTION' || newChild.tagName === 'OPTGROUP');
+                if (isSelectNode && !newChildIsOption) {
+                    // Redirect: insert as sibling of <select> instead of inside it
+                    insertTarget = node.parentNode;
+                    insertRefChild = node.nextSibling;
+                    if (globalThis.djustDebug) {
+                        console.log('[LiveView] InsertChild redirected: non-option child into SELECT parent');
+                    }
                 } else {
-                    node.appendChild(newChild);
+                    if (patch.ref_d) {
+                        // ID-based resolution: find sibling by dj-id (resilient to index shifts)
+                        const escaped = CSS.escape(patch.ref_d);
+                        insertRefChild = node.querySelector(`:scope > [dj-id="${escaped}"]`);
+                    }
+                    if (!insertRefChild) {
+                        // Fallback: index-based
+                        const children = getSignificantChildren(node);
+                        insertRefChild = children[patch.index] || null;
+                    }
+                }
+                if (insertRefChild) {
+                    insertTarget.insertBefore(newChild, insertRefChild);
+                } else {
+                    insertTarget.appendChild(newChild);
                 }
                 // If inserting a text node into a textarea, also update its .value
                 if (newChild.nodeType === Node.TEXT_NODE && node.tagName === 'TEXTAREA') {
@@ -6155,4 +6174,65 @@ function bindModelElements(root) {
 
 // Export
 window.djust.bindModelElements = bindModelElements;
+// ============================================================================
+// Prefetch on Hover
+// ============================================================================
+// Posts PREFETCH messages to the service worker when users hover over links.
+// Only same-origin links are prefetched; each URL is prefetched at most once.
+
+(function () {
+    var _prefetched = new Set();
+
+    function _shouldPrefetch(link) {
+        // No SW controller available
+        if (!navigator.serviceWorker || !navigator.serviceWorker.controller) {
+            return false;
+        }
+        // Respect save-data preference
+        if (navigator.connection && navigator.connection.saveData) {
+            return false;
+        }
+        // Element opted out
+        if (link.hasAttribute('data-no-prefetch')) {
+            return false;
+        }
+        // Must have href and be same-origin
+        if (!link.href) {
+            return false;
+        }
+        try {
+            var url = new URL(link.href, location.origin);
+            if (url.origin !== location.origin) {
+                return false;
+            }
+        } catch (e) {
+            return false;
+        }
+        // Already prefetched
+        if (_prefetched.has(link.href)) {
+            return false;
+        }
+        return true;
+    }
+
+    document.addEventListener('pointerenter', function (event) {
+        var link = event.target.closest('a');
+        if (!link || !_shouldPrefetch(link)) {
+            return;
+        }
+        _prefetched.add(link.href);
+        if (globalThis.djustDebug) console.log('[djust] Prefetching:', link.href);
+        navigator.serviceWorker.controller.postMessage({
+            type: 'PREFETCH',
+            url: link.href
+        });
+    }, true);
+
+    // Expose for testing
+    window.djust = window.djust || {};
+    window.djust._prefetch = {
+        _prefetched: _prefetched,
+        _shouldPrefetch: _shouldPrefetch
+    };
+})();
 } // End of double-load guard
