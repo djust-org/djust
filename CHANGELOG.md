@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6rc2] - 2026-03-07
+
 ### Added
 
-- **Link prefetch on hover** — new `22-prefetch.js` module that injects `<link rel="prefetch">` when hovering over same-origin anchor tags. This allows the browser to warm-start the request before the click, improving perceived navigation speed. Prefetch is automatically deduped and respects same-origin policy. See `static/djust/src/22-prefetch.js` for implementation details.
+- **Prefetch on hover** — new `22-prefetch.js` client module posts `PREFETCH` messages to the service worker when users hover over same-origin links, enabling near-instant navigation on click. Supports deduplication, `data-no-prefetch` opt-out, and respects `navigator.connection.saveData`.
+- **Smart static asset caching** — `generate_sw` management command now always includes djust core assets (`client.js`, `debug-panel.js` in DEBUG) in the precache list, and the generated service worker checks a `djust-prefetch` cache before going to network.
+
+## [0.3.6rc1] - 2026-03-06
+
+### Added
+
 - **`djust-deploy` CLI** — new `python/djust/deploy_cli.py` module providing deployment commands for [djustlive.com](https://djustlive.com). Available via the `djust-deploy` entry point after installation:
   - `djust-deploy login` — prompts for email/password, authenticates against djustlive.com, and stores the token in `~/.djustlive/credentials` (mode `0o600`)
   - `djust-deploy logout` — calls the server logout endpoint and removes the local credentials file
@@ -18,12 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `--server` flag / `DJUST_SERVER` env var to override the default server URL (`https://djustlive.com`)
 - **TypeScript type stubs updated** — `DjustStreamOp` now includes `"done"` and `"start"` operation types and an optional `mode` field (`"append" | "replace" | "prepend"`). `getActiveStreams()` return type changed from `Map` to `Record`.
 
+### Performance
+
+- **VDOM keyed list diffing optimized with LIS algorithm** — When reordering large keyed lists (>1000 items), the VDOM differ now computes the Longest Increasing Subsequence to minimize `MoveChild` patches. Elements in the LIS maintain their relative order and don't need explicit moves. Reduces patches from O(n) to O(k) where k is the number of actual moves needed. Example: moving last item to front in 1000-item list now produces 1 move instead of 999. Uses O(n log n) patience-sorting algorithm in `crates/djust_vdom/src/lis.rs`. (#458)
+
 ### Fixed
 
-- **Link prefetch throws `TypeError` when hovering over text nodes** — The `pointerenter` capture listener on `document` receives events for all DOM nodes, including text nodes which don't have `.closest()`. This caused repeated console errors when hovering over plain text inside links. Fixed by adding an `instanceof Element` guard before calling `.closest()`. (#264)
-- **Python 3.14 build fails with PyO3 0.24** — PyO3 0.24 hard-caps support at Python 3.13. Enabled the `abi3-py38` feature in `Cargo.toml` to use the CPython stable ABI, which is forward-compatible with Python 3.14+ and any Python ≥ 3.8. The compiled wheel ABI tag changes from version-specific (`cp312-cp312`) to stable ABI (`cp38-abi3`), providing one universal binary for multiple Python versions. (#384)
-- **PWA `cache_first` strategy serves stale HTML, breaking LiveView VDOM patching** — The `cache_first` service worker strategy intercepted ALL GET requests, including navigation page loads (`request.mode === 'navigate'`). Returning a cached stale page caused the server's initial VDOM snapshot and client DOM to diverge before the WebSocket connected, producing incorrect VDOM diffs. Fixed by adding a navigate-mode guard that forces network fetches for page loads (with offline fallback), while keeping cache-first for static assets. (#382)
-- **DOM patcher inserts new siblings inside `<select>` when adjacent `{% if %}` block expands** — When a template conditional block adjacent to a `<select>` expands, the VDOM `InsertChild` patch could resolve to the `<select>` element as the parent, causing non-option sibling content to be inserted as children of the select (invalid HTML). Added a guard in the patcher: when `node` is a `<select>` but `newChild` is not an `<option>` or `<optgroup>`, the insert is redirected to `node.parentNode`, making the new node a proper sibling. (#383)
+- **Python 3.14 build fails with PyO3 0.24** — PyO3 0.24 hard-caps support at Python 3.13. Bumped PyO3 from 0.24 to 0.25, which adds native Python 3.14 support. Also bumped `pyo3-async-runtimes` from 0.24 to 0.25 to match. (#416)
+- **PWA `cache_first` strategy serves stale HTML, breaking LiveView VDOM patching** — The `cache_first` service worker strategy intercepted ALL GET requests, including navigation page loads (`request.mode === 'navigate'`). Returning a cached stale page caused the server's initial VDOM snapshot and client DOM to diverge before the WebSocket connected, producing incorrect VDOM diffs. Fixed by adding a navigate-mode guard that forces network fetches for page loads (with offline fallback), while keeping cache-first for static assets. (#423)
+- **DOM patcher inserts new siblings inside `<select>` when adjacent `{% if %}` block expands** — When a template conditional block adjacent to a `<select>` expands, the VDOM `InsertChild` patch could resolve to the `<select>` element as the parent, causing non-option sibling content to be inserted as children of the select (invalid HTML). Added a guard in the patcher: when `node` is a `<select>` but `newChild` is not an `<option>` or `<optgroup>`, the insert is redirected to `node.parentNode`, making the new node a proper sibling. (#417)
 - **Auto-reload on unrecoverable VDOM state** — When VDOM patch recovery fails because recovery HTML is unavailable (e.g. after server restart), the client now auto-reloads the page instead of showing a confusing error overlay. The server sends `recoverable: false` to signal the client.
 - **`{% djust_pwa_head %}` and other custom tags with quoted arguments containing spaces now render correctly** — The Rust template lexer used `split_whitespace()` to tokenize tag arguments, which broke quoted values like `name="My App"` into separate tokens (`name="My` and `App"`). This caused the downstream Python handler to receive malformed arguments, silently returning empty output. Replaced with a quote-aware splitter (`split_tag_args`) that preserves quoted strings as single arguments.
 - **`{% load %}` tags stripped during template inheritance, breaking inclusion tags** — The Rust parser treated `{% load %}` as `Node::Comment`, which `nodes_to_template_string()` discarded during inheritance reconstruction. When the resolved template was re-parsed, custom tags that relied on Django tag libraries (e.g. `{% djust_pwa_head %}`) could silently fail. Fixed by adding a dedicated `Node::Load` variant that preserves library names through reconstruction. Also improved `_render_django_tag()` error handling: failures now log a full traceback via `logger.exception()` and return a visible HTML comment instead of an empty string.

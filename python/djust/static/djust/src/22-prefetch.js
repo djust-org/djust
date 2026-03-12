@@ -1,46 +1,61 @@
-
 // ============================================================================
-// Link Prefetch — hover-based <link rel="prefetch"> injection
+// Prefetch on Hover
 // ============================================================================
-//
-// When the user hovers over an anchor, inject a <link rel="prefetch"> so the
-// browser can warm-start the request before the click lands.
-//
-// Uses pointerenter with capture:true so it fires before any element handler.
-// IMPORTANT: text nodes and comment nodes are NOT Elements and do not have
-// .closest(); guard with instanceof Element before calling it.
+// Posts PREFETCH messages to the service worker when users hover over links.
+// Only same-origin links are prefetched; each URL is prefetched at most once.
 
 (function () {
-    'use strict';
+    var _prefetched = new Set();
 
-    var prefetched = new Set();
+    function _shouldPrefetch(link) {
+        // No SW controller available
+        if (!navigator.serviceWorker || !navigator.serviceWorker.controller) {
+            return false;
+        }
+        // Respect save-data preference
+        if (navigator.connection && navigator.connection.saveData) {
+            return false;
+        }
+        // Element opted out
+        if (link.hasAttribute('data-no-prefetch')) {
+            return false;
+        }
+        // Must have href and be same-origin
+        if (!link.href) {
+            return false;
+        }
+        try {
+            var url = new URL(link.href, location.origin);
+            if (url.origin !== location.origin) {
+                return false;
+            }
+        } catch (e) {
+            return false;
+        }
+        // Already prefetched
+        if (_prefetched.has(link.href)) {
+            return false;
+        }
+        return true;
+    }
 
     document.addEventListener('pointerenter', function (event) {
-        if (!(event.target instanceof Element)) return;
-        var link = event.target.closest('a[href]');
-        if (!link) return;
-
-        var href = link.getAttribute('href');
-        // Only prefetch same-origin, path-based URLs
-        if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
-
-        try {
-            var url = new URL(href, window.location.href);
-            if (url.origin !== window.location.origin) return;
-            if (prefetched.has(url.href)) return;
-            prefetched.add(url.href);
-
-            var el = document.createElement('link');
-            el.rel = 'prefetch';
-            el.href = url.href;
-            document.head.appendChild(el);
-
-            if (globalThis.djustDebug) console.log('[LiveView] prefetch:', url.href);
-        } catch (e) {
-            // Ignore unparseable hrefs
+        var link = event.target.closest('a');
+        if (!link || !_shouldPrefetch(link)) {
+            return;
         }
+        _prefetched.add(link.href);
+        if (globalThis.djustDebug) console.log('[djust] Prefetching:', link.href);
+        navigator.serviceWorker.controller.postMessage({
+            type: 'PREFETCH',
+            url: link.href
+        });
     }, true);
 
     // Expose for testing
-    window.djust._prefetchedUrls = prefetched;
+    window.djust = window.djust || {};
+    window.djust._prefetch = {
+        _prefetched: _prefetched,
+        _shouldPrefetch: _shouldPrefetch
+    };
 })();
