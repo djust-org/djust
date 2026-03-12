@@ -190,22 +190,25 @@ class DjustTemplate:
         """
         Serialize a single Django model instance.
 
+        Returns both 'id' and 'pk' as native types for consistent template comparisons.
+        This ensures {% if item.id == state_var %} works with integer comparisons.
+
         Args:
             model_instance: Django model instance
             variable_name: Variable name in template
 
         Returns:
-            Serialized dictionary
+            Serialized dictionary with 'id' and 'pk' keys (both native types)
         """
         if not JIT_AVAILABLE or not DjangoJSONEncoder:
             # Fallback to basic serialization
-            return {"id": str(model_instance.pk), "__str__": str(model_instance)}
+            return {"id": model_instance.pk, "pk": model_instance.pk, "__str__": str(model_instance)}
 
         try:
             return normalize_django_value(model_instance)
         except Exception as e:
             logger.warning("Model serialization failed for '%s': %s", variable_name, e)
-            return {"id": str(model_instance.pk), "__str__": str(model_instance)}
+            return {"id": model_instance.pk, "pk": model_instance.pk, "__str__": str(model_instance)}
 
     def _resolve_template_inheritance(self) -> str:
         """
