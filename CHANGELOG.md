@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Link prefetch on hover** — new `22-prefetch.js` module that injects `<link rel="prefetch">` when hovering over same-origin anchor tags. This allows the browser to warm-start the request before the click, improving perceived navigation speed. Prefetch is automatically deduped and respects same-origin policy. See `static/djust/src/22-prefetch.js` for implementation details.
 - **`djust-deploy` CLI** — new `python/djust/deploy_cli.py` module providing deployment commands for [djustlive.com](https://djustlive.com). Available via the `djust-deploy` entry point after installation:
   - `djust-deploy login` — prompts for email/password, authenticates against djustlive.com, and stores the token in `~/.djustlive/credentials` (mode `0o600`)
   - `djust-deploy logout` — calls the server logout endpoint and removes the local credentials file
@@ -19,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Link prefetch throws `TypeError` when hovering over text nodes** — The `pointerenter` capture listener on `document` receives events for all DOM nodes, including text nodes which don't have `.closest()`. This caused repeated console errors when hovering over plain text inside links. Fixed by adding an `instanceof Element` guard before calling `.closest()`. (#264)
 - **Python 3.14 build fails with PyO3 0.24** — PyO3 0.24 hard-caps support at Python 3.13. Enabled the `abi3-py38` feature in `Cargo.toml` to use the CPython stable ABI, which is forward-compatible with Python 3.14+ and any Python ≥ 3.8. The compiled wheel ABI tag changes from version-specific (`cp312-cp312`) to stable ABI (`cp38-abi3`), providing one universal binary for multiple Python versions. (#384)
 - **PWA `cache_first` strategy serves stale HTML, breaking LiveView VDOM patching** — The `cache_first` service worker strategy intercepted ALL GET requests, including navigation page loads (`request.mode === 'navigate'`). Returning a cached stale page caused the server's initial VDOM snapshot and client DOM to diverge before the WebSocket connected, producing incorrect VDOM diffs. Fixed by adding a navigate-mode guard that forces network fetches for page loads (with offline fallback), while keeping cache-first for static assets. (#382)
 - **DOM patcher inserts new siblings inside `<select>` when adjacent `{% if %}` block expands** — When a template conditional block adjacent to a `<select>` expands, the VDOM `InsertChild` patch could resolve to the `<select>` element as the parent, causing non-option sibling content to be inserted as children of the select (invalid HTML). Added a guard in the patcher: when `node` is a `<select>` but `newChild` is not an `<option>` or `<optgroup>`, the insert is redirected to `node.parentNode`, making the new node a proper sibling. (#383)
