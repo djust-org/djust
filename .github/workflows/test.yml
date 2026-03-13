@@ -74,6 +74,23 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -90,12 +107,14 @@ jobs:
           path: |
             ~/.cache/uv
             .venv
-          key: ${{ runner.os }}-python-${{ hashFiles('**/pyproject.toml') }}
+          key: ${{ runner.os }}-python-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
           restore-keys: |
             ${{ runner.os }}-python-
 
-      - name: Install Python dependencies
-        run: uv sync --extra dev
+      - name: Install Python dependencies and build extension
+        run: |
+          uv sync --extra dev
+          uv run maturin develop --release
 
       - name: Install test tools
         run: uv pip install pytest-xdist mypy
@@ -154,7 +173,7 @@ jobs:
           path: |
             ~/.cache/uv
             .venv
-          key: ${{ runner.os }}-python-${{ hashFiles('**/pyproject.toml') }}
+          key: ${{ runner.os }}-python-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
           restore-keys: |
             ${{ runner.os }}-python-
 
@@ -246,7 +265,7 @@ jobs:
           path: |
             ~/.cache/uv
             .venv
-          key: ${{ runner.os }}-python-security-${{ hashFiles('**/pyproject.toml') }}
+          key: ${{ runner.os }}-python-security-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
           restore-keys: |
             ${{ runner.os }}-python-security-
             ${{ runner.os }}-python-
@@ -327,7 +346,7 @@ jobs:
           path: |
             ~/.cache/uv
             .venv
-          key: ${{ runner.os }}-python-security-tests-${{ hashFiles('**/pyproject.toml') }}
+          key: ${{ runner.os }}-python-security-tests-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
           restore-keys: |
             ${{ runner.os }}-python-security-tests-
             ${{ runner.os }}-python-
