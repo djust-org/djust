@@ -65,7 +65,9 @@ class StateBackend(ABC):
         Args:
             key: Unique session key
             view: RustLiveView instance to store
-            ttl: Time-to-live in seconds (None = use backend default)
+            ttl: Time-to-live in seconds. None = use backend default; positive int
+                = expire after N seconds; 0 or negative = never expire (sessions
+                persist until explicitly deleted).
         """
         pass
 
@@ -88,10 +90,25 @@ class StateBackend(ABC):
         Remove expired sessions based on TTL.
 
         Args:
-            ttl: Time-to-live threshold in seconds
+            ttl: Time-to-live threshold in seconds. None = use backend default;
+                positive int = remove sessions older than N seconds; 0 or negative
+                = do not remove any sessions (never-expire mode).
 
         Returns:
             Number of sessions cleaned up
+        """
+        pass
+
+    @abstractmethod
+    def delete_all(self) -> int:
+        """
+        Delete every session unconditionally.
+
+        Used by ``djust clear --all``.  Implementations must provide an
+        efficient bulk-delete operation for their storage backend.
+
+        Returns:
+            Number of sessions deleted
         """
         pass
 

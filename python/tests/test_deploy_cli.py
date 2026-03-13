@@ -125,6 +125,11 @@ class TestCredentialHelpers:
         assert creds["email"] == "e@e.com"
 
     def test_load_credentials_missing_file_raises(self, tmp_path, monkeypatch):
+        """load_credentials() raises ClickException when the credentials file does not exist.
+
+        The exception message must contain "Not logged in" so that the CLI
+        surfaces a clear, actionable error rather than a bare FileNotFoundError.
+        """
         cred_file = tmp_path / ".djustlive" / "credentials"
         monkeypatch.setattr("djust.deploy_cli.credentials_path", lambda: cred_file)
         with pytest.raises(click.ClickException, match="Not logged in"):

@@ -157,6 +157,48 @@ class TestInMemoryBackend:
         assert cleaned == 1
         assert backend.get("key1") is None
 
+    def test_cleanup_ttl_zero_never_expires(self):
+        """SESSION_TTL=0 means "never expire" — cleanup_expired is a no-op (#409).
+
+        TTL=0 was redefined in 0.3.5 to mean "never expire" so that sessions
+        configured with no expiry aren't accidentally wiped. Bulk removal is
+        now handled by ``delete_all()``.
+        """
+        backend = InMemoryStateBackend()
+
+        for i in range(3):
+            view = RustLiveView(f"<div>{i}</div>")
+            backend.set(f"key{i}", view)
+
+        assert backend.get_stats()["total_sessions"] == 3
+
+        # TTL=0 is a no-op — sessions must survive
+        cleaned = backend.cleanup_expired(ttl=0)
+        assert cleaned == 0, "TTL=0 must not remove any sessions (never-expire semantics)"
+        assert backend.get_stats()["total_sessions"] == 3
+
+    def test_cleanup_ttl_zero_on_empty_backend(self):
+        """SESSION_TTL=0 on an empty backend returns 0 (#395)."""
+        backend = InMemoryStateBackend()
+        cleaned = backend.cleanup_expired(ttl=0)
+        assert cleaned == 0
+
+    def test_cleanup_ttl_zero_preserves_sessions(self):
+        """After TTL=0 cleanup all sessions are still retrievable (#409).
+
+        TTL=0 means "never expire" — cleanup_expired must leave sessions intact.
+        Use delete_all() for unconditional removal.
+        """
+        backend = InMemoryStateBackend()
+
+        view = RustLiveView("<div>persist-check</div>")
+        backend.set("survive", view)
+
+        backend.cleanup_expired(ttl=0)
+
+        # The session must still be present — TTL=0 is a no-op
+        assert backend.get("survive") is not None
+
     def test_stats(self):
         """Test statistics tracking."""
         backend = InMemoryStateBackend()

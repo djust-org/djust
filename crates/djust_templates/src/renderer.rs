@@ -532,6 +532,53 @@ fn render_node_with_loader<L: TemplateLoader>(
             Ok(format!("<!-- djust: unsupported tag '{tag_sig}' -->"))
         }
 
+        Node::BlockCustomTag {
+            name,
+            args,
+            children,
+        } => {
+            // Render children first to get block content
+            let content = render_nodes_with_loader(children, context, loader)?;
+
+            // Resolve variable references in args (same as CustomTag below)
+            let resolved_args: Vec<String> = args
+                .iter()
+                .map(|arg| {
+                    let arg_trimmed = arg.trim();
+                    if (arg_trimmed.starts_with('"') && arg_trimmed.ends_with('"'))
+                        || (arg_trimmed.starts_with('\'') && arg_trimmed.ends_with('\''))
+                    {
+                        arg.clone()
+                    } else if let Some(eq_pos) = arg.find('=') {
+                        let key = &arg[..eq_pos];
+                        let value = arg[eq_pos + 1..].trim();
+                        if (value.starts_with('"') && value.ends_with('"'))
+                            || (value.starts_with('\'') && value.ends_with('\''))
+                        {
+                            arg.clone()
+                        } else {
+                            match context.get(value) {
+                                Some(resolved) => format!("{}={}", key, resolved),
+                                None => arg.clone(),
+                            }
+                        }
+                    } else {
+                        match context.get(arg_trimmed) {
+                            Some(resolved) => resolved.to_string(),
+                            None => arg.clone(),
+                        }
+                    }
+                })
+                .collect();
+
+            let context_map = context.to_hashmap();
+
+            crate::registry::call_block_handler(name, &resolved_args, &content, &context_map)
+                .map_err(|e| {
+                    DjangoRustError::TemplateError(format!("Block tag '{}' error: {}", name, e))
+                })
+        }
+
         Node::CustomTag { name, args } => {
             // Call Python handler for custom tags (e.g., {% url %}, {% static %})
             //

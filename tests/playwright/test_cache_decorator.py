@@ -2,6 +2,7 @@
 """
 Test @cache decorator functionality using Playwright
 """
+
 import asyncio
 import sys
 from playwright.async_api import async_playwright
@@ -32,15 +33,22 @@ async def test_cache():
 
         # Extract results from console logs
         cache_hits = len([log for log in console_logs if "Cache hit" in log])
-        cache_misses = len([log for log in console_logs if "Cache miss" in log or "calling server" in log])
+        cache_misses = len(
+            [log for log in console_logs if "Cache miss" in log or "calling server" in log]
+        )
 
-        print(f"\n📊 Cache Test Results:")
+        print("\n📊 Cache Test Results:")
         print(f"  Cache hits:   {cache_hits}")
         print(f"  Cache misses: {cache_misses}")
 
         # Print relevant cache logs
-        print(f"\n🔍 Cache Debug Logs:")
-        cache_logs = [log for log in console_logs if "cache" in log.lower() and ("hit" in log.lower() or "miss" in log.lower() or "cached" in log.lower())]
+        print("\n🔍 Cache Debug Logs:")
+        cache_logs = [
+            log
+            for log in console_logs
+            if "cache" in log.lower()
+            and ("hit" in log.lower() or "miss" in log.lower() or "cached" in log.lower())
+        ]
         for log in cache_logs:
             print(f"  {log}")
 
@@ -50,7 +58,9 @@ async def test_cache():
 
         success = cache_hits >= expected_hits and cache_misses >= expected_misses
 
-        print(f"\n{'✅ PASS' if success else '❌ FAIL'}: Expected {expected_hits} cache hits and {expected_misses} misses")
+        print(
+            f"\n{'✅ PASS' if success else '❌ FAIL'}: Expected {expected_hits} cache hits and {expected_misses} misses"
+        )
         print(f"           Got {cache_hits} cache hits and {cache_misses} misses")
 
         if not success:
@@ -69,5 +79,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n❌ Test error: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

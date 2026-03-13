@@ -505,9 +505,9 @@ def _get_string_to_int_hint(param: str, value: Any, coercion_attempted: bool) ->
 
     hint += "    Quick fixes:\n"
     hint += "      1. Use typed template attribute:\n"
-    hint += f"         data-{param.replace('_', '-')}:int=\"{{{{ value }}}}\"\n"
+    hint += f'         data-{param.replace("_", "-")}:int="{{{{ value }}}}"\n'
     hint += "      2. Ensure the value is numeric in your template:\n"
-    hint += f"         data-{param.replace('_', '-')}=\"{{{{ item.id|default:0 }}}}\""
+    hint += f'         data-{param.replace("_", "-")}="{{{{ item.id|default:0 }}}}"'
 
     return hint
 
@@ -522,9 +522,9 @@ def _get_string_to_float_hint(param: str, value: Any, coercion_attempted: bool) 
 
     hint += "    Quick fixes:\n"
     hint += "      1. Use typed template attribute:\n"
-    hint += f"         data-{param.replace('_', '-')}:float=\"{{{{ value }}}}\"\n"
+    hint += f'         data-{param.replace("_", "-")}:float="{{{{ value }}}}"\n'
     hint += "      2. Ensure the value is numeric in your template:\n"
-    hint += f"         data-{param.replace('_', '-')}=\"{{{{ item.price|default:0.0 }}}}\""
+    hint += f'         data-{param.replace("_", "-")}="{{{{ item.price|default:0.0 }}}}"'
 
     return hint
 
@@ -552,11 +552,11 @@ def _get_string_to_list_hint(param: str, value: Any, coercion_attempted: bool) -
 
     hint += "    Quick fixes:\n"
     hint += "      1. Use JSON typed attribute:\n"
-    hint += f"         data-{param.replace('_', '-')}:json=\"{{{{ values|safe }}}}\"\n"
+    hint += f'         data-{param.replace("_", "-")}:json="{{{{ values|safe }}}}"\n'
     hint += "      2. Use comma-separated list:\n"
-    hint += f"         data-{param.replace('_', '-')}:list=\"a,b,c\"\n"
+    hint += f'         data-{param.replace("_", "-")}:list="a,b,c"\n'
     hint += "      3. Pass as JSON string:\n"
-    hint += f"         data-{param.replace('_', '-')}='[\"a\", \"b\", \"c\"]'"
+    hint += f'         data-{param.replace("_", "-")}=\'["a", "b", "c"]\''
 
     return hint
 
@@ -570,7 +570,7 @@ def _get_string_to_decimal_hint(param: str, value: Any, coercion_attempted: bool
 
     hint += "    Quick fixes:\n"
     hint += "      1. Ensure the value is a valid decimal:\n"
-    hint += f"         data-{param.replace('_', '-')}=\"{{{{ item.price }}}}\"\n"
+    hint += f'         data-{param.replace("_", "-")}="{{{{ item.price }}}}"\n'
     hint += "      2. Use a default value:\n"
     hint += f"         data-{param.replace('_', '-')}=\"{{{{ item.price|default:'0.00' }}}}\""
 

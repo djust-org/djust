@@ -2,9 +2,7 @@
 Integration tests for Django ORM Query Optimizer with real database queries
 """
 
-import pytest
 from django.test import TestCase
-from django.test.utils import override_settings
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
@@ -24,12 +22,12 @@ sys.path.insert(0, demo_project_path)
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "demo_project.settings")
 
-import django
+import django  # noqa: E402
 
 django.setup()
 
-from django.contrib.auth.models import User
-from djust_rentals.models import Lease, Property, Tenant
+from django.contrib.auth.models import User  # noqa: E402
+from djust_rentals.models import Lease, Property, Tenant  # noqa: E402
 
 
 class QueryOptimizationIntegrationTestCase(TestCase):
@@ -54,10 +52,16 @@ class QueryOptimizationIntegrationTestCase(TestCase):
 
         # Create tenants
         tenant1 = Tenant.objects.create(
-            user=user1, phone="555-1234", emergency_contact_name="Contact 1", emergency_contact_phone="555-0001"
+            user=user1,
+            phone="555-1234",
+            emergency_contact_name="Contact 1",
+            emergency_contact_phone="555-0001",
         )
         tenant2 = Tenant.objects.create(
-            user=user2, phone="555-5678", emergency_contact_name="Contact 2", emergency_contact_phone="555-0002"
+            user=user2,
+            phone="555-5678",
+            emergency_contact_name="Contact 2",
+            emergency_contact_phone="555-0002",
         )
 
         # Create properties
@@ -128,9 +132,7 @@ class QueryOptimizationIntegrationTestCase(TestCase):
     def test_optimization_eliminates_n_plus_1(self):
         """Verify optimization eliminates N+1 queries."""
         # Analyze and optimize
-        optimization = analyze_queryset_optimization(
-            Lease, ["property.name", "tenant.user.email"]
-        )
+        optimization = analyze_queryset_optimization(Lease, ["property.name", "tenant.user.email"])
 
         with CaptureQueriesContext(connection) as ctx:
             leases = Lease.objects.all()
@@ -179,7 +181,9 @@ class QueryOptimizationIntegrationTestCase(TestCase):
         queries_with = len(ctx_opt.captured_queries)
 
         # Should reduce queries significantly
-        assert queries_with < queries_without, f"Expected fewer queries with optimization: {queries_with} vs {queries_without}"
+        assert (
+            queries_with < queries_without
+        ), f"Expected fewer queries with optimization: {queries_with} vs {queries_without}"
         # Should ideally be 1 query
         assert queries_with <= 2, f"Expected <= 2 queries with optimization, got {queries_with}"
 
@@ -248,9 +252,7 @@ class QueryOptimizationIntegrationTestCase(TestCase):
 
     def test_optimization_with_filter(self):
         """Test that optimization works with filtered QuerySets."""
-        optimization = analyze_queryset_optimization(
-            Lease, ["property.name", "tenant.user.email"]
-        )
+        optimization = analyze_queryset_optimization(Lease, ["property.name", "tenant.user.email"])
 
         with CaptureQueriesContext(connection) as ctx:
             leases = Lease.objects.filter(status="active")
@@ -270,9 +272,7 @@ class QueryOptimizationIntegrationTestCase(TestCase):
 
     def test_optimization_with_ordering(self):
         """Test that optimization works with ordered QuerySets."""
-        optimization = analyze_queryset_optimization(
-            Lease, ["property.name", "tenant.user.email"]
-        )
+        optimization = analyze_queryset_optimization(Lease, ["property.name", "tenant.user.email"])
 
         with CaptureQueriesContext(connection) as ctx:
             leases = Lease.objects.all().order_by("-start_date")
@@ -302,9 +302,7 @@ class QueryOptimizationIntegrationTestCase(TestCase):
         ]
 
         # Get results with optimization
-        optimization = analyze_queryset_optimization(
-            Lease, ["property.name", "tenant.user.email"]
-        )
+        optimization = analyze_queryset_optimization(Lease, ["property.name", "tenant.user.email"])
         leases_opt = Lease.objects.all()
         leases_opt = optimize_queryset(leases_opt, optimization)
         leases_opt = list(leases_opt)
@@ -338,14 +336,17 @@ class PerformanceTestCase(TestCase):
                 last_name=f"Last{i}",
             )
             tenant = Tenant.objects.create(
-                user=user, phone=f"555-{i:04d}", emergency_contact_name=f"Contact {i}", emergency_contact_phone=f"555-{i+1000:04d}"
+                user=user,
+                phone=f"555-{i:04d}",
+                emergency_contact_name=f"Contact {i}",
+                emergency_contact_phone=f"555-{i + 1000:04d}",
             )
             prop = Property.objects.create(
                 name=f"Property {i}",
                 address=f"{i} Main St",
                 city=f"City {i}",
                 state="CA",
-                zip_code=f"{12345+i}",
+                zip_code=f"{12345 + i}",
                 property_type="apartment",
                 bedrooms=2,
                 bathrooms=1.0,
@@ -375,9 +376,7 @@ class PerformanceTestCase(TestCase):
         queries_without = len(ctx_unopt.captured_queries)
 
         # With optimization
-        optimization = analyze_queryset_optimization(
-            Lease, ["property.name", "tenant.user.email"]
-        )
+        optimization = analyze_queryset_optimization(Lease, ["property.name", "tenant.user.email"])
 
         with CaptureQueriesContext(connection) as ctx_opt:
             leases = Lease.objects.all()
@@ -391,9 +390,13 @@ class PerformanceTestCase(TestCase):
 
         # Should reduce from ~41 queries to 1 query
         # (1 for leases + 20 for properties + 20 for tenants -> 1 query with JOINs)
-        assert queries_without >= 40, f"Expected >= 40 queries without optimization, got {queries_without}"
+        assert (
+            queries_without >= 40
+        ), f"Expected >= 40 queries without optimization, got {queries_without}"
         assert queries_with == 1, f"Expected 1 query with optimization, got {queries_with}"
 
         # Calculate improvement
         improvement = (queries_without - queries_with) / queries_without * 100
-        print(f"\nQuery reduction: {queries_without} -> {queries_with} ({improvement:.1f}% improvement)")
+        print(
+            f"\nQuery reduction: {queries_without} -> {queries_with} ({improvement:.1f}% improvement)"
+        )

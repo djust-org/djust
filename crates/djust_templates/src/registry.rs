@@ -36,6 +36,19 @@ use std::sync::Mutex;
 static TAG_HANDLERS: Lazy<Mutex<HashMap<String, Py<PyAny>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// Block handler entry: (end_tag_name, Python handler object).
+type BlockHandlerEntry = (String, Py<PyAny>);
+
+/// Global registry for block tag handlers (tags with children).
+///
+/// Maps opening tag name -> (end_tag_name, handler).
+/// Handlers must implement a `render(args, content, context)` method:
+/// - `args`: list of strings from the opening tag
+/// - `content`: pre-rendered HTML string of the block body
+/// - `context`: dict of template context variables
+static BLOCK_TAG_HANDLERS: Lazy<Mutex<HashMap<String, BlockHandlerEntry>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 /// Register a Python tag handler for a custom template tag.
 ///
 /// The handler must be a Python object with a `render(self, args, context)` method:
@@ -122,8 +135,156 @@ pub fn clear_tag_handlers() -> PyResult<()> {
 }
 
 // ============================================================================
+// Block Tag Handler API (Python-callable)
+// ============================================================================
+
+/// Register a block tag handler for a custom template block tag.
+///
+/// Block tags wrap content like `{% modal %}...{% endmodal %}`.
+/// The handler receives the pre-rendered HTML of the block body as `content`.
+///
+/// The handler must be a Python object with a `render(self, args, content, context)` method:
+/// - `args`: List of string arguments from the opening tag
+/// - `content`: Pre-rendered HTML string of the block body
+/// - `context`: Dictionary of template context variables
+/// - Returns: String to insert in the rendered output
+///
+/// # Arguments
+///
+/// * `name` - Opening tag name (e.g., "modal", "card")
+/// * `end_tag` - Closing tag name (e.g., "endmodal", "endcard")
+/// * `handler` - Python handler object with `render` method
+#[pyfunction]
+pub fn register_block_tag_handler(
+    py: Python<'_>,
+    name: String,
+    end_tag: String,
+    handler: Py<PyAny>,
+) -> PyResult<()> {
+    let handler_ref = handler.bind(py);
+    if !handler_ref.hasattr("render")? {
+        return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "Block tag handler must have a 'render' method",
+        ));
+    }
+
+    let mut registry = BLOCK_TAG_HANDLERS.lock().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+
+    registry.insert(name, (end_tag, handler));
+    Ok(())
+}
+
+/// Unregister a block tag handler.
+#[pyfunction]
+pub fn unregister_block_tag_handler(name: &str) -> PyResult<bool> {
+    let mut registry = BLOCK_TAG_HANDLERS.lock().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+
+    Ok(registry.remove(name).is_some())
+}
+
+/// Check if a block tag handler is registered.
+#[pyfunction]
+pub fn has_block_tag_handler(name: &str) -> PyResult<bool> {
+    let registry = BLOCK_TAG_HANDLERS.lock().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+
+    Ok(registry.contains_key(name))
+}
+
+/// Clear all block tag handlers (primarily for testing).
+#[pyfunction]
+pub fn clear_block_tag_handlers() -> PyResult<()> {
+    let mut registry = BLOCK_TAG_HANDLERS.lock().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+
+    registry.clear();
+    Ok(())
+}
+
+// ============================================================================
 // Internal Rust API (for use by parser and renderer)
 // ============================================================================
+
+/// Check if a block tag handler exists and return the end tag name (internal Rust API).
+///
+/// Returns `Some(end_tag_name)` if a block handler is registered, `None` otherwise.
+pub fn block_handler_exists(name: &str) -> Option<String> {
+    BLOCK_TAG_HANDLERS
+        .lock()
+        .map(|registry| registry.get(name).map(|(end_tag, _)| end_tag.clone()))
+        .unwrap_or(None)
+}
+
+/// Call a registered Python block handler with args, content, and context.
+///
+/// The handler's `render(args, content, context)` method is called and the
+/// returned string is inserted into the rendered output.
+pub fn call_block_handler(
+    name: &str,
+    args: &[String],
+    content: &str,
+    context: &HashMap<String, djust_core::Value>,
+) -> Result<String, String> {
+    let handler = {
+        let registry = BLOCK_TAG_HANDLERS
+            .lock()
+            .map_err(|e| format!("Registry lock error: {e}"))?;
+
+        let (_, handler_ref) = registry
+            .get(name)
+            .ok_or_else(|| format!("No block handler registered for tag: {name}"))?;
+
+        Python::with_gil(|py| handler_ref.clone_ref(py))
+    };
+
+    Python::with_gil(|py| {
+        use pyo3::IntoPyObject;
+
+        let py_args = pyo3::types::PyList::new(py, args)
+            .map_err(|e| format!("Failed to create args list: {e}"))?;
+
+        let py_content = content
+            .into_pyobject(py)
+            .map_err(|e| format!("Failed to convert content: {e}"))?;
+
+        let py_context = pyo3::types::PyDict::new(py);
+        for (key, value) in context {
+            let py_value = value
+                .clone()
+                .into_pyobject(py)
+                .map_err(|e| format!("Failed to convert value for key '{key}': {e}"))?;
+            py_context
+                .set_item(key, py_value)
+                .map_err(|e| format!("Failed to set context key '{key}': {e}"))?;
+        }
+
+        let handler_ref = handler.bind(py);
+        let result = handler_ref
+            .call_method1("render", (py_args, py_content, py_context))
+            .map_err(|e| {
+                let traceback = e
+                    .traceback(py)
+                    .map(|tb| tb.format().unwrap_or_default())
+                    .unwrap_or_default();
+                format!(
+                    "Block handler '{}' raised exception: {}\n{}",
+                    name,
+                    e.value(py),
+                    traceback
+                )
+            })?;
+
+        result
+            .extract::<String>()
+            .map_err(|_| format!("Block handler '{name}' render() must return a string"))
+    })
+}
 
 /// Check if a handler exists for the given tag name (internal Rust API).
 ///

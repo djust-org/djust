@@ -227,7 +227,7 @@ class ForeignKeySelect(LiveComponent):
             html += '<div class="position-relative">'
             html += f'<input type="text" class="form-control mb-1" placeholder="Search..." value="{self.search_query}" dj-input="search(value)">'
 
-        html += f'<select {" ".join(attrs)}>'
+        html += f"<select {' '.join(attrs)}>"
 
         # Empty option
         if self.empty_label and not self.required:
@@ -311,7 +311,7 @@ class ForeignKeySelect(LiveComponent):
             html += '<div class="relative">'
             html += f'<input type="text" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm mb-1" placeholder="Search..." value="{self.search_query}" dj-input="search(value)">'
 
-        html += f'<select {" ".join(attrs)}>'
+        html += f"<select {' '.join(attrs)}>"
 
         # Empty option
         if self.empty_label and not self.required:

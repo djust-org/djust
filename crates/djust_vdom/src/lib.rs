@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 pub mod diff;
+pub mod lis;
 pub mod parser;
 pub mod patch;
 

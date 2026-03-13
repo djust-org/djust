@@ -27,9 +27,9 @@ DTS_PATH = os.path.join(
 def dts_content():
     """Read and return the .d.ts file content."""
     abs_path = os.path.abspath(DTS_PATH)
-    assert os.path.exists(abs_path), (
-        f"djust.d.ts not found at {abs_path}. " "Run the implementation step to create it."
-    )
+    assert os.path.exists(
+        abs_path
+    ), f"djust.d.ts not found at {abs_path}. Run the implementation step to create it."
     with open(abs_path) as f:
         return f.read()
 

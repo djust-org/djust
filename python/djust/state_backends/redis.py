@@ -229,8 +229,7 @@ class RedisStateBackend(StateBackend):
         - Timestamp embedded in serialized data
         """
         redis_key = self._make_key(key)
-        if ttl is None:
-            ttl = self._default_ttl
+        ttl = self._default_ttl if ttl is None else ttl
 
         with profiler.profile(profiler.OP_STATE_SAVE):
             try:
@@ -243,8 +242,12 @@ class RedisStateBackend(StateBackend):
                 with profiler.profile(profiler.OP_COMPRESSION):
                     data = self._compress(serialized)
 
-                # Store with TTL
-                self._client.setex(redis_key, ttl, data)
+                # TTL=0 means "never expire"; use SET without expiry instead of
+                # SETEX (which requires TTL >= 1 and would raise a Redis error).
+                if ttl > 0:
+                    self._client.setex(redis_key, ttl, data)
+                else:
+                    self._client.set(redis_key, data)
 
             except Exception as e:
                 logger.error("Failed to serialize to Redis key '%s': %s", key, e)
@@ -260,14 +263,37 @@ class RedisStateBackend(StateBackend):
 
     def cleanup_expired(self, ttl: Optional[int] = None) -> int:
         """
-        Redis handles TTL expiration automatically.
+        Clean up sessions from Redis.
 
-        This method returns 0 as no manual cleanup is needed.
-        Redis will automatically remove expired keys based on their TTL.
+        Redis handles TTL-based expiration automatically, so this is a no-op.
+        Use ``delete_all()`` to forcibly remove all sessions.
+
+        Returns:
+            0 (Redis manages its own expiry clock).
         """
-        # Redis handles expiration automatically via TTL
-        # No manual cleanup needed
         return 0
+
+    def delete_all(self) -> int:
+        """Delete every session unconditionally (used by ``djust clear --all``).
+
+        Returns the number of sessions actually deleted, or 0 if a Redis error
+        occurred (in which case the pipeline was never executed).
+        """
+        pattern = f"{self._key_prefix}*"
+        try:
+            pipeline = self._client.pipeline()
+            queued = 0
+            for key in self._client.scan_iter(match=pattern, count=100):
+                pipeline.delete(key)
+                queued += 1
+            if queued:
+                pipeline.execute()
+            if queued:
+                logger.info("Deleted all %s sessions from Redis", queued)
+            return queued
+        except Exception:
+            logger.exception("Error during Redis delete_all()")
+            return 0
 
     def get_stats(self) -> Dict[str, Any]:
         """Get Redis backend statistics."""

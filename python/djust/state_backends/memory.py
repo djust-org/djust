@@ -173,6 +173,13 @@ class InMemoryStateBackend(StateBackend):
         if ttl is None:
             ttl = self._default_ttl
 
+        # TTL=0 means "never expire" — skip cleanup entirely.
+        # Without this guard, cutoff equals time.time() and every session
+        # (whose timestamp is always in the past) gets deleted immediately,
+        # which breaks all event handling because there is no state to patch.
+        if ttl <= 0:
+            return 0
+
         cutoff = time.time() - ttl
 
         with self._lock:
@@ -188,6 +195,16 @@ class InMemoryStateBackend(StateBackend):
             logger.info("Cleaned up %s expired sessions from memory", len(expired_keys))
 
         return len(expired_keys)
+
+    def delete_all(self) -> int:
+        """Delete every session unconditionally (used by ``djust clear --all``)."""
+        with self._lock:
+            count = len(self._cache)
+            self._cache.clear()
+            self._state_sizes.clear()
+        if count:
+            logger.info("Deleted all %s sessions from memory", count)
+        return count
 
     def get_stats(self) -> Dict[str, Any]:
         """Get in-memory cache statistics (thread-safe)."""

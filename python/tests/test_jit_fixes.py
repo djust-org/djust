@@ -84,6 +84,16 @@ class TestCodegenAllWithSubtree:
 
 
 class TestDeepDictSerialization:
+    def setup_method(self):
+        # DjangoJSONEncoder._depth is a class-level counter.  Reset it before
+        # each test so that a crash in a previous test (which would leave it
+        # non-zero despite the try/finally in default()) cannot affect later
+        # assertions about serialized output.
+        DjangoJSONEncoder._depth = 0
+
+    def teardown_method(self):
+        DjangoJSONEncoder._depth = 0
+
     def _make_model(self, **kwargs):
         """Create a mock Django Model instance."""
         obj = MagicMock()
@@ -105,20 +115,75 @@ class TestDeepDictSerialization:
         model = self._make_model(title="Test")
         serialized = json.loads(json.dumps({"item": model}, cls=DjangoJSONEncoder))
         assert isinstance(serialized["item"], dict)
-        assert serialized["item"]["id"] == "1"
+        assert serialized["item"]["id"] == 1, "id must be native int after PR #472"
 
     def test_serialize_model_includes_pk_key(self):
-        """Model serialization includes 'pk' key alongside 'id' (#262).
+        """Model serialization includes 'pk' key alongside 'id' (#262, #472).
 
-        'id' is the legacy string representation (for backwards compat).
-        'pk' is the native type (for template rendering: {{ model.pk }}).
+        Both 'id' and 'pk' are now the native type (PR #472 fix).
+        'id' now matches 'pk' — no longer a string for backwards compat.
         """
         model = self._make_model(title="Test")
         encoder = DjangoJSONEncoder()
         result = encoder._serialize_model_safely(model)
         assert "pk" in result, "Serialized model must include 'pk' key"
         assert result["pk"] == 1, "'pk' must be the native primary key value"
-        assert result["id"] == "1", "'id' must be the string representation"
+        assert result["id"] == 1, "'id' must now be native type, matching pk (PR #472)"
+        assert result["id"] == result["pk"], ".id and .pk must be identical"
+
+    def test_serialize_model_id_is_native_type(self):
+        """Primary .id serialization path returns native type (#472).
+
+        The 'id' key must be the native pk type (not a string) so that
+        template code using {% if model.id == var %} works with integer comparisons.
+        PR #472 fixed this — model.id now returns native type, matching model.pk.
+        """
+        # Integer pk (most common case)
+        model_int = self._make_model(title="Int PK")
+        model_int.pk = 42
+        encoder = DjangoJSONEncoder()
+        result = encoder._serialize_model_safely(model_int)
+        assert result["id"] == 42, "id must be native int, not string"
+        assert isinstance(result["id"], int), "id must always be native type"
+
+    def test_serialize_model_uuid_pk(self):
+        """Model with UUID primary key serializes id as native UUID (#472)."""
+        import uuid
+
+        model = self._make_model(title="UUID PK")
+        model.pk = uuid.UUID("12345678-1234-5678-1234-567812345678")
+        encoder = DjangoJSONEncoder()
+        result = encoder._serialize_model_safely(model)
+        assert isinstance(result["id"], uuid.UUID), "id must be native UUID"
+        assert result["id"] == uuid.UUID("12345678-1234-5678-1234-567812345678")
+        # pk should also be the native UUID object
+        assert isinstance(result["pk"], uuid.UUID)
+        assert result["id"] == result["pk"]
+
+    def test_serialize_model_uuid_pk_via_json_dumps(self):
+        """UUID pk model serialized through json.dumps produces a string id in JSON output.
+
+        _serialize_model_safely() returns id as a native UUID object.  When
+        that dict is re-encoded by json.dumps, DjangoJSONEncoder.default()
+        converts the UUID to a string.  This test exercises the full pipeline
+        so both the direct and json.dumps code paths are covered.
+        """
+        import uuid
+
+        model = self._make_model(title="UUID PK via dumps")
+        model.pk = uuid.UUID("12345678-1234-5678-1234-567812345678")
+        serialized = json.loads(json.dumps(model, cls=DjangoJSONEncoder))
+        assert serialized["id"] == "12345678-1234-5678-1234-567812345678"
+        assert serialized["pk"] == "12345678-1234-5678-1234-567812345678"
+
+    def test_serialize_model_none_pk(self):
+        """Model with pk=None (unsaved) serializes id as None, not 'None' (#408)."""
+        model = self._make_model(title="Unsaved")
+        model.pk = None
+        encoder = DjangoJSONEncoder()
+        result = encoder._serialize_model_safely(model)
+        assert result["id"] is None, "id must be None for unsaved models, not the string 'None'"
+        assert result["pk"] is None
 
     def test_deep_serialize_dict_nested(self):
         """Dict-in-dict containing Model is recursively serialized."""
@@ -224,6 +289,10 @@ class TestPropertyCache:
         obj.pk = 1
         obj.__dict__["id"] = 1
 
+        # Reset class-level counter before the test.  This is safe because
+        # _call_count is only written by _CountingModel.expensive_prop and read
+        # here; no other test touches this class attribute, so resetting it
+        # directly avoids the need for a pytest fixture.
         _CountingModel._call_count = 0
 
         result1 = {}
@@ -267,7 +336,7 @@ class TestModelBeforeDuckTyping:
         result = json.loads(json.dumps(obj, cls=DjangoJSONEncoder))
         # Should be a dict (model serialization), not a string URL
         assert isinstance(result, dict)
-        assert result["id"] == "42"
+        assert result["id"] == 42, "id must be native int after PR #472"
 
 
 # --- Fix 5: Rust→Python fallback ---

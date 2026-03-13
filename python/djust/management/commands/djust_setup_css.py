@@ -227,8 +227,7 @@ module.exports = {{
         """Set up Bootstrap + Sass compilation."""
         self.stdout.write(
             self.style.WARNING(
-                "Bootstrap setup not yet implemented. "
-                "Manually install: npm install bootstrap sass"
+                "Bootstrap setup not yet implemented. Manually install: npm install bootstrap sass"
             )
         )
 

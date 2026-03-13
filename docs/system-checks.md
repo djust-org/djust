@@ -24,9 +24,9 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V003 | LiveView | Error | mount() has wrong signature |
 | V004 | LiveView | Info | Public method looks like event handler but missing @event_handler |
 | V005 | LiveView | Warning | Module not in LIVEVIEW_ALLOWED_MODULES |
-| V006 | LiveView | Warning | Service instance assigned in mount() (AST) |
+| V006 | LiveView | Warning | Service instance assigned in mount() — high-confidence subset of V008 |
 | V007 | LiveView | Warning | Event handler missing **kwargs |
-| V008 | LiveView | Info | Non-primitive type assigned in mount() (AST) |
+| V008 | LiveView | Info | Non-primitive type assigned in mount() — broader, lower-confidence (skips V006 patterns) |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -181,7 +181,8 @@ console.log("debug info"); // noqa: Q003
 ### V006 — Service instance assigned in mount() (AST)
 - **Severity**: Warning
 - **Method**: AST (inspects assignments in `mount()`)
-- **What it detects**: `self.X = SomeService()` pattern — service objects are not JSON-serialisable and cannot survive WebSocket reconnects
+- **What it detects**: `self.X = SomeService()` pattern — service objects are not JSON-serialisable and cannot survive WebSocket reconnects. Matches class names containing "Service", "Client", "Session", "API", or "Connection" (case-insensitive)
+- **Relationship to V008**: V006 is the high-confidence subset of V008. Both detect non-serialisable state in `mount()`, but V006 fires at **Warning** level for well-known service patterns while V008 fires at **Info** level for everything else. They are deliberately non-overlapping — V008 skips any assignment already caught by V006
 - **Suppression**: `# noqa: V006` inline on the assignment
 - **False positives**: Objects whose class name contains "Service", "Client", "Session", "API", or "Connection" but are actually lightweight and serialisable
 
@@ -194,10 +195,11 @@ console.log("debug info"); // noqa: Q003
 
 ### V008 — Non-primitive type assigned in mount() (AST)
 - **Severity**: Info
-- **Method**: AST (inspects the RHS expression of assignments in `mount()` — reads the call expression, **not** the return type annotation)
-- **What it detects**: `self.X = some_function()` where the assigned value appears to be non-primitive (not a literal int/str/bool/None/list/dict)
+- **Method**: AST (inspects the RHS expression of assignments in `mount()`)
+- **What it detects**: `self.X = some_function()` where the assigned value appears to be non-primitive (not a literal int/str/bool/None/list/dict) and is not already caught by V006
+- **Relationship to V006**: V008 is the broader, lower-confidence counterpart to V006. V006 covers high-confidence service patterns at **Warning** level; V008 catches all remaining non-primitive assignments at **Info** level. V008 explicitly skips assignments matching V006's keyword patterns to avoid duplicate messages
 - **Suppression**: `# noqa: V008` inline on the assignment
-- **False positives**: `self.x = get_some_string()` triggers V008 even when the function returns a `str` — the AST check reads the function name, not its `-> str` return type annotation. Use `# noqa: V008` on such assignments.
+- **False positives**: Functions with primitive return-type annotations (e.g. `-> str`, `-> int`) are excluded since PR #398. Other functions returning serialisable types (e.g. dataclasses) may still trigger V008 — suppress with `# noqa: V008`
 
 ---
 

@@ -43,7 +43,7 @@ class Command(BaseCommand):
         except ImportError:
             self.stderr.write(
                 self.style.ERROR(
-                    "Error: mcp package not installed. " "Install with: pip install 'mcp[cli]'"
+                    "Error: mcp package not installed. Install with: pip install 'mcp[cli]'"
                 )
             )
             sys.exit(1)

@@ -320,7 +320,7 @@ class PerformanceTracker:
                     if memory_stats.get("delta_mb", 0) > 10:
                         node.add_warning(
                             "memory_usage",
-                            f'High memory usage: {memory_stats["delta_mb"]}MB increase',
+                            f"High memory usage: {memory_stats['delta_mb']}MB increase",
                             memory_stats=memory_stats,
                         )
 

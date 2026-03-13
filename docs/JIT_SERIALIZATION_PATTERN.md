@@ -406,8 +406,10 @@ When a Django model is passed to a template, djust automatically serializes:
 All concrete fields on the model are serialized:
 - CharField, TextField, IntegerField, etc. → their values
 - DateTimeField, DateField, TimeField → ISO 8601 strings (see [Datetime Gotcha](#datetime-fields-become-iso-strings))
-- ForeignKey → `{id: ..., __str__: ...}` (if not prefetched)
+- ForeignKey → `{id: ..., pk: ..., __str__: ...}` (if not prefetched)
 - ForeignKey (prefetched) → full nested serialization
+
+**Note on `.id` and `.pk`:** Both `model.id` and `model.pk` serialize to native types (int/UUID) and can be used interchangeably in templates. In `{% if %}` comparisons, both match native integer view state: `{% if item.id == edit_id %}` and `{% if item.pk == edit_id %}` are equivalent.
 
 #### 2. `@property` Attributes
 Python `@property` attributes on models are automatically serialized. The Rust serializer can't access these directly, so JIT falls back to Python codegen when it detects missing keys:

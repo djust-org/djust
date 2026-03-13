@@ -335,14 +335,13 @@ class LiveViewTestClient:
         for name, expected_value in expected.items():
             if name not in actual_state:
                 raise AssertionError(
-                    f"State variable '{name}' not found. " f"Available: {list(actual_state.keys())}"
+                    f"State variable '{name}' not found. Available: {list(actual_state.keys())}"
                 )
 
             actual_value = actual_state[name]
             if actual_value != expected_value:
                 raise AssertionError(
-                    f"State variable '{name}': expected {expected_value!r}, "
-                    f"got {actual_value!r}"
+                    f"State variable '{name}': expected {expected_value!r}, got {actual_value!r}"
                 )
 
     def assert_state_contains(self, **expected: Any) -> None:
@@ -363,7 +362,7 @@ class LiveViewTestClient:
         for name, expected_value in expected.items():
             if name not in actual_state:
                 raise AssertionError(
-                    f"State variable '{name}' not found. " f"Available: {list(actual_state.keys())}"
+                    f"State variable '{name}' not found. Available: {list(actual_state.keys())}"
                 )
 
             actual_value = actual_state[name]
@@ -1052,7 +1051,7 @@ class LiveViewSmokeTest:
                         # escape the handler boundary.
                     except Exception as e:
                         crashes.append(
-                            f"{view_name}.{handler_name} [{desc}]: " f"{type(e).__name__}: {e}"
+                            f"{view_name}.{handler_name} [{desc}]: {type(e).__name__}: {e}"
                         )
 
         if crashes:

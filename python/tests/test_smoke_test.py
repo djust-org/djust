@@ -109,9 +109,7 @@ class TestCheckXssInHtml:
         assert len(found) >= 1
 
     def test_multiple_sentinels_detected(self):
-        html = (
-            '<script>alert("xss")</script>' "<img src=x onerror=alert(1)>" "<svg onload=alert(1)>"
-        )
+        html = '<script>alert("xss")</script><img src=x onerror=alert(1)><svg onload=alert(1)>'
         found = _check_xss_in_html(html)
         assert len(found) >= 3
 
