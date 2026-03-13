@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6rc3] - 2026-03-13
+
 ### Breaking Changes
 
 - **`model.id` now returns the native type, not a string** — `_serialize_model_safely()` previously wrapped `obj.pk` with `str()` when producing the `"id"` key, causing template comparisons like `{% if edit_id == todo.id %}` to fail silently when `edit_id` was an integer. `model.id` now matches `model.pk` and returns the native Python type (e.g. `int`, `UUID`). **Migration:** if your templates or event handlers compare `model.id` against string literals or string-typed variables, update them to use the native type. PR #262 fixed `.pk`; this PR (#472) completes the fix for `.id`.
@@ -57,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Debug panel search extended to Network and State tabs** — The search bar in the debug panel now filters across all data tabs. The Network tab shows a `N / total` count label when a query narrows the message list (#530). The State tab filters history entries by trigger, event name, and serialized state content, with the same `N / total` count label (#520). Overlapping `nameFilter` and `searchQuery` on the Events tab now correctly apply AND semantics (#532). ([#541](https://github.com/djust-org/djust/pull/541))
 
 ## [0.3.5] - 2026-03-05
+
 
 ### Added
 
