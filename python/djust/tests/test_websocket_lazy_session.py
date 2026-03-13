@@ -9,7 +9,7 @@ browser's existing session.
 The fix uses `getattr(scope_session, "session_key", None)` which forces
 resolution of the LazyObject before the attribute is accessed.
 
-See: https://github.com/djust-org/djust/issues/NNN
+See: https://github.com/djust-org/djust/issues/396
 """
 
 from unittest.mock import MagicMock

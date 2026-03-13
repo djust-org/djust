@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **`model.id` now returns the native type, not a string** — `_serialize_model_safely()` previously wrapped `obj.pk` with `str()` when producing the `"id"` key, causing template comparisons like `{% if edit_id == todo.id %}` to fail silently when `edit_id` was an integer. `model.id` now matches `model.pk` and returns the native Python type (e.g. `int`, `UUID`). **Migration:** if your templates or event handlers compare `model.id` against string literals or string-typed variables, update them to use the native type. PR #262 fixed `.pk`; this PR (#472) completes the fix for `.id`.
+
 ### Fixed
 
 - **`djust cache --all` now correctly clears all sessions on the Redis backend** — The CLI called `cleanup_expired(ttl=0)` to force-clear sessions, but the semantics of `ttl=0` changed in 0.3.5 to mean "never expire". The command now calls the explicit `delete_all()` method, which uses a Redis pipeline for an efficient single round-trip bulk delete. (#409)
