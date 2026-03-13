@@ -48,6 +48,8 @@ class RedisStateBackend(StateBackend):
         )
     """
 
+    _DELETE_BATCH_SIZE = 1000  # max keys per pipeline flush in delete_all()
+
     def __init__(
         self,
         redis_url: str,
@@ -279,7 +281,6 @@ class RedisStateBackend(StateBackend):
         Returns:
             Number of keys deleted, or 0 on error
         """
-        _BATCH = 1000  # flush pipeline every N keys to cap memory usage
         try:
             pattern = f"{self._key_prefix}*"
             total = 0
@@ -287,10 +288,10 @@ class RedisStateBackend(StateBackend):
             for key in self._client.scan_iter(match=pattern, count=100):
                 pipe.delete(key)
                 total += 1
-                if total % _BATCH == 0:
+                if total % self._DELETE_BATCH_SIZE == 0:
                     pipe.execute()
                     pipe = self._client.pipeline()
-            if total % _BATCH:  # flush any remaining
+            if total % self._DELETE_BATCH_SIZE:  # flush any remaining
                 pipe.execute()
             if total:
                 logger.info("Deleted %d sessions from Redis backend", total)

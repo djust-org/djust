@@ -6,6 +6,8 @@ Covers:
 2. Empty keyspace — no keys, returns 0 without calling pipeline.execute().
 3. Scan error — scan_iter raises mid-iteration, returns 0 (not a partial count).
 4. Execute error — pipeline.execute() raises, returns 0 (caught by exception handler).
+5. Batch boundary — exactly _DELETE_BATCH_SIZE keys flushes mid-loop only (1 execute).
+6. Batch overflow — _DELETE_BATCH_SIZE + 1 keys flushes twice (mid-loop + remainder).
 """
 
 from unittest.mock import MagicMock, patch
@@ -163,3 +165,30 @@ class TestRedisDeleteAllPipelineExecuteFailure:
             backend.delete_all()
             mock_logger.exception.assert_called_once()
             assert "delete_all" in mock_logger.exception.call_args[0][0]
+
+
+class TestRedisDeleteAllBatchBoundary:
+    """Verify pipeline is flushed in batches at _DELETE_BATCH_SIZE boundaries."""
+
+    def test_exactly_batch_size_flushes_once(self):
+        """Exactly _DELETE_BATCH_SIZE keys: one mid-loop flush, no remainder flush."""
+        n = RedisStateBackend._DELETE_BATCH_SIZE
+        keys = [f"djust:k{i}".encode() for i in range(n)]
+        backend, client, pipeline = _make_backend(keys=keys)
+
+        result = backend.delete_all()
+
+        assert result == n
+        # Mid-loop flush fires at key n; final `if total % n` is False → no second call.
+        assert pipeline.execute.call_count == 1
+
+    def test_batch_size_plus_one_flushes_twice(self):
+        """_DELETE_BATCH_SIZE + 1 keys: mid-loop flush + remainder flush = 2 executes."""
+        n = RedisStateBackend._DELETE_BATCH_SIZE
+        keys = [f"djust:k{i}".encode() for i in range(n + 1)]
+        backend, client, pipeline = _make_backend(keys=keys)
+
+        result = backend.delete_all()
+
+        assert result == n + 1
+        assert pipeline.execute.call_count == 2
