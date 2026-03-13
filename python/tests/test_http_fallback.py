@@ -267,8 +267,8 @@ class TestHTTPOnlySessionState:
         finally:
             lv_config.set("use_websocket", original)
 
-    def test_websocket_mode_does_not_save_state_on_get(self, settings):
-        """When use_websocket=True (default), GET does NOT save state to session."""
+    def test_websocket_mode_saves_state_on_get(self, settings):
+        """When use_websocket=True (default), GET saves state to session so WS mount can restore it."""
         view = CounterView()
         factory = RequestFactory()
         get_request = factory.get("/test/")
@@ -281,10 +281,11 @@ class TestHTTPOnlySessionState:
         try:
             view.get(get_request)
 
-            # State should NOT be in session (WebSocket mode manages state in-memory)
+            # State SHOULD be in session (WS mount restores it to skip redundant mount())
             view_key = "liveview_/test/"
             saved_state = get_request.session.get(view_key, {})
-            assert saved_state == {}
+            assert saved_state != {}, "State should be saved to session for WS mount restoration"
+            assert "count" in saved_state
         finally:
             lv_config.set("use_websocket", original)
 
