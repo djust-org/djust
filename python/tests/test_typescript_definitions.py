@@ -11,27 +11,22 @@ Run with:
     pytest python/tests/test_typescript_definitions.py -v
 """
 
-import os
 import re
+from pathlib import Path
 
 import pytest
 
 # Path to the shipped .d.ts file relative to the package
-DTS_PATH = os.path.join(
-    os.path.dirname(__file__),
-    "../../python/djust/static/djust/djust.d.ts",
-)
+DTS_PATH = (Path(__file__).resolve().parents[2] / "python" / "djust" / "static" / "djust" / "djust.d.ts")
 
 
 @pytest.fixture(scope="module")
 def dts_content():
     """Read and return the .d.ts file content."""
-    abs_path = os.path.abspath(DTS_PATH)
-    assert os.path.exists(
-        abs_path
-    ), f"djust.d.ts not found at {abs_path}. Run the implementation step to create it."
-    with open(abs_path) as f:
-        return f.read()
+    assert DTS_PATH.exists(), (
+        f"djust.d.ts not found at {DTS_PATH}. Run the implementation step to create it."
+    )
+    return DTS_PATH.read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -40,8 +35,7 @@ def dts_content():
 
 
 def test_dts_file_exists():
-    abs_path = os.path.abspath(DTS_PATH)
-    assert os.path.exists(abs_path), f"djust.d.ts missing at {abs_path}"
+    assert DTS_PATH.exists(), f"djust.d.ts missing at {DTS_PATH}"
 
 
 def test_dts_file_is_non_empty(dts_content):

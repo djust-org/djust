@@ -5,14 +5,13 @@ Tests for djust file upload support.
 import importlib.util
 import os
 import struct
+from pathlib import Path
 import tempfile
 import uuid
 from unittest import TestCase
 
 # Import uploads.py directly to avoid djust/__init__.py (which pulls in channels/Django)
-_uploads_path = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "djust", "uploads.py"
-)
+_uploads_path = Path(__file__).resolve().parent.parent / "djust" / "uploads.py"
 _spec = importlib.util.spec_from_file_location("djust_uploads", _uploads_path)
 uploads = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(uploads)

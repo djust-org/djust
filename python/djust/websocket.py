@@ -3,6 +3,7 @@ WebSocket consumer for LiveView real-time updates
 """
 
 import asyncio
+import copy
 import json
 import logging
 import msgpack
@@ -55,8 +56,6 @@ def _snapshot_assigns(view_instance):
     Immutable types (str, int, float, bool, None, bytes, tuple, frozenset)
     are stored directly — no deep copy needed since they cannot be mutated.
     """
-    import copy
-
     _static_skip = set(getattr(view_instance, "static_assigns", []))
     snapshot = {}
     for k, v in view_instance.__dict__.items():
