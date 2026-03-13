@@ -189,6 +189,16 @@ class InMemoryStateBackend(StateBackend):
 
         return len(expired_keys)
 
+    def delete_all(self) -> int:
+        """Delete every session unconditionally (used by ``djust clear --all``)."""
+        with self._lock:
+            count = len(self._cache)
+            self._cache.clear()
+            self._state_sizes.clear()
+        if count:
+            logger.info("Deleted all %s sessions from memory", count)
+        return count
+
     def get_stats(self) -> Dict[str, Any]:
         """Get in-memory cache statistics (thread-safe)."""
         with self._lock:

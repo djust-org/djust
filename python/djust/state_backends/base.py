@@ -96,6 +96,19 @@ class StateBackend(ABC):
         pass
 
     @abstractmethod
+    def delete_all(self) -> int:
+        """
+        Delete every session unconditionally.
+
+        Used by ``djust clear --all``.  Implementations must provide an
+        efficient bulk-delete operation for their storage backend.
+
+        Returns:
+            Number of sessions deleted
+        """
+        pass
+
+    @abstractmethod
     def get_stats(self) -> Dict[str, Any]:
         """
         Get backend statistics.

@@ -8,8 +8,11 @@ import pytest
 from django.test import RequestFactory
 from django.contrib.sessions.middleware import SessionMiddleware
 
-# Add demo_project to Python path for Django settings
-demo_project_path = Path(__file__).parent.parent / "examples" / "demo_project"
+# Add demo_project to Python path for Django settings.
+# Use .resolve() so symlinks (e.g. Dropbox-backed worktrees) are resolved to the
+# real path before inserting into sys.path, making the fixture portable across
+# different invocation directories.
+demo_project_path = Path(__file__).resolve().parent.parent / "examples" / "demo_project"
 if str(demo_project_path) not in sys.path:
     sys.path.insert(0, str(demo_project_path))
 
@@ -74,5 +77,7 @@ def cleanup_session_cache():
 
     yield
 
-    # Cleanup: Clear all sessions from backend
-    backend.cleanup_expired(ttl=0)  # TTL=0 expires everything
+    # Cleanup: Clear all sessions from backend unconditionally.
+    # delete_all() has unambiguous semantics; cleanup_expired(ttl=0) previously
+    # meant "expire everything" but that changed in #395.
+    backend.delete_all()

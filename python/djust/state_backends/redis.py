@@ -260,14 +260,32 @@ class RedisStateBackend(StateBackend):
 
     def cleanup_expired(self, ttl: Optional[int] = None) -> int:
         """
-        Redis handles TTL expiration automatically.
+        Clean up sessions from Redis.
 
-        This method returns 0 as no manual cleanup is needed.
-        Redis will automatically remove expired keys based on their TTL.
+        Redis handles TTL-based expiration automatically, so this is a no-op.
+        Use ``delete_all()`` to forcibly remove all sessions.
+
+        Returns:
+            0 (Redis manages its own expiry clock).
         """
-        # Redis handles expiration automatically via TTL
-        # No manual cleanup needed
         return 0
+
+    def delete_all(self) -> int:
+        """Delete every session unconditionally (used by ``djust clear --all``)."""
+        deleted = 0
+        pattern = f"{self._key_prefix}*"
+        try:
+            pipeline = self._client.pipeline()
+            for key in self._client.scan_iter(match=pattern, count=100):
+                pipeline.delete(key)
+                deleted += 1
+            if deleted:
+                pipeline.execute()
+        except Exception:
+            logger.exception("Error during Redis delete_all()")
+        if deleted:
+            logger.info("Deleted all %s sessions from Redis", deleted)
+        return deleted
 
     def get_stats(self) -> Dict[str, Any]:
         """Get Redis backend statistics."""
