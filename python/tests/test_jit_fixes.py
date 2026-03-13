@@ -105,46 +105,47 @@ class TestDeepDictSerialization:
         model = self._make_model(title="Test")
         serialized = json.loads(json.dumps({"item": model}, cls=DjangoJSONEncoder))
         assert isinstance(serialized["item"], dict)
-        assert serialized["item"]["id"] == "1"
+        assert serialized["item"]["id"] == 1, "id must be native int after PR #472"
 
     def test_serialize_model_includes_pk_key(self):
-        """Model serialization includes 'pk' key alongside 'id' (#262).
+        """Model serialization includes 'pk' key alongside 'id' (#262, #472).
 
-        'id' is the legacy string representation (for backwards compat).
-        'pk' is the native type (for template rendering: {{ model.pk }}).
+        Both 'id' and 'pk' are now the native type (PR #472 fix).
+        'id' now matches 'pk' — no longer a string for backwards compat.
         """
         model = self._make_model(title="Test")
         encoder = DjangoJSONEncoder()
         result = encoder._serialize_model_safely(model)
         assert "pk" in result, "Serialized model must include 'pk' key"
         assert result["pk"] == 1, "'pk' must be the native primary key value"
-        assert result["id"] == "1", "'id' must be the string representation"
+        assert result["id"] == 1, "'id' must now be native type, matching pk (PR #472)"
 
     def test_serialize_model_id_is_always_string(self):
         """Primary .id serialization path always produces a string (#408).
 
-        The 'id' key must be str(pk) regardless of the pk's native type so that
-        template code using {{ model.id }} gets a consistent string value.
+        The 'id' key must be the native pk type (not a string) so that
+        template code using {% if model.id == var %} works with integer comparisons.
+        PR #472 fixed this — model.id now returns native type, matching model.pk.
         """
         # Integer pk (most common case)
         model_int = self._make_model(title="Int PK")
         model_int.pk = 42
         encoder = DjangoJSONEncoder()
         result = encoder._serialize_model_safely(model_int)
-        assert result["id"] == "42", "id must be string even for integer pk"
-        assert isinstance(result["id"], str), "id must always be a str"
+        assert result["id"] == 42, "id must be native int, not string"
+        assert isinstance(result["id"], int), "id must always be native type"
 
     def test_serialize_model_uuid_pk(self):
-        """Model with UUID primary key serializes id as string (#408)."""
+        """Model with UUID primary key serializes id as native UUID (#472)."""
         import uuid
 
         model = self._make_model(title="UUID PK")
         model.pk = uuid.UUID("12345678-1234-5678-1234-567812345678")
         encoder = DjangoJSONEncoder()
         result = encoder._serialize_model_safely(model)
-        assert result["id"] == "12345678-1234-5678-1234-567812345678"
-        assert isinstance(result["id"], str)
-        # pk should be the native UUID object
+        assert isinstance(result["id"], uuid.UUID), "id must be native UUID"
+        assert result["id"] == uuid.UUID("12345678-1234-5678-1234-567812345678")
+        # pk should also be the native UUID object
         assert isinstance(result["pk"], uuid.UUID)
 
     def test_serialize_model_none_pk(self):
@@ -303,7 +304,7 @@ class TestModelBeforeDuckTyping:
         result = json.loads(json.dumps(obj, cls=DjangoJSONEncoder))
         # Should be a dict (model serialization), not a string URL
         assert isinstance(result, dict)
-        assert result["id"] == "42"
+        assert result["id"] == 42, "id must be native int after PR #472"
 
 
 # --- Fix 5: Rust→Python fallback ---
