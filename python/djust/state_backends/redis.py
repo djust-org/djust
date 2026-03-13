@@ -276,21 +276,26 @@ class RedisStateBackend(StateBackend):
         return 0
 
     def delete_all(self) -> int:
-        """Delete every session unconditionally (used by ``djust clear --all``)."""
-        deleted = 0
+        """Delete every session unconditionally (used by ``djust clear --all``).
+
+        Returns the number of sessions actually deleted, or 0 if a Redis error
+        occurred (in which case the pipeline was never executed).
+        """
         pattern = f"{self._key_prefix}*"
         try:
             pipeline = self._client.pipeline()
+            queued = 0
             for key in self._client.scan_iter(match=pattern, count=100):
                 pipeline.delete(key)
-                deleted += 1
-            if deleted:
+                queued += 1
+            if queued:
                 pipeline.execute()
+            if queued:
+                logger.info("Deleted all %s sessions from Redis", queued)
+            return queued
         except Exception:
             logger.exception("Error during Redis delete_all()")
-        if deleted:
-            logger.info("Deleted all %s sessions from Redis", deleted)
-        return deleted
+            return 0
 
     def get_stats(self) -> Dict[str, Any]:
         """Get Redis backend statistics."""
