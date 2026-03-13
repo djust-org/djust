@@ -157,6 +157,44 @@ class TestInMemoryBackend:
         assert cleaned == 1
         assert backend.get("key1") is None
 
+    def test_cleanup_ttl_zero_expires_all_sessions(self):
+        """SESSION_TTL=0 immediately expires every session (#410).
+
+        TTL=0 is used by the test fixture teardown (conftest cleanup_session_cache)
+        and by `djust clear --all` to wipe all live sessions without waiting.
+        """
+        backend = InMemoryStateBackend()
+
+        # Add several sessions
+        for i in range(3):
+            view = RustLiveView(f"<div>{i}</div>")
+            backend.set(f"key{i}", view)
+
+        assert backend.get_stats()["total_sessions"] == 3
+
+        # TTL=0 should expire everything immediately
+        cleaned = backend.cleanup_expired(ttl=0)
+        assert cleaned == 3, "TTL=0 must clean up all sessions regardless of age"
+        assert backend.get_stats()["total_sessions"] == 0
+
+    def test_cleanup_ttl_zero_on_empty_backend(self):
+        """SESSION_TTL=0 on an empty backend returns 0, not an error (#410)."""
+        backend = InMemoryStateBackend()
+        cleaned = backend.cleanup_expired(ttl=0)
+        assert cleaned == 0
+
+    def test_cleanup_ttl_zero_leaves_no_sessions(self):
+        """After TTL=0 cleanup no sessions are retrievable (#410)."""
+        backend = InMemoryStateBackend()
+
+        view = RustLiveView("<div>persist-check</div>")
+        backend.set("survive", view)
+
+        backend.cleanup_expired(ttl=0)
+
+        # The session must be gone — cannot survive a TTL=0 wipe
+        assert backend.get("survive") is None
+
     def test_stats(self):
         """Test statistics tracking."""
         backend = InMemoryStateBackend()

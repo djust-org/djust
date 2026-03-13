@@ -113,3 +113,20 @@
 .text-indigo-600 {
     color: var(--color-accent) !important;
 }
+
+/* ============================================
+   FLEX UTILITIES
+   ============================================ */
+
+.flex-between {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+/* Ensure flex-between always wins over component flex-direction overrides.
+   .card-header sets flex-direction: column; combining it with .flex-between
+   must produce a row layout, not a column. */
+.card-header.flex-between {
+    flex-direction: row;
+}

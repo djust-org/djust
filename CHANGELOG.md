@@ -7,8 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-<<<<<<< HEAD
 ### Fixed
+
+- **`djust cache --all` now correctly clears all sessions on the Redis backend** — The CLI called `cleanup_expired(ttl=0)` to force-clear sessions, but the semantics of `ttl=0` changed in 0.3.5 to mean "never expire". The command now calls the explicit `delete_all()` method, which uses a Redis pipeline for an efficient single round-trip bulk delete. (#409)
 
 - **`dj-params` attribute no longer silently dropped** — Between 0.3.2 and 0.3.6rc2, `dj-params` was removed from the client event-binding code. Templates using `dj-params='{"key": value}'` continued to fire click events but the server received `params: {}`. The attribute is now read and merged into the params object for backward compatibility. A `console.warn` is emitted in debug mode (`globalThis.djustDebug`) to notify developers to migrate.
 
@@ -29,16 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```
 
   Type-coercion suffixes: `:int`, `:float`, `:bool`, `:json`. Kebab-case attribute names are auto-converted to `snake_case` for server handler parameters.
-=======
-## [0.3.6rc2] - 2026-03-07
 
-### Added
-
-- **Prefetch on hover** — new `22-prefetch.js` client module posts `PREFETCH` messages to the service worker when users hover over same-origin links, enabling near-instant navigation on click. Supports deduplication, `data-no-prefetch` opt-out, and respects `navigator.connection.saveData`.
-- **Smart static asset caching** — `generate_sw` management command now always includes djust core assets (`client.js`, `debug-panel.js` in DEBUG) in the precache list, and the generated service worker checks a `djust-prefetch` cache before going to network.
-
-## [0.3.6rc1] - 2026-03-06
->>>>>>> origin/main
+- **Auto-reload on unrecoverable VDOM state** — When VDOM patch recovery fails because recovery HTML is unavailable (e.g. after server restart), the client now auto-reloads the page instead of showing a confusing error overlay. The server sends `recoverable: false` to signal the client.
+- **`{% djust_pwa_head %}` and other custom tags with quoted arguments containing spaces now render correctly** — The Rust template lexer used `split_whitespace()` to tokenize tag arguments, which broke quoted values like `name="My App"` into separate tokens (`name="My` and `App"`). This caused the downstream Python handler to receive malformed arguments, silently returning empty output. Replaced with a quote-aware splitter (`split_tag_args`) that preserves quoted strings as single arguments.
+- **`{% load %}` tags stripped during template inheritance, breaking inclusion tags** — The Rust parser treated `{% load %}` as `Node::Comment`, which `nodes_to_template_string()` discarded during inheritance reconstruction. When the resolved template was re-parsed, custom tags that relied on Django tag libraries (e.g. `{% djust_pwa_head %}`) could silently fail. Fixed by adding a dedicated `Node::Load` variant that preserves library names through reconstruction. Also improved `_render_django_tag()` error handling: failures now log a full traceback via `logger.exception()` and return a visible HTML comment instead of an empty string.
+- **Checkbox/radio `checked` and `<option>` `selected` state not updated by VDOM patches** — `SetAttr` and `RemoveAttr` patches only called `setAttribute`/`removeAttribute`, which updates the HTML attribute but not the DOM property. After user interaction the browser separates the two, so server-driven state changes via `dj-click` had no visible effect on checkboxes, radios, or select options. Fixed by syncing the DOM property alongside the attribute. Also fixed `createNodeFromVNode` to set `.checked`/`.selected` when creating new elements. (#422)
 
 ### Added
 
@@ -49,28 +45,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `djust-deploy deploy <project-slug>` — validates the git working tree is clean, triggers a production deployment, and streams build logs to stdout
   - `--server` flag / `DJUST_SERVER` env var to override the default server URL (`https://djustlive.com`)
 - **TypeScript type stubs updated** — `DjustStreamOp` now includes `"done"` and `"start"` operation types and an optional `mode` field (`"append" | "replace" | "prepend"`). `getActiveStreams()` return type changed from `Map` to `Record`.
-- **`.flex-between` CSS utility class** — Added to demo project's `utilities.css` for laying out flex children horizontally with space-between. Use on card headers or any flex container that needs a title on the left and action widget on the right.
-
-### Performance
-
-- **VDOM keyed list diffing optimized with LIS algorithm** — When reordering large keyed lists (>1000 items), the VDOM differ now computes the Longest Increasing Subsequence to minimize `MoveChild` patches. Elements in the LIS maintain their relative order and don't need explicit moves. Reduces patches from O(n) to O(k) where k is the number of actual moves needed. Example: moving last item to front in 1000-item list now produces 1 move instead of 999. Uses O(n log n) patience-sorting algorithm in `crates/djust_vdom/src/lis.rs`. (#458)
-
-### Fixed
-
-<<<<<<< HEAD
-- **`SESSION_TTL=0` breaks all event handling (no DOM patches)** — `cleanup_expired()` methods in both `InMemoryStateBackend` and `RedisStateBackend` now treat `TTL ≤ 0` as "never expire". Previously `SESSION_TTL=0` caused `cutoff = time.time() - 0`, making all sessions appear expired, deleting them immediately, and leaving no state for VDOM patches. (#395)
-- **WebSocket session extraction crashes on Django Channels `LazyObject`** — Replaced `hasattr(scope_session, "session_key")` with `getattr(scope_session, "session_key", None)` in the consumer's request context builder. `hasattr()` on a Django Channels `LazyObject` can raise non-`AttributeError` exceptions during lazy evaluation, causing the consumer to crash silently. (#396)
-=======
-- **Python 3.14 build fails with PyO3 0.24** — PyO3 0.24 hard-caps support at Python 3.13. Bumped PyO3 from 0.24 to 0.25, which adds native Python 3.14 support. Also bumped `pyo3-async-runtimes` from 0.24 to 0.25 to match. (#416)
-- **PWA `cache_first` strategy serves stale HTML, breaking LiveView VDOM patching** — The `cache_first` service worker strategy intercepted ALL GET requests, including navigation page loads (`request.mode === 'navigate'`). Returning a cached stale page caused the server's initial VDOM snapshot and client DOM to diverge before the WebSocket connected, producing incorrect VDOM diffs. Fixed by adding a navigate-mode guard that forces network fetches for page loads (with offline fallback), while keeping cache-first for static assets. (#423)
-- **DOM patcher inserts new siblings inside `<select>` when adjacent `{% if %}` block expands** — When a template conditional block adjacent to a `<select>` expands, the VDOM `InsertChild` patch could resolve to the `<select>` element as the parent, causing non-option sibling content to be inserted as children of the select (invalid HTML). Added a guard in the patcher: when `node` is a `<select>` but `newChild` is not an `<option>` or `<optgroup>`, the insert is redirected to `node.parentNode`, making the new node a proper sibling. (#417)
->>>>>>> origin/main
-- **Auto-reload on unrecoverable VDOM state** — When VDOM patch recovery fails because recovery HTML is unavailable (e.g. after server restart), the client now auto-reloads the page instead of showing a confusing error overlay. The server sends `recoverable: false` to signal the client.
-- **`{% djust_pwa_head %}` and other custom tags with quoted arguments containing spaces now render correctly** — The Rust template lexer used `split_whitespace()` to tokenize tag arguments, which broke quoted values like `name="My App"` into separate tokens (`name="My` and `App"`). This caused the downstream Python handler to receive malformed arguments, silently returning empty output. Replaced with a quote-aware splitter (`split_tag_args`) that preserves quoted strings as single arguments.
-- **`{% load %}` tags stripped during template inheritance, breaking inclusion tags** — The Rust parser treated `{% load %}` as `Node::Comment`, which `nodes_to_template_string()` discarded during inheritance reconstruction. When the resolved template was re-parsed, custom tags that relied on Django tag libraries (e.g. `{% djust_pwa_head %}`) could silently fail. Fixed by adding a dedicated `Node::Load` variant that preserves library names through reconstruction. Also improved `_render_django_tag()` error handling: failures now log a full traceback via `logger.exception()` and return a visible HTML comment instead of an empty string.
-- **Checkbox/radio `checked` and `<option>` `selected` state not updated by VDOM patches** — `SetAttr` and `RemoveAttr` patches only called `setAttribute`/`removeAttribute`, which updates the HTML attribute but not the DOM property. After user interaction the browser separates the two, so server-driven state changes via `dj-click` had no visible effect on checkboxes, radios, or select options. Fixed by syncing the DOM property alongside the attribute. Also fixed `createNodeFromVNode` to set `.checked`/`.selected` when creating new elements. (#422)
-- **Model `.id` field serialized as string, breaking `{% if %}` equality comparisons** — Django model `id` fields were wrapped with `str()` during JIT serialization, serializing to strings (e.g. `"4"`) instead of native integers. This caused `{% if edit_id == todo.id %}` comparisons to fail when `edit_id` was an integer (4 ≠ "4"), while `{% if edit_id == todo.pk %}` worked correctly. Fixed by removing `str()` wrapper from `"id"` serialization in `_serialize_model_safely()`, `normalize_django_value()`, and fallback serializers in `_jit_serialize_model()`. Both `.id` and `.pk` now return native types consistently.
-
 ## [0.3.5] - 2026-03-05
 
 ### Added

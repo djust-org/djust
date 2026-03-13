@@ -950,18 +950,23 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             from django.contrib.sessions.backends.db import SessionStore
 
             scope_session = self.scope.get("session")
-            # Django Channels wraps the session in a LazyObject for async
-            # compatibility. hasattr() triggers lazy evaluation and can raise
-            # unexpected exceptions on un-initialised LazyObjects.  Use
-            # getattr() with a sentinel instead so any AttributeError is
-            # handled cleanly without masking real errors elsewhere.
+            # getattr(obj, name, default) is used instead of a hasattr() +
+            # getattr() pair.  Django Channels' AuthMiddlewareStack wraps
+            # scope["session"] in a LazyObject; a two-step hasattr/getattr
+            # approach resolves the object twice and can disagree if the
+            # LazyObject is in a partially-resolved state.  The single
+            # getattr() call resolves the LazyObject once and returns the
+            # value (or None) atomically.
             session_key = getattr(scope_session, "session_key", None) if scope_session else None
             if session_key:
                 request.session = SessionStore(session_key=session_key)
             else:
                 request.session = SessionStore()
 
-            # Add user if available
+            # Add user if available.
+            # scope["user"] is a Django Channels LazyObject (set by AuthMiddlewareStack).
+            # Assigning it directly to request.user is safe — Django's auth machinery
+            # and template context both handle lazy user proxies correctly.
             if "user" in self.scope:
                 request.user = self.scope["user"]
 

@@ -120,6 +120,42 @@ class TestDeepDictSerialization:
         assert result["pk"] == 1, "'pk' must be the native primary key value"
         assert result["id"] == "1", "'id' must be the string representation"
 
+    def test_serialize_model_id_is_always_string(self):
+        """Primary .id serialization path always produces a string (#408).
+
+        The 'id' key must be str(pk) regardless of the pk's native type so that
+        template code using {{ model.id }} gets a consistent string value.
+        """
+        # Integer pk (most common case)
+        model_int = self._make_model(title="Int PK")
+        model_int.pk = 42
+        encoder = DjangoJSONEncoder()
+        result = encoder._serialize_model_safely(model_int)
+        assert result["id"] == "42", "id must be string even for integer pk"
+        assert isinstance(result["id"], str), "id must always be a str"
+
+    def test_serialize_model_uuid_pk(self):
+        """Model with UUID primary key serializes id as string (#408)."""
+        import uuid
+
+        model = self._make_model(title="UUID PK")
+        model.pk = uuid.UUID("12345678-1234-5678-1234-567812345678")
+        encoder = DjangoJSONEncoder()
+        result = encoder._serialize_model_safely(model)
+        assert result["id"] == "12345678-1234-5678-1234-567812345678"
+        assert isinstance(result["id"], str)
+        # pk should be the native UUID object
+        assert isinstance(result["pk"], uuid.UUID)
+
+    def test_serialize_model_none_pk(self):
+        """Model with pk=None (unsaved) serializes id as None, not 'None' (#408)."""
+        model = self._make_model(title="Unsaved")
+        model.pk = None
+        encoder = DjangoJSONEncoder()
+        result = encoder._serialize_model_safely(model)
+        assert result["id"] is None, "id must be None for unsaved models, not the string 'None'"
+        assert result["pk"] is None
+
     def test_deep_serialize_dict_nested(self):
         """Dict-in-dict containing Model is recursively serialized."""
         model = self._make_model(title="Nested")

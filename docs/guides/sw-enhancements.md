@@ -153,6 +153,7 @@ self.addEventListener('message', (event) => {
 - Zero-config for internal `<a>` tags — djust already controls the client JS
 - Pairs with TurboNav for instant perceived navigation
 - Can be smart about LiveView pages: prefetch the initial HTML but skip WebSocket setup until actual navigation
+- **SPA navigation clears cache**: When a user navigates to a different view via `live_redirect`, the client-side prefetch set is automatically cleared so links on the new view are re-eligible for prefetching. This prevents stale prefetches from the previous view.
 
 ### Configuration
 
@@ -169,6 +170,13 @@ DJUST_PWA = {
     }
 }
 ```
+
+### Implementation Note
+
+The client maintains a Set of prefetched URLs (`window.djust._prefetch._prefetched`) to avoid redundant prefetch requests. This set is automatically cleared when a SPA navigation occurs via `live_redirect()`, ensuring that:
+1. Links on the new view are not incorrectly marked as "already prefetched"
+2. Prefetch operations adapt as the user navigates between views
+3. Server-side state changes (e.g., cache invalidation) don't leave the client in a stale prefetch state
 
 ---
 

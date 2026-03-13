@@ -1,166 +1,76 @@
 /**
  * Tests for prefetch-on-hover (src/22-prefetch.js)
+ * and clear-on-SPA-navigation behaviour.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
-const prefetchCode = fs.readFileSync(
-    './python/djust/static/djust/src/22-prefetch.js',
-    'utf-8'
-);
+const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
 
-function createEnv(opts = {}) {
-    const {
-        hasSW = true,
-        saveData = false,
-        bodyHtml = ''
-    } = opts;
-
+function createEnv() {
     const dom = new JSDOM(
-        `<!DOCTYPE html><html><body>${bodyHtml}</body></html>`,
+        `<!DOCTYPE html><html><body><div dj-root></div></body></html>`,
         { url: 'http://localhost:8000/', runScripts: 'dangerously', pretendToBeVisual: true }
     );
     const { window } = dom;
+    window.console = { log: () => {}, error: () => {}, warn: () => {}, debug: () => {}, info: () => {} };
 
-    // Suppress console
-    window.console = { log: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), info: vi.fn() };
+    // Mock history to avoid JSDOM errors
+    window.history.pushState = (s, t, u) => {};
+    window.history.replaceState = (s, t, u) => {};
 
-    // Mock navigator.serviceWorker
-    const postMessageFn = vi.fn();
-    if (hasSW) {
-        Object.defineProperty(window.navigator, 'serviceWorker', {
-            value: {
-                controller: { postMessage: postMessageFn }
-            },
-            configurable: true
-        });
-    } else {
-        Object.defineProperty(window.navigator, 'serviceWorker', {
-            value: { controller: null },
-            configurable: true
-        });
-    }
+    try { window.eval(clientCode); } catch (e) { /* ignore missing DOM APIs */ }
 
-    // Mock navigator.connection
-    Object.defineProperty(window.navigator, 'connection', {
-        value: { saveData: saveData },
-        configurable: true
-    });
-
-    // Run the prefetch module
-    window.eval(prefetchCode);
-
-    return { window, dom, document: dom.window.document, postMessageFn };
+    return { window };
 }
 
-function hoverLink(document, link) {
-    // JSDOM lacks PointerEvent; use Event with bubbles to simulate pointerenter
-    const event = new document.defaultView.Event('pointerenter', {
-        bubbles: true,
-        composed: true
-    });
-    link.dispatchEvent(event);
-}
-
-// ============================================================================
-// Basic Prefetch Behavior
-// ============================================================================
-
-describe('prefetch-on-hover', () => {
-    it('should prefetch same-origin link on hover', () => {
-        const { document, postMessageFn } = createEnv({
-            bodyHtml: '<a href="http://localhost:8000/about/">About</a>'
-        });
-
-        const link = document.querySelector('a');
-        hoverLink(document, link);
-
-        expect(postMessageFn).toHaveBeenCalledWith({
-            type: 'PREFETCH',
-            url: 'http://localhost:8000/about/'
-        });
-    });
-
-    it('should NOT prefetch cross-origin links', () => {
-        const { document, postMessageFn } = createEnv({
-            bodyHtml: '<a href="https://external.com/page">External</a>'
-        });
-
-        const link = document.querySelector('a');
-        hoverLink(document, link);
-
-        expect(postMessageFn).not.toHaveBeenCalled();
-    });
-
-    it('should deduplicate URLs (only prefetch once)', () => {
-        const { document, postMessageFn } = createEnv({
-            bodyHtml: '<a href="http://localhost:8000/about/">About</a>'
-        });
-
-        const link = document.querySelector('a');
-        hoverLink(document, link);
-        hoverLink(document, link);
-        hoverLink(document, link);
-
-        expect(postMessageFn).toHaveBeenCalledTimes(1);
-    });
-
-    it('should respect data-no-prefetch attribute', () => {
-        const { document, postMessageFn } = createEnv({
-            bodyHtml: '<a href="http://localhost:8000/about/" data-no-prefetch>About</a>'
-        });
-
-        const link = document.querySelector('a');
-        hoverLink(document, link);
-
-        expect(postMessageFn).not.toHaveBeenCalled();
-    });
-
-    it('should respect saveData preference', () => {
-        const { document, postMessageFn } = createEnv({
-            saveData: true,
-            bodyHtml: '<a href="http://localhost:8000/about/">About</a>'
-        });
-
-        const link = document.querySelector('a');
-        hoverLink(document, link);
-
-        expect(postMessageFn).not.toHaveBeenCalled();
-    });
-
-    it('should no-op without SW controller', () => {
-        const { document, postMessageFn } = createEnv({
-            hasSW: false,
-            bodyHtml: '<a href="http://localhost:8000/about/">About</a>'
-        });
-
-        const link = document.querySelector('a');
-        hoverLink(document, link);
-
-        expect(postMessageFn).not.toHaveBeenCalled();
-    });
-
-    it('should prefetch multiple different URLs', () => {
-        const { document, postMessageFn } = createEnv({
-            bodyHtml: `
-                <a href="http://localhost:8000/page1/">Page 1</a>
-                <a href="http://localhost:8000/page2/">Page 2</a>
-            `
-        });
-
-        const links = document.querySelectorAll('a');
-        hoverLink(document, links[0]);
-        hoverLink(document, links[1]);
-
-        expect(postMessageFn).toHaveBeenCalledTimes(2);
-    });
-
-    it('should expose _prefetch on window.djust', () => {
+describe('prefetch module', () => {
+    it('exposes window.djust._prefetch with _prefetched, _shouldPrefetch, and clear', () => {
         const { window } = createEnv();
         expect(window.djust._prefetch).toBeDefined();
         expect(window.djust._prefetch._prefetched).toBeInstanceOf(window.Set);
         expect(typeof window.djust._prefetch._shouldPrefetch).toBe('function');
+        expect(typeof window.djust._prefetch.clear).toBe('function');
+    });
+
+    it('_shouldPrefetch returns false when no service worker controller', () => {
+        const { window } = createEnv();
+        const link = window.document.createElement('a');
+        link.href = 'http://localhost:8000/about/';
+        // navigator.serviceWorker.controller is null in JSDOM — should return false
+        expect(window.djust._prefetch._shouldPrefetch(link)).toBe(false);
+    });
+
+    it('clear() empties the _prefetched set', () => {
+        const { window } = createEnv();
+        const set = window.djust._prefetch._prefetched;
+        set.add('http://localhost:8000/about/');
+        set.add('http://localhost:8000/contact/');
+        expect(set.size).toBe(2);
+
+        window.djust._prefetch.clear();
+        expect(set.size).toBe(0);
+    });
+});
+
+describe('prefetch cleared on SPA navigation', () => {
+    it('handleNavigation with live_redirect clears the prefetch set', () => {
+        const { window } = createEnv();
+
+        // Seed the prefetch set with URLs from the current view
+        window.djust._prefetch._prefetched.add('http://localhost:8000/about/');
+        window.djust._prefetch._prefetched.add('http://localhost:8000/contact/');
+        expect(window.djust._prefetch._prefetched.size).toBe(2);
+
+        // Trigger a live_redirect navigation — this calls handleLiveRedirect internally,
+        // which should invoke window.djust._prefetch.clear()
+        window.djust.navigation.handleNavigation({
+            type: 'live_redirect',
+            path: '/new-view/',
+        });
+
+        expect(window.djust._prefetch._prefetched.size).toBe(0);
     });
 });

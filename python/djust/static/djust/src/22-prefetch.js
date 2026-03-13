@@ -3,6 +3,7 @@
 // ============================================================================
 // Posts PREFETCH messages to the service worker when users hover over links.
 // Only same-origin links are prefetched; each URL is prefetched at most once.
+// The set is cleared on SPA navigation so links on the new view are re-eligible.
 
 (function () {
     var _prefetched = new Set();
@@ -40,6 +41,7 @@
     }
 
     document.addEventListener('pointerenter', function (event) {
+        if (!(event.target instanceof Element)) return;
         var link = event.target.closest('a');
         if (!link || !_shouldPrefetch(link)) {
             return;
@@ -52,10 +54,11 @@
         });
     }, true);
 
-    // Expose for testing
+    // Expose for testing and for navigation to clear on SPA transition
     window.djust = window.djust || {};
     window.djust._prefetch = {
         _prefetched: _prefetched,
-        _shouldPrefetch: _shouldPrefetch
+        _shouldPrefetch: _shouldPrefetch,
+        clear: function () { _prefetched.clear(); }
     };
 })();

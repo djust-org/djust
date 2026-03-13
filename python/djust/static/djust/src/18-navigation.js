@@ -74,6 +74,9 @@
         const method = data.replace ? 'replaceState' : 'pushState';
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
 
+        // Clear the prefetch set so links on the new view are re-eligible for prefetching
+        window.djust._prefetch?.clear();
+
         if (globalThis.djustDebug) console.log(`[LiveView] live_redirect: ${method} → ${newUrl.toString()}`);
 
         // Send a mount request for the new view path over the existing WebSocket
