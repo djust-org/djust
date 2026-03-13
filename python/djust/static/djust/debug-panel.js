@@ -8,9 +8,7 @@
 
     // Check if we should load the debug panel
     if (!window.DEBUG_MODE) {
-        if (globalThis.djustDebug) {
-            console.log('[djust] Debug panel disabled (DEBUG_MODE=false)');
-        }
+        console.log('[djust] Debug panel disabled (DEBUG_MODE=false)');
         return;
     }
     class DjustDebugPanel {
@@ -74,9 +72,7 @@
             this.hookIntoLiveView();
             this.loadState();
 
-            if (globalThis.djustDebug) {
-                console.log('[djust] Developer Bar initialized 🐍');
-            }
+            console.log('[djust] Developer Bar initialized 🐍');
         }
 
         createFloatingButton() {
@@ -1709,12 +1705,18 @@
 
             const nameFilter = (this.state.filters.eventName || '').toLowerCase();
             const statusFilter = this.state.filters.eventStatus || 'all';
+            const searchQuery = (this.state.searchQuery || '').toLowerCase();
 
             const filtered = this.eventHistory.filter(event => {
                 const eventName = (event.handler || event.name || 'unknown').toLowerCase();
                 if (nameFilter && !eventName.includes(nameFilter)) return false;
                 if (statusFilter === 'errors' && !event.error) return false;
                 if (statusFilter === 'success' && event.error) return false;
+                if (searchQuery) {
+                    const errorStr = (event.error || '').toLowerCase();
+                    const paramsStr = event.params ? JSON.stringify(event.params).toLowerCase() : '';
+                    if (!eventName.includes(searchQuery) && !errorStr.includes(searchQuery) && !paramsStr.includes(searchQuery)) return false;
+                }
                 return true;
             });
 
@@ -1914,7 +1916,18 @@
                     <div class="network-header-row">
                         <span class="network-title">Recent Messages (${messages.length})</span>
                     </div>
-                    ${messages.map((msg, index) => {
+                    ${(() => {
+                        const searchQuery = (this.state.searchQuery || '').toLowerCase();
+                        return messages.filter(msg => {
+                            if (!searchQuery) return true;
+                            const payload = msg.data || msg.payload;
+                            const type = msg.type || (payload ? (payload.type || payload.event || 'data') : 'unknown');
+                            const payloadStr = payload ? JSON.stringify(payload).toLowerCase() : '';
+                            return type.toLowerCase().includes(searchQuery) ||
+                                   (msg.direction || '').toLowerCase().includes(searchQuery) ||
+                                   payloadStr.includes(searchQuery);
+                        });
+                    })().map((msg, index) => {
                         const hasPayload = msg.data || (msg.payload && Object.keys(msg.payload).length > 0);
                         const hasDebugInfo = msg.payload && msg.payload._debug;
                         const payload = msg.data || msg.payload;
@@ -1981,7 +1994,16 @@
                 ${this.renderPerformanceMetrics()}
                 ${recentWarnings.length > 0 ? this.renderWarningsSummary(recentWarnings) : ''}
                 <div class="patches-list">
-                    ${this.patchHistory.map((entry, index) => {
+                    ${(() => {
+                        const searchQuery = (this.state.searchQuery || '').toLowerCase();
+                        return this.patchHistory.filter(entry => {
+                            if (!searchQuery) return true;
+                            const types = entry.patches ? entry.patches.map(p => p.type || p.op || 'update').join(' ').toLowerCase() : '';
+                            const paths = entry.patches ? entry.patches.map(p => p.path || '').join(' ').toLowerCase() : '';
+                            const values = entry.patches ? entry.patches.map(p => p.value != null ? JSON.stringify(p.value) : '').join(' ').toLowerCase() : '';
+                            return types.includes(searchQuery) || paths.includes(searchQuery) || values.includes(searchQuery);
+                        });
+                    })().map((entry, index) => {
                         const hasDetails = entry.patches && entry.patches.length > 0;
                         const patchTypes = [...new Set(entry.patches.map(p => p.type || p.op || 'update'))];
 
@@ -2065,60 +2087,9 @@
             `).join('');
         }
 
-        formatBytes(bytes) {
-            if (bytes === null || bytes === undefined) return 'N/A';
-            if (bytes < 1024) return bytes + ' B';
-            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-        }
-
-        renderStateSizeSection() {
-            const debugInfo = window.DJUST_DEBUG_INFO;
-            if (!debugInfo || !debugInfo.state_sizes) return '';
-
-            const sizes = debugInfo.state_sizes;
-            const keys = Object.keys(sizes);
-            if (keys.length === 0) return '';
-
-            const rows = keys.map(key => {
-                const info = sizes[key];
-                return `
-                    <tr>
-                        <td style="padding: 4px 8px; border-bottom: 1px solid #1e293b; font-family: monospace; font-size: 11px;">${this.escapeHtml(key)}</td>
-                        <td style="padding: 4px 8px; border-bottom: 1px solid #1e293b; text-align: right; font-size: 11px;">${this.formatBytes(info.memory)}</td>
-                        <td style="padding: 4px 8px; border-bottom: 1px solid #1e293b; text-align: right; font-size: 11px;">${this.formatBytes(info.serialized)}</td>
-                    </tr>
-                `;
-            }).join('');
-
-            return `
-                <div class="state-size-breakdown" style="margin-bottom: 16px;">
-                    <div class="state-timeline-header" style="margin-bottom: 8px;">
-                        <div class="state-timeline-title">
-                            <span>Size Breakdown</span>
-                            <span class="state-count">${keys.length} variable${keys.length === 1 ? '' : 's'}</span>
-                        </div>
-                    </div>
-                    <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
-                        <thead>
-                            <tr style="color: #94a3b8; text-transform: uppercase; font-size: 10px;">
-                                <th style="padding: 4px 8px; text-align: left; border-bottom: 1px solid #334155;">Variable</th>
-                                <th style="padding: 4px 8px; text-align: right; border-bottom: 1px solid #334155;">Memory</th>
-                                <th style="padding: 4px 8px; text-align: right; border-bottom: 1px solid #334155;">Serialized</th>
-                            </tr>
-                        </thead>
-                        <tbody>${rows}</tbody>
-                    </table>
-                </div>
-            `;
-        }
-
         renderStateTab() {
-            const sizeSection = this.renderStateSizeSection();
-
             if (this.stateHistory.length === 0) {
                 return `
-                    ${sizeSection}
                     <div class="empty-state">
                         <p>No state changes recorded yet.</p>
                         <p style="font-size: 11px; margin-top: 10px; color: #64748b;">
@@ -2129,7 +2100,6 @@
             }
 
             return `
-                ${sizeSection}
                 <div class="state-timeline-container">
                     <div class="state-timeline-header">
                         <div class="state-timeline-title">
@@ -2820,14 +2790,6 @@
             if (debugInfo.components) {
                 this.components = debugInfo.components;
                 if (this.state.activeTab === 'components') {
-                    this.renderTabContent();
-                }
-            }
-
-            // Update state sizes on DJUST_DEBUG_INFO for the state tab
-            if (debugInfo.state_sizes && window.DJUST_DEBUG_INFO) {
-                window.DJUST_DEBUG_INFO.state_sizes = debugInfo.state_sizes;
-                if (this.state.activeTab === 'state') {
                     this.renderTabContent();
                 }
             }
@@ -3644,27 +3606,7 @@
                         }, 0);
                     }
                 } catch (e) {
-                    if (globalThis.djustDebug) {
-                        console.warn('[djust] Failed to load debug panel state:', e);
-                    }
-                }
-            }
-
-            // Restore debug history from sessionStorage (TurboNav persistence)
-            const savedHistory = sessionStorage.getItem('djust-debug-history');
-            if (savedHistory) {
-                try {
-                    const historyData = JSON.parse(savedHistory);
-                    // Only restore if recent (within 30 seconds -- TurboNav, not full reload)
-                    if (Date.now() - historyData.timestamp < 30000) {
-                        this.eventHistory = historyData.events || [];
-                        this.patchHistory = historyData.patches || [];
-                        this.networkHistory = historyData.network || [];
-                        this.stateHistory = historyData.stateHistory || [];
-                    }
-                    sessionStorage.removeItem('djust-debug-history');
-                } catch (e) {
-                    // Corrupted data -- ignore
+                    console.warn('[djust] Failed to load debug panel state:', e);
                 }
             }
         }
@@ -3714,8 +3656,7 @@
         }
 
         performSearch() {
-            // TODO: Implement search functionality
-            if (globalThis.djustDebug) console.log('[djust] Searching for:', this.state.searchQuery);
+            this.renderTabContent();
         }
 
         export() {
@@ -3752,9 +3693,9 @@
                             this.networkHistory = data.network || [];
                             this.patchHistory = data.patches || [];
                             this.renderTabContent();
-                            if (globalThis.djustDebug) console.log('[djust] Debug session imported successfully');
+                            console.log('[djust] Debug session imported successfully');
                         } catch (err) {
-                            if (globalThis.djustDebug) console.error('[djust] Failed to import debug session:', err);
+                            console.error('[djust] Failed to import debug session:', err);
                         }
                     };
                     reader.readAsText(file);
@@ -3764,20 +3705,6 @@
         }
 
         destroy() {
-            // Save debug history to sessionStorage before destroy (TurboNav navigation)
-            const historyData = {
-                events: this.eventHistory.slice(0, 100),
-                patches: this.patchHistory.slice(0, 100),
-                network: this.networkHistory.slice(0, 100),
-                stateHistory: this.stateHistory.slice(0, 50),
-                timestamp: Date.now()
-            };
-            try {
-                sessionStorage.setItem('djust-debug-history', JSON.stringify(historyData));
-            } catch (e) {
-                // sessionStorage full or unavailable -- silently ignore
-            }
-
             // Remove event listeners
             if (this.keydownHandler) {
                 document.removeEventListener('keydown', this.keydownHandler);
@@ -3799,9 +3726,7 @@
             this.components = null;
             this.variables = {};
 
-            if (globalThis.djustDebug) {
-                console.log('[djust] Debug panel destroyed');
-            }
+            console.log('[djust] Debug panel destroyed');
         }
     }
 

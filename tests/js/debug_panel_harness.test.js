@@ -513,3 +513,92 @@ describe('Debug Panel Harness — _hookExistingWebSocket (#196)', () => {
         expect(mockWs._djustDebugHooked).toBe(true);
     });
 });
+
+describe('Debug Panel — Search functionality (#454)', () => {
+    let panel;
+
+    beforeEach(() => {
+        panel = createPanel();
+        panel.eventHistory = [
+            { handler: 'increment', timestamp: Date.now(), params: { amount: 1 } },
+            { handler: 'decrement', timestamp: Date.now() },
+            { handler: 'fetch_data', timestamp: Date.now(), error: 'Timeout', params: { id: 5 } },
+        ];
+        panel.networkHistory = [
+            { direction: 'sent', type: 'event', size: 64, timestamp: Date.now(), payload: { type: 'event', handler: 'increment' } },
+            { direction: 'received', type: 'patch', size: 128, timestamp: Date.now(), payload: { type: 'patch', html: '<div>2</div>' } },
+        ];
+        panel.patchHistory = [
+            { count: 2, timestamp: Date.now(), patches: [{ type: 'SetAttr', path: '/div/0', value: 'active' }] },
+            { count: 1, timestamp: Date.now(), patches: [{ type: 'Replace', path: '/span/1', value: 'hello' }] },
+        ];
+    });
+
+    afterEach(() => {
+        panel.destroy();
+    });
+
+    it('performSearch() triggers a re-render without throwing', () => {
+        panel.state.searchQuery = 'increment';
+        expect(() => panel.performSearch()).not.toThrow();
+    });
+
+    it('filters events by search query (handler name)', () => {
+        panel.state.searchQuery = 'increment';
+        panel.state.filters.eventName = '';
+        panel.state.filters.eventStatus = 'all';
+        const html = panel.renderEventsTab();
+        expect(html).toContain('increment');
+        expect(html).not.toContain('decrement');
+        expect(html).not.toContain('fetch_data');
+    });
+
+    it('filters events by search query (error message)', () => {
+        panel.state.searchQuery = 'timeout';
+        panel.state.filters.eventName = '';
+        panel.state.filters.eventStatus = 'all';
+        const html = panel.renderEventsTab();
+        expect(html).toContain('fetch_data');
+        expect(html).not.toContain('increment');
+    });
+
+    it('filters events by search query (params JSON)', () => {
+        panel.state.searchQuery = '"amount"';
+        panel.state.filters.eventName = '';
+        panel.state.filters.eventStatus = 'all';
+        const html = panel.renderEventsTab();
+        expect(html).toContain('increment');
+        expect(html).not.toContain('fetch_data');
+    });
+
+    it('shows all events when searchQuery is empty', () => {
+        panel.state.searchQuery = '';
+        panel.state.filters.eventName = '';
+        panel.state.filters.eventStatus = 'all';
+        const html = panel.renderEventsTab();
+        expect(html).toContain('increment');
+        expect(html).toContain('decrement');
+        expect(html).toContain('fetch_data');
+    });
+
+    it('filters network messages by search query (type)', () => {
+        panel.state.searchQuery = 'patch';
+        const html = panel.renderNetworkTab();
+        expect(html).toContain('patch');
+        expect(html).not.toContain('increment');
+    });
+
+    it('filters patches by search query (patch type)', () => {
+        panel.state.searchQuery = 'setat';
+        const html = panel.renderPatchesTab();
+        expect(html).toContain('SetAttr');
+        expect(html).not.toContain('Replace');
+    });
+
+    it('shows all patches when searchQuery is empty', () => {
+        panel.state.searchQuery = '';
+        const html = panel.renderPatchesTab();
+        expect(html).toContain('SetAttr');
+        expect(html).toContain('Replace');
+    });
+});

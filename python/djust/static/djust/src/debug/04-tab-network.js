@@ -53,7 +53,18 @@
                     <div class="network-header-row">
                         <span class="network-title">Recent Messages (${messages.length})</span>
                     </div>
-                    ${messages.map((msg, index) => {
+                    ${(() => {
+                        const searchQuery = (this.state.searchQuery || '').toLowerCase();
+                        return messages.filter(msg => {
+                            if (!searchQuery) return true;
+                            const payload = msg.data || msg.payload;
+                            const type = msg.type || (payload ? (payload.type || payload.event || 'data') : 'unknown');
+                            const payloadStr = payload ? JSON.stringify(payload).toLowerCase() : '';
+                            return type.toLowerCase().includes(searchQuery) ||
+                                   (msg.direction || '').toLowerCase().includes(searchQuery) ||
+                                   payloadStr.includes(searchQuery);
+                        });
+                    })().map((msg, index) => {
                         const hasPayload = msg.data || (msg.payload && Object.keys(msg.payload).length > 0);
                         const hasDebugInfo = msg.payload && msg.payload._debug;
                         const payload = msg.data || msg.payload;
