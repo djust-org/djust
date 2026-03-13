@@ -370,7 +370,7 @@ function extractTypedParams(element) {
                     }
                 }
             } catch {
-                console.warn('[LiveView] Failed to parse dj-params JSON: "' + djParamsAttr + '"');
+                if (globalThis.djustDebug) console.warn('[LiveView] Failed to parse dj-params JSON: "' + djParamsAttr + '"');
             }
         }
     }
