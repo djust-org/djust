@@ -17,15 +17,17 @@ from pathlib import Path
 import pytest
 
 # Path to the shipped .d.ts file relative to the package
-DTS_PATH = (Path(__file__).resolve().parents[2] / "python" / "djust" / "static" / "djust" / "djust.d.ts")
+DTS_PATH = (
+    Path(__file__).resolve().parents[2] / "python" / "djust" / "static" / "djust" / "djust.d.ts"
+)
 
 
 @pytest.fixture(scope="module")
 def dts_content():
     """Read and return the .d.ts file content."""
-    assert DTS_PATH.exists(), (
-        f"djust.d.ts not found at {DTS_PATH}. Run the implementation step to create it."
-    )
+    assert (
+        DTS_PATH.exists()
+    ), f"djust.d.ts not found at {DTS_PATH}. Run the implementation step to create it."
     return DTS_PATH.read_text()
 
 
