@@ -99,6 +99,19 @@ class StateBackend(ABC):
         """
         pass
 
+    def delete_all(self) -> int:
+        """
+        Delete every session unconditionally.
+
+        Used by ``djust clear --all``.  Override in subclasses for an
+        efficient implementation; the default falls back to iterating
+        ``get_stats()`` keys which may be slow.
+
+        Returns:
+            Number of sessions deleted
+        """
+        raise NotImplementedError
+
     @abstractmethod
     def delete_all(self) -> int:
         """

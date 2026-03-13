@@ -297,6 +297,20 @@ class RedisStateBackend(StateBackend):
             logger.exception("Error during Redis delete_all()")
             return 0
 
+    def delete_all(self) -> int:
+        """Delete every session unconditionally (used by ``djust clear --all``)."""
+        deleted = 0
+        pattern = f"{self._key_prefix}*"
+        try:
+            for key in self._client.scan_iter(match=pattern, count=100):
+                self._client.delete(key)
+                deleted += 1
+        except Exception:
+            logger.exception("Error during Redis delete_all()")
+        if deleted:
+            logger.info("Deleted all %s sessions from Redis", deleted)
+        return deleted
+
     def get_stats(self) -> Dict[str, Any]:
         """Get Redis backend statistics."""
         try:
