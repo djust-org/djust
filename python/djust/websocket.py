@@ -966,6 +966,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             session_key = getattr(scope_session, "session_key", None) if scope_session else None
             if session_key:
                 request.session = SessionStore(session_key=session_key)
+                self.view_instance._django_session_key = session_key
             else:
                 request.session = SessionStore()
 
@@ -1020,35 +1021,64 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 return
             # --- End auth check ---
 
-            # Resolve URL kwargs from the page path (e.g., slug, pk)
-            # Django's URL resolver extracts these during HTTP dispatch, but
-            # the WebSocket consumer doesn't go through URL routing, so we
-            # resolve them here and merge into mount() kwargs.
-            mount_kwargs = dict(params)
-            try:
-                from django.urls import resolve
+            # --- State restoration (skip mount when pre-rendered state exists) ---
+            mounted = False
+            if has_prerendered:
+                view_key = f"liveview_{page_url}"
+                saved_state = await request.session.aget(view_key, {})
+                if saved_state:
+                    from .security import safe_setattr
 
-                match = resolve(page_url)
-                if match.kwargs:
-                    mount_kwargs.update(match.kwargs)
-            except Exception:
-                pass  # URL may not resolve (e.g., root "/") — that's fine
+                    for key, value in saved_state.items():
+                        if not key.startswith("_") and not callable(value):
+                            safe_setattr(self.view_instance, key, value, allow_private=False)
 
-            # Call lifecycle hooks that some mixins register on the HTTP path
-            # (dispatch/get/post) but that are bypassed here because we never
-            # go through Django's view dispatch.  Calling these explicitly
-            # means mixin authors don't need to know about the WebSocket path.
-            #
-            # Current hooks:
-            #   _ensure_tenant() — djust-tenants TenantMixin resolves the tenant.
-            #     Without this, self.tenant is always None in the live path even
-            #     though the SSR pre-render (HTTP) path works correctly.
-            #     See: https://github.com/djust-org/djust/issues/342
-            if hasattr(self.view_instance, "_ensure_tenant"):
-                await sync_to_async(self.view_instance._ensure_tenant)(request)
+                    await sync_to_async(self.view_instance._initialize_temporary_assigns)()
+                    await sync_to_async(self.view_instance._assign_component_ids)()
 
-            # Run synchronous view operations in a thread pool
-            await sync_to_async(self.view_instance.mount)(request, **mount_kwargs)
+                    # Restore component state
+                    from .components.base import Component, LiveComponent
+
+                    component_state = await request.session.aget(f"{view_key}_components", {})
+                    for key, state in component_state.items():
+                        component = getattr(self.view_instance, key, None)
+                        if component and isinstance(component, (Component, LiveComponent)):
+                            await sync_to_async(self.view_instance._restore_component_state)(
+                                component, state
+                            )
+
+                    mounted = True
+
+            if not mounted:
+                # Resolve URL kwargs from the page path (e.g., slug, pk)
+                # Django's URL resolver extracts these during HTTP dispatch, but
+                # the WebSocket consumer doesn't go through URL routing, so we
+                # resolve them here and merge into mount() kwargs.
+                mount_kwargs = dict(params)
+                try:
+                    from django.urls import resolve
+
+                    match = resolve(page_url)
+                    if match.kwargs:
+                        mount_kwargs.update(match.kwargs)
+                except Exception:
+                    pass  # URL may not resolve (e.g., root "/") — that's fine
+
+                # Call lifecycle hooks that some mixins register on the HTTP path
+                # (dispatch/get/post) but that are bypassed here because we never
+                # go through Django's view dispatch.  Calling these explicitly
+                # means mixin authors don't need to know about the WebSocket path.
+                #
+                # Current hooks:
+                #   _ensure_tenant() — djust-tenants TenantMixin resolves the tenant.
+                #     Without this, self.tenant is always None in the live path even
+                #     though the SSR pre-render (HTTP) path works correctly.
+                #     See: https://github.com/djust-org/djust/issues/342
+                if hasattr(self.view_instance, "_ensure_tenant"):
+                    await sync_to_async(self.view_instance._ensure_tenant)(request)
+
+                # Run synchronous view operations in a thread pool
+                await sync_to_async(self.view_instance.mount)(request, **mount_kwargs)
         except Exception as e:
             response = handle_exception(
                 e,
