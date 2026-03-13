@@ -197,7 +197,13 @@ self.addEventListener('activate', event => {
             return self._generate_cache_first_fetch()  # Default
 
     def _generate_cache_first_fetch(self) -> str:
-        """Generate cache-first fetch strategy."""
+        """Generate cache-first fetch strategy.
+
+        Navigation requests (page loads, mode='navigate') always fetch from the
+        network to ensure LiveView receives a fresh HTML snapshot and the
+        server-side VDOM matches the client DOM. Static assets (JS, CSS, images)
+        are served cache-first. Falls back to offline page on network errors.
+        """
         return """
 // Fetch event - cache first strategy
 self.addEventListener('fetch', event => {
@@ -211,6 +217,17 @@ self.addEventListener('fetch', event => {
     // Skip excluded patterns
     const url = new URL(request.url);
     if (shouldExcludeFromCache(url.pathname)) {
+        return;
+    }
+
+    // Navigation requests (page loads) must always go to the network so that
+    // LiveView receives a fresh HTML snapshot.  Returning a stale cached page
+    // causes the server-side VDOM and the client DOM to diverge before the
+    // WebSocket even connects, breaking VDOM patching.
+    if (request.mode === 'navigate') {
+        event.respondWith(
+            fetch(request).catch(() => caches.match(OFFLINE_PAGE))
+        );
         return;
     }
 
@@ -239,11 +256,6 @@ self.addEventListener('fetch', event => {
             })
             .catch(error => {
                 _log('error','[SW] Fetch failed:', error);
-
-                // Return offline page for navigation requests
-                if (request.mode === 'navigate') {
-                    return caches.match(OFFLINE_PAGE);
-                }
 
                 // Return generic offline response
                 return new Response('Offline', { status: 503 });
