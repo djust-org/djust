@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Skip redundant `mount()` on WebSocket connect for pre-rendered pages** — When the client sends `has_prerendered=true` on WS connect and saved state exists in the session (written during the HTTP GET), the view's attributes are restored from session instead of re-running `mount()`. This eliminates the double page-load cost for views with expensive `mount()` implementations (e.g. directory scans, API calls). Falls back to calling `mount()` normally when no saved state is found. `_ensure_tenant()` is now called unconditionally before the restore/mount decision, fixing a regression where multi-tenant views had `self.tenant=None` on WS connect for pre-rendered pages. ([#542](https://github.com/djust-org/djust/pull/542))
+
 ## [0.3.6rc3] - 2026-03-13
 
 ### Breaking Changes
@@ -16,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **`djust cache --all` now correctly clears all sessions on the Redis backend** — The CLI called `cleanup_expired(ttl=0)` to force-clear sessions, but the semantics of `ttl=0` changed in 0.3.5 to mean "never expire". The command now calls the explicit `delete_all()` method, which uses a Redis pipeline for an efficient single round-trip bulk delete. ([#409](https://github.com/djust-org/djust/pull/409))
-- **`dj-params` attribute no longer silently dropped** — Between 0.3.2 and 0.3.6rc2, `dj-params` was removed from the client event-binding code. Templates using `dj-params='{"key": value}'` continued to fire click events but the server received `params: {}`. The attribute is now read and merged into the params object for backward compatibility. A `console.warn` is emitted in debug mode (`globalThis.djustDebug`) to notify developers to migrate.
+- **`dj-params` attribute no longer silently dropped** — Between 0.3.2 and 0.3.6rc2, `dj-params` was removed from the client event-binding code. Templates using `dj-params='{"key": value}'` continued to fire click events but the server received `params: {}`. The attribute is now read and merged into the params object for backward compatibility. A `console.warn` is emitted in debug mode (`globalThis.djustDebug`) to notify developers to migrate. ([#469](https://github.com/djust-org/djust/pull/469))
 - **Prefetch Set not cleared on SPA navigation** — The client-side `_prefetched` Set persisted across `live_redirect` navigations, preventing links on the new view from being prefetched. Added `clear()` to `window.djust._prefetch` and call it in `handleLiveRedirect()` so each SPA navigation starts with a fresh prefetch state. ([#402](https://github.com/djust-org/djust/pull/402))
 - **Auto-reload on unrecoverable VDOM state** — When VDOM patch recovery fails because recovery HTML is unavailable (e.g. after server restart), the client now auto-reloads the page instead of showing a confusing error overlay. The server sends `recoverable: false` to signal the client. ([#421](https://github.com/djust-org/djust/pull/421))
 - **`{% djust_pwa_head %}` and other custom tags with quoted arguments containing spaces now render correctly** — The Rust template lexer used `split_whitespace()` to tokenize tag arguments, which broke quoted values like `name="My App"` into separate tokens (`name="My` and `App"`). This caused the downstream Python handler to receive malformed arguments, silently returning empty output. Replaced with a quote-aware splitter (`split_tag_args`) that preserves quoted strings as single arguments. ([#419](https://github.com/djust-org/djust/pull/419))

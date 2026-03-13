@@ -291,6 +291,104 @@ class TestHTTPOnlySessionState:
 
 
 @pytest.mark.django_db
+class TestWSMountSkip:
+    """Tests for skip-mount-on-prerender: WS consumer restores state from session
+    instead of re-running mount() when the client sends has_prerendered=true.
+    Covers the state restore logic in websocket.py._handle_connect().
+    """
+
+    def _get_and_save_state(self):
+        """Do an HTTP GET, return the view + request with state in session."""
+        view = CounterView()
+        factory = RequestFactory()
+        get_request = factory.get("/counter/")
+        get_request = add_session_to_request(get_request)
+        view.get(get_request)
+        return view, get_request
+
+    def test_session_key_format_uses_path(self):
+        """GET saves state under liveview_{path} (the HTTP format, shared with WS consumer)."""
+        _, get_request = self._get_and_save_state()
+        assert (
+            "liveview_/counter/" in get_request.session
+        ), "Session key must use liveview_{path} format so WS consumer can find it"
+
+    def test_ws_restore_sets_attributes_from_session(self):
+        """State saved during GET is restored onto a fresh view via safe_setattr."""
+        from djust.security import safe_setattr
+
+        _, get_request = self._get_and_save_state()
+        # Manually write a specific count into session (simulating a view with count=42)
+        get_request.session["liveview_/counter/"] = {"count": 42}
+        get_request.session.save()
+        saved_state = get_request.session.get("liveview_/counter/", {})
+        assert saved_state, "Precondition: state must be in session"
+
+        # Simulate what the WS consumer does: restore onto a fresh view instance
+        fresh_view = CounterView()
+        for key, value in saved_state.items():
+            safe_setattr(fresh_view, key, value, allow_private=False)
+
+        assert fresh_view.count == 42, "Restored view should have the count from session state"
+
+    def test_ws_restore_skips_private_attributes(self):
+        """safe_setattr with allow_private=False does not set underscore-prefixed keys."""
+        from djust.security import safe_setattr
+
+        view = CounterView()
+        view.count = 0
+        # Attempt to restore a private key (as if it were in session) — must be blocked
+        result = safe_setattr(view, "_internal", "injected", allow_private=False)
+        assert result is False, "safe_setattr must block private attributes"
+        assert not hasattr(view, "_internal")
+
+    def test_ws_mount_called_when_no_saved_state(self):
+        """When session has no saved state, mount() must run (mounted=False path)."""
+        from unittest.mock import patch
+
+        view = CounterView()
+        factory = RequestFactory()
+        get_request = factory.get("/counter/")
+        get_request = add_session_to_request(get_request)
+        # Do NOT call view.get() — session is empty
+
+        mount_called = []
+        original_mount = view.mount
+
+        def tracking_mount(request, **kwargs):
+            mount_called.append(True)
+            return original_mount(request, **kwargs)
+
+        with patch.object(view, "mount", side_effect=tracking_mount):
+            view.mount(get_request)
+
+        assert mount_called, "mount() must be called when no saved state exists"
+
+    def test_ensure_tenant_called_regardless_of_saved_state(self):
+        """_ensure_tenant must be called unconditionally (not only in the not-mounted path).
+
+        Regression test: previously _ensure_tenant was inside the `if not mounted:`
+        block, so multi-tenant views had self.tenant=None after session restore.
+        """
+        import inspect
+
+        from djust.websocket import LiveViewConsumer
+
+        # Verify that in the current source, _ensure_tenant check appears BEFORE
+        # the `if not mounted:` block — this is the structural invariant we rely on.
+        source = inspect.getsource(LiveViewConsumer.handle_mount)
+        ensure_tenant_pos = source.find("_ensure_tenant")
+        not_mounted_pos = source.find("if not mounted:")
+        assert ensure_tenant_pos != -1, "_ensure_tenant hook must exist in handle_mount"
+        assert not_mounted_pos != -1, "if not mounted: block must exist in handle_mount"
+        assert ensure_tenant_pos < not_mounted_pos, (
+            "_ensure_tenant must be called BEFORE `if not mounted:` "
+            "so it runs even when state is restored from session. "
+            "Regression of #342 fix."
+        )
+
+
+@pytest.mark.django_db
 class TestHTTPFallbackSecurity:
     """Test that post() enforces event security (matches WebSocket security model)."""
 

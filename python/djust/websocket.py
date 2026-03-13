@@ -1021,6 +1021,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 return
             # --- End auth check ---
 
+            # Call lifecycle hooks that must run on every WS connect regardless
+            # of whether state is restored from session or mount() is called.
+            #
+            # _ensure_tenant() — djust-tenants TenantMixin resolves the tenant.
+            #   Without this, self.tenant is always None in the live path even
+            #   though the SSR pre-render (HTTP) path works correctly.
+            #   See: https://github.com/djust-org/djust/issues/342
+            if hasattr(self.view_instance, "_ensure_tenant"):
+                await sync_to_async(self.view_instance._ensure_tenant)(request)
+
             # --- State restoration (skip mount when pre-rendered state exists) ---
             mounted = False
             if has_prerendered:
@@ -1030,8 +1040,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     from .security import safe_setattr
 
                     for key, value in saved_state.items():
-                        if not key.startswith("_") and not callable(value):
-                            safe_setattr(self.view_instance, key, value, allow_private=False)
+                        safe_setattr(self.view_instance, key, value, allow_private=False)
 
                     await sync_to_async(self.view_instance._initialize_temporary_assigns)()
                     await sync_to_async(self.view_instance._assign_component_ids)()
@@ -1063,19 +1072,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         mount_kwargs.update(match.kwargs)
                 except Exception:
                     pass  # URL may not resolve (e.g., root "/") — that's fine
-
-                # Call lifecycle hooks that some mixins register on the HTTP path
-                # (dispatch/get/post) but that are bypassed here because we never
-                # go through Django's view dispatch.  Calling these explicitly
-                # means mixin authors don't need to know about the WebSocket path.
-                #
-                # Current hooks:
-                #   _ensure_tenant() — djust-tenants TenantMixin resolves the tenant.
-                #     Without this, self.tenant is always None in the live path even
-                #     though the SSR pre-render (HTTP) path works correctly.
-                #     See: https://github.com/djust-org/djust/issues/342
-                if hasattr(self.view_instance, "_ensure_tenant"):
-                    await sync_to_async(self.view_instance._ensure_tenant)(request)
 
                 # Run synchronous view operations in a thread pool
                 await sync_to_async(self.view_instance.mount)(request, **mount_kwargs)
