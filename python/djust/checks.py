@@ -1614,7 +1614,7 @@ def _check_view_root_same_element(content, relpath, filepath, errors):
                     'Example: <div dj-root dj-view="myapp.views.MyView">'
                 ),
                 id="djust.T005",
-                fix_hint=("Move dj-view and dj-root onto the same element " "in `%s`." % relpath),
+                fix_hint=("Move dj-view and dj-root onto the same element in `%s`." % relpath),
                 file_path=filepath,
                 line_number=view_only_lineno,
             )

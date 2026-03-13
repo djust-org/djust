@@ -49,7 +49,7 @@ class RedisPresenceBackend(PresenceBackend):
             import redis as redis_lib
         except ImportError:
             raise ImportError(
-                "redis is required for RedisPresenceBackend. " "Install with: pip install redis"
+                "redis is required for RedisPresenceBackend. Install with: pip install redis"
             )
 
         self._client = redis_lib.from_url(redis_url, decode_responses=True)

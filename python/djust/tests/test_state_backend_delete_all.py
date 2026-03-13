@@ -51,7 +51,7 @@ class TestDeleteAll:
 
     def test_delete_all_clears_state_sizes(self):
         backend = _make_backend()
-        view = _add_session(backend)
+        _add_session(backend)
         backend._state_sizes["sess1"] = 42
 
         backend.delete_all()

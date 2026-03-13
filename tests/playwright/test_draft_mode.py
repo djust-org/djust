@@ -61,17 +61,17 @@ async def test_draft_mode():
 
             # Print relevant console logs
             print("\n🔍 Console Logs:")
-            draft_logs = [log for log in console_logs if '[Test]' in log or '[Draft]' in log]
+            draft_logs = [log for log in console_logs if "[Test]" in log or "[Draft]" in log]
             for log in draft_logs[-20:]:  # Last 20 relevant logs
                 print(f"  {log}")
 
             # Additional test: Check localStorage directly
             print("\n🔍 localStorage Check:")
-            draft_key = await page.evaluate("() => '{{ draft_key }}'")
+            await page.evaluate("() => '{{ draft_key }}'")
             has_draft = await page.evaluate("""
                 () => localStorage.getItem('djust_draft_test_article_editor') !== null
             """)
-            print(f"  Draft key: test_article_editor")
+            print("  Draft key: test_article_editor")
             print(f"  Draft in localStorage: {has_draft}")
 
             if has_draft:
@@ -87,13 +87,15 @@ async def test_draft_mode():
                 await browser.close()
                 return 0
             else:
-                print(f"\n❌ FAIL: Expected all tests to pass")
+                print("\n❌ FAIL: Expected all tests to pass")
                 print(f"           Got {client_passed} passed, {client_failed} failed")
 
                 # Print failed test details
                 if client_failed > 0:
                     print("\n🔍 Failed Test Details:")
-                    failed_items = await page.query_selector_all("#client-test-results .test-result-failed")
+                    failed_items = await page.query_selector_all(
+                        "#client-test-results .test-result-failed"
+                    )
                     for item in failed_items:
                         name = await item.query_selector("h6")
                         expected = await item.query_selector("p:has-text('Expected:')")

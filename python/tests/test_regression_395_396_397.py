@@ -52,9 +52,7 @@ def _make_memory_backend_cleanup_fn():
             cutoff = time.time() - ttl
 
             with self._lock:
-                expired_keys = [
-                    key for key, (_, ts) in self._cache.items() if ts < cutoff
-                ]
+                expired_keys = [key for key, (_, ts) in self._cache.items() if ts < cutoff]
                 for key in expired_keys:
                     del self._cache[key]
                     self._state_sizes.pop(key, None)
@@ -124,11 +122,13 @@ def test_redis_py_source_handles_ttl_zero():
 
 class _LazyObjectWithKey:
     """Simulates an initialised Django Channels LazyObject with session_key."""
+
     session_key = "real-session-key-abc123"
 
 
 class _LazyObjectWithoutKey:
     """Simulates a LazyObject with no session_key attribute."""
+
     pass
 
 
@@ -152,12 +152,12 @@ def test_websocket_py_uses_getattr_not_hasattr():
     """
     src = (_WORKTREE_ROOT / "python/djust/websocket.py").read_text()
 
-    assert 'getattr(scope_session, "session_key", None)' in src, (
-        "websocket.py must use getattr() with sentinel for LazyObject safety"
-    )
-    assert 'hasattr(scope_session, "session_key")' not in src, (
-        "websocket.py must not use hasattr() on scope_session"
-    )
+    assert (
+        'getattr(scope_session, "session_key", None)' in src
+    ), "websocket.py must use getattr() with sentinel for LazyObject safety"
+    assert (
+        'hasattr(scope_session, "session_key")' not in src
+    ), "websocket.py must not use hasattr() on scope_session"
 
 
 # ===========================================================================
@@ -167,10 +167,7 @@ def test_websocket_py_uses_getattr_not_hasattr():
 
 def test_flex_between_utility_defined_in_utilities_css():
     """utilities.css must define a .flex-between class."""
-    css_path = (
-        _WORKTREE_ROOT
-        / "examples/demo_project/demo_app/static/css/utilities.css"
-    )
+    css_path = _WORKTREE_ROOT / "examples/demo_project/demo_app/static/css/utilities.css"
     content = css_path.read_text()
     assert ".flex-between" in content, "utilities.css must define .flex-between"
 
@@ -178,10 +175,7 @@ def test_flex_between_utility_defined_in_utilities_css():
 def test_flex_between_sets_required_properties():
     """The .flex-between rule must include display:flex, flex-direction:row,
     and justify-content:space-between."""
-    css_path = (
-        _WORKTREE_ROOT
-        / "examples/demo_project/demo_app/static/css/utilities.css"
-    )
+    css_path = _WORKTREE_ROOT / "examples/demo_project/demo_app/static/css/utilities.css"
     content = css_path.read_text()
 
     match = re.search(r"\.flex-between\s*\{([^}]+)\}", content, re.DOTALL)
@@ -189,12 +183,8 @@ def test_flex_between_sets_required_properties():
 
     rule = match.group(1)
 
-    assert "display" in rule and "flex" in rule, (
-        ".flex-between must set display: flex"
-    )
-    assert "flex-direction" in rule and "row" in rule, (
-        ".flex-between must set flex-direction: row"
-    )
-    assert "justify-content" in rule and "space-between" in rule, (
-        ".flex-between must set justify-content: space-between"
-    )
+    assert "display" in rule and "flex" in rule, ".flex-between must set display: flex"
+    assert "flex-direction" in rule and "row" in rule, ".flex-between must set flex-direction: row"
+    assert (
+        "justify-content" in rule and "space-between" in rule
+    ), ".flex-between must set justify-content: space-between"

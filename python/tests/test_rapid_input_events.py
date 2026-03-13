@@ -85,11 +85,11 @@ def test_rapid_input_events_return_patches():
         html, patches_json, version = view.render_with_diff(request)
 
         print(
-            f"[TEST] Event {i+1}: value={new_value}, version={version}, patches={'YES' if patches_json else 'NO'}"
+            f"[TEST] Event {i + 1}: value={new_value}, version={version}, patches={'YES' if patches_json else 'NO'}"
         )
 
         if not patches_json:
-            print(f"[TEST] FAIL: No patches returned for event {i+1}!")
+            print(f"[TEST] FAIL: No patches returned for event {i + 1}!")
             all_patches_returned = False
         else:
             patches = json.loads(patches_json)

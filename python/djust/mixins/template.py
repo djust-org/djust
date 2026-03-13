@@ -135,8 +135,7 @@ class TemplateMixin:
                     extracted = self._strip_comments_and_whitespace(extracted)
 
                     logger.debug(
-                        "[LiveView] Extracted and stripped liveview-root: %d chars "
-                        "(from %d chars)",
+                        "[LiveView] Extracted and stripped liveview-root: %d chars (from %d chars)",
                         len(extracted),
                         len(template_source),
                     )

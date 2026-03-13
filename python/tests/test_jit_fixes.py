@@ -119,9 +119,10 @@ class TestDeepDictSerialization:
         assert "pk" in result, "Serialized model must include 'pk' key"
         assert result["pk"] == 1, "'pk' must be the native primary key value"
         assert result["id"] == 1, "'id' must now be native type, matching pk (PR #472)"
+        assert result["id"] == result["pk"], ".id and .pk must be identical"
 
-    def test_serialize_model_id_is_always_string(self):
-        """Primary .id serialization path always produces a string (#408).
+    def test_serialize_model_id_is_native_type(self):
+        """Primary .id serialization path returns native type (#472).
 
         The 'id' key must be the native pk type (not a string) so that
         template code using {% if model.id == var %} works with integer comparisons.
@@ -147,6 +148,7 @@ class TestDeepDictSerialization:
         assert result["id"] == uuid.UUID("12345678-1234-5678-1234-567812345678")
         # pk should also be the native UUID object
         assert isinstance(result["pk"], uuid.UUID)
+        assert result["id"] == result["pk"]
 
     def test_serialize_model_none_pk(self):
         """Model with pk=None (unsaved) serializes id as None, not 'None' (#408)."""

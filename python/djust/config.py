@@ -168,7 +168,7 @@ class LiveViewConfig:
         mode = self._config.get("event_security")
         if mode not in valid_modes:
             logger.warning(
-                "Invalid event_security mode %r (must be one of %s). " "Falling back to 'strict'.",
+                "Invalid event_security mode %r (must be one of %s). Falling back to 'strict'.",
                 mode,
                 valid_modes,
             )
@@ -188,7 +188,7 @@ class LiveViewConfig:
                 val = rl.get(key)
                 if val is not None and (not isinstance(val, (int, float)) or val <= 0):
                     logger.warning(
-                        "Invalid rate_limit.%s=%r (must be > 0). " "Using default %s.",
+                        "Invalid rate_limit.%s=%r (must be > 0). Using default %s.",
                         key,
                         val,
                         defaults[key],

@@ -26,9 +26,9 @@ class TestDocFilesExist:
     def test_css_frameworks_guide_exists(self):
         """docs/website/guides/css-frameworks.md must exist (README links to it)."""
         path = os.path.join(DOCS_ROOT, "guides", "css-frameworks.md")
-        assert os.path.isfile(path), (
-            "docs/website/guides/css-frameworks.md is missing. " "README line 454 links to it."
-        )
+        assert os.path.isfile(
+            path
+        ), "docs/website/guides/css-frameworks.md is missing. README line 454 links to it."
 
     def test_template_cheatsheet_exists(self):
         """docs/website/guides/template-cheatsheet.md must exist."""

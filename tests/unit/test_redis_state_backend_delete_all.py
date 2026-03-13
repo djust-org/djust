@@ -39,6 +39,7 @@ def _make_backend(keys=None, scan_error=None):
 
     # Configure scan_iter behavior
     if scan_error is not None:
+
         def _iter_with_error(*args, **kwargs):
             for k in keys or []:
                 yield k
