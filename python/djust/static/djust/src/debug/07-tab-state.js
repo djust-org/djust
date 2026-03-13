@@ -92,7 +92,8 @@
                     </div>
                     <div class="state-timeline-list">
                         ${filtered.map((entry, index) => {
-                            const prevEntry = this.stateHistory[index + 1];
+                            const origIndex = this.stateHistory.indexOf(entry);
+                            const prevEntry = this.stateHistory[origIndex + 1];
                             const changes = this.computeStateDiff(prevEntry?.state, entry.state);
                             const hasChanges = changes.length > 0;
                             const isExpanded = entry._expanded || false;
