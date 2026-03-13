@@ -229,8 +229,7 @@ class RedisStateBackend(StateBackend):
         - Timestamp embedded in serialized data
         """
         redis_key = self._make_key(key)
-        if ttl is None:
-            ttl = self._default_ttl
+        ttl = self._default_ttl if ttl is None else ttl
 
         with profiler.profile(profiler.OP_STATE_SAVE):
             try:
@@ -243,7 +242,6 @@ class RedisStateBackend(StateBackend):
                 with profiler.profile(profiler.OP_COMPRESSION):
                     data = self._compress(serialized)
 
-                # Store with TTL.
                 # TTL=0 means "never expire"; use SET without expiry instead of
                 # SETEX (which requires TTL >= 1 and would raise a Redis error).
                 if ttl > 0:

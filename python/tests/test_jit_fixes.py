@@ -84,6 +84,16 @@ class TestCodegenAllWithSubtree:
 
 
 class TestDeepDictSerialization:
+    def setup_method(self):
+        # DjangoJSONEncoder._depth is a class-level counter.  Reset it before
+        # each test so that a crash in a previous test (which would leave it
+        # non-zero despite the try/finally in default()) cannot affect later
+        # assertions about serialized output.
+        DjangoJSONEncoder._depth = 0
+
+    def teardown_method(self):
+        DjangoJSONEncoder._depth = 0
+
     def _make_model(self, **kwargs):
         """Create a mock Django Model instance."""
         obj = MagicMock()
@@ -149,6 +159,22 @@ class TestDeepDictSerialization:
         # pk should also be the native UUID object
         assert isinstance(result["pk"], uuid.UUID)
         assert result["id"] == result["pk"]
+
+    def test_serialize_model_uuid_pk_via_json_dumps(self):
+        """UUID pk model serialized through json.dumps produces a string id in JSON output.
+
+        _serialize_model_safely() returns id as a native UUID object.  When
+        that dict is re-encoded by json.dumps, DjangoJSONEncoder.default()
+        converts the UUID to a string.  This test exercises the full pipeline
+        so both the direct and json.dumps code paths are covered.
+        """
+        import uuid
+
+        model = self._make_model(title="UUID PK via dumps")
+        model.pk = uuid.UUID("12345678-1234-5678-1234-567812345678")
+        serialized = json.loads(json.dumps(model, cls=DjangoJSONEncoder))
+        assert serialized["id"] == "12345678-1234-5678-1234-567812345678"
+        assert serialized["pk"] == "12345678-1234-5678-1234-567812345678"
 
     def test_serialize_model_none_pk(self):
         """Model with pk=None (unsaved) serializes id as None, not 'None' (#408)."""
@@ -263,6 +289,10 @@ class TestPropertyCache:
         obj.pk = 1
         obj.__dict__["id"] = 1
 
+        # Reset class-level counter before the test.  This is safe because
+        # _call_count is only written by _CountingModel.expensive_prop and read
+        # here; no other test touches this class attribute, so resetting it
+        # directly avoids the need for a pytest fixture.
         _CountingModel._call_count = 0
 
         result1 = {}
