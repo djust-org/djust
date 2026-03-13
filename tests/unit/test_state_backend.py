@@ -166,7 +166,6 @@ class TestInMemoryBackend:
         """
         backend = InMemoryStateBackend()
 
-        # Add several sessions
         for i in range(3):
             view = RustLiveView(f"<div>{i}</div>")
             backend.set(f"key{i}", view)
@@ -179,7 +178,7 @@ class TestInMemoryBackend:
         assert backend.get_stats()["total_sessions"] == 3
 
     def test_cleanup_ttl_zero_on_empty_backend(self):
-        """SESSION_TTL=0 on an empty backend returns 0, not an error (#410)."""
+        """SESSION_TTL=0 on an empty backend returns 0 (#395)."""
         backend = InMemoryStateBackend()
         cleaned = backend.cleanup_expired(ttl=0)
         assert cleaned == 0
