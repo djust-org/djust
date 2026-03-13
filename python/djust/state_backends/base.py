@@ -156,14 +156,3 @@ class StateBackend(ABC):
             "average_state_bytes": 0,
             "largest_sessions": [],
         }
-
-    def delete_all(self) -> int:
-        """
-        Delete all sessions managed by this backend.
-
-        Override in subclasses for an efficient bulk-delete implementation.
-
-        Returns:
-            Number of sessions deleted
-        """
-        raise NotImplementedError("delete_all() is not implemented for this backend")
