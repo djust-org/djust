@@ -1,10 +1,11 @@
 """
 Tests for RedisStateBackend.delete_all() — issue #428.
 
-Covers three scenarios:
+Covers:
 1. Normal path — keys found and deleted via pipeline, correct count returned.
-2. Scan error path — scan_iter raises mid-iteration, returns 0 (not a partial count).
-3. Empty keyspace — no keys, returns 0 without calling pipeline.execute().
+2. Empty keyspace — no keys, returns 0 without calling pipeline.execute().
+3. Scan error — scan_iter raises mid-iteration, returns 0 (not a partial count).
+4. Execute error — pipeline.execute() raises, returns 0 (caught by exception handler).
 """
 
 from unittest.mock import MagicMock, patch
@@ -13,15 +14,11 @@ from djust.state_backends.redis import RedisStateBackend
 
 
 def _make_backend(keys=None, scan_error=None):
-    """
-    Build a RedisStateBackend with all Redis I/O mocked.
+    """Build a RedisStateBackend with all Redis I/O mocked.
 
-    Bypasses __init__ (which requires a live Redis connection) by using
-    __new__ and directly injecting a mock client.
-
-    Args:
-        keys: list of byte-string keys scan_iter should yield (default: [])
-        scan_error: if set, scan_iter raises this exception after yielding keys
+    Bypasses __init__ (requires a live Redis connection) via __new__ and
+    injects a mock client directly.  Pass ``scan_error`` to make scan_iter
+    raise after yielding ``keys``.
     """
     backend = RedisStateBackend.__new__(RedisStateBackend)
 
@@ -137,6 +134,29 @@ class TestRedisDeleteAllScanError:
             keys=[],
             scan_error=OSError("timeout"),
         )
+
+        with patch("djust.state_backends.redis.logger") as mock_logger:
+            backend.delete_all()
+            mock_logger.exception.assert_called_once()
+            assert "delete_all" in mock_logger.exception.call_args[0][0]
+
+
+class TestRedisDeleteAllPipelineExecuteFailure:
+    """pipeline.execute() raises — must return 0 and log, not propagate."""
+
+    def test_returns_zero_when_execute_raises(self):
+        """delete_all() returns 0 when pipeline.execute() raises (#432)."""
+        backend, client, pipeline = _make_backend(keys=[b"djust:sess1", b"djust:sess2"])
+        pipeline.execute.side_effect = RuntimeError("pipeline exec failed")
+
+        result = backend.delete_all()
+
+        assert result == 0
+
+    def test_logs_exception_when_execute_raises(self):
+        """Exception from pipeline.execute() is logged via logger.exception (#432)."""
+        backend, client, pipeline = _make_backend(keys=[b"djust:sess1"])
+        pipeline.execute.side_effect = OSError("connection reset")
 
         with patch("djust.state_backends.redis.logger") as mock_logger:
             backend.delete_all()
