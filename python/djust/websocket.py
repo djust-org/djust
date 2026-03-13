@@ -951,7 +951,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # absent, but will not suppress other exceptions (e.g. OperationalError
             # from a db-backed session backend).  Use getattr(obj, name, None) for
             # a more robust single-call alternative on LazyObjects.
-            from django.contrib.sessions.backends.db import SessionStore
+            # Lazy import: avoids pulling in the db backend when the project
+            # uses a different session backend (e.g. cached_db, file, redis).
+            from django.contrib.sessions.backends.db import SessionStore  # noqa: PLC0415
 
             scope_session = self.scope.get("session")
             # getattr(obj, name, default) is used instead of a hasattr() +

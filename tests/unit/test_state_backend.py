@@ -238,6 +238,23 @@ class TestInMemoryBackend:
         stats = backend.get_stats()
         assert stats["total_sessions"] == 10
 
+    def test_delete_all_removes_all_sessions(self):
+        """delete_all() removes every session and returns the count."""
+        backend = InMemoryStateBackend()
+        for i in range(3):
+            backend.set(f"key{i}", RustLiveView(f"<div>{i}</div>"))
+
+        deleted = backend.delete_all()
+
+        assert deleted == 3
+        for i in range(3):
+            assert backend.get(f"key{i}") is None
+
+    def test_delete_all_empty_backend_returns_zero(self):
+        """delete_all() on an empty backend returns 0."""
+        backend = InMemoryStateBackend()
+        assert backend.delete_all() == 0
+
 
 class TestRedisBackend:
     """Test RedisStateBackend (requires Redis server)."""
@@ -347,7 +364,7 @@ class TestRedisBackend:
             assert redis_backend.get(f"del_all_key{i}") is not None
 
         deleted = redis_backend.delete_all()
-        assert deleted == 3
+        assert deleted >= 3  # >= not == in case teardown from a prior run left extra keys
 
         # All sessions should be gone
         for i in range(3):

@@ -19,7 +19,7 @@ import pytest
 # Path to the shipped .d.ts file relative to the package
 DTS_PATH = (
     Path(__file__).resolve().parents[2] / "python" / "djust" / "static" / "djust" / "djust.d.ts"
-)
+)  # parents[2] == repo root (python/tests/../../)
 
 
 @pytest.fixture(scope="module")

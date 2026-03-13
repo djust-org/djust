@@ -48,6 +48,8 @@ class RedisStateBackend(StateBackend):
         )
     """
 
+    _DELETE_BATCH_SIZE = 1000  # max keys per pipeline flush in delete_all()
+
     def __init__(
         self,
         redis_url: str,
@@ -281,16 +283,19 @@ class RedisStateBackend(StateBackend):
         """
         try:
             pattern = f"{self._key_prefix}*"
-            queued = 0
+            total = 0
             pipe = self._client.pipeline()
             for key in self._client.scan_iter(match=pattern, count=100):
                 pipe.delete(key)
-                queued += 1
-            if not queued:
-                return 0
-            pipe.execute()
-            logger.info("Deleted %d sessions from Redis backend", queued)
-            return queued
+                total += 1
+                if total % self._DELETE_BATCH_SIZE == 0:
+                    pipe.execute()
+                    pipe = self._client.pipeline()
+            if total % self._DELETE_BATCH_SIZE:  # flush any remaining
+                pipe.execute()
+            if total:
+                logger.info("Deleted %d sessions from Redis backend", total)
+            return total
 
         except Exception:
             logger.exception("delete_all failed for prefix %s", self._key_prefix)

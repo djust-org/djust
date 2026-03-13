@@ -5,7 +5,12 @@ Regression tests for issue #397: .flex-between utility CSS class.
 import re
 from pathlib import Path
 
-_WORKTREE_ROOT = Path(__file__).resolve().parents[2]  # .../djust/
+_WORKTREE_ROOT = Path(__file__).resolve().parents[2]  # python/tests/../../ == repo root
+
+# Guard against accidental mis-location of this test file.
+assert (
+    _WORKTREE_ROOT / "pyproject.toml"
+).exists(), f"_WORKTREE_ROOT does not look like the djust repo root: {_WORKTREE_ROOT}"
 
 
 def test_flex_between_utility_defined_in_utilities_css():
