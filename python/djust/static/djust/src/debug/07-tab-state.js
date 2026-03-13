@@ -49,6 +49,17 @@
 
         renderStateTab() {
             const sizeSection = this.renderStateSizeSection();
+            const searchQuery = (this.state.searchQuery || '').toLowerCase();
+            const filtered = searchQuery
+                ? this.stateHistory.filter(entry => {
+                    const trigger = (entry.trigger || '').toLowerCase();
+                    const eventName = (entry.eventName || '').toLowerCase();
+                    const stateStr = JSON.stringify(entry.state || {}).toLowerCase();
+                    return trigger.includes(searchQuery) ||
+                           eventName.includes(searchQuery) ||
+                           stateStr.includes(searchQuery);
+                })
+                : this.stateHistory;
 
             if (this.stateHistory.length === 0) {
                 return `
@@ -62,6 +73,10 @@
                 `;
             }
 
+            const countLabel = (searchQuery && filtered.length !== this.stateHistory.length)
+                ? `${filtered.length} / ${this.stateHistory.length}`
+                : `${this.stateHistory.length}`;
+
             return `
                 ${sizeSection}
                 <div class="state-timeline-container">
@@ -69,14 +84,14 @@
                         <div class="state-timeline-title">
                             <span class="timeline-icon">🕐</span>
                             <span>State Timeline</span>
-                            <span class="state-count">${this.stateHistory.length} change${this.stateHistory.length === 1 ? '' : 's'}</span>
+                            <span class="state-count">${countLabel} change${this.stateHistory.length === 1 ? '' : 's'}</span>
                         </div>
                         <button class="clear-state-btn" onclick="window.djustDebugPanel.clearStateHistory()">
                             Clear History
                         </button>
                     </div>
                     <div class="state-timeline-list">
-                        ${this.stateHistory.map((entry, index) => {
+                        ${filtered.map((entry, index) => {
                             const prevEntry = this.stateHistory[index + 1];
                             const changes = this.computeStateDiff(prevEntry?.state, entry.state);
                             const hasChanges = changes.length > 0;
