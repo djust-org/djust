@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Debug toolbar state size visualization** — New "Size Breakdown" table in State tab shows per-variable memory and serialized byte sizes with human-readable formatting (B/KB/MB). Added `_debug_state_sizes()` method to `PostProcessingMixin` included in both mount and event debug payloads. ([#459](https://github.com/djust-org/djust/pull/459))
 - **Debug panel TurboNav persistence** — Event, patch, network, and state history now persist across TurboNav navigation via sessionStorage (30s window). Panel state restores on next page if navigated within 30 seconds. ([#459](https://github.com/djust-org/djust/pull/459))
 - **TurboNav integration guide** — Comprehensive guide covering setup, navigation lifecycle, inline script handling, known caveats, and design decisions: `docs/guides/turbonav-integration.md`. ([#459](https://github.com/djust-org/djust/pull/459))
+- **Debug panel search extended to Network and State tabs** — The search bar in the debug panel now filters across all data tabs. The Network tab shows a `N / total` count label when a query narrows the message list (#530). The State tab filters history entries by trigger, event name, and serialized state content, with the same `N / total` count label (#520). Overlapping `nameFilter` and `searchQuery` on the Events tab now correctly apply AND semantics (#532). ([#541](https://github.com/djust-org/djust/pull/541))
 
 ## [0.3.5] - 2026-03-05
 

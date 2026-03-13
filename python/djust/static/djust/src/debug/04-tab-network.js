@@ -14,6 +14,20 @@
             const uptimeStr = uptime > 0 ?
                 `${Math.floor(uptime / 60)}m ${uptime % 60}s` : 'N/A';
 
+            // Filter messages by search query and compute count label
+            const searchQuery = (this.state.searchQuery || '').toLowerCase();
+            const filtered = searchQuery ? messages.filter(msg => {
+                const payload = msg.data || msg.payload;
+                const type = msg.type || (payload ? (payload.type || payload.event || 'data') : 'unknown');
+                const payloadStr = payload ? JSON.stringify(payload).toLowerCase() : '';
+                return type.toLowerCase().includes(searchQuery) ||
+                       (msg.direction || '').toLowerCase().includes(searchQuery) ||
+                       payloadStr.includes(searchQuery);
+            }) : messages;
+            const countLabel = (searchQuery && filtered.length !== messages.length)
+                ? filtered.length + ' / ' + messages.length
+                : messages.length;
+
             return `
                 ${stats ? `
                 <div class="websocket-stats">
@@ -51,20 +65,9 @@
                 ` : ''}
                 <div class="network-list">
                     <div class="network-header-row">
-                        <span class="network-title">Recent Messages (${messages.length})</span>
+                        <span class="network-title">Recent Messages (${countLabel})</span>
                     </div>
-                    ${(() => {
-                        const searchQuery = (this.state.searchQuery || '').toLowerCase();
-                        return messages.filter(msg => {
-                            if (!searchQuery) return true;
-                            const payload = msg.data || msg.payload;
-                            const type = msg.type || (payload ? (payload.type || payload.event || 'data') : 'unknown');
-                            const payloadStr = payload ? JSON.stringify(payload).toLowerCase() : '';
-                            return type.toLowerCase().includes(searchQuery) ||
-                                   (msg.direction || '').toLowerCase().includes(searchQuery) ||
-                                   payloadStr.includes(searchQuery);
-                        });
-                    })().map((msg, index) => {
+                    ${filtered.map((msg, index) => {
                         const hasPayload = msg.data || (msg.payload && Object.keys(msg.payload).length > 0);
                         const hasDebugInfo = msg.payload && msg.payload._debug;
                         const payload = msg.data || msg.payload;
