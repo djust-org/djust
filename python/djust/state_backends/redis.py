@@ -281,20 +281,19 @@ class RedisStateBackend(StateBackend):
         """
         try:
             pattern = f"{self._key_prefix}*"
-            keys = list(self._client.scan_iter(match=pattern))
-            if not keys:
-                return 0
-
+            queued = 0
             pipe = self._client.pipeline()
-            for key in keys:
+            for key in self._client.scan_iter(match=pattern, count=100):
                 pipe.delete(key)
-            results = pipe.execute()
-            deleted = sum(1 for r in results if r)
-            logger.info("Deleted %d sessions from Redis backend", deleted)
-            return deleted
+                queued += 1
+            if not queued:
+                return 0
+            pipe.execute()
+            logger.info("Deleted %d sessions from Redis backend", queued)
+            return queued
 
-        except Exception as e:
-            logger.error("Failed to delete all sessions from Redis: %s", e)
+        except Exception:
+            logger.exception("delete_all failed for prefix %s", self._key_prefix)
             return 0
 
     def get_stats(self) -> Dict[str, Any]:
