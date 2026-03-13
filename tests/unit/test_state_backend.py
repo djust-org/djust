@@ -335,6 +335,52 @@ class TestRedisBackend:
 
         assert redis_backend.get("del_key") is None
 
+    def test_delete_all_removes_sessions(self, redis_backend):
+        """Test delete_all() removes all sessions and returns the count."""
+        # Add several sessions
+        for i in range(3):
+            view = RustLiveView(f"<div>{i}</div>")
+            redis_backend.set(f"del_all_key{i}", view)
+
+        # All sessions should be retrievable
+        for i in range(3):
+            assert redis_backend.get(f"del_all_key{i}") is not None
+
+        deleted = redis_backend.delete_all()
+        assert deleted == 3
+
+        # All sessions should be gone
+        for i in range(3):
+            assert redis_backend.get(f"del_all_key{i}") is None
+
+    def test_delete_all_empty_backend_returns_zero(self, redis_backend):
+        """Test delete_all() on an empty backend returns 0."""
+        result = redis_backend.delete_all()
+        assert result == 0
+
+    def test_delete_all_pipeline_execute_error(self, redis_backend):
+        """Test delete_all() returns 0 (not raises) when pipeline.execute() fails."""
+        import redis
+        from unittest.mock import MagicMock
+
+        # Add a key so scan_iter finds something
+        view = RustLiveView("<div>test</div>")
+        redis_backend.set("pipeline_err_key", view)
+
+        # Swap out the pipeline to one that raises on execute()
+        mock_pipeline = MagicMock()
+        mock_pipeline.delete = MagicMock()
+        mock_pipeline.execute.side_effect = redis.RedisError("Simulated pipeline failure")
+        original_pipeline = redis_backend._client.pipeline
+        redis_backend._client.pipeline = lambda: mock_pipeline
+
+        try:
+            result = redis_backend.delete_all()
+        finally:
+            redis_backend._client.pipeline = original_pipeline
+
+        assert result == 0
+
     def test_redis_stats(self, redis_backend):
         """Test Redis statistics."""
         # Add some sessions

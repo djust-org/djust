@@ -11,7 +11,16 @@
                 ${this.renderPerformanceMetrics()}
                 ${recentWarnings.length > 0 ? this.renderWarningsSummary(recentWarnings) : ''}
                 <div class="patches-list">
-                    ${this.patchHistory.map((entry, index) => {
+                    ${(() => {
+                        const searchQuery = (this.state.searchQuery || '').toLowerCase();
+                        return this.patchHistory.filter(entry => {
+                            if (!searchQuery) return true;
+                            const types = entry.patches ? entry.patches.map(p => p.type || p.op || 'update').join(' ').toLowerCase() : '';
+                            const paths = entry.patches ? entry.patches.map(p => p.path || '').join(' ').toLowerCase() : '';
+                            const values = entry.patches ? entry.patches.map(p => p.value != null ? JSON.stringify(p.value) : '').join(' ').toLowerCase() : '';
+                            return types.includes(searchQuery) || paths.includes(searchQuery) || values.includes(searchQuery);
+                        });
+                    })().map((entry, index) => {
                         const hasDetails = entry.patches && entry.patches.length > 0;
                         const patchTypes = [...new Set(entry.patches.map(p => p.type || p.op || 'update'))];
 

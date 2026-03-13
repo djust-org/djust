@@ -7,12 +7,18 @@
 
             const nameFilter = (this.state.filters.eventName || '').toLowerCase();
             const statusFilter = this.state.filters.eventStatus || 'all';
+            const searchQuery = (this.state.searchQuery || '').toLowerCase();
 
             const filtered = this.eventHistory.filter(event => {
                 const eventName = (event.handler || event.name || 'unknown').toLowerCase();
                 if (nameFilter && !eventName.includes(nameFilter)) return false;
                 if (statusFilter === 'errors' && !event.error) return false;
                 if (statusFilter === 'success' && event.error) return false;
+                if (searchQuery) {
+                    const errorStr = (event.error || '').toLowerCase();
+                    const paramsStr = event.params ? JSON.stringify(event.params).toLowerCase() : '';
+                    if (!eventName.includes(searchQuery) && !errorStr.includes(searchQuery) && !paramsStr.includes(searchQuery)) return false;
+                }
                 return true;
             });
 

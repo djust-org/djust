@@ -39,9 +39,13 @@ The debug panel only appears when `DEBUG = True`. Never deploy to production wit
 
 ## Opening the Debug Panel
 
-### Keyboard Shortcut (Recommended)
+### Keyboard Shortcuts
 
-Press **`Ctrl+Shift+D`** (Windows/Linux) or **`Cmd+Shift+D`** (Mac)
+| Action | Windows/Linux | Mac |
+|--------|--------------|-----|
+| Toggle panel | `Ctrl+Shift+D` | `Cmd+Shift+D` |
+| Focus search | `Ctrl+Shift+F` | `Cmd+Shift+F` |
+| Clear all data | `Ctrl+Shift+C` | `Cmd+Shift+C` |
 
 ### Floating Button
 
@@ -54,6 +58,49 @@ The panel appears as a bottom dock that slides up from the bottom of the screen:
 - **Width**: Full screen width
 - **Position**: Fixed at bottom, overlays page content
 - **Sidebar**: Left-side vertical tab navigation
+- **Search box**: Top of panel (highlighted in orange) for filtering across all tabs
+
+## Global Search
+
+The debug panel includes a **global search box** at the top that filters results across all active tabs in real-time.
+
+### Using Global Search
+
+1. **Open the search box**: Press `Ctrl+Shift+F` (Windows/Linux) or `Cmd+Shift+F` (Mac), or click in the search field
+2. **Type your query**: Search is case-insensitive and supports partial matches
+3. **Results filter instantly**: The active tab re-renders to show only matching items
+4. **Clear search**: Delete the text or press Escape to show all items again
+
+### What Global Search Matches
+
+**Event History Tab:**
+- Event handler names
+- Error messages
+- Parameter JSON (including keys and values)
+
+**Network Tab:**
+- Message types (`event`, `patch`, etc.)
+- Message direction (`sent`/`received`)
+- Payload JSON (entire payload content)
+
+**VDOM Patches Tab:**
+- Patch types (`SetAttr`, `Replace`, `SetText`, etc.)
+- DOM paths
+- Patch values
+
+### Example Searches
+
+```
+"increment"       → Find all events/patches mentioning increment
+"Timeout"         → Find error messages or events with Timeout
+"SetAttr"         → Find all SetAttr patches
+"sent"            → Find sent network messages
+'"amount"'        → Find events with amount parameter (JSON key)
+```
+
+### Performance
+
+Search filters are applied client-side and are instant — no network requests needed. Search works across the last 50 events, 50 patches, and unlimited network messages (subject to available memory).
 
 ## Features Overview
 
