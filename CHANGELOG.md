@@ -51,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `--server` flag / `DJUST_SERVER` env var to override the default server URL (`https://djustlive.com`)
 - **TypeScript type stubs updated** — `DjustStreamOp` now includes `"done"` and `"start"` operation types and an optional `mode` field (`"append" | "replace" | "prepend"`). `getActiveStreams()` return type changed from `Map` to `Record`.
 - **`.flex-between` CSS utility class** — Added to demo project's `utilities.css` for laying out flex children horizontally with space-between. Use on card headers or any flex container that needs a title on the left and action widget on the right. (#397)
+- **Debug toolbar state size visualization** — New "Size Breakdown" table in State tab shows per-variable memory and serialized byte sizes with human-readable formatting (B/KB/MB). Added `_debug_state_sizes()` method to `PostProcessingMixin` included in both mount and event debug payloads. (#459)
+- **Debug panel TurboNav persistence** — Event, patch, network, and state history now persist across TurboNav navigation via sessionStorage (30s window). Panel state restores on next page if navigated within 30 seconds. (#459)
+- **TurboNav integration guide** — Comprehensive guide covering setup, navigation lifecycle, inline script handling, known caveats, and design decisions: `docs/guides/turbonav-integration.md`. (#459)
 
 ## [0.3.5] - 2026-03-05
 
