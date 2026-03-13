@@ -11,6 +11,10 @@ import { describe, it, expect } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Replicated from 03-tab-events.js
+// NOTE: The debug panel is an IIFE and cannot be imported directly.
+// If the filter logic in 03-tab-events.js changes, update this function
+// to stay in sync. The source of truth is the inline filter in
+// renderEventsTab() → the filter block at the top of that method.
 // ---------------------------------------------------------------------------
 function filterEvents(events, nameFilter, statusFilter, searchQuery) {
     const name = (nameFilter || '').toLowerCase();
@@ -35,6 +39,9 @@ function filterEvents(events, nameFilter, statusFilter, searchQuery) {
 
 // ---------------------------------------------------------------------------
 // Replicated from 04-tab-network.js
+// NOTE: If the filter logic in renderNetworkTab() changes, update
+// filterMessages() here. Source of truth: the `filtered =` block
+// computed before the return statement in renderNetworkTab().
 // ---------------------------------------------------------------------------
 function filterMessages(messages, searchQuery) {
     const query = (searchQuery || '').toLowerCase();
@@ -59,6 +66,9 @@ function networkCountLabel(messages, searchQuery) {
 
 // ---------------------------------------------------------------------------
 // Replicated from 07-tab-state.js
+// NOTE: If the filter logic in renderStateTab() changes, update
+// filterStateHistory() here. Source of truth: the `filtered =` block
+// computed before the return statement in renderStateTab().
 // ---------------------------------------------------------------------------
 function filterStateHistory(stateHistory, searchQuery) {
     const query = (searchQuery || '').toLowerCase();
