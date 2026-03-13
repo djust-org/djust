@@ -32,7 +32,7 @@ def rf():
 @pytest.fixture
 def get_request(request_factory):
     """Create a basic GET request with session support."""
-    request = request_factory.get('/')
+    request = request_factory.get("/")
 
     # Add session support
     middleware = SessionMiddleware(lambda x: None)
@@ -45,7 +45,7 @@ def get_request(request_factory):
 @pytest.fixture
 def post_request(request_factory):
     """Create a basic POST request with session support."""
-    request = request_factory.post('/', content_type='application/json')
+    request = request_factory.post("/", content_type="application/json")
 
     # Add session support
     middleware = SessionMiddleware(lambda x: None)

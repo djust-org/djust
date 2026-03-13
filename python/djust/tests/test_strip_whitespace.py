@@ -149,7 +149,7 @@ class TestStripCommentsAndWhitespace:
     # ── Mixed content ──
 
     def test_textarea_and_pre_both_preserved(self, mixin):
-        html = "<div>\n" "  <textarea>text\narea</textarea>\n" "  <pre>pre\nblock</pre>\n" "</div>"
+        html = "<div>\n  <textarea>text\narea</textarea>\n  <pre>pre\nblock</pre>\n</div>"
         result = mixin._strip_comments_and_whitespace(html)
         assert "text\narea" in result
         assert "pre\nblock" in result

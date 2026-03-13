@@ -2483,7 +2483,7 @@ class TestT005ViewRootSameElement:
         tpl_dir = tmp_path / "templates"
         tpl_dir.mkdir()
         (tpl_dir / "bad.html").write_text(
-            "<div dj-root>\n" '  <div dj-view="myapp.views.MyView">content</div>\n' "</div>"
+            '<div dj-root>\n  <div dj-view="myapp.views.MyView">content</div>\n</div>'
         )
         settings.TEMPLATES = [
             {

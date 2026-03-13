@@ -70,7 +70,6 @@ class TestCmdClearAll:
 
     def test_backend_error_exits_nonzero(self):
         """Errors from the backend should be caught and sys.exit(1) called."""
-        import sys
 
         backend = MagicMock()
         backend.get_stats.return_value = {"total_sessions": 1}

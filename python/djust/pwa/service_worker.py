@@ -89,9 +89,9 @@ class ServiceWorkerGenerator:
         """Generate service worker header with metadata."""
         return f"""/*
  * djust Service Worker
- * Version: {self.config['version']}
+ * Version: {self.config["version"]}
  * Generated automatically
- * Cache Strategy: {self.config['cache_strategy']}
+ * Cache Strategy: {self.config["cache_strategy"]}
  */
 
 """
@@ -104,14 +104,14 @@ class ServiceWorkerGenerator:
         debug_enabled = json.dumps(self.config.get("debug", False))
 
         return f"""
-const CACHE_NAME = '{self.config['cache_name']}';
-const CACHE_DURATION = {self.config['cache_duration']} * 1000; // Convert to milliseconds
-const OFFLINE_PAGE = '{self.config['offline_page']}';
-const SYNC_ENDPOINT = '{self.config['sync_endpoint']}';
-const CACHE_STRATEGY = '{self.config['cache_strategy']}';
+const CACHE_NAME = '{self.config["cache_name"]}';
+const CACHE_DURATION = {self.config["cache_duration"]} * 1000; // Convert to milliseconds
+const OFFLINE_PAGE = '{self.config["offline_page"]}';
+const SYNC_ENDPOINT = '{self.config["sync_endpoint"]}';
+const CACHE_STRATEGY = '{self.config["cache_strategy"]}';
 const PRECACHE_URLS = {precache_urls};
 const EXCLUDE_PATTERNS = {exclude_patterns};
-const SW_VERSION = '{self.config['version']}';
+const SW_VERSION = '{self.config["version"]}';
 const SW_DEBUG = {debug_enabled};
 
 // Conditional logging — silent in production unless SW_DEBUG is true

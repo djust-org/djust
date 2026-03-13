@@ -202,13 +202,21 @@ class DjustTemplate:
         """
         if not JIT_AVAILABLE or not DjangoJSONEncoder:
             # Fallback to basic serialization
-            return {"id": model_instance.pk, "pk": model_instance.pk, "__str__": str(model_instance)}
+            return {
+                "id": model_instance.pk,
+                "pk": model_instance.pk,
+                "__str__": str(model_instance),
+            }
 
         try:
             return normalize_django_value(model_instance)
         except Exception as e:
             logger.warning("Model serialization failed for '%s': %s", variable_name, e)
-            return {"id": model_instance.pk, "pk": model_instance.pk, "__str__": str(model_instance)}
+            return {
+                "id": model_instance.pk,
+                "pk": model_instance.pk,
+                "__str__": str(model_instance),
+            }
 
     def _resolve_template_inheritance(self) -> str:
         """
