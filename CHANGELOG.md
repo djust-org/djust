@@ -48,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `djust-deploy logout` — calls the server logout endpoint and removes the local credentials file
   - `djust-deploy status [project]` — fetches current deployment state; optionally filtered by project slug
   - `djust-deploy deploy <project-slug>` — validates the git working tree is clean, triggers a production deployment, and streams build logs to stdout
-  - `--server` flag / `DJUST_SERVER` env var to override the default server URL (`https://djustlive.com`)
+  - `--server` flag / `DJUST_SERVER` env var to override the default server URL (`https://djustlive.com`) ([#437](https://github.com/djust-org/djust/pull/437))
 - **TypeScript type stubs updated** — `DjustStreamOp` now includes `"done"` and `"start"` operation types and an optional `mode` field (`"append" | "replace" | "prepend"`). `getActiveStreams()` return type changed from `Map` to `Record`.
 - **`.flex-between` CSS utility class** — Added to demo project's `utilities.css` for laying out flex children horizontally with space-between. Use on card headers or any flex container that needs a title on the left and action widget on the right. (#397)
 - **Debug toolbar state size visualization** — New "Size Breakdown" table in State tab shows per-variable memory and serialized byte sizes with human-readable formatting (B/KB/MB). Added `_debug_state_sizes()` method to `PostProcessingMixin` included in both mount and event debug payloads. (#459)
@@ -67,9 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`dj-hook` elements now initialize after `dj-navigate` navigation** — `updateHooks()` is called after `live_redirect_mount` replaces DOM content via WebSocket and SSE mount handlers. Previously, hook lifecycle callbacks (`mounted()`, `destroyed()`) were skipped after client-side navigation, leaving hook-dependent elements (e.g., Chart.js canvases) uninitialized.
-- **Event handler exceptions now logged with full traceback in production** — Previously, `handle_exception()` only logged the exception class name (e.g. `ValueError`) when `DEBUG=False`, hiding the error message and stack trace. Now logs type, message, and traceback at `ERROR` level regardless of `DEBUG` mode. Client responses remain generic in production.
-- **DJE-053 no longer fires as a warning for idempotent event handlers** — When an `@event_handler` runs successfully but produces no DOM changes (e.g. toggle clicked in target state, debounced input with unchanged results, side-effect-only handlers), the empty diff is now silently dropped at `DEBUG` level rather than logged as a `WARNING`. This matches Phoenix LiveView behaviour. The `WARNING`-level DJE-053 is preserved for genuine VDOM failures (`patches=None`), which fall back to a full HTML update and risk losing event listeners.
+- **`dj-hook` elements now initialize after `dj-navigate` navigation** — `updateHooks()` is called after `live_redirect_mount` replaces DOM content via WebSocket and SSE mount handlers. Previously, hook lifecycle callbacks (`mounted()`, `destroyed()`) were skipped after client-side navigation, leaving hook-dependent elements (e.g., Chart.js canvases) uninitialized. ([#408](https://github.com/djust-org/djust/pull/408))
+- **Event handler exceptions now logged with full traceback in production** — Previously, `handle_exception()` only logged the exception class name (e.g. `ValueError`) when `DEBUG=False`, hiding the error message and stack trace. Now logs type, message, and traceback at `ERROR` level regardless of `DEBUG` mode. Client responses remain generic in production. ([#415](https://github.com/djust-org/djust/pull/415))
+- **DJE-053 no longer fires as a warning for idempotent event handlers** — When an `@event_handler` runs successfully but produces no DOM changes (e.g. toggle clicked in target state, debounced input with unchanged results, side-effect-only handlers), the empty diff is now silently dropped at `DEBUG` level rather than logged as a `WARNING`. This matches Phoenix LiveView behaviour. The `WARNING`-level DJE-053 is preserved for genuine VDOM failures (`patches=None`), which fall back to a full HTML update and risk losing event listeners. ([#415](https://github.com/djust-org/djust/pull/415))
 
 ## [0.3.5rc2] - 2026-03-04
 
