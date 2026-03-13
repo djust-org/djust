@@ -164,14 +164,21 @@ class InMemoryStateBackend(StateBackend):
         """
         Clean up expired sessions from memory (thread-safe).
 
+        Sessions are considered expired if their age exceeds the ttl.
+        If ttl <= 0, no sessions are removed (never-expire semantics).
+
         Args:
-            ttl: Time-to-live threshold in seconds (default: backend default)
+            ttl: Time-to-live threshold in seconds (default: backend default).
+                 If <= 0, returns 0 and removes no sessions.
 
         Returns:
             Number of sessions cleaned up
         """
         if ttl is None:
             ttl = self._default_ttl
+
+        if ttl <= 0:
+            return 0
 
         cutoff = time.time() - ttl
 

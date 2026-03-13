@@ -946,12 +946,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             request = factory.get(path_with_query)
 
             # Add session from WebSocket scope
-            # NOTE: session_key is an ATTRIBUTE of the session object, not a dict key
+            # NOTE: session_key is an ATTRIBUTE of the session object, not a dict key.
+            # Use getattr() with a sentinel (None) instead of hasattr() + attribute access.
+            # Django Channels LazyObjects may raise exceptions during initialization,
+            # and hasattr() + separate access is unsafe (TOCTOU). getattr() is atomic.
             from django.contrib.sessions.backends.db import SessionStore
 
             scope_session = self.scope.get("session")
-            if scope_session and hasattr(scope_session, "session_key"):
-                session_key = scope_session.session_key
+            session_key = scope_session and getattr(scope_session, "session_key", None)
+            if session_key:
                 request.session = SessionStore(session_key=session_key)
             else:
                 request.session = SessionStore()
