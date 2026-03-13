@@ -16,6 +16,7 @@ import inspect
 import logging
 import os
 import re
+from importlib import import_module
 
 from django.core.checks import Error, Warning, Info, register
 
@@ -409,8 +410,6 @@ def check_configuration(app_configs, **kwargs):
     asgi_path = getattr(settings, "ASGI_APPLICATION", None)
     if asgi_path:
         try:
-            from importlib import import_module
-
             module_path, attr = asgi_path.rsplit(".", 1)
             asgi_app = getattr(import_module(module_path), attr)
             # ProtocolTypeRouter stores routes in .application_mapping

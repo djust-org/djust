@@ -1,12 +1,12 @@
 """Tests for ModelBindingMixin (dj-model server-side support)."""
 
-import os
 import importlib.util
+from pathlib import Path
 
 # Direct import to avoid pulling in Django/channels via djust.__init__
 _spec = importlib.util.spec_from_file_location(
     "model_binding",
-    os.path.join(os.path.dirname(__file__), "..", "djust", "mixins", "model_binding.py"),
+    Path(__file__).resolve().parent.parent / "djust" / "mixins" / "model_binding.py",
 )
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)

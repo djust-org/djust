@@ -7,9 +7,11 @@ the expected content sections. They run as part of the standard Python test suit
 
 import os
 import re
+from pathlib import Path
 
-DOCS_ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "docs", "website")
-README_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "README.md")
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+DOCS_ROOT = _REPO_ROOT / "docs" / "website"
+README_PATH = _REPO_ROOT / "README.md"
 
 
 def _read(path):
@@ -78,12 +80,11 @@ class TestReadmeContent:
         content = _read(README_PATH)
         # Check specifically that the css-frameworks.md link resolves
         assert "css-frameworks.md" in content, "README must link to css-frameworks.md"
-        repo_root = os.path.join(os.path.dirname(__file__), "..", "..")
         # Find the css-frameworks.md link target
         links = re.findall(r"\[.*?\]\((docs/[^)]*css-frameworks[^)]*)\)", content)
         assert links, "README must have a link to css-frameworks.md"
         for link in links:
-            full_path = os.path.join(repo_root, link)
+            full_path = _REPO_ROOT / link
             assert os.path.isfile(full_path), f"Link target '{link}' in README does not exist"
 
     def test_readme_documents_one_sided_if_pitfall(self):
