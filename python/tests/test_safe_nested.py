@@ -7,6 +7,7 @@ Verifies that mark_safe() HTML is preserved when stored in:
 - Nested dicts
 - Deeply nested structures
 """
+
 import pytest
 from django.test import RequestFactory
 from django.utils.safestring import mark_safe
@@ -38,11 +39,7 @@ class SafeNestedView(LiveView):
             {"content": mark_safe("<i>Item 2</i>")},
         ]
         self.data = {"content": mark_safe("<u>Nested</u>")}
-        self.deep = {
-            "level1": {
-                "level2": [{"content": mark_safe("<strong>Deep</strong>")}]
-            }
-        }
+        self.deep = {"level1": {"level2": [{"content": mark_safe("<strong>Deep</strong>")}]}}
 
 
 @pytest.fixture
@@ -113,11 +110,7 @@ def test_collect_safe_keys_function():
     assert result == ["data.content"]
 
     # Deeply nested structure
-    deep = {
-        "level1": {
-            "level2": [{"content": mark_safe("<strong>Deep</strong>")}]
-        }
-    }
+    deep = {"level1": {"level2": [{"content": mark_safe("<strong>Deep</strong>")}]}}
     result = _collect_safe_keys(deep, "deep")
     assert "deep.level1.level2.0.content" in result
 

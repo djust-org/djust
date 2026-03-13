@@ -26,13 +26,18 @@ def get_backend() -> StateBackend:
         DJUST_CONFIG = {
             'STATE_BACKEND': 'redis',  # or 'memory'
             'REDIS_URL': 'redis://localhost:6379/0',
-            'SESSION_TTL': 3600,
+            'SESSION_TTL': 3600,  # Time-to-live in seconds; 0 = never expire
             'STATE_SIZE_WARNING_KB': 100,  # Warn when state exceeds this size
             # Compression settings (Redis only)
             'COMPRESSION_ENABLED': True,  # Enable zstd compression
             'COMPRESSION_THRESHOLD_KB': 10,  # Compress states > 10KB
             'COMPRESSION_LEVEL': 3,  # zstd level 1-22 (higher = slower but smaller)
         }
+
+    Note:
+        SESSION_TTL values: positive int = expire after N seconds; 0 or negative =
+        never expire (sessions persist until explicitly deleted). The backend's
+        cleanup_expired() method is a no-op when TTL ≤ 0.
 
     Returns:
         StateBackend instance (InMemory or Redis)

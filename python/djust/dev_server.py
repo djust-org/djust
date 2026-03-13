@@ -134,9 +134,7 @@ class HotReloadServer:
             exclude_dirs: Set of directory names to exclude (e.g., {'node_modules', '.git'})
         """
         if not WATCHDOG_AVAILABLE:
-            logger.warning(
-                "[HotReload] watchdog not installed. " "Install with: pip install watchdog"
-            )
+            logger.warning("[HotReload] watchdog not installed. Install with: pip install watchdog")
             return
 
         if self._started:

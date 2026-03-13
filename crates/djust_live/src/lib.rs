@@ -1679,5 +1679,23 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
 
+    // Block tag handler registry for block tags with children (modal, card, etc.)
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::register_block_tag_handler,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::unregister_block_tag_handler,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::has_block_tag_handler,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::clear_block_tag_handlers,
+        m
+    )?)?;
+
     Ok(())
 }

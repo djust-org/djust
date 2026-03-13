@@ -204,7 +204,7 @@ class TestMaxRecursionDepth:
         # _depth at or above max_depth should produce minimal output
         max_depth = DjangoJSONEncoder._get_max_depth()
         result = normalize_django_value(obj, _depth=max_depth)
-        assert result == {"id": "99", "pk": 99, "__str__": "fake"}
+        assert result == {"id": 99, "pk": 99, "__str__": "fake"}
 
     def test_depth_counter_is_reset_after_call(self):
         """DjangoJSONEncoder._depth is properly reset even after errors."""

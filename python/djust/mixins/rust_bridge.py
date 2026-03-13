@@ -18,7 +18,9 @@ except ImportError:
     RustLiveView = None
 
 
-def _collect_safe_keys(value: Any, prefix: str = "", visited: Optional[Set[int]] = None) -> List[str]:
+def _collect_safe_keys(
+    value: Any, prefix: str = "", visited: Optional[Set[int]] = None
+) -> List[str]:
     """
     Recursively scan a value for SafeString instances and return dotted paths.
 

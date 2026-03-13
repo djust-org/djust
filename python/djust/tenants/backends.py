@@ -81,7 +81,7 @@ class TenantAwareRedisBackend(TenantAwareBackendMixin, PresenceBackend):
             import redis as redis_lib
         except ImportError:
             raise ImportError(
-                "redis is required for TenantAwareRedisBackend. " "Install with: pip install redis"
+                "redis is required for TenantAwareRedisBackend. Install with: pip install redis"
             )
 
         self._tenant_id = tenant_id

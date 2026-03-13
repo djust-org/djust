@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **`model.id` now returns the native type, not a string** — `_serialize_model_safely()` previously wrapped `obj.pk` with `str()` when producing the `"id"` key, causing template comparisons like `{% if edit_id == todo.id %}` to fail silently when `edit_id` was an integer. `model.id` now matches `model.pk` and returns the native Python type (e.g. `int`, `UUID`). **Migration:** if your templates or event handlers compare `model.id` against string literals or string-typed variables, update them to use the native type. PR #262 fixed `.pk`; this PR (#472) completes the fix for `.id`.
+
+### Fixed
+
+- **`djust cache --all` now correctly clears all sessions on the Redis backend** — The CLI called `cleanup_expired(ttl=0)` to force-clear sessions, but the semantics of `ttl=0` changed in 0.3.5 to mean "never expire". The command now calls the explicit `delete_all()` method, which uses a Redis pipeline for an efficient single round-trip bulk delete. (#409)
+- **`dj-params` attribute no longer silently dropped** — Between 0.3.2 and 0.3.6rc2, `dj-params` was removed from the client event-binding code. Templates using `dj-params='{"key": value}'` continued to fire click events but the server received `params: {}`. The attribute is now read and merged into the params object for backward compatibility. A `console.warn` is emitted in debug mode (`globalThis.djustDebug`) to notify developers to migrate.
+- **Prefetch Set not cleared on SPA navigation** — The client-side `_prefetched` Set persisted across `live_redirect` navigations, preventing links on the new view from being prefetched. Added `clear()` to `window.djust._prefetch` and call it in `handleLiveRedirect()` so each SPA navigation starts with a fresh prefetch state. (#402)
+- **Auto-reload on unrecoverable VDOM state** — When VDOM patch recovery fails because recovery HTML is unavailable (e.g. after server restart), the client now auto-reloads the page instead of showing a confusing error overlay. The server sends `recoverable: false` to signal the client. (#421)
+- **`{% djust_pwa_head %}` and other custom tags with quoted arguments containing spaces now render correctly** — The Rust template lexer used `split_whitespace()` to tokenize tag arguments, which broke quoted values like `name="My App"` into separate tokens (`name="My` and `App"`). This caused the downstream Python handler to receive malformed arguments, silently returning empty output. Replaced with a quote-aware splitter (`split_tag_args`) that preserves quoted strings as single arguments. (#419)
+- **`{% load %}` tags stripped during template inheritance, breaking inclusion tags** — The Rust parser treated `{% load %}` as `Node::Comment`, which `nodes_to_template_string()` discarded during inheritance reconstruction. When the resolved template was re-parsed, custom tags that relied on Django tag libraries (e.g. `{% djust_pwa_head %}`) could silently fail. Fixed by adding a dedicated `Node::Load` variant that preserves library names through reconstruction. Also improved `_render_django_tag()` error handling: failures now log a full traceback via `logger.exception()` and return a visible HTML comment instead of an empty string. (#418)
+- **Checkbox/radio `checked` and `<option>` `selected` state not updated by VDOM patches** — `SetAttr` and `RemoveAttr` patches only called `setAttribute`/`removeAttribute`, which updates the HTML attribute but not the DOM property. After user interaction the browser separates the two, so server-driven state changes via `dj-click` had no visible effect on checkboxes, radios, or select options. Fixed by syncing the DOM property alongside the attribute. Also fixed `createNodeFromVNode` to set `.checked`/`.selected` when creating new elements. (#422)
+- **`SESSION_TTL=0` breaks all event handling (no DOM patches)** — `cleanup_expired()` methods in both `InMemoryStateBackend` and `RedisStateBackend` now treat `TTL ≤ 0` as "never expire". Previously `SESSION_TTL=0` caused `cutoff = time.time() - 0`, making all sessions appear expired, deleting them immediately, and leaving no state for VDOM patches. (#395)
+- **WebSocket session extraction crashes on Django Channels `LazyObject`** — Replaced `hasattr(scope_session, "session_key")` with `getattr(scope_session, "session_key", None)` in the consumer's request context builder. `hasattr()` on a Django Channels `LazyObject` can raise non-`AttributeError` exceptions during lazy evaluation, causing the consumer to crash silently. (#396)
+
+### Deprecated
+
+- **`dj-params` JSON blob attribute** — Use individual `data-*` attributes with optional type-coercion suffixes instead. `dj-params` will be removed in a future release.
+
+  **Migration guide (0.3.2 → 0.3.6):**
+
+  ```html
+  <!-- Before (0.3.2) -->
+  <button dj-click="start_edit" dj-params='{"todo_id": {{ todo.id }}}'>Edit</button>
+  <button dj-click="set_filter" dj-params='{"filter_value": "all"}'>All</button>
+
+  <!-- After (0.3.6+) -->
+  <button dj-click="start_edit" data-todo-id:int="{{ todo.id }}">Edit</button>
+  <button dj-click="set_filter" data-filter-value="all">All</button>
+  ```
+
+  Type-coercion suffixes: `:int`, `:float`, `:bool`, `:json`. Kebab-case attribute names are auto-converted to `snake_case` for server handler parameters.
+
 ### Added
 
 - **`djust-deploy` CLI** — new `python/djust/deploy_cli.py` module providing deployment commands for [djustlive.com](https://djustlive.com). Available via the `djust-deploy` entry point after installation:
@@ -16,13 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `djust-deploy deploy <project-slug>` — validates the git working tree is clean, triggers a production deployment, and streams build logs to stdout
   - `--server` flag / `DJUST_SERVER` env var to override the default server URL (`https://djustlive.com`)
 - **TypeScript type stubs updated** — `DjustStreamOp` now includes `"done"` and `"start"` operation types and an optional `mode` field (`"append" | "replace" | "prepend"`). `getActiveStreams()` return type changed from `Map` to `Record`.
-
-### Fixed
-
-- **Auto-reload on unrecoverable VDOM state** — When VDOM patch recovery fails because recovery HTML is unavailable (e.g. after server restart), the client now auto-reloads the page instead of showing a confusing error overlay. The server sends `recoverable: false` to signal the client.
-- **`{% djust_pwa_head %}` and other custom tags with quoted arguments containing spaces now render correctly** — The Rust template lexer used `split_whitespace()` to tokenize tag arguments, which broke quoted values like `name="My App"` into separate tokens (`name="My` and `App"`). This caused the downstream Python handler to receive malformed arguments, silently returning empty output. Replaced with a quote-aware splitter (`split_tag_args`) that preserves quoted strings as single arguments.
-- **`{% load %}` tags stripped during template inheritance, breaking inclusion tags** — The Rust parser treated `{% load %}` as `Node::Comment`, which `nodes_to_template_string()` discarded during inheritance reconstruction. When the resolved template was re-parsed, custom tags that relied on Django tag libraries (e.g. `{% djust_pwa_head %}`) could silently fail. Fixed by adding a dedicated `Node::Load` variant that preserves library names through reconstruction. Also improved `_render_django_tag()` error handling: failures now log a full traceback via `logger.exception()` and return a visible HTML comment instead of an empty string.
-- **Checkbox/radio `checked` and `<option>` `selected` state not updated by VDOM patches** — `SetAttr` and `RemoveAttr` patches only called `setAttribute`/`removeAttribute`, which updates the HTML attribute but not the DOM property. After user interaction the browser separates the two, so server-driven state changes via `dj-click` had no visible effect on checkboxes, radios, or select options. Fixed by syncing the DOM property alongside the attribute. Also fixed `createNodeFromVNode` to set `.checked`/`.selected` when creating new elements. (#422)
+- **`.flex-between` CSS utility class** — Added to demo project's `utilities.css` for laying out flex children horizontally with space-between. Use on card headers or any flex container that needs a title on the left and action widget on the right. (#397)
 
 ## [0.3.5] - 2026-03-05
 

@@ -38,6 +38,25 @@
 }
 
 /* ============================================
+   FLEX UTILITIES
+   ============================================ */
+
+/* Lay out children in a horizontal row with space between them.
+ *
+ * Use on .card-header (or any flex child) when you need a title on the left
+ * and an action widget on the right.  The explicit flex-direction: row
+ * prevents Bootstrap's parent .card (display:flex; flex-direction:column)
+ * from being confused with the header's own flex context — flex-direction is
+ * not inherited but this makes intent clear and avoids specificity surprises.
+ */
+.flex-between {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+}
+
+/* ============================================
    TAILWIND/BOOTSTRAP OVERRIDES
    Theme-aware overrides for framework classes
    ============================================ */
@@ -93,4 +112,21 @@
 
 .text-indigo-600 {
     color: var(--color-accent) !important;
+}
+
+/* ============================================
+   FLEX UTILITIES
+   ============================================ */
+
+.flex-between {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+/* Ensure flex-between always wins over component flex-direction overrides.
+   .card-header sets flex-direction: column; combining it with .flex-between
+   must produce a row layout, not a column. */
+.card-header.flex-between {
+    flex-direction: row;
 }

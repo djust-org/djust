@@ -638,7 +638,7 @@ BEST_PRACTICES = {
     "setup": {
         "description": "Minimal setup for a djust project",
         "settings": (
-            "INSTALLED_APPS = ['djust', ...]\n" "ASGI_APPLICATION = 'myproject.asgi.application'"
+            "INSTALLED_APPS = ['djust', ...]\nASGI_APPLICATION = 'myproject.asgi.application'"
         ),
         "asgi": (
             "from djust.routing import live_session\n"
@@ -873,9 +873,7 @@ BEST_PRACTICES = {
                 "dj-root: Marks the root element for VDOM patching scope",
             ],
             "example": (
-                '<div dj-view="{{ view_name }}" dj-root>\n'
-                "  <!-- your template content -->\n"
-                "</div>"
+                '<div dj-view="{{ view_name }}" dj-root>\n  <!-- your template content -->\n</div>'
             ),
         },
     },

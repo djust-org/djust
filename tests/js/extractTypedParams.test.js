@@ -273,4 +273,60 @@ describe('extractTypedParams', () => {
             expect(Object.keys(params)).toEqual(['value']);
         });
     });
+
+    describe('dj-params backward compatibility (#265)', () => {
+        it('should extract params from dj-params JSON blob', () => {
+            const el = createElement({ 'dj-params': '{"todo_id": 4}' });
+            const params = extractTypedParams(el);
+            expect(params.todo_id).toBe(4);
+        });
+
+        it('should extract string params from dj-params', () => {
+            const el = createElement({ 'dj-params': '{"filter_value": "all"}' });
+            const params = extractTypedParams(el);
+            expect(params.filter_value).toBe('all');
+        });
+
+        it('data-* attributes take precedence over dj-params keys', () => {
+            const el = createElement({
+                'dj-params': '{"todo_id": 99}',
+                'data-todo-id:int': '4',
+            });
+            const params = extractTypedParams(el);
+            expect(params.todo_id).toBe(4);
+        });
+
+        it('should merge dj-params alongside data-* attributes', () => {
+            const el = createElement({
+                'dj-params': '{"extra": "value"}',
+                'data-name': 'Alice',
+            });
+            const params = extractTypedParams(el);
+            expect(params.name).toBe('Alice');
+            expect(params.extra).toBe('value');
+        });
+
+        it('should handle empty dj-params gracefully', () => {
+            const el = createElement({ 'dj-params': '' });
+            const params = extractTypedParams(el);
+            expect(Object.keys(params)).toHaveLength(0);
+        });
+
+        it('should handle invalid dj-params JSON gracefully (no throw)', () => {
+            const el = createElement({ 'dj-params': '{bad json}' });
+            expect(() => extractTypedParams(el)).not.toThrow();
+        });
+
+        it('should skip prototype-pollution keys in dj-params', () => {
+            const el = createElement({ 'dj-params': '{"__proto__": {"polluted": true}}' });
+            const params = extractTypedParams(el);
+            expect(params.__proto__).toBeUndefined();
+        });
+
+        it('should ignore dj-params array values (only plain objects accepted)', () => {
+            const el = createElement({ 'dj-params': '[1, 2, 3]' });
+            const params = extractTypedParams(el);
+            expect(Object.keys(params)).toHaveLength(0);
+        });
+    });
 });

@@ -794,8 +794,11 @@ def cmd_clear(args):
         stats_before = backend.get_stats()
         sessions_before = stats_before.get("total_sessions", 0)
 
-        # Clear expired sessions
-        cleaned = backend.cleanup_expired(ttl=0 if args.all else None)
+        # Clear sessions
+        if args.all:
+            cleaned = backend.delete_all()
+        else:
+            cleaned = backend.cleanup_expired()
 
         print(f"\nCleared {cleaned} session(s)")
         print(f"Sessions before: {sessions_before}")

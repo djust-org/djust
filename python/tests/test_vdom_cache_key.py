@@ -150,13 +150,12 @@ def test_cache_key_differs_for_different_query_params():
     cache_key3 = view3._cache_key
 
     # All three should have different cache keys
-    assert cache_key1 != cache_key2, (
-        f"Grouped and flat views should have different cache keys: " f"{cache_key1} vs {cache_key2}"
-    )
-    assert cache_key2 != cache_key3, (
-        f"Different sender filters should have different cache keys: "
-        f"{cache_key2} vs {cache_key3}"
-    )
+    assert (
+        cache_key1 != cache_key2
+    ), f"Grouped and flat views should have different cache keys: {cache_key1} vs {cache_key2}"
+    assert (
+        cache_key2 != cache_key3
+    ), f"Different sender filters should have different cache keys: {cache_key2} vs {cache_key3}"
 
 
 @pytest.mark.django_db
@@ -193,9 +192,9 @@ def test_cache_key_query_param_order_independent():
     cache_key2 = view2._cache_key
 
     # Same params in different order should produce same cache key
-    assert cache_key1 == cache_key2, (
-        f"Query param order should not affect cache key: " f"{cache_key1} vs {cache_key2}"
-    )
+    assert (
+        cache_key1 == cache_key2
+    ), f"Query param order should not affect cache key: {cache_key1} vs {cache_key2}"
 
 
 if __name__ == "__main__":
