@@ -72,8 +72,6 @@ class RequestMixin:
         state_serializable = state
         t_json = (time.perf_counter() - t0) * 1000
 
-        t_save_components = 0.0
-
         # Save state to session after GET so the WebSocket mount can restore it
         # instead of re-running mount() (which doubles page load cost).
         # Also used by HTTP-only POST path to restore state before event handling.
