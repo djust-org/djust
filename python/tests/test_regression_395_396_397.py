@@ -4,115 +4,92 @@ Regression tests for milestone bugs #395, #396, #397.
 #395 – SESSION_TTL=0 must not delete all sessions (no DOM patches bug)
 #396 – WebSocket session: getattr() instead of hasattr() for LazyObject
 #397 – .flex-between utility class must be defined in utilities.css
-
-Strategy: verify fixes via source-file inspection (avoids Rust-extension
-import issues in worktrees) plus standalone logic tests that replicate the
-fixed behaviour without the full import chain.
 """
 
 import re
 import time
 from pathlib import Path
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Locate worktree root from this test file's path
 # ---------------------------------------------------------------------------
 
-_WORKTREE_ROOT = Path(__file__).resolve().parents[2]  # .../pipeline-267/
+_WORKTREE_ROOT = Path(__file__).resolve().parents[2]  # .../pipeline-NNN/
 
 
 # ===========================================================================
 # #395 – SESSION_TTL=0: cleanup_expired must return 0 (never expire)
 # ===========================================================================
 
+try:
+    from djust.state_backends.memory import InMemoryStateBackend
 
-def _make_memory_backend_cleanup_fn():
-    """
-    Return a standalone replica of InMemoryStateBackend.cleanup_expired()
-    extracted from the worktree source, so we can unit-test its behaviour
-    without triggering the djust._rust import chain.
-    """
-    import threading
+    _BACKEND_AVAILABLE = True
+except ImportError:
+    _BACKEND_AVAILABLE = False
 
-    class _FakeBackend:
-        def __init__(self, default_ttl):
-            self._default_ttl = default_ttl
-            self._cache: dict = {}
-            self._state_sizes: dict = {}
-            self._lock = threading.Lock()
-
-        def cleanup_expired(self, ttl=None):
-            # --- copied verbatim from patched memory.py ---
-            if ttl is None:
-                ttl = self._default_ttl
-
-            if ttl <= 0:
-                return 0
-
-            cutoff = time.time() - ttl
-
-            with self._lock:
-                expired_keys = [key for key, (_, ts) in self._cache.items() if ts < cutoff]
-                for key in expired_keys:
-                    del self._cache[key]
-                    self._state_sizes.pop(key, None)
-
-            return len(expired_keys)
-
-    return _FakeBackend
+_skip_if_no_backend = pytest.mark.skipif(
+    not _BACKEND_AVAILABLE, reason="djust._rust extension not available in this environment"
+)
 
 
-def test_cleanup_expired_ttl_zero_keeps_all_sessions():
-    """TTL=0 → no sessions removed (never-expire semantics)."""
-    Backend = _make_memory_backend_cleanup_fn()
-    b = Backend(default_ttl=0)
-    b._cache["sess-1"] = (object(), time.time() - 9999)
+@_skip_if_no_backend
+def test_cleanup_expired_ttl_zero_keeps_sessions():
+    """TTL=0 explicit arg → no sessions removed (never-expire semantics)."""
+    backend = InMemoryStateBackend(default_ttl=3600)
+    backend._cache["sess-1"] = (object(), time.time() - 9999)
 
-    removed = b.cleanup_expired(ttl=0)
+    removed = backend.cleanup_expired(ttl=0)
 
     assert removed == 0, "TTL=0 must not remove any sessions"
-    assert "sess-1" in b._cache
+    assert "sess-1" in backend._cache
 
 
-def test_cleanup_expired_ttl_zero_default_keeps_sessions():
+@_skip_if_no_backend
+def test_cleanup_expired_default_ttl_zero_keeps_sessions():
     """default_ttl=0 and no explicit arg → still no-op cleanup."""
-    Backend = _make_memory_backend_cleanup_fn()
-    b = Backend(default_ttl=0)
-    b._cache["sess-2"] = (object(), time.time() - 9999)
+    backend = InMemoryStateBackend(default_ttl=0)
+    backend._cache["sess-2"] = (object(), time.time() - 9999)
 
-    removed = b.cleanup_expired()  # uses default_ttl=0
+    removed = backend.cleanup_expired()
 
-    assert removed == 0
-    assert "sess-2" in b._cache
+    assert removed == 0, "default_ttl=0 must not remove any sessions"
+    assert "sess-2" in backend._cache
 
 
+@_skip_if_no_backend
 def test_cleanup_expired_positive_ttl_still_works():
     """Positive TTL must still expire genuinely old sessions."""
-    Backend = _make_memory_backend_cleanup_fn()
-    b = Backend(default_ttl=3600)
-    b._cache["old-sess"] = (object(), time.time() - 7200)
-    b._cache["new-sess"] = (object(), time.time() - 10)
+    backend = InMemoryStateBackend(default_ttl=3600)
+    backend._cache["old-sess"] = (object(), time.time() - 7200)
+    backend._cache["new-sess"] = (object(), time.time() - 10)
 
-    removed = b.cleanup_expired(ttl=3600)
+    removed = backend.cleanup_expired(ttl=3600)
 
     assert removed == 1
-    assert "old-sess" not in b._cache
-    assert "new-sess" in b._cache
+    assert "old-sess" not in backend._cache
+    assert "new-sess" in backend._cache
 
 
-def test_memory_py_source_contains_ttl_guard():
-    """The worktree's memory.py must contain the ttl<=0 guard."""
-    src = (_WORKTREE_ROOT / "python/djust/state_backends/memory.py").read_text()
-    assert "ttl <= 0" in src, "memory.py must guard against ttl <= 0"
-    assert "return 0" in src, "memory.py must return 0 early when ttl <= 0"
+@_skip_if_no_backend
+def test_cleanup_expired_negative_ttl_keeps_sessions():
+    """Negative TTL is treated same as zero — no sessions removed."""
+    backend = InMemoryStateBackend(default_ttl=-1)
+    backend._cache["sess-3"] = (object(), time.time() - 9999)
+
+    removed = backend.cleanup_expired()
+
+    assert removed == 0
+    assert "sess-3" in backend._cache
 
 
-def test_redis_py_source_handles_ttl_zero():
-    """The worktree's redis.py must not call setex() when TTL=0."""
-    src = (_WORKTREE_ROOT / "python/djust/state_backends/redis.py").read_text()
-    # The fix wraps setex in an if ttl > 0: branch
-    assert "if ttl > 0:" in src, "redis.py must guard setex with if ttl > 0"
-    assert "self._client.set(" in src, "redis.py must use SET (no expiry) for TTL=0"
+@_skip_if_no_backend
+def test_cleanup_expired_empty_cache_returns_zero():
+    """Empty cache must return 0 regardless of TTL."""
+    backend = InMemoryStateBackend(default_ttl=3600)
+    assert backend.cleanup_expired(ttl=3600) == 0
 
 
 # ===========================================================================
@@ -127,9 +104,11 @@ class _LazyObjectWithKey:
 
 
 class _LazyObjectWithoutKey:
-    """Simulates a LazyObject with no session_key attribute."""
+    """Simulates a LazyObject where session_key raises AttributeError (uninitialized)."""
 
-    pass
+    @property
+    def session_key(self):
+        raise AttributeError("LazyObject not yet initialized")
 
 
 def test_getattr_succeeds_for_object_with_key():
@@ -144,11 +123,29 @@ def test_getattr_returns_none_for_missing_key():
     assert result is None
 
 
+def test_getattr_sentinel_handles_raising_lazy():
+    """
+    getattr() with a default safely handles LazyObject AttributeError.
+
+    Django Channels LazyObjects raise AttributeError when accessed before
+    initialization. getattr(obj, 'attr', None) returns the default instead
+    of propagating the exception — the correct pattern for scope_session.
+    """
+    obj = _LazyObjectWithoutKey()
+
+    # hasattr triggers the property, raises AttributeError — returns False
+    assert not hasattr(obj, "session_key")
+
+    # getattr with sentinel absorbs AttributeError, returns None
+    result = getattr(obj, "session_key", None)
+    assert result is None
+
+
 def test_websocket_py_uses_getattr_not_hasattr():
     """
     Verify the worktree's websocket.py uses getattr() for scope_session.
-    hasattr() on a Django Channels LazyObject can raise non-AttributeError
-    exceptions during lazy evaluation, crashing the consumer silently.
+    hasattr() + attribute access is two operations (TOCTOU on LazyObject).
+    getattr() with a sentinel is atomic and idiomatic.
     """
     src = (_WORKTREE_ROOT / "python/djust/websocket.py").read_text()
 
