@@ -162,7 +162,7 @@ class TestInMemoryBackend:
 
         TTL=0 was redefined in 0.3.5 to mean "never expire" so that sessions
         configured with no expiry aren't accidentally wiped. Bulk removal is
-        now handled by ``delete_all()`` (see #409).
+        now handled by ``delete_all()``.
         """
         backend = InMemoryStateBackend()
 
