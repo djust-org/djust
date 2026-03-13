@@ -52,10 +52,7 @@ def create_server():
     try:
         from mcp.server.fastmcp import FastMCP
     except ImportError:
-        print(
-            "Error: mcp package not installed. Install with: pip install 'mcp[cli]'",
-            file=sys.stderr,
-        )
+        logger.error("mcp package not installed. Install with: pip install 'mcp[cli]'")
         sys.exit(1)
 
     mcp = FastMCP(
