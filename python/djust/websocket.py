@@ -945,8 +945,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             path_with_query = f"{page_url}?{query_string}" if query_string else page_url
             request = factory.get(path_with_query)
 
-            # Add session from WebSocket scope
-            # NOTE: session_key is an ATTRIBUTE of the session object, not a dict key
+            # Add session from WebSocket scope.
+            # session_key is an ATTRIBUTE of the session object, not a dict key.
+            # Django Channels' AuthMiddlewareStack wraps scope["session"] in a
+            # LazyObject.  hasattr() catches AttributeError if the attribute is
+            # absent, but will not suppress other exceptions (e.g. OperationalError
+            # from a db-backed session backend).  Use getattr(obj, name, None) for
+            # a more robust single-call alternative on LazyObjects.
             from django.contrib.sessions.backends.db import SessionStore
 
             scope_session = self.scope.get("session")
