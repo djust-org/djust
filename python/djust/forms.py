@@ -197,6 +197,12 @@ class FormMixin:
             if hasattr(self, "form_invalid"):
                 self.form_invalid(form)
 
+        # Always re-render after form submission so confirmation messages
+        # and updated field values are sent to the client, even when the
+        # submitted values match the previous state (which would otherwise
+        # trigger auto-skip via _snapshot_assigns equality).
+        self._force_render = True
+
     def reset_form(self, **kwargs):
         """Reset form to initial state"""
         # Reset form_data with all field keys initialized (matching mount() behavior)
