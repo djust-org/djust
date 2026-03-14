@@ -98,9 +98,11 @@ def test_cache_key_includes_class_name_and_path():
 
     cache_key = view._cache_key
 
-    # Cache key should include view class name AND path
-    assert "InboxView" in cache_key, f"Cache key should include class name: {cache_key}"
+    # Cache key should include path (aligned with HTTP format for cache sharing)
     assert "/emails/" in cache_key, f"Cache key should include path: {cache_key}"
+    assert (
+        cache_key == "test-session-123_liveview_/emails/"
+    ), f"Unexpected cache key format: {cache_key}"
 
 
 @pytest.mark.django_db

@@ -103,10 +103,12 @@ class RustBridgeMixin:
                     sorted_query = urlencode(sorted(params.items()), doseq=True)
                     query_hash = hashlib.md5(sorted_query.encode()).hexdigest()[:8]
 
-                view_key = f"liveview_ws_{self.__class__.__name__}_{ws_path}"
+                view_key = f"liveview_{ws_path}"
                 if query_hash:
                     view_key = f"{view_key}_{query_hash}"
-                session_key = self._websocket_session_id
+                session_key = (
+                    getattr(self, "_django_session_key", None) or self._websocket_session_id
+                )
 
                 from ..state_backend import get_backend
 
