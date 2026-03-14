@@ -561,6 +561,88 @@ class TestModelInstance:
         assert form.is_valid()
 
 
+class TestFormChoices:
+    """Test form_choices auto-population for template-friendly serializable choices."""
+
+    @pytest.mark.django_db
+    def test_form_choices_populated_for_choice_fields(self, get_request):
+        """form_choices should contain serializable (str, str) tuples for ChoiceFields."""
+        view = FullTestFormView()
+        view.get(get_request)
+
+        assert "role" in view.form_choices
+        choices = view.form_choices["role"]
+        assert ("dev", "Developer") in choices
+        assert ("mgr", "Manager") in choices
+
+    @pytest.mark.django_db
+    def test_form_choices_not_populated_for_non_choice_fields(self, get_request):
+        """form_choices should not contain entries for CharField, EmailField, etc."""
+        view = FullTestFormView()
+        view.get(get_request)
+
+        assert "name" not in view.form_choices
+        assert "email" not in view.form_choices
+        assert "bio" not in view.form_choices
+
+    @pytest.mark.django_db
+    def test_form_choices_values_are_strings(self, get_request):
+        """All choice values and labels must be plain strings for WS serialization."""
+        view = FullTestFormView()
+        view.get(get_request)
+
+        for field_name, choices in view.form_choices.items():
+            for value, label in choices:
+                assert isinstance(
+                    value, str
+                ), f"{field_name} choice value {value!r} is not a string"
+                assert isinstance(
+                    label, str
+                ), f"{field_name} choice label {label!r} is not a string"
+
+
+class TestFormInstanceProperty:
+    """Test that form_instance property provides backward-compatible access."""
+
+    @pytest.mark.django_db
+    def test_form_instance_accessible_after_mount(self, get_request):
+        """form_instance should be accessible via property after mount."""
+        view = TestFormView()
+        view.get(get_request)
+        assert view.form_instance is not None
+        assert hasattr(view.form_instance, "fields")
+
+    @pytest.mark.django_db
+    def test_form_instance_recreated_if_lost(self, get_request):
+        """form_instance property should re-create the form if _form_instance is None."""
+        view = TestFormView()
+        view.get(get_request)
+
+        # Simulate WS serialization loss
+        view._form_instance = None
+
+        # Property should re-create it
+        fi = view.form_instance
+        assert fi is not None
+        assert hasattr(fi, "fields")
+
+
+class TestEventHandlerDecorators:
+    """Test that submit_form and validate_field have @event_handler."""
+
+    def test_submit_form_has_event_handler(self):
+        """submit_form should be decorated with @event_handler."""
+        from djust.decorators import is_event_handler
+
+        assert is_event_handler(FormMixin.submit_form)
+
+    def test_validate_field_has_event_handler(self):
+        """validate_field should be decorated with @event_handler."""
+        from djust.decorators import is_event_handler
+
+        assert is_event_handler(FormMixin.validate_field)
+
+
 class TestLiveViewFormDeprecation:
     """Test that LiveViewForm emits deprecation warning."""
 

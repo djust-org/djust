@@ -10,6 +10,8 @@ from typing import Dict, Any, Optional, Type, List
 from django import forms
 from django.core.exceptions import ValidationError
 
+from .decorators import event_handler
+
 
 class FormMixin:
     """
@@ -34,22 +36,32 @@ class FormMixin:
             _model_instance = None  # Set in mount() for editing
 
             def mount(self, request, **kwargs):
-                super().mount(request, **kwargs)
                 self._model_instance = MyModel.objects.get(pk=kwargs['pk'])
+                super().mount(request, **kwargs)
     """
 
     form_class: Optional[Type[forms.Form]] = None
-    form_instance: Optional[forms.Form] = None
+    # Private: non-serializable form object, re-created as needed
+    _form_instance: Optional[forms.Form] = None
     _model_instance = None
 
     def mount(self, request, **kwargs):
         """Initialize form on view mount"""
         super().mount(request, **kwargs)
 
+        # Store model PK for re-hydration after WS serialization
+        if self._model_instance and hasattr(self._model_instance, "pk"):
+            self._model_pk = self._model_instance.pk
+            self._model_app_label = self._model_instance._meta.label
+        elif not hasattr(self, "_model_pk"):
+            self._model_pk = None
+            self._model_app_label = ""
+
         # Initialize form state with all form fields set to empty strings
         # This ensures that when template renders {{ form_data.field_name }},
         # it doesn't render missing keys as empty, which would clear user input
         self.form_data = {}
+        self.form_choices = {}
         if self.form_class:
             form = self.form_class()
             # Initialize all fields with their initial values or empty string
@@ -59,12 +71,19 @@ class FormMixin:
                     initial = ""
                 self.form_data[field_name] = initial
 
+                # Expose serializable choices for template iteration
+                if hasattr(field, "choices"):
+                    self.form_choices[field_name] = [(str(k), str(v)) for k, v in field.choices]
+
             # If _model_instance is set and this is a ModelForm, populate from instance
             if self._model_instance and issubclass(self.form_class, forms.ModelForm):
                 for field_name in form.fields:
                     if hasattr(self._model_instance, field_name):
                         val = getattr(self._model_instance, field_name)
                         if val is not None:
+                            # For FK fields, store the PK not the related object
+                            if hasattr(val, "pk"):
+                                val = val.pk
                             self.form_data[field_name] = val
 
         self.form_errors = {}
@@ -73,9 +92,36 @@ class FormMixin:
         self.success_message = ""
         self.error_message = ""
 
-        # Create initial form instance
+        # Create initial form instance (private, not serialized)
         if self.form_class:
-            self.form_instance = self._create_form()
+            self._form_instance = self._create_form()
+
+    # Keep form_instance as a property for backward compatibility
+    @property
+    def form_instance(self):
+        """Access the form instance (re-creates if lost after serialization)."""
+        if self._form_instance is None and self.form_class:
+            self._ensure_model_instance()
+            self._form_instance = self._create_form()
+        return self._form_instance
+
+    @form_instance.setter
+    def form_instance(self, value):
+        self._form_instance = value
+
+    def _ensure_model_instance(self):
+        """Re-hydrate _model_instance from stored PK if lost after WS serialization."""
+        if self._model_instance is not None:
+            return
+        if not getattr(self, "_model_pk", None):
+            return
+        try:
+            from django.apps import apps
+
+            model = apps.get_model(self._model_app_label)
+            self._model_instance = model.objects.get(pk=self._model_pk)
+        except Exception:
+            self._model_instance = None
 
     def _create_form(self, data: Optional[Dict[str, Any]] = None) -> forms.Form:
         """
@@ -99,6 +145,7 @@ class FormMixin:
         else:
             return self.form_class(**kwargs)
 
+    @event_handler
     def validate_field(self, field_name: str = "", value: Any = None, **kwargs):
         """
         Validate a single field in real-time.
@@ -117,11 +164,12 @@ class FormMixin:
             self.form_data = {}
         if not hasattr(self, "field_errors"):
             self.field_errors = {}
-        if not hasattr(self, "form_instance"):
-            self.form_instance = None
 
         # Update form data
         self.form_data[field_name] = value
+
+        # Re-hydrate model instance if needed
+        self._ensure_model_instance()
 
         # Create form with current data
         form = self._create_form(self.form_data)
@@ -156,8 +204,9 @@ class FormMixin:
             self.field_errors[field_name] = e.messages
 
         # Update form instance
-        self.form_instance = form
+        self._form_instance = form
 
+    @event_handler
     def submit_form(self, **kwargs):
         """
         Handle form submission.
@@ -168,6 +217,9 @@ class FormMixin:
         # Merge kwargs into form_data (for fields submitted with the form)
         self.form_data.update(kwargs)
 
+        # Re-hydrate model instance if lost after WS serialization
+        self._ensure_model_instance()
+
         # Create form with all data
         form = self._create_form(self.form_data)
 
@@ -176,11 +228,14 @@ class FormMixin:
             self.is_valid = True
             self.field_errors = {}
             self.form_errors = {}
-            self.form_instance = form
+            self._form_instance = form
 
             # Call form_valid hook
             if hasattr(self, "form_valid"):
                 self.form_valid(form)
+
+            # Sync form_data from saved instance so VDOM reflects new values
+            self._sync_form_data(form)
         else:
             self.is_valid = False
 
@@ -191,17 +246,33 @@ class FormMixin:
             if form.non_field_errors():
                 self.form_errors = form.non_field_errors()
 
-            self.form_instance = form
+            self._form_instance = form
 
             # Call form_invalid hook
             if hasattr(self, "form_invalid"):
                 self.form_invalid(form)
 
-        # Always re-render after form submission so confirmation messages
-        # and updated field values are sent to the client, even when the
-        # submitted values match the previous state (which would otherwise
-        # trigger auto-skip via _snapshot_assigns equality).
-        self._force_render = True
+    def _sync_form_data(self, form):
+        """Sync form_data from the form's cleaned/saved values.
+
+        After form_valid(), update form_data so the VDOM diff sends patches
+        reflecting the saved state. For ModelForms, reads from the saved
+        instance; for plain forms, reads from cleaned_data.
+        """
+        source = None
+        if isinstance(form, forms.ModelForm) and hasattr(form, "instance"):
+            source = form.instance
+        for field_name in form.fields:
+            if source is not None and hasattr(source, field_name):
+                val = getattr(source, field_name)
+                # FK fields: store PK, not the related object
+                if hasattr(val, "pk"):
+                    val = val.pk
+            elif hasattr(form, "cleaned_data"):
+                val = form.cleaned_data.get(field_name)
+            else:
+                continue
+            self.form_data[field_name] = val if val is not None else ""
 
     def reset_form(self, **kwargs):
         """Reset form to initial state"""
@@ -224,7 +295,7 @@ class FormMixin:
         self.error_message = ""
 
         if self.form_class:
-            self.form_instance = self._create_form()
+            self._form_instance = self._create_form()
 
         # Signal to WebSocket handler that we need to reset the form on client-side
         # This bypasses VDOM form value preservation
@@ -271,14 +342,15 @@ class FormMixin:
         """
         from .frameworks import get_adapter
 
-        if not hasattr(self, "form_instance") or not self.form_instance:
+        fi = self.form_instance
+        if not fi:
             return "<!-- ERROR: form_instance not initialized. Did you call super().mount()? -->"
 
         framework = kwargs.pop("framework", None)
         adapter = get_adapter(framework)
 
         html = ""
-        for field_name in self.form_instance.fields.keys():
+        for field_name in fi.fields.keys():
             html += self.as_live_field(field_name, adapter=adapter, **kwargs)
 
         return html
@@ -300,10 +372,11 @@ class FormMixin:
         """
         from .frameworks import get_adapter
 
-        if not self.form_instance:
+        fi = self.form_instance
+        if not fi:
             return ""
 
-        field = self.form_instance.fields.get(field_name)
+        field = fi.fields.get(field_name)
         if not field:
             return ""
 
