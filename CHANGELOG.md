@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6rc4] - 2026-03-13
+
 ### Fixed
 
 - **Skip redundant `mount()` on WebSocket connect for pre-rendered pages** — When the client sends `has_prerendered=true` on WS connect and saved state exists in the session (written during the HTTP GET), the view's attributes are restored from session instead of re-running `mount()`. This eliminates the double page-load cost for views with expensive `mount()` implementations (e.g. directory scans, API calls). Falls back to calling `mount()` normally when no saved state is found. `_ensure_tenant()` is now called unconditionally before the restore/mount decision, fixing a regression where multi-tenant views had `self.tenant=None` on WS connect for pre-rendered pages. ([#542](https://github.com/djust-org/djust/pull/542))
