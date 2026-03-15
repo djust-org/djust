@@ -4,6 +4,24 @@
 // ============================================================================
 
 /**
+ * Check whether the global WebSocket connection is open and ready.
+ * @returns {boolean}
+ */
+function isWSConnected() {
+    return liveViewWS && liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN;
+}
+
+/**
+ * Remove the 'optimistic-pending' CSS class from all elements.
+ * Called after server confirms state to clear optimistic UI indicators.
+ */
+function clearOptimisticPending() {
+    document.querySelectorAll('.optimistic-pending').forEach(el => {
+        el.classList.remove('optimistic-pending');
+    });
+}
+
+/**
  * Centralized server response handler for both WebSocket and HTTP fallback.
  * Eliminates code duplication and ensures consistent behavior.
  *
@@ -47,7 +65,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 clearOptimisticState(eventName);
 
                 // Request full HTML for recovery morph
-                if (liveViewWS && liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) {
+                if (isWSConnected()) {
                     liveViewWS.sendMessage({ type: 'request_html' });
                 } else {
                     window.location.reload();
@@ -63,9 +81,7 @@ function handleServerResponse(data, eventName, triggerElement) {
         clearOptimisticState(eventName);
 
         // Global cleanup of lingering optimistic-pending classes
-        document.querySelectorAll('.optimistic-pending').forEach(el => {
-            el.classList.remove('optimistic-pending');
-        });
+        clearOptimisticPending();
 
         // Apply patches (efficient incremental updates)
         // Empty patches array = server confirmed no DOM changes needed (no-op success)
@@ -115,7 +131,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 // Revert VDOM version — recovery response will set the correct version
                 clientVdomVersion = data.version - 1;
 
-                if (liveViewWS && liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) {
+                if (isWSConnected()) {
                     liveViewWS.sendMessage({ type: 'request_html' });
                 } else {
                     // No WebSocket available — last resort page reload

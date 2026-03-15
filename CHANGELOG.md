@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Extract `reinitAfterDOMUpdate()` to DRY up post-DOM-update calls** — The repeated pattern of `initReactCounters()` + `initTodoItems()` + `bindLiveViewEvents()` + `updateHooks()` across 10+ call sites is now a single function. New DOM replacement paths only need one call. ([#549](https://github.com/djust-org/djust/issues/549))
+- **Extract `addEventContext()` to consolidate component/embedded view ID extraction** — The 8-line `getComponentId`/`getEmbeddedViewId` pattern appeared 4 times in event binding; now a single helper. ([#551](https://github.com/djust-org/djust/issues/551))
+- **Extract `isWSConnected()` to replace WebSocket state guard chains** — The `liveViewWS && liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN` pattern appeared across 4 files; now a single predicate. ([#552](https://github.com/djust-org/djust/issues/552))
+- **Extract `clearOptimisticPending()` to consolidate CSS class cleanup** — The `querySelectorAll('.optimistic-pending')` removal loop appeared 4 times across 2 files; now a single function. ([#553](https://github.com/djust-org/djust/issues/553))
 
 ## [0.3.7rc1] - 2026-03-14
 

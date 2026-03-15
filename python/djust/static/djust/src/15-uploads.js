@@ -318,7 +318,7 @@
 
         // Auto-upload if configured (default)
         if (!config || config.auto_upload !== false) {
-            if (!liveViewWS || !liveViewWS.ws || liveViewWS.ws.readyState !== WebSocket.OPEN) {
+            if (!isWSConnected()) {
                 console.error('[Upload] WebSocket not connected');
                 return;
             }
@@ -400,7 +400,7 @@
                 const config = uploadConfigs[uploadName];
                 await showPreviews(uploadName, files);
 
-                if (!liveViewWS || !liveViewWS.ws || liveViewWS.ws.readyState !== WebSocket.OPEN) {
+                if (!isWSConnected()) {
                     console.error('[Upload] WebSocket not connected');
                     return;
                 }
