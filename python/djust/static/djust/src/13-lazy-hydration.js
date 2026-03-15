@@ -189,9 +189,8 @@ const lazyHydrationManager = {
         element.removeAttribute('dj-lazy');
         element.setAttribute('data-live-hydrated', 'true');
 
-        // Bind events to the newly hydrated content
-        bindLiveViewEvents();
-        if (typeof updateHooks === 'function') { updateHooks(); }
+        // Bind events and hooks to the newly hydrated content
+        reinitAfterDOMUpdate();
     },
 
     // Check if an element is lazily loaded

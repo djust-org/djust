@@ -122,9 +122,8 @@ function reinitLiveViewForTurboNav() {
         if (el._djustPollVisibilityHandler) document.removeEventListener('visibilitychange', el._djustPollVisibilityHandler);
     });
 
-    // Re-bind events
-    bindLiveViewEvents();
-    if (typeof updateHooks === 'function') { updateHooks(); }
+    // Re-bind events and hooks
+    reinitAfterDOMUpdate();
 
     // Re-scan dj-loading attributes
     globalLoadingManager.scanAndRegister();

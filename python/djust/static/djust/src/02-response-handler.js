@@ -133,9 +133,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 el.classList.remove('optimistic-pending');
             });
 
-            initReactCounters();
-            initTodoItems();
-            bindLiveViewEvents();
+            reinitAfterDOMUpdate();
         }
         // Apply full HTML update (fallback)
         else if (data.html) {
@@ -160,10 +158,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             });
 
             _isBroadcastUpdate = false;
-            initReactCounters();
-            initTodoItems();
-            bindLiveViewEvents();
-            if (typeof updateHooks === 'function') { updateHooks(); }
+            reinitAfterDOMUpdate();
         } else {
             if (globalThis.djustDebug) console.warn('[LiveView] Response has neither patches nor html!', data);
         }

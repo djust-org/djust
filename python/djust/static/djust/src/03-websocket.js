@@ -228,8 +228,7 @@ class LiveViewWebSocket {
                         if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
                     }
                     this.skipMountHtml = false;
-                    bindLiveViewEvents();
-                    if (typeof updateHooks === 'function') { updateHooks(); }
+                    reinitAfterDOMUpdate();
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
@@ -242,8 +241,7 @@ class LiveViewWebSocket {
                     if (container) {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         container.innerHTML = data.html;
-                        bindLiveViewEvents();
-                        if (typeof updateHooks === 'function') { updateHooks(); }
+                        reinitAfterDOMUpdate();
                     }
                     this.skipMountHtml = false;
                 }
@@ -277,10 +275,7 @@ class LiveViewWebSocket {
                 const newRoot = doc.querySelector('[dj-root]') || doc.body;
                 morphChildren(liveviewRoot, newRoot);
                 clientVdomVersion = data.version;
-                initReactCounters();
-                initTodoItems();
-                bindLiveViewEvents();
-                if (typeof updateHooks === 'function') { updateHooks(); }
+                reinitAfterDOMUpdate();
                 if (globalThis.djustDebug) {
                     // codeql[js/log-injection] -- data.version is a server-controlled integer
                     console.log('[LiveView] DOM recovered via morph, version:', data.version);
@@ -573,8 +568,7 @@ class LiveViewWebSocket {
         if (globalThis.djustDebug) console.log(`[LiveView] Updated embedded view: ${viewId}`);
 
         // Re-bind events within the updated container
-        bindLiveViewEvents();
-        if (typeof updateHooks === 'function') { updateHooks(); }
+        reinitAfterDOMUpdate();
     }
 
     _showConnectionErrorOverlay() {

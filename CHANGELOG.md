@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`dj-hook` elements not re-initialized after `html_update` or `html_recovery`** — When VDOM patches failed and djust fell back to full HTML replacement, `updateHooks()` was never called, leaving hook elements stale (charts showing old data, canvases empty). Added `updateHooks()` to all DOM replacement paths: `html_update`, `html_recovery`, TurboNav reinit, embedded view update, lazy hydration, and streaming updates. ([#548](https://github.com/djust-org/djust/pull/548))
 
+### Changed
+
+- **Extract `reinitAfterDOMUpdate()` to DRY up post-DOM-update calls** — The repeated pattern of `initReactCounters()` + `initTodoItems()` + `bindLiveViewEvents()` + `updateHooks()` across 10+ call sites is now a single function. New DOM replacement paths only need one call. ([#549](https://github.com/djust-org/djust/issues/549))
+
 ## [0.3.7rc1] - 2026-03-14
 
 ### Fixed

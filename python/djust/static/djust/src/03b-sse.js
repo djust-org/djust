@@ -121,8 +121,7 @@ class LiveViewSSE {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                             container.innerHTML = data.html;
                         }
-                        bindLiveViewEvents();
-                        if (typeof updateHooks === 'function') { updateHooks(); }
+                        reinitAfterDOMUpdate();
                     }
                 }
                 break;

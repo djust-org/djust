@@ -39,9 +39,7 @@ async function handleEvent(eventName, params = {}) {
         // Apply cached patches
         if (cached.patches && cached.patches.length > 0) {
             applyPatches(cached.patches);
-            initReactCounters();
-            initTodoItems();
-            bindLiveViewEvents();
+            reinitAfterDOMUpdate();
         }
 
         if (!skipLoading) globalLoadingManager.stopLoading(eventName, triggerElement);
