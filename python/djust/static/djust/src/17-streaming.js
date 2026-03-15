@@ -45,11 +45,10 @@ function handleStreamMessage(data) {
         }
     }
 
-    // Re-bind events on new DOM content
-    if (typeof bindLiveViewEvents === 'function') {
-        bindLiveViewEvents();
+    // Re-bind events and hooks on new DOM content
+    if (typeof reinitAfterDOMUpdate === 'function') {
+        reinitAfterDOMUpdate();
     }
-    if (typeof updateHooks === 'function') { updateHooks(); }
 }
 
 /**

@@ -460,7 +460,23 @@ function clearOptimisticState(eventName) {
     }
 }
 
+/**
+ * Reinitialize all dynamic content after a DOM replacement.
+ *
+ * Call this after any operation that replaces or morphs DOM content
+ * (html_update, html_recovery, TurboNav, embedded view update, etc.)
+ * instead of manually calling initReactCounters + initTodoItems +
+ * bindLiveViewEvents + updateHooks individually.
+ */
+function reinitAfterDOMUpdate() {
+    initReactCounters();
+    initTodoItems();
+    bindLiveViewEvents();
+    if (typeof updateHooks === 'function') { updateHooks(); }
+}
+
 // Export for testing and for createNodeFromVNode to mark VDOM-created elements as bound
 window.djust.bindLiveViewEvents = bindLiveViewEvents;
+window.djust.reinitAfterDOMUpdate = reinitAfterDOMUpdate;
 window.djust._isHandlerBound = _isHandlerBound;
 window.djust._markHandlerBound = _markHandlerBound;

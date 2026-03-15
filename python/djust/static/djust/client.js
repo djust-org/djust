@@ -146,9 +146,8 @@ function reinitLiveViewForTurboNav() {
         if (el._djustPollVisibilityHandler) document.removeEventListener('visibilitychange', el._djustPollVisibilityHandler);
     });
 
-    // Re-bind events
-    bindLiveViewEvents();
-    if (typeof updateHooks === 'function') { updateHooks(); }
+    // Re-bind events and hooks
+    reinitAfterDOMUpdate();
 
     // Re-scan dj-loading attributes
     globalLoadingManager.scanAndRegister();
@@ -290,9 +289,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 el.classList.remove('optimistic-pending');
             });
 
-            initReactCounters();
-            initTodoItems();
-            bindLiveViewEvents();
+            reinitAfterDOMUpdate();
         }
         // Apply full HTML update (fallback)
         else if (data.html) {
@@ -317,10 +314,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             });
 
             _isBroadcastUpdate = false;
-            initReactCounters();
-            initTodoItems();
-            bindLiveViewEvents();
-            if (typeof updateHooks === 'function') { updateHooks(); }
+            reinitAfterDOMUpdate();
         } else {
             if (globalThis.djustDebug) console.warn('[LiveView] Response has neither patches nor html!', data);
         }
@@ -586,8 +580,7 @@ class LiveViewWebSocket {
                         if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
                     }
                     this.skipMountHtml = false;
-                    bindLiveViewEvents();
-                    if (typeof updateHooks === 'function') { updateHooks(); }
+                    reinitAfterDOMUpdate();
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
@@ -600,8 +593,7 @@ class LiveViewWebSocket {
                     if (container) {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         container.innerHTML = data.html;
-                        bindLiveViewEvents();
-                        if (typeof updateHooks === 'function') { updateHooks(); }
+                        reinitAfterDOMUpdate();
                     }
                     this.skipMountHtml = false;
                 }
@@ -635,10 +627,7 @@ class LiveViewWebSocket {
                 const newRoot = doc.querySelector('[dj-root]') || doc.body;
                 morphChildren(liveviewRoot, newRoot);
                 clientVdomVersion = data.version;
-                initReactCounters();
-                initTodoItems();
-                bindLiveViewEvents();
-                if (typeof updateHooks === 'function') { updateHooks(); }
+                reinitAfterDOMUpdate();
                 if (globalThis.djustDebug) {
                     // codeql[js/log-injection] -- data.version is a server-controlled integer
                     console.log('[LiveView] DOM recovered via morph, version:', data.version);
@@ -931,8 +920,7 @@ class LiveViewWebSocket {
         if (globalThis.djustDebug) console.log(`[LiveView] Updated embedded view: ${viewId}`);
 
         // Re-bind events within the updated container
-        bindLiveViewEvents();
-        if (typeof updateHooks === 'function') { updateHooks(); }
+        reinitAfterDOMUpdate();
     }
 
     _showConnectionErrorOverlay() {
@@ -1146,8 +1134,7 @@ class LiveViewSSE {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                             container.innerHTML = data.html;
                         }
-                        bindLiveViewEvents();
-                        if (typeof updateHooks === 'function') { updateHooks(); }
+                        reinitAfterDOMUpdate();
                     }
                 }
                 break;
@@ -2624,8 +2611,24 @@ function clearOptimisticState(eventName) {
     }
 }
 
+/**
+ * Reinitialize all dynamic content after a DOM replacement.
+ *
+ * Call this after any operation that replaces or morphs DOM content
+ * (html_update, html_recovery, TurboNav, embedded view update, etc.)
+ * instead of manually calling initReactCounters + initTodoItems +
+ * bindLiveViewEvents + updateHooks individually.
+ */
+function reinitAfterDOMUpdate() {
+    initReactCounters();
+    initTodoItems();
+    bindLiveViewEvents();
+    if (typeof updateHooks === 'function') { updateHooks(); }
+}
+
 // Export for testing and for createNodeFromVNode to mark VDOM-created elements as bound
 window.djust.bindLiveViewEvents = bindLiveViewEvents;
+window.djust.reinitAfterDOMUpdate = reinitAfterDOMUpdate;
 window.djust._isHandlerBound = _isHandlerBound;
 window.djust._markHandlerBound = _markHandlerBound;
 
@@ -2862,9 +2865,7 @@ async function handleEvent(eventName, params = {}) {
         // Apply cached patches
         if (cached.patches && cached.patches.length > 0) {
             applyPatches(cached.patches);
-            initReactCounters();
-            initTodoItems();
-            bindLiveViewEvents();
+            reinitAfterDOMUpdate();
         }
 
         if (!skipLoading) globalLoadingManager.stopLoading(eventName, triggerElement);
@@ -4434,9 +4435,8 @@ const lazyHydrationManager = {
         element.removeAttribute('dj-lazy');
         element.setAttribute('data-live-hydrated', 'true');
 
-        // Bind events to the newly hydrated content
-        bindLiveViewEvents();
-        if (typeof updateHooks === 'function') { updateHooks(); }
+        // Bind events and hooks to the newly hydrated content
+        reinitAfterDOMUpdate();
     },
 
     // Check if an element is lazily loaded
@@ -5294,11 +5294,10 @@ function handleStreamMessage(data) {
         }
     }
 
-    // Re-bind events on new DOM content
-    if (typeof bindLiveViewEvents === 'function') {
-        bindLiveViewEvents();
+    // Re-bind events and hooks on new DOM content
+    if (typeof reinitAfterDOMUpdate === 'function') {
+        reinitAfterDOMUpdate();
     }
-    if (typeof updateHooks === 'function') { updateHooks(); }
 }
 
 /**

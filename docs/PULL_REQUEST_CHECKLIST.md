@@ -65,6 +65,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **No console.log** in production code without debug guard - All `console.log` calls must be wrapped in `if (globalThis.djustDebug)` guards. Unguarded logging is auto-rejected
 - [ ] **Generated JS follows same rules** - Python code that generates JavaScript strings (e.g., service worker generators, template tags) must also avoid `console.log` and use proper escaping
 - [ ] **New JS feature files have tests** - Each new file in `static/djust/src/` must have a corresponding test file in `tests/js/`
+- [ ] **Post-DOM-update uses `reinitAfterDOMUpdate()`** - After any DOM replacement (html_update, morph, innerHTML, etc.), call `reinitAfterDOMUpdate()` instead of manually calling `initReactCounters`, `initTodoItems`, `bindLiveViewEvents`, and `updateHooks` individually. This ensures new DOM paths automatically get all re-initialization steps
 - [ ] **Browser compatibility** maintained for supported versions
 - [ ] **Security considerations** - No XSS vulnerabilities, proper sanitization
 
