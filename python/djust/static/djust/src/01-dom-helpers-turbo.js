@@ -124,6 +124,7 @@ function reinitLiveViewForTurboNav() {
 
     // Re-bind events
     bindLiveViewEvents();
+    if (typeof updateHooks === 'function') { updateHooks(); }
 
     // Re-scan dj-loading attributes
     globalLoadingManager.scanAndRegister();

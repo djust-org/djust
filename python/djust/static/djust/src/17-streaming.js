@@ -49,6 +49,7 @@ function handleStreamMessage(data) {
     if (typeof bindLiveViewEvents === 'function') {
         bindLiveViewEvents();
     }
+    if (typeof updateHooks === 'function') { updateHooks(); }
 }
 
 /**

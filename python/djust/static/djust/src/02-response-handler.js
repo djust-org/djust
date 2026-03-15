@@ -163,6 +163,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             initReactCounters();
             initTodoItems();
             bindLiveViewEvents();
+            if (typeof updateHooks === 'function') { updateHooks(); }
         } else {
             if (globalThis.djustDebug) console.warn('[LiveView] Response has neither patches nor html!', data);
         }

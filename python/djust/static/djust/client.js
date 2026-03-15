@@ -148,6 +148,7 @@ function reinitLiveViewForTurboNav() {
 
     // Re-bind events
     bindLiveViewEvents();
+    if (typeof updateHooks === 'function') { updateHooks(); }
 
     // Re-scan dj-loading attributes
     globalLoadingManager.scanAndRegister();
@@ -319,6 +320,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             initReactCounters();
             initTodoItems();
             bindLiveViewEvents();
+            if (typeof updateHooks === 'function') { updateHooks(); }
         } else {
             if (globalThis.djustDebug) console.warn('[LiveView] Response has neither patches nor html!', data);
         }
@@ -636,6 +638,7 @@ class LiveViewWebSocket {
                 initReactCounters();
                 initTodoItems();
                 bindLiveViewEvents();
+                if (typeof updateHooks === 'function') { updateHooks(); }
                 if (globalThis.djustDebug) {
                     // codeql[js/log-injection] -- data.version is a server-controlled integer
                     console.log('[LiveView] DOM recovered via morph, version:', data.version);
@@ -929,6 +932,7 @@ class LiveViewWebSocket {
 
         // Re-bind events within the updated container
         bindLiveViewEvents();
+        if (typeof updateHooks === 'function') { updateHooks(); }
     }
 
     _showConnectionErrorOverlay() {
@@ -4432,6 +4436,7 @@ const lazyHydrationManager = {
 
         // Bind events to the newly hydrated content
         bindLiveViewEvents();
+        if (typeof updateHooks === 'function') { updateHooks(); }
     },
 
     // Check if an element is lazily loaded
@@ -5293,6 +5298,7 @@ function handleStreamMessage(data) {
     if (typeof bindLiveViewEvents === 'function') {
         bindLiveViewEvents();
     }
+    if (typeof updateHooks === 'function') { updateHooks(); }
 }
 
 /**
