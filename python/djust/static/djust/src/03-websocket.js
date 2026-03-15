@@ -126,9 +126,7 @@ class LiveViewWebSocket {
             pendingEvents.clear();
 
             // Remove loading indicators from DOM
-            document.querySelectorAll('.optimistic-pending').forEach(el => {
-                el.classList.remove('optimistic-pending');
-            });
+            clearOptimisticPending();
 
             // Skip reconnection logic if this was an intentional disconnect (TurboNav)
             if (this._intentionalDisconnect) {

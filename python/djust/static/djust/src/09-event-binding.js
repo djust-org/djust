@@ -34,6 +34,19 @@ function _markHandlerBound(element, type) {
     set.add(type);
 }
 
+/**
+ * Add component and embedded view context to event params.
+ * Extracts component_id and view_id from the element's ancestry.
+ * @param {Object} params - Event params object to augment
+ * @param {HTMLElement} element - Element that triggered the event
+ */
+function addEventContext(params, element) {
+    const componentId = getComponentId(element);
+    if (componentId) params.component_id = componentId;
+    const embeddedViewId = getEmbeddedViewId(element);
+    if (embeddedViewId) params.view_id = embeddedViewId;
+}
+
 function bindLiveViewEvents() {
     // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
     if (window.djust.uploads) {
@@ -79,17 +92,7 @@ function bindLiveViewEvents() {
                     params._args = parsed.args;
                 }
 
-                // Phase 4: Check if event is from a component
-                const componentId = getComponentId(e.currentTarget);
-                if (componentId) {
-                    params.component_id = componentId;
-                }
-
-                // Embedded LiveView: route event to correct child view
-                const embeddedViewId = getEmbeddedViewId(e.currentTarget);
-                if (embeddedViewId) {
-                    params.view_id = embeddedViewId;
-                }
+                addEventContext(params, e.currentTarget);
 
                 // Pass target element and optimistic update ID
                 params._targetElement = e.currentTarget;
@@ -143,17 +146,7 @@ function bindLiveViewEvents() {
                 const formData = new FormData(e.target);
                 const params = Object.fromEntries(formData.entries());
 
-                // Phase 4: Check if event is from a component
-                const componentId = getComponentId(e.target);
-                if (componentId) {
-                    params.component_id = componentId;
-                }
-
-                // Embedded LiveView: route event to correct child view
-                const embeddedViewId = getEmbeddedViewId(e.target);
-                if (embeddedViewId) {
-                    params.view_id = embeddedViewId;
-                }
+                addEventContext(params, e.target);
 
                 // Pass target element for optimistic updates (Phase 3)
                 params._targetElement = e.target;
@@ -188,15 +181,7 @@ function bindLiveViewEvents() {
         function buildFormEventParams(element, value) {
             const fieldName = getFieldName(element);
             const params = { value, field: fieldName };
-            const componentId = getComponentId(element);
-            if (componentId) {
-                params.component_id = componentId;
-            }
-            // Embedded LiveView: route event to correct child view
-            const embeddedViewId = getEmbeddedViewId(element);
-            if (embeddedViewId) {
-                params.view_id = embeddedViewId;
-            }
+            addEventContext(params, element);
             return params;
         }
 
@@ -359,17 +344,7 @@ function bindLiveViewEvents() {
                         field: fieldName
                     };
 
-                    // Phase 4: Check if event is from a component
-                    const componentId = getComponentId(e.target);
-                    if (componentId) {
-                        params.component_id = componentId;
-                    }
-
-                    // Embedded LiveView: route event to correct child view
-                    const embeddedViewId = getEmbeddedViewId(e.target);
-                    if (embeddedViewId) {
-                        params.view_id = embeddedViewId;
-                    }
+                    addEventContext(params, e.target);
 
                     // Add target element and handle dj-target
                     params._targetElement = e.target;

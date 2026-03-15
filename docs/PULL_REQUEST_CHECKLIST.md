@@ -7,7 +7,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **PR Title** follows format: `[type]: brief description` (e.g., `feat:`, `fix:`, `docs:`, `refactor:`)
 - [ ] **PR Description** includes purpose, changes, and testing approach
 - [ ] **Breaking Changes** are clearly identified and documented
-- [ ] **Linked Issues** are referenced (if applicable)
+- [ ] **Linked Issues** are referenced (if applicable). Each issue that should be closed by the PR must appear on its own line using GitHub closing keywords (e.g., `Closes #123`). Multiple issues must be listed one per line — do not combine them on a single line (e.g., `Closes #123, closes #456` will only close the last one)
 - [ ] **Target Branch** is correct (typically `main` for releases)
 - [ ] **All new files are tracked** — `git status` shows no untracked files that should be part of the PR. Tests must not depend on files absent from the diff
 
