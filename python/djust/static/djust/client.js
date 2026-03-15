@@ -319,6 +319,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             initReactCounters();
             initTodoItems();
             bindLiveViewEvents();
+            if (typeof updateHooks === 'function') { updateHooks(); }
         } else {
             if (globalThis.djustDebug) console.warn('[LiveView] Response has neither patches nor html!', data);
         }
@@ -636,6 +637,7 @@ class LiveViewWebSocket {
                 initReactCounters();
                 initTodoItems();
                 bindLiveViewEvents();
+                if (typeof updateHooks === 'function') { updateHooks(); }
                 if (globalThis.djustDebug) {
                     // codeql[js/log-injection] -- data.version is a server-controlled integer
                     console.log('[LiveView] DOM recovered via morph, version:', data.version);

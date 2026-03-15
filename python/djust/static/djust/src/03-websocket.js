@@ -280,6 +280,7 @@ class LiveViewWebSocket {
                 initReactCounters();
                 initTodoItems();
                 bindLiveViewEvents();
+                if (typeof updateHooks === 'function') { updateHooks(); }
                 if (globalThis.djustDebug) {
                     // codeql[js/log-injection] -- data.version is a server-controlled integer
                     console.log('[LiveView] DOM recovered via morph, version:', data.version);

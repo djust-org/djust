@@ -354,6 +354,69 @@ describe('hooks', () => {
         });
     });
 
+    describe('hooks after html_update (full DOM replacement)', () => {
+        it('re-mounts hooks when html_update replaces DOM content', () => {
+            // Simulate: initial page has a chart hook, then an event triggers
+            // html_update which replaces the DOM with new content containing
+            // a different chart hook (e.g., filter changed table + chart).
+            const { window, document } = createEnv(
+                '<div dj-view="myapp.views.RevenueView"><canvas dj-hook="OldChart" data-chart="old"></canvas></div>'
+            );
+
+            const oldMounted = vi.fn();
+            const oldDestroyed = vi.fn();
+            const oldUpdated = vi.fn();
+            const newMounted = vi.fn();
+
+            window.djust.hooks = {
+                OldChart: { mounted: oldMounted, destroyed: oldDestroyed, updated: oldUpdated },
+                NewChart: { mounted: newMounted },
+            };
+
+            // Mount initial hooks
+            window.djust.mountHooks(document);
+            expect(oldMounted).toHaveBeenCalledTimes(1);
+
+            // Simulate html_update: replace liveview root innerHTML
+            const root = document.querySelector('[dj-root]');
+            root.innerHTML = '<div dj-view="myapp.views.RevenueView"><canvas dj-hook="NewChart" data-chart="new"></canvas></div>';
+
+            // updateHooks should destroy old hooks and mount new ones
+            window.djust.updateHooks(document);
+
+            expect(oldDestroyed).toHaveBeenCalledTimes(1);
+            expect(newMounted).toHaveBeenCalledTimes(1);
+        });
+
+        it('calls updated() when hook element stays but data-chart changes', () => {
+            // Simulate: same hook element exists but its data attribute changed
+            // (e.g., chart data updated after filter change)
+            const { window, document } = createEnv(
+                '<canvas dj-hook="MyChart" data-chart="olddata" dj-view="test"></canvas>'
+            );
+
+            const mountedFn = vi.fn();
+            const updatedFn = vi.fn();
+
+            window.djust.hooks = {
+                MyChart: { mounted: mountedFn, updated: updatedFn },
+            };
+
+            // Mount initial
+            window.djust.mountHooks(document);
+            expect(mountedFn).toHaveBeenCalledTimes(1);
+
+            // Change data attribute (simulating server sending new chart data)
+            document.querySelector('[dj-hook="MyChart"]').setAttribute('data-chart', 'newdata');
+
+            // updateHooks should call updated() on the existing hook
+            window.djust.updateHooks(document);
+
+            expect(updatedFn).toHaveBeenCalledTimes(1);
+            expect(mountedFn).toHaveBeenCalledTimes(1); // not re-mounted
+        });
+    });
+
     describe('exports', () => {
         it('exposes all expected functions', () => {
             const { window } = createEnv();
