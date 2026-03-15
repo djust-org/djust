@@ -5,12 +5,15 @@ This module provides seamless integration between Django's forms system and Live
 enabling real-time validation, error display, and reactive form handling.
 """
 
+import logging
 import warnings
 from typing import Dict, Any, Optional, Type, List
 from django import forms
 from django.core.exceptions import ValidationError
 
 from .decorators import event_handler
+
+logger = logging.getLogger(__name__)
 
 
 class FormMixin:
@@ -49,13 +52,14 @@ class FormMixin:
         """Initialize form on view mount"""
         super().mount(request, **kwargs)
 
-        # Store model PK for re-hydration after WS serialization
+        # Store model PK for re-hydration after WS serialization.
+        # Public attrs so they survive get_context_data() → session save → WS restore.
         if self._model_instance and hasattr(self._model_instance, "pk"):
-            self._model_pk = self._model_instance.pk
-            self._model_app_label = self._model_instance._meta.label
-        elif not hasattr(self, "_model_pk"):
-            self._model_pk = None
-            self._model_app_label = ""
+            self.model_pk = self._model_instance.pk
+            self.model_label = self._model_instance._meta.label
+        elif not hasattr(self, "model_pk"):
+            self.model_pk = None
+            self.model_label = ""
 
         # Initialize form state with all form fields set to empty strings
         # This ensures that when template renders {{ form_data.field_name }},
@@ -113,14 +117,20 @@ class FormMixin:
         """Re-hydrate _model_instance from stored PK if lost after WS serialization."""
         if self._model_instance is not None:
             return
-        if not getattr(self, "_model_pk", None):
+        if not getattr(self, "model_pk", None):
             return
         try:
             from django.apps import apps
 
-            model = apps.get_model(self._model_app_label)
-            self._model_instance = model.objects.get(pk=self._model_pk)
+            model = apps.get_model(self.model_label)
+            self._model_instance = model.objects.get(pk=self.model_pk)
         except Exception:
+            logger.warning(
+                "Failed to re-hydrate model instance (label=%s, pk=%s)",
+                getattr(self, "model_label", ""),
+                getattr(self, "model_pk", None),
+                exc_info=True,
+            )
             self._model_instance = None
 
     def _create_form(self, data: Optional[Dict[str, Any]] = None) -> forms.Form:

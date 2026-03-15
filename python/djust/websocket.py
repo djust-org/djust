@@ -1434,10 +1434,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # In-place mutations (list.append) are NOT detected and
                         # will still trigger a render — this is the safe default.
                         skip_render = getattr(self.view_instance, "_skip_render", False)
-                        force_render = getattr(self.view_instance, "_force_render", False)
-                        if force_render:
-                            self.view_instance._force_render = False
-                            skip_render = False
                         if not skip_render:
                             post_assigns = _snapshot_assigns(self.view_instance)
                             if pre_assigns == post_assigns:
