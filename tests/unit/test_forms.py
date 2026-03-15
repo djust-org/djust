@@ -5,7 +5,10 @@ Tests form state management, validation, reset behavior, as_live rendering,
 XSS prevention, and _model_instance support.
 """
 
+import logging
 import warnings
+from unittest.mock import MagicMock, patch
+
 import pytest
 from django import forms
 from django.utils.html import escape
@@ -559,6 +562,231 @@ class TestModelInstance:
         view.get(get_request)
         form = view._create_form({"first_name": "Test", "last_name": "User"})
         assert form.is_valid()
+
+
+class TestFormChoices:
+    """Test form_choices auto-population for template-friendly serializable choices."""
+
+    @pytest.mark.django_db
+    def test_form_choices_populated_for_choice_fields(self, get_request):
+        """form_choices should contain serializable (str, str) tuples for ChoiceFields."""
+        view = FullTestFormView()
+        view.get(get_request)
+
+        assert "role" in view.form_choices
+        choices = view.form_choices["role"]
+        assert ("dev", "Developer") in choices
+        assert ("mgr", "Manager") in choices
+
+    @pytest.mark.django_db
+    def test_form_choices_not_populated_for_non_choice_fields(self, get_request):
+        """form_choices should not contain entries for CharField, EmailField, etc."""
+        view = FullTestFormView()
+        view.get(get_request)
+
+        assert "name" not in view.form_choices
+        assert "email" not in view.form_choices
+        assert "bio" not in view.form_choices
+
+    @pytest.mark.django_db
+    def test_form_choices_values_are_strings(self, get_request):
+        """All choice values and labels must be plain strings for WS serialization."""
+        view = FullTestFormView()
+        view.get(get_request)
+
+        for field_name, choices in view.form_choices.items():
+            for value, label in choices:
+                assert isinstance(
+                    value, str
+                ), f"{field_name} choice value {value!r} is not a string"
+                assert isinstance(
+                    label, str
+                ), f"{field_name} choice label {label!r} is not a string"
+
+
+class TestFormInstanceProperty:
+    """Test that form_instance property provides backward-compatible access."""
+
+    @pytest.mark.django_db
+    def test_form_instance_accessible_after_mount(self, get_request):
+        """form_instance should be accessible via property after mount."""
+        view = TestFormView()
+        view.get(get_request)
+        assert view.form_instance is not None
+        assert hasattr(view.form_instance, "fields")
+
+    @pytest.mark.django_db
+    def test_form_instance_recreated_if_lost(self, get_request):
+        """form_instance property should re-create the form if _form_instance is None."""
+        view = TestFormView()
+        view.get(get_request)
+
+        # Simulate WS serialization loss
+        view._form_instance = None
+
+        # Property should re-create it
+        fi = view.form_instance
+        assert fi is not None
+        assert hasattr(fi, "fields")
+
+
+class TestEventHandlerDecorators:
+    """Test that submit_form and validate_field have @event_handler."""
+
+    def test_submit_form_has_event_handler(self):
+        """submit_form should be decorated with @event_handler."""
+        from djust.decorators import is_event_handler
+
+        assert is_event_handler(FormMixin.submit_form)
+
+    def test_validate_field_has_event_handler(self):
+        """validate_field should be decorated with @event_handler."""
+        from djust.decorators import is_event_handler
+
+        assert is_event_handler(FormMixin.validate_field)
+
+
+class TestSyncFormData:
+    """Test _sync_form_data() syncs form_data from cleaned/saved values."""
+
+    @pytest.mark.django_db
+    def test_sync_from_cleaned_data(self, get_request):
+        """Plain form: _sync_form_data reads from cleaned_data."""
+        view = TestFormView()
+        view.get(get_request)
+
+        view.submit_form(first_name="John", last_name="Doe")
+
+        assert view.is_valid
+        assert view.form_data["first_name"] == "John"
+        assert view.form_data["last_name"] == "Doe"
+
+    @pytest.mark.django_db
+    def test_sync_replaces_none_with_empty_string(self, get_request):
+        """None values in cleaned_data should be stored as empty string."""
+        view = TestFormView()
+        view.get(get_request)
+
+        # Submit valid form, optional fields left empty
+        view.submit_form(first_name="John", last_name="Doe", email="", bio="")
+
+        assert view.is_valid
+        # Optional fields that clean to empty string
+        assert view.form_data["email"] == ""
+        assert view.form_data["bio"] == ""
+
+    @pytest.mark.django_db
+    def test_sync_updates_stale_values(self, get_request):
+        """form_data should reflect cleaned values, not pre-submit values."""
+        view = TestFormView()
+        view.get(get_request)
+
+        # Set stale value
+        view.form_data["first_name"] = "OldName"
+        view.submit_form(first_name="NewName", last_name="Doe")
+
+        assert view.is_valid
+        assert view.form_data["first_name"] == "NewName"
+
+
+class TestEnsureModelInstance:
+    """Test _ensure_model_instance() re-hydration logic."""
+
+    @pytest.mark.django_db
+    def test_early_return_when_model_instance_exists(self, get_request):
+        """Should not query DB if _model_instance is already set."""
+        view = TestFormView()
+        view.get(get_request)
+        view._model_instance = object()  # non-None sentinel
+
+        with patch("django.apps.apps.get_model") as mock_get:
+            view._ensure_model_instance()
+            mock_get.assert_not_called()
+
+    @pytest.mark.django_db
+    def test_early_return_when_no_model_pk(self, get_request):
+        """Should not query DB if model_pk is None or unset."""
+        view = TestFormView()
+        view.get(get_request)
+        assert view.model_pk is None
+
+        with patch("django.apps.apps.get_model") as mock_get:
+            view._ensure_model_instance()
+            mock_get.assert_not_called()
+
+    @pytest.mark.django_db
+    def test_rehydrates_from_db(self, get_request):
+        """Should query DB with stored label and pk."""
+        view = TestFormView()
+        view.get(get_request)
+        view.model_pk = 42
+        view.model_label = "myapp.MyModel"
+
+        mock_instance = MagicMock()
+        mock_model = MagicMock()
+        mock_model.objects.get.return_value = mock_instance
+
+        with patch("django.apps.apps.get_model", return_value=mock_model) as mock_get:
+            view._ensure_model_instance()
+            mock_get.assert_called_once_with("myapp.MyModel")
+            mock_model.objects.get.assert_called_once_with(pk=42)
+            assert view._model_instance is mock_instance
+
+    @pytest.mark.django_db
+    def test_logs_warning_on_failure(self, get_request, caplog):
+        """Should log warning (not silently fail) when re-hydration fails."""
+        view = TestFormView()
+        view.get(get_request)
+        view.model_pk = 999
+        view.model_label = "nonexistent.Model"
+
+        with caplog.at_level(logging.WARNING, logger="djust.forms"):
+            view._ensure_model_instance()
+
+        assert view._model_instance is None
+        assert "Failed to re-hydrate model instance" in caplog.text
+        assert "nonexistent.Model" in caplog.text
+
+
+class TestModelPkSerialization:
+    """Test that model_pk and model_label are public (survive serialization)."""
+
+    @pytest.mark.django_db
+    def test_model_pk_is_public_attribute(self, get_request):
+        """model_pk must not start with _ so it survives get_context_data()."""
+        view = TestFormView()
+        view.get(get_request)
+
+        # Verify it's a public attribute (no underscore prefix)
+        assert hasattr(view, "model_pk")
+        assert not any(
+            k.startswith("_") and k in ("_model_pk", "_model_app_label") for k in view.__dict__
+        )
+
+    @pytest.mark.django_db
+    def test_model_pk_set_from_model_instance(self, get_request):
+        """model_pk and model_label should be set when _model_instance has a pk."""
+
+        class FakeModel:
+            pk = 17
+
+            class _meta:
+                label = "myapp.Thing"
+
+        class PkView(FormMixin, LiveView):
+            form_class = TestForm
+            template = "<div dj-root></div>"
+            _model_instance = None
+
+            def mount(self, request, **kwargs):
+                self._model_instance = FakeModel()
+                super().mount(request, **kwargs)
+
+        view = PkView()
+        view.get(get_request)
+
+        assert view.model_pk == 17
+        assert view.model_label == "myapp.Thing"
 
 
 class TestLiveViewFormDeprecation:

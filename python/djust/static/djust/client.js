@@ -2319,7 +2319,6 @@ function bindLiveViewEvents() {
                 params._targetElement = e.target;
 
                 await handleEvent(submitHandler, params);
-                e.target.reset();
             });
         }
 
