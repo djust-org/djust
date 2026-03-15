@@ -392,6 +392,9 @@ endif
 	@# Convert Python version to Cargo version (0.2.0a1 -> 0.2.0-alpha.1)
 	@CARGO_VERSION=$$(echo "$(VERSION)" | sed 's/a/-alpha./; s/b/-beta./; s/rc/-rc./'); \
 	sed 's/^version = ".*"/version = "'$$CARGO_VERSION'"/' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
+	@# Update __version__ in Python source files
+	@sed 's/^__version__ = ".*"/__version__ = "$(VERSION)"/' python/djust/__init__.py > python/djust/__init__.py.tmp && mv python/djust/__init__.py.tmp python/djust/__init__.py
+	@sed 's/^__version__ = ".*"/__version__ = "$(VERSION)"/' python/djust/components/__init__.py > python/djust/components/__init__.py.tmp && mv python/djust/components/__init__.py.tmp python/djust/components/__init__.py
 	@echo "$(GREEN)Updated versions:$(NC)"
 	@echo "  pyproject.toml: $(VERSION)"
 	@grep 'version = ' Cargo.toml | head -1
@@ -402,6 +405,8 @@ version-check: ## Check current version in all files
 	@echo "$(BLUE)Current versions:$(NC)"
 	@echo "  pyproject.toml: $$(grep '^version = ' pyproject.toml | head -1)"
 	@echo "  Cargo.toml:     $$(grep '^version = ' Cargo.toml | head -1)"
+	@echo "  __init__.py:    $$(grep '^__version__' python/djust/__init__.py | head -1)"
+	@echo "  components:     $$(grep '^__version__' python/djust/components/__init__.py | head -1)"
 
 .PHONY: release
 release: ## Create and push a release tag (usage: make release VERSION=0.2.0a1)
