@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7rc2] - 2026-03-14
+
 ### Fixed
 
 - **`dj-hook` elements not re-initialized after `html_update` or `html_recovery`** — When VDOM patches failed and djust fell back to full HTML replacement, `updateHooks()` was never called, leaving hook elements stale (charts showing old data, canvases empty). Added `updateHooks()` to all DOM replacement paths: `html_update`, `html_recovery`, TurboNav reinit, embedded view update, lazy hydration, and streaming updates. ([#548](https://github.com/djust-org/djust/pull/548))
