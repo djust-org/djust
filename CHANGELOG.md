@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7rc1] - 2026-03-14
+
 ### Fixed
 
 - **FormMixin: serialization, event handling, and ModelForm support** — Fixed 6 issues blocking production use of `FormMixin` with `ModelForm` over WebSocket: added `@event_handler` to `submit_form()` and `validate_field()`; renamed `form_instance` to private `_form_instance` with backward-compatible property; store `model_pk`/`model_label` as public attributes for re-hydration after WS session restore; sync `form_data` from saved instance after `form_valid()`; use FK PK instead of related object; auto-populate `form_choices` with serializable tuples. ([#545](https://github.com/djust-org/djust/pull/545))
