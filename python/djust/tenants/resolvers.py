@@ -109,14 +109,9 @@ class TenantResolver(ABC):
 
     def get_config(self, key: str, default: Any = None) -> Any:
         """Get a value from DJUST_CONFIG."""
-        try:
-            from django.conf import settings
+        from ..config import get_djust_config
 
-            config = getattr(settings, "DJUST_CONFIG", {})
-            return config.get(key, default)
-        except Exception:
-            logger.debug("Could not load DJUST_CONFIG for key %s, using default", key)
-            return default
+        return get_djust_config().get(key, default)
 
 
 class SubdomainResolver(TenantResolver):
@@ -366,14 +361,9 @@ def get_tenant_resolver() -> TenantResolver:
     Returns:
         Configured TenantResolver instance
     """
-    try:
-        from django.conf import settings
+    from ..config import get_djust_config
 
-        config = getattr(settings, "DJUST_CONFIG", {})
-    except Exception:
-        logger.debug("Could not load DJUST_CONFIG for tenant resolver, using defaults")
-        config = {}
-
+    config = get_djust_config()
     resolver_config = config.get("TENANT_RESOLVER", "subdomain")
 
     # Handle list of resolvers (chained)
@@ -426,14 +416,10 @@ def resolve_tenant(request: "HttpRequest") -> Optional[TenantInfo]:
 
     # Apply default if configured
     if tenant is None:
-        try:
-            from django.conf import settings
+        from ..config import get_djust_config
 
-            config = getattr(settings, "DJUST_CONFIG", {})
-            default_tenant = config.get("TENANT_DEFAULT")
-            if default_tenant:
-                return TenantInfo(tenant_id=default_tenant)
-        except Exception:
-            logger.debug("Could not load DJUST_CONFIG for default tenant")
+        default_tenant = get_djust_config().get("TENANT_DEFAULT")
+        if default_tenant:
+            return TenantInfo(tenant_id=default_tenant)
 
     return tenant

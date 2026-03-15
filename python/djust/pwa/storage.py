@@ -524,14 +524,9 @@ def get_storage_backend(storage_name: str, backend_type: Optional[str] = None) -
     """
     if not backend_type:
         # Get from config
-        try:
-            from django.conf import settings
+        from ..config import get_djust_config
 
-            config = getattr(settings, "DJUST_CONFIG", {})
-            backend_type = config.get("PWA_OFFLINE_STORAGE", "indexeddb")
-        except Exception:
-            logger.debug("Could not load DJUST_CONFIG for PWA_OFFLINE_STORAGE, using default")
-            backend_type = "indexeddb"
+        backend_type = get_djust_config().get("PWA_OFFLINE_STORAGE", "indexeddb")
 
     backend_type = backend_type.lower()
 

@@ -62,25 +62,22 @@ class PWAMixin:
         config = {}
 
         # Get global config
-        try:
-            from django.conf import settings
+        from ..config import get_djust_config
 
-            djust_config = getattr(settings, "DJUST_CONFIG", {})
-            config.update(
-                {
-                    "name": djust_config.get("PWA_NAME", "djust App"),
-                    "short_name": djust_config.get("PWA_SHORT_NAME", "djust"),
-                    "description": djust_config.get("PWA_DESCRIPTION", "PWA built with djust"),
-                    "theme_color": djust_config.get("PWA_THEME_COLOR", "#000000"),
-                    "background_color": djust_config.get("PWA_BACKGROUND_COLOR", "#ffffff"),
-                    "display": djust_config.get("PWA_DISPLAY", "standalone"),
-                    "orientation": djust_config.get("PWA_ORIENTATION", "any"),
-                    "start_url": djust_config.get("PWA_START_URL", "/"),
-                    "scope": djust_config.get("PWA_SCOPE", "/"),
-                }
-            )
-        except Exception:
-            logger.warning("Failed to load DJUST_CONFIG settings, using defaults", exc_info=True)
+        djust_config = get_djust_config()
+        config.update(
+            {
+                "name": djust_config.get("PWA_NAME", "djust App"),
+                "short_name": djust_config.get("PWA_SHORT_NAME", "djust"),
+                "description": djust_config.get("PWA_DESCRIPTION", "PWA built with djust"),
+                "theme_color": djust_config.get("PWA_THEME_COLOR", "#000000"),
+                "background_color": djust_config.get("PWA_BACKGROUND_COLOR", "#ffffff"),
+                "display": djust_config.get("PWA_DISPLAY", "standalone"),
+                "orientation": djust_config.get("PWA_ORIENTATION", "any"),
+                "start_url": djust_config.get("PWA_START_URL", "/"),
+                "scope": djust_config.get("PWA_SCOPE", "/"),
+            }
+        )
 
         # Override with view-level settings
         if self.pwa_name:

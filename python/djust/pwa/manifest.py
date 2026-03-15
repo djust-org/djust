@@ -6,7 +6,6 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 from django.http import JsonResponse, HttpRequest
-from django.conf import settings
 from django.utils.html import format_html
 
 logger = logging.getLogger(__name__)
@@ -26,7 +25,9 @@ class PWAManifestGenerator:
     def _get_default_config(self) -> Dict[str, Any]:
         """Get default PWA configuration from Django settings."""
         try:
-            djust_config = getattr(settings, "DJUST_CONFIG", {})
+            from ..config import get_djust_config
+
+            djust_config = get_djust_config()
             return {
                 "name": djust_config.get("PWA_NAME", "djust App"),
                 "short_name": djust_config.get("PWA_SHORT_NAME", "djust"),
@@ -243,12 +244,9 @@ def generate_theme_color_meta(theme_color: Optional[str] = None) -> str:
         HTML meta tag string
     """
     if not theme_color:
-        try:
-            djust_config = getattr(settings, "DJUST_CONFIG", {})
-            theme_color = djust_config.get("PWA_THEME_COLOR", "#000000")
-        except Exception:
-            logger.debug("Could not load DJUST_CONFIG for PWA_THEME_COLOR, using default")
-            theme_color = "#000000"
+        from ..config import get_djust_config
+
+        theme_color = get_djust_config().get("PWA_THEME_COLOR", "#000000")
 
     return format_html('<meta name="theme-color" content="{}">', theme_color)
 

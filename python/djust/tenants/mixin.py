@@ -133,28 +133,18 @@ class TenantMixin:
             return self.tenant_required
 
         # Fall back to global config
-        try:
-            from django.conf import settings
+        from ..config import get_djust_config
 
-            config = getattr(settings, "DJUST_CONFIG", {})
-            return config.get("TENANT_REQUIRED", True)
-        except Exception:
-            logger.debug("Could not load DJUST_CONFIG for TENANT_REQUIRED, defaulting to True")
-            return True
+        return get_djust_config().get("TENANT_REQUIRED", True)
 
     def get_context_data(self, **kwargs) -> Dict[str, Any]:
         """Add tenant to template context."""
         context = super().get_context_data(**kwargs) if hasattr(super(), "get_context_data") else {}
 
         # Get context name from config or class attribute
-        context_name = self.tenant_context_name
-        try:
-            from django.conf import settings
+        from ..config import get_djust_config
 
-            config = getattr(settings, "DJUST_CONFIG", {})
-            context_name = config.get("TENANT_CONTEXT_NAME", context_name)
-        except Exception:
-            logger.debug("Could not load DJUST_CONFIG for TENANT_CONTEXT_NAME")
+        context_name = get_djust_config().get("TENANT_CONTEXT_NAME", self.tenant_context_name)
 
         context[context_name] = self._tenant
         return context
@@ -310,14 +300,9 @@ class TenantContextProcessor:
         """Process request and return tenant context."""
         tenant = resolve_tenant(request)
 
-        context_name = "tenant"
-        try:
-            from django.conf import settings
+        from ..config import get_djust_config
 
-            config = getattr(settings, "DJUST_CONFIG", {})
-            context_name = config.get("TENANT_CONTEXT_NAME", "tenant")
-        except Exception:
-            logger.debug("Could not load DJUST_CONFIG for TENANT_CONTEXT_NAME")
+        context_name = get_djust_config().get("TENANT_CONTEXT_NAME", "tenant")
 
         return {context_name: tenant}
 

@@ -9,6 +9,7 @@ from django.db import models
 from django.test.signals import setting_changed
 
 from ..serialization import normalize_django_value
+from ..utils import is_model_list
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +130,7 @@ class ContextMixin:
                 if isinstance(val, (QuerySet, models.Model)):
                     has_db_values = True
                     break
-                if isinstance(val, list) and val and isinstance(val[0], models.Model):
+                if is_model_list(val):
                     has_db_values = True
                     break
 
@@ -164,9 +165,7 @@ class ContextMixin:
                             context[key] = self._jit_serialize_model(value, template_content, key)
                             jit_serialized_keys.add(key)
 
-                        elif (
-                            isinstance(value, list) and value and isinstance(value[0], models.Model)
-                        ):
+                        elif is_model_list(value):
                             # Re-fetch with select_related/prefetch_related/annotations
                             # to avoid N+1 queries during serialization
                             from ..optimization.query_optimizer import (
@@ -230,7 +229,7 @@ class ContextMixin:
                 context[key] = self._deep_serialize_dict(value, tc, key)
             elif isinstance(value, models.Model):
                 context[key] = normalize_django_value(value)
-            elif isinstance(value, list) and value and isinstance(value[0], models.Model):
+            elif is_model_list(value):
                 context[key] = [normalize_django_value(item) for item in value]
 
         self._jit_serialized_keys = jit_serialized_keys
@@ -258,7 +257,7 @@ class ContextMixin:
                     result[k] = self._jit_serialize_queryset(v, template_content, child_name)
                 else:
                     result[k] = [normalize_django_value(item) for item in v]
-            elif isinstance(v, list) and v and isinstance(v[0], models.Model):
+            elif is_model_list(v):
                 if template_content:
                     result[k] = [
                         self._jit_serialize_model(item, template_content, child_name) for item in v
