@@ -160,6 +160,24 @@ function reinitLiveViewForTurboNav() {
 // ============================================================================
 
 /**
+ * Check whether the global WebSocket connection is open and ready.
+ * @returns {boolean}
+ */
+function isWSConnected() {
+    return liveViewWS && liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN;
+}
+
+/**
+ * Remove the 'optimistic-pending' CSS class from all elements.
+ * Called after server confirms state to clear optimistic UI indicators.
+ */
+function clearOptimisticPending() {
+    document.querySelectorAll('.optimistic-pending').forEach(el => {
+        el.classList.remove('optimistic-pending');
+    });
+}
+
+/**
  * Centralized server response handler for both WebSocket and HTTP fallback.
  * Eliminates code duplication and ensures consistent behavior.
  *
@@ -203,7 +221,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 clearOptimisticState(eventName);
 
                 // Request full HTML for recovery morph
-                if (liveViewWS && liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) {
+                if (isWSConnected()) {
                     liveViewWS.sendMessage({ type: 'request_html' });
                 } else {
                     window.location.reload();
@@ -219,9 +237,7 @@ function handleServerResponse(data, eventName, triggerElement) {
         clearOptimisticState(eventName);
 
         // Global cleanup of lingering optimistic-pending classes
-        document.querySelectorAll('.optimistic-pending').forEach(el => {
-            el.classList.remove('optimistic-pending');
-        });
+        clearOptimisticPending();
 
         // Apply patches (efficient incremental updates)
         // Empty patches array = server confirmed no DOM changes needed (no-op success)
@@ -271,7 +287,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 // Revert VDOM version — recovery response will set the correct version
                 clientVdomVersion = data.version - 1;
 
-                if (liveViewWS && liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) {
+                if (isWSConnected()) {
                     liveViewWS.sendMessage({ type: 'request_html' });
                 } else {
                     // No WebSocket available — last resort page reload
@@ -285,9 +301,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             if (globalThis.djustDebug) console.log('[LiveView] Patches applied successfully');
 
             // Final cleanup
-            document.querySelectorAll('.optimistic-pending').forEach(el => {
-                el.classList.remove('optimistic-pending');
-            });
+            clearOptimisticPending();
 
             reinitAfterDOMUpdate();
         }
@@ -309,9 +323,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             // This preserves existing DOM elements and only adds/updates new content
             applyDjUpdateElements(liveviewRoot, newRoot);
 
-            document.querySelectorAll('.optimistic-pending').forEach(el => {
-                el.classList.remove('optimistic-pending');
-            });
+            clearOptimisticPending();
 
             _isBroadcastUpdate = false;
             reinitAfterDOMUpdate();
@@ -478,9 +490,7 @@ class LiveViewWebSocket {
             pendingEvents.clear();
 
             // Remove loading indicators from DOM
-            document.querySelectorAll('.optimistic-pending').forEach(el => {
-                el.classList.remove('optimistic-pending');
-            });
+            clearOptimisticPending();
 
             // Skip reconnection logic if this was an intentional disconnect (TurboNav)
             if (this._intentionalDisconnect) {
@@ -2185,6 +2195,19 @@ function _markHandlerBound(element, type) {
     set.add(type);
 }
 
+/**
+ * Add component and embedded view context to event params.
+ * Extracts component_id and view_id from the element's ancestry.
+ * @param {Object} params - Event params object to augment
+ * @param {HTMLElement} element - Element that triggered the event
+ */
+function addEventContext(params, element) {
+    const componentId = getComponentId(element);
+    if (componentId) params.component_id = componentId;
+    const embeddedViewId = getEmbeddedViewId(element);
+    if (embeddedViewId) params.view_id = embeddedViewId;
+}
+
 function bindLiveViewEvents() {
     // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
     if (window.djust.uploads) {
@@ -2230,17 +2253,7 @@ function bindLiveViewEvents() {
                     params._args = parsed.args;
                 }
 
-                // Phase 4: Check if event is from a component
-                const componentId = getComponentId(e.currentTarget);
-                if (componentId) {
-                    params.component_id = componentId;
-                }
-
-                // Embedded LiveView: route event to correct child view
-                const embeddedViewId = getEmbeddedViewId(e.currentTarget);
-                if (embeddedViewId) {
-                    params.view_id = embeddedViewId;
-                }
+                addEventContext(params, e.currentTarget);
 
                 // Pass target element and optimistic update ID
                 params._targetElement = e.currentTarget;
@@ -2294,17 +2307,7 @@ function bindLiveViewEvents() {
                 const formData = new FormData(e.target);
                 const params = Object.fromEntries(formData.entries());
 
-                // Phase 4: Check if event is from a component
-                const componentId = getComponentId(e.target);
-                if (componentId) {
-                    params.component_id = componentId;
-                }
-
-                // Embedded LiveView: route event to correct child view
-                const embeddedViewId = getEmbeddedViewId(e.target);
-                if (embeddedViewId) {
-                    params.view_id = embeddedViewId;
-                }
+                addEventContext(params, e.target);
 
                 // Pass target element for optimistic updates (Phase 3)
                 params._targetElement = e.target;
@@ -2339,15 +2342,7 @@ function bindLiveViewEvents() {
         function buildFormEventParams(element, value) {
             const fieldName = getFieldName(element);
             const params = { value, field: fieldName };
-            const componentId = getComponentId(element);
-            if (componentId) {
-                params.component_id = componentId;
-            }
-            // Embedded LiveView: route event to correct child view
-            const embeddedViewId = getEmbeddedViewId(element);
-            if (embeddedViewId) {
-                params.view_id = embeddedViewId;
-            }
+            addEventContext(params, element);
             return params;
         }
 
@@ -2510,17 +2505,7 @@ function bindLiveViewEvents() {
                         field: fieldName
                     };
 
-                    // Phase 4: Check if event is from a component
-                    const componentId = getComponentId(e.target);
-                    if (componentId) {
-                        params.component_id = componentId;
-                    }
-
-                    // Embedded LiveView: route event to correct child view
-                    const embeddedViewId = getEmbeddedViewId(e.target);
-                    if (embeddedViewId) {
-                        params.view_id = embeddedViewId;
-                    }
+                    addEventContext(params, e.target);
 
                     // Add target element and handle dj-target
                     params._targetElement = e.target;
@@ -4390,7 +4375,7 @@ const lazyHydrationManager = {
         }
 
         // Wait for WebSocket connection then mount
-        if (liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) {
+        if (isWSConnected()) {
             this.mountElement(element, viewPath);
         } else {
             // Queue mount for when WebSocket connects (handles multiple lazy elements)
@@ -4925,7 +4910,7 @@ if (document.readyState === 'loading') {
 
         // Auto-upload if configured (default)
         if (!config || config.auto_upload !== false) {
-            if (!liveViewWS || !liveViewWS.ws || liveViewWS.ws.readyState !== WebSocket.OPEN) {
+            if (!isWSConnected()) {
                 console.error('[Upload] WebSocket not connected');
                 return;
             }
@@ -5007,7 +4992,7 @@ if (document.readyState === 'loading') {
                 const config = uploadConfigs[uploadName];
                 await showPreviews(uploadName, files);
 
-                if (!liveViewWS || !liveViewWS.ws || liveViewWS.ws.readyState !== WebSocket.OPEN) {
+                if (!isWSConnected()) {
                     console.error('[Upload] WebSocket not connected');
                     return;
                 }
@@ -5564,7 +5549,7 @@ window.djust.getActiveStreams = getActiveStreams;
 
         // Send a mount request for the new view path over the existing WebSocket
         // The server will unmount the old view and mount the new one
-        if (liveViewWS && liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) {
+        if (isWSConnected()) {
             // Look up the view path for the new URL from the route map
             const viewPath = resolveViewPath(newUrl.pathname);
             if (viewPath) {
@@ -5626,7 +5611,7 @@ window.djust.getActiveStreams = getActiveStreams;
      */
     window.addEventListener('popstate', function (event) {
         if (!liveViewWS || !liveViewWS.viewMounted) return;
-        if (!liveViewWS.ws || liveViewWS.ws.readyState !== WebSocket.OPEN) return;
+        if (!isWSConnected()) return;
 
         const url = new URL(window.location.href);
         const params = Object.fromEntries(url.searchParams);

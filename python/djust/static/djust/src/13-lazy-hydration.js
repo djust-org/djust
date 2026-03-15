@@ -144,7 +144,7 @@ const lazyHydrationManager = {
         }
 
         // Wait for WebSocket connection then mount
-        if (liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) {
+        if (isWSConnected()) {
             this.mountElement(element, viewPath);
         } else {
             // Queue mount for when WebSocket connects (handles multiple lazy elements)

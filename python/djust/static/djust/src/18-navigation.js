@@ -81,7 +81,7 @@
 
         // Send a mount request for the new view path over the existing WebSocket
         // The server will unmount the old view and mount the new one
-        if (liveViewWS && liveViewWS.ws && liveViewWS.ws.readyState === WebSocket.OPEN) {
+        if (isWSConnected()) {
             // Look up the view path for the new URL from the route map
             const viewPath = resolveViewPath(newUrl.pathname);
             if (viewPath) {
@@ -143,7 +143,7 @@
      */
     window.addEventListener('popstate', function (event) {
         if (!liveViewWS || !liveViewWS.viewMounted) return;
-        if (!liveViewWS.ws || liveViewWS.ws.readyState !== WebSocket.OPEN) return;
+        if (!isWSConnected()) return;
 
         const url = new URL(window.location.href);
         const params = Object.fromEntries(url.searchParams);
