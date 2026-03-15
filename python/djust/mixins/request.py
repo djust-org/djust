@@ -12,6 +12,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.db import models
 
 from ..serialization import normalize_django_value
+from ..utils import is_model_list
 from ..validation import validate_handler_params
 from ..security import safe_setattr
 from ..security.event_guard import is_safe_event_name
@@ -66,7 +67,7 @@ class RequestMixin:
         for key, value in list(state.items()):
             if isinstance(value, models.Model):
                 state[key] = normalize_django_value(value)
-            elif isinstance(value, list) and value and isinstance(value[0], models.Model):
+            elif is_model_list(value):
                 state[key] = normalize_django_value(value)
 
         state_serializable = state

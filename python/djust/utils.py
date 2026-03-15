@@ -2,7 +2,74 @@
 Utility functions for djust.
 """
 
+import logging
 from functools import lru_cache
+from typing import Any, Callable, Optional
+
+logger = logging.getLogger(__name__)
+
+
+def is_model_list(value: Any) -> bool:
+    """Check if value is a non-empty list of Django Model instances."""
+    from django.db import models
+
+    return isinstance(value, list) and len(value) > 0 and isinstance(value[0], models.Model)
+
+
+class BackendRegistry:
+    """
+    Generic singleton-style registry for lazily-initialised backends.
+
+    Both ``state_backends.registry`` and ``backends.registry`` (presence)
+    follow the same pattern: a module-level ``_backend`` variable, a
+    ``get_backend()`` that reads config and instantiates on first call,
+    ``set_backend()`` and ``reset_backend()``.  This class captures that
+    pattern once.
+
+    Args:
+        config_key: The key inside ``DJUST_CONFIG`` that selects the
+            backend type (e.g. ``"STATE_BACKEND"``, ``"PRESENCE_BACKEND"``).
+        default_type: Value returned when the config key is absent
+            (e.g. ``"memory"``).
+        factory: A callable ``(backend_type: str, config: dict) -> backend``
+            responsible for instantiating the concrete backend.
+        name: Human-readable name for log messages (e.g. ``"state"``).
+    """
+
+    def __init__(
+        self,
+        config_key: str,
+        default_type: str,
+        factory: Callable[[str, dict], Any],
+        name: str = "backend",
+    ):
+        self._config_key = config_key
+        self._default_type = default_type
+        self._factory = factory
+        self._name = name
+        self._backend: Optional[Any] = None
+
+    def get(self) -> Any:
+        """Return the cached backend, creating it on first call."""
+        if self._backend is not None:
+            return self._backend
+
+        from .config import get_djust_config
+
+        cfg = get_djust_config()
+        backend_type = cfg.get(self._config_key, self._default_type)
+
+        self._backend = self._factory(backend_type, cfg)
+        logger.info("Initialized %s backend: %s", self._name, backend_type)
+        return self._backend
+
+    def set(self, backend: Any) -> None:
+        """Manually set the backend (useful for testing)."""
+        self._backend = backend
+
+    def reset(self) -> None:
+        """Reset to force re-initialisation on next access."""
+        self._backend = None
 
 
 @lru_cache(maxsize=1)

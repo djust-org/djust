@@ -321,3 +321,22 @@ config = LiveViewConfig()
 def get_config() -> LiveViewConfig:
     """Get the global configuration instance"""
     return config
+
+
+def get_djust_config() -> Dict[str, Any]:
+    """
+    Get the DJUST_CONFIG dictionary from Django settings.
+
+    This provides centralized access to the ``DJUST_CONFIG`` dict used by
+    state backends, presence backends, tenants, PWA, and other subsystems.
+    Falls back to an empty dict when Django settings are unavailable.
+
+    Returns:
+        Dictionary of DJUST_CONFIG settings
+    """
+    try:
+        from django.conf import settings
+
+        return getattr(settings, "DJUST_CONFIG", {})
+    except Exception:
+        return {}

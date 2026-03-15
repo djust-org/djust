@@ -417,13 +417,9 @@ class TenantPresenceManager:
             return cls._instances[tenant_id]
 
         # Get backend configuration
-        try:
-            from django.conf import settings
+        from ..config import get_djust_config
 
-            config = getattr(settings, "DJUST_CONFIG", {})
-        except Exception:
-            logger.debug("Could not load DJUST_CONFIG, using defaults")
-            config = {}
+        config = get_djust_config()
 
         backend_type = config.get("PRESENCE_BACKEND", "memory")
 

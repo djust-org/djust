@@ -6,7 +6,6 @@ import json
 import logging
 from typing import Any, Dict, Optional
 from django.http import HttpResponse, HttpRequest
-from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,9 @@ class ServiceWorkerGenerator:
     def _get_default_config(self) -> Dict[str, Any]:
         """Get default service worker configuration."""
         try:
-            djust_config = getattr(settings, "DJUST_CONFIG", {})
+            from ..config import get_djust_config
+
+            djust_config = get_djust_config()
             return {
                 "cache_name": djust_config.get("PWA_CACHE_NAME", "djust-cache-v1"),
                 "cache_strategy": djust_config.get("PWA_CACHE_STRATEGY", "cache_first"),

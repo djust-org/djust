@@ -2,17 +2,47 @@
 Global state backend registry and initialization.
 """
 
-import logging
-from typing import Optional
-
 from .base import StateBackend, DEFAULT_STATE_SIZE_WARNING_KB, DEFAULT_COMPRESSION_THRESHOLD_KB
 from .memory import InMemoryStateBackend
 from .redis import RedisStateBackend
+from ..utils import BackendRegistry
 
-logger = logging.getLogger(__name__)
 
-# Global backend instance (initialized by get_backend())
-_backend: Optional[StateBackend] = None
+def _create_state_backend(backend_type: str, config: dict) -> StateBackend:
+    """Factory that creates the appropriate state backend from config."""
+    ttl = config.get("SESSION_TTL", 3600)
+    state_size_warning_kb = config.get("STATE_SIZE_WARNING_KB", DEFAULT_STATE_SIZE_WARNING_KB)
+
+    if backend_type == "redis":
+        redis_url = config.get("REDIS_URL", "redis://localhost:6379/0")
+        key_prefix = config.get("REDIS_KEY_PREFIX", "djust:")
+        compression_enabled = config.get("COMPRESSION_ENABLED", True)
+        compression_threshold_kb = config.get(
+            "COMPRESSION_THRESHOLD_KB", DEFAULT_COMPRESSION_THRESHOLD_KB
+        )
+        compression_level = config.get("COMPRESSION_LEVEL", 3)
+
+        return RedisStateBackend(
+            redis_url=redis_url,
+            default_ttl=ttl,
+            key_prefix=key_prefix,
+            compression_enabled=compression_enabled,
+            compression_threshold_kb=compression_threshold_kb,
+            compression_level=compression_level,
+        )
+    else:
+        return InMemoryStateBackend(
+            default_ttl=ttl,
+            state_size_warning_kb=state_size_warning_kb,
+        )
+
+
+_registry = BackendRegistry(
+    config_key="STATE_BACKEND",
+    default_type="memory",
+    factory=_create_state_backend,
+    name="state",
+)
 
 
 def get_backend() -> StateBackend:
@@ -42,49 +72,7 @@ def get_backend() -> StateBackend:
     Returns:
         StateBackend instance (InMemory or Redis)
     """
-    global _backend
-
-    if _backend is not None:
-        return _backend
-
-    # Load configuration from Django settings
-    try:
-        from django.conf import settings
-
-        config = getattr(settings, "DJUST_CONFIG", {})
-    except Exception:
-        config = {}
-
-    backend_type = config.get("STATE_BACKEND", "memory")
-    ttl = config.get("SESSION_TTL", 3600)
-    state_size_warning_kb = config.get("STATE_SIZE_WARNING_KB", DEFAULT_STATE_SIZE_WARNING_KB)
-
-    if backend_type == "redis":
-        redis_url = config.get("REDIS_URL", "redis://localhost:6379/0")
-        key_prefix = config.get("REDIS_KEY_PREFIX", "djust:")
-        # Compression settings
-        compression_enabled = config.get("COMPRESSION_ENABLED", True)
-        compression_threshold_kb = config.get(
-            "COMPRESSION_THRESHOLD_KB", DEFAULT_COMPRESSION_THRESHOLD_KB
-        )
-        compression_level = config.get("COMPRESSION_LEVEL", 3)
-
-        _backend = RedisStateBackend(
-            redis_url=redis_url,
-            default_ttl=ttl,
-            key_prefix=key_prefix,
-            compression_enabled=compression_enabled,
-            compression_threshold_kb=compression_threshold_kb,
-            compression_level=compression_level,
-        )
-    else:
-        _backend = InMemoryStateBackend(
-            default_ttl=ttl,
-            state_size_warning_kb=state_size_warning_kb,
-        )
-
-    logger.info("Initialized state backend: %s", backend_type)
-    return _backend
+    return _registry.get()
 
 
 def set_backend(backend: StateBackend):
@@ -94,5 +82,4 @@ def set_backend(backend: StateBackend):
     Args:
         backend: StateBackend instance to use
     """
-    global _backend
-    _backend = backend
+    _registry.set(backend)

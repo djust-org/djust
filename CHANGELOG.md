@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Extract `reinitAfterDOMUpdate()` to DRY up post-DOM-update calls** — The repeated pattern of `initReactCounters()` + `initTodoItems()` + `bindLiveViewEvents()` + `updateHooks()` across 10+ call sites is now a single function. New DOM replacement paths only need one call. ([#549](https://github.com/djust-org/djust/issues/549))
+- **Standardize `DJUST_CONFIG` access via `get_djust_config()`** — Replaced 10+ inline `getattr(settings, "DJUST_CONFIG", {})` try/except blocks across tenants, PWA, and storage modules with a single `get_djust_config()` helper in `config.py`. ([#554](https://github.com/djust-org/djust/issues/554))
+- **Extract generic `BackendRegistry` class** — The duplicated lazy-init / set / reset pattern in `state_backends/registry.py` and `backends/registry.py` now delegates to a shared `BackendRegistry` class in `utils.py`. ([#555](https://github.com/djust-org/djust/issues/555))
+- **Extract `is_model_list()` helper** — The repeated `isinstance(value, list) and value and isinstance(value[0], models.Model)` check is now a single `is_model_list()` function in `utils.py`, used in `mixins/context.py` and `mixins/request.py`. ([#556](https://github.com/djust-org/djust/issues/556))
 
 ## [0.3.7rc1] - 2026-03-14
 
