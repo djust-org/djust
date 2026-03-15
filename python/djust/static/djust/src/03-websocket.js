@@ -574,6 +574,7 @@ class LiveViewWebSocket {
 
         // Re-bind events within the updated container
         bindLiveViewEvents();
+        if (typeof updateHooks === 'function') { updateHooks(); }
     }
 
     _showConnectionErrorOverlay() {

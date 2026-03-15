@@ -148,6 +148,7 @@ function reinitLiveViewForTurboNav() {
 
     // Re-bind events
     bindLiveViewEvents();
+    if (typeof updateHooks === 'function') { updateHooks(); }
 
     // Re-scan dj-loading attributes
     globalLoadingManager.scanAndRegister();
@@ -931,6 +932,7 @@ class LiveViewWebSocket {
 
         // Re-bind events within the updated container
         bindLiveViewEvents();
+        if (typeof updateHooks === 'function') { updateHooks(); }
     }
 
     _showConnectionErrorOverlay() {
@@ -4434,6 +4436,7 @@ const lazyHydrationManager = {
 
         // Bind events to the newly hydrated content
         bindLiveViewEvents();
+        if (typeof updateHooks === 'function') { updateHooks(); }
     },
 
     // Check if an element is lazily loaded
@@ -5295,6 +5298,7 @@ function handleStreamMessage(data) {
     if (typeof bindLiveViewEvents === 'function') {
         bindLiveViewEvents();
     }
+    if (typeof updateHooks === 'function') { updateHooks(); }
 }
 
 /**

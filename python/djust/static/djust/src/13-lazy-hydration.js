@@ -191,6 +191,7 @@ const lazyHydrationManager = {
 
         // Bind events to the newly hydrated content
         bindLiveViewEvents();
+        if (typeof updateHooks === 'function') { updateHooks(); }
     },
 
     // Check if an element is lazily loaded
