@@ -145,9 +145,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             if (globalThis.djustDebug) console.log('[LiveView] Patches applied successfully');
 
             // Final cleanup
-            document.querySelectorAll('.optimistic-pending').forEach(el => {
-                el.classList.remove('optimistic-pending');
-            });
+            clearOptimisticPending();
 
             reinitAfterDOMUpdate();
         }
@@ -169,9 +167,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             // This preserves existing DOM elements and only adds/updates new content
             applyDjUpdateElements(liveviewRoot, newRoot);
 
-            document.querySelectorAll('.optimistic-pending').forEach(el => {
-                el.classList.remove('optimistic-pending');
-            });
+            clearOptimisticPending();
 
             _isBroadcastUpdate = false;
             reinitAfterDOMUpdate();
