@@ -7,11 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.7rc2] - 2026-03-14
+## [0.3.7] - 2026-03-16
 
 ### Fixed
 
+- **FormMixin: serialization, event handling, and ModelForm support** — Fixed 6 issues blocking production use of `FormMixin` with `ModelForm` over WebSocket: added `@event_handler` to `submit_form()` and `validate_field()`; renamed `form_instance` to private `_form_instance` with backward-compatible property; store `model_pk`/`model_label` as public attributes for re-hydration after WS session restore; sync `form_data` from saved instance after `form_valid()`; use FK PK instead of related object; auto-populate `form_choices` with serializable tuples. ([#545](https://github.com/djust-org/djust/pull/545))
 - **`dj-hook` elements not re-initialized after `html_update` or `html_recovery`** — When VDOM patches failed and djust fell back to full HTML replacement, `updateHooks()` was never called, leaving hook elements stale (charts showing old data, canvases empty). Added `updateHooks()` to all DOM replacement paths: `html_update`, `html_recovery`, TurboNav reinit, embedded view update, lazy hydration, and streaming updates. ([#548](https://github.com/djust-org/djust/pull/548))
+- **`__version__` not updated by `make version`** — `make version` only updated `pyproject.toml` and `Cargo.toml` but not the hardcoded `__version__` in `__init__.py` files. `djust.__version__` now stays in sync with the package version. ([#547](https://github.com/djust-org/djust/issues/547))
 
 ### Changed
 
@@ -22,12 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Standardize `DJUST_CONFIG` access via `get_djust_config()`** — Replaced 10+ inline `getattr(settings, "DJUST_CONFIG", {})` try/except blocks across tenants, PWA, and storage modules with a single `get_djust_config()` helper in `config.py`. ([#554](https://github.com/djust-org/djust/issues/554))
 - **Extract generic `BackendRegistry` class** — The duplicated lazy-init / set / reset pattern in `state_backends/registry.py` and `backends/registry.py` now delegates to a shared `BackendRegistry` class in `utils.py`. ([#555](https://github.com/djust-org/djust/issues/555))
 - **Extract `is_model_list()` helper** — The repeated `isinstance(value, list) and value and isinstance(value[0], models.Model)` check is now a single `is_model_list()` function in `utils.py`, used in `mixins/context.py` and `mixins/request.py`. ([#556](https://github.com/djust-org/djust/issues/556))
-
-## [0.3.7rc1] - 2026-03-14
-
-### Fixed
-
-- **FormMixin: serialization, event handling, and ModelForm support** — Fixed 6 issues blocking production use of `FormMixin` with `ModelForm` over WebSocket: added `@event_handler` to `submit_form()` and `validate_field()`; renamed `form_instance` to private `_form_instance` with backward-compatible property; store `model_pk`/`model_label` as public attributes for re-hydration after WS session restore; sync `form_data` from saved instance after `form_valid()`; use FK PK instead of related object; auto-populate `form_choices` with serializable tuples. ([#545](https://github.com/djust-org/djust/pull/545))
 
 ## [0.3.6] - 2026-03-14
 
