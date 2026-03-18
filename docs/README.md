@@ -19,6 +19,7 @@ This directory contains comprehensive documentation for djust organized by topic
 
 ### 🔌 Real-Time Features
 - **[Navigation](guides/navigation.md)** - URL state management with live_patch and live_redirect
+- **[Flash Messages](website/guides/flash-messages.md)** - Transient notifications with put_flash (Phoenix-style)
 - **[Presence](guides/presence.md)** - Real-time user presence tracking and live cursors
 - **[Streaming](guides/streaming.md)** - Real-time partial DOM updates for LLM chat and live feeds
 - **[Uploads](guides/uploads.md)** - Chunked binary file uploads via WebSocket

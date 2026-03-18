@@ -218,6 +218,45 @@ def handle_async_result(self, name: str, result=None, error=None):
 
 ---
 
+### Flash Messages
+
+#### `put_flash(level, message)`
+
+Queue a flash message to be sent to the connected client. The message is rendered into the `#dj-flash-container` element (inserted by the `{% dj_flash %}` template tag).
+
+**Parameters:**
+
+- `level` (`str`) -- Severity/category string. Common values: `"info"`, `"success"`, `"warning"`, `"error"`. Any string is accepted -- it becomes a CSS class `dj-flash-{level}`.
+- `message` (`str`) -- Human-readable message text.
+
+```python
+@event_handler()
+def save(self, **kwargs):
+    save_item(self.name)
+    self.put_flash("success", "Item saved!")
+```
+
+---
+
+#### `clear_flash(level=None)`
+
+Queue a command to clear flash messages on the client.
+
+**Parameters:**
+
+- `level` (`str`, optional) -- If provided, only clear messages with this level. If `None`, clear all flash messages.
+
+```python
+@event_handler()
+def dismiss_errors(self, **kwargs):
+    self.clear_flash("error")   # clear only errors
+    self.clear_flash()          # clear all
+```
+
+See [Flash Messages Guide](../guides/flash-messages.md) for detailed examples and CSS styling.
+
+---
+
 ### Server-Push
 
 #### `send_update()`
