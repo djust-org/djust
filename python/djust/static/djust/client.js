@@ -2982,6 +2982,9 @@ function getNodeByPath(path, djustId = null) {
                 // JS \s includes \u00A0, so we use an explicit ASCII whitespace pattern instead.
                 return (/[^ \t\n\r\f]/.test(child.textContent));
             }
+            // Include comment nodes — the Rust VDOM parser preserves <!--dj-if-->
+            // placeholders and counts them when computing child indices (#559).
+            if (child.nodeType === Node.COMMENT_NODE) return true;
             return false;
         });
 
@@ -3232,6 +3235,11 @@ function createHtmlElement(tagLower) {
 function createNodeFromVNode(vnode, inSvgContext = false) {
     if (vnode.tag === '#text') {
         return document.createTextNode(vnode.text || '');
+    }
+    // Handle comment nodes — Rust emits <!--dj-if--> placeholders for
+    // {% if %} blocks that evaluate to False (#559).
+    if (vnode.tag === '#comment') {
+        return document.createComment(vnode.text || '');
     }
 
     // Validate tag name against whitelist (security: prevents script injection)
@@ -3814,6 +3822,9 @@ function getSignificantChildren(node) {
             // Only filter out ASCII whitespace-only text nodes.
             return (/[^ \t\n\r\f]/.test(child.textContent));
         }
+        // Include comment nodes — the Rust VDOM parser preserves <!--dj-if-->
+        // placeholders and counts them in child indices (#559).
+        if (child.nodeType === Node.COMMENT_NODE) return true;
         return false;
     });
 }
