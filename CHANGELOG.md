@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8rc1] - 2026-03-17
+
 ### Fixed
 
 - **Tick auto-refresh causes VDOM version mismatch, silently drops user events** — `_run_tick` always called `render_with_diff()` even when `handle_tick()` made no state changes, incrementing the VDOM version on every tick. When a user event interleaved with a tick, the client and server versions diverged, causing all subsequent patches to be silently discarded. Tick now uses `_snapshot_assigns` to skip render when no public assigns changed. ([#560](https://github.com/djust-org/djust/issues/560))
