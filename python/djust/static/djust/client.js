@@ -319,8 +319,12 @@ function handleServerResponse(data, eventName, triggerElement) {
             }
             const newRoot = doc.querySelector('[dj-root]') || doc.body;
 
-            // Handle dj-update="append|prepend|ignore" for efficient list updates
-            // This preserves existing DOM elements and only adds/updates new content
+            // Full DOM morph — replaces children of liveview root with new HTML.
+            // Needed when VDOM patches can't represent the change ({% for %} loop
+            // length changes, _force_full_html).
+            morphChildren(liveviewRoot, newRoot);
+
+            // Also handle dj-update="append|prepend|ignore" for list updates
             applyDjUpdateElements(liveviewRoot, newRoot);
 
             clearOptimisticPending();
@@ -3547,10 +3551,14 @@ function morphElement(existing, desired) {
     }
 
     // --- Sync attributes ---
-    // Remove attributes not present in desired
+    // Remove attributes not present in desired.
+    // Exception: canvas width/height are set by scripts (e.g. Chart.js) and must
+    // not be removed — doing so resets the canvas context and clears drawn content.
+    const isCanvas = existing.tagName === 'CANVAS';
     for (let i = existing.attributes.length - 1; i >= 0; i--) {
         const name = existing.attributes[i].name;
         if (!desired.hasAttribute(name)) {
+            if (isCanvas && (name === 'width' || name === 'height')) continue;
             existing.removeAttribute(name);
         }
     }
@@ -5648,35 +5656,73 @@ window.djust.getActiveStreams = getActiveStreams;
      *
      * Called from bindLiveViewEvents() after DOM updates.
      */
+    function _executePatch(el, patchValue, selectValue) {
+        // Replace {value} placeholder with the actual value (for selects)
+        if (selectValue !== undefined) {
+            patchValue = patchValue.replace(/\{value\}/g, encodeURIComponent(selectValue));
+        }
+
+        const url = new URL(patchValue, window.location.href);
+
+        // Build new URL by merging params into current URL
+        const newUrl = new URL(window.location.href);
+        for (const [k, v] of url.searchParams) {
+            newUrl.searchParams.set(k, v);
+        }
+        if (patchValue.startsWith('/')) {
+            newUrl.pathname = url.pathname;
+        }
+
+        // dj-patch-reload attribute forces full page navigation (opt-in escape hatch).
+        if (el.hasAttribute('dj-patch-reload')) {
+            window.location.href = newUrl.toString();
+            return;
+        }
+
+        // WebSocket patch — pushState + url_change for selects, inputs, links, buttons
+        if (!liveViewWS || !liveViewWS.viewMounted) return;
+        window.history.pushState({ djust: true }, '', newUrl.toString());
+
+        const allParams = Object.fromEntries(newUrl.searchParams);
+        liveViewWS.sendMessage({
+            type: 'url_change',
+            params: allParams,
+            uri: newUrl.pathname + newUrl.search,
+        });
+    }
+
+    // Delegated change handler for dj-patch on select/input elements.
+    // Bound once on document so it survives DOM replacement by morphdom.
+    (function () {
+        var _djPatchChangeHandlerInstalled = false;
+        function installDjPatchChangeHandler() {
+            if (_djPatchChangeHandlerInstalled) return;
+            _djPatchChangeHandlerInstalled = true;
+            document.addEventListener('change', function (e) {
+                var el = e.target.closest('[dj-patch]');
+                if (!el) return;
+                if (el.tagName === 'SELECT' || el.tagName === 'INPUT') {
+                    _executePatch(el, el.getAttribute('dj-patch'), el.value);
+                }
+            });
+        }
+        installDjPatchChangeHandler();
+    })();
+
     function bindNavigationDirectives() {
         // dj-patch: Update URL params without remount
+        // Select/input elements are handled by the delegated document listener above.
         document.querySelectorAll('[dj-patch]').forEach(function (el) {
             if (el.dataset.djustPatchBound) return;
             el.dataset.djustPatchBound = 'true';
 
-            el.addEventListener('click', function (e) {
-                e.preventDefault();
-                if (!liveViewWS || !liveViewWS.viewMounted) return;
-
-                const patchValue = el.getAttribute('dj-patch');
-                const url = new URL(patchValue, window.location.href);
-                const params = Object.fromEntries(url.searchParams);
-
-                // Update browser URL
-                const newUrl = new URL(window.location.href);
-                newUrl.search = url.search;
-                if (patchValue.startsWith('/')) {
-                    newUrl.pathname = url.pathname;
-                }
-                window.history.pushState({ djust: true }, '', newUrl.toString());
-
-                // Send url_change to server
-                liveViewWS.sendMessage({
-                    type: 'url_change',
-                    params: params,
-                    uri: newUrl.pathname + newUrl.search,
+            // Only bind click for non-select elements (links/buttons)
+            if (el.tagName !== 'SELECT' && el.tagName !== 'INPUT') {
+                el.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    _executePatch(el, el.getAttribute('dj-patch'));
                 });
-            });
+            }
         });
 
         // dj-navigate: Navigate to a different view

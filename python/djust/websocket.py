@@ -1434,7 +1434,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # In-place mutations (list.append) are NOT detected and
                         # will still trigger a render — this is the safe default.
                         skip_render = getattr(self.view_instance, "_skip_render", False)
-                        if not skip_render:
+                        # Never skip if the view explicitly requests full HTML
+                        force_html = getattr(self.view_instance, "_force_full_html", False)
+                        if not skip_render and not force_html:
                             post_assigns = _snapshot_assigns(self.view_instance)
                             if pre_assigns == post_assigns:
                                 skip_render = True
@@ -1579,6 +1581,23 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         _emit_full_html_update(
                             self.view_instance,
                             "component_event",
+                            event_name,
+                            html,
+                            version,
+                        )
+
+                    # Allow views to force full HTML by setting _force_full_html = True
+                    # in their event handler. Useful when the handler changes data that
+                    # affects {% for %} loop lengths, which VDOM can't diff correctly (#559).
+                    # We discard patches and send html instead, but do NOT reset the Rust
+                    # VDOM — the current render already established the new baseline.
+                    if getattr(self.view_instance, "_force_full_html", False):
+                        self.view_instance._force_full_html = False
+                        patches = None
+                        patch_list = None
+                        _emit_full_html_update(
+                            self.view_instance,
+                            "force_full_html",
                             event_name,
                             html,
                             version,
@@ -2096,6 +2115,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await sync_to_async(self.view_instance._sync_state_to_rust)()
 
             html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+
+            # Allow views to force full HTML by setting _force_full_html = True
+            # in handle_params (e.g. when {% for %} loop lengths change, #559).
+            if getattr(self.view_instance, "_force_full_html", False):
+                self.view_instance._force_full_html = False
+                patches = None
 
             if patches is not None:
                 if isinstance(patches, str):

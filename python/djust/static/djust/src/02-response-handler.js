@@ -163,8 +163,12 @@ function handleServerResponse(data, eventName, triggerElement) {
             }
             const newRoot = doc.querySelector('[dj-root]') || doc.body;
 
-            // Handle dj-update="append|prepend|ignore" for efficient list updates
-            // This preserves existing DOM elements and only adds/updates new content
+            // Full DOM morph — replaces children of liveview root with new HTML.
+            // Needed when VDOM patches can't represent the change ({% for %} loop
+            // length changes, _force_full_html).
+            morphChildren(liveviewRoot, newRoot);
+
+            // Also handle dj-update="append|prepend|ignore" for list updates
             applyDjUpdateElements(liveviewRoot, newRoot);
 
             clearOptimisticPending();

@@ -103,7 +103,18 @@ class RustBridgeMixin:
                     sorted_query = urlencode(sorted(params.items()), doseq=True)
                     query_hash = hashlib.md5(sorted_query.encode()).hexdigest()[:8]
 
-                view_key = f"liveview_{ws_path}"
+                # Use the actual page path to match the HTTP render cache key.
+                # Prefer the request parameter (passed from render()/render_with_diff()),
+                # then fall back to self.request (set on the view during WS mount).
+                # Falls back to view class name + ws_path if neither is available.
+                page_path = getattr(request, "path", None) or getattr(
+                    getattr(self, "request", None), "path", None
+                )
+                if page_path:
+                    view_key = f"liveview_{page_path}"
+                else:
+                    view_class = self.__class__.__name__
+                    view_key = f"liveview_{view_class}_{ws_path}"
                 if query_hash:
                     view_key = f"{view_key}_{query_hash}"
                 session_key = (

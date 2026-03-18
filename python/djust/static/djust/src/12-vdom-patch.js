@@ -620,10 +620,14 @@ function morphElement(existing, desired) {
     }
 
     // --- Sync attributes ---
-    // Remove attributes not present in desired
+    // Remove attributes not present in desired.
+    // Exception: canvas width/height are set by scripts (e.g. Chart.js) and must
+    // not be removed — doing so resets the canvas context and clears drawn content.
+    const isCanvas = existing.tagName === 'CANVAS';
     for (let i = existing.attributes.length - 1; i >= 0; i--) {
         const name = existing.attributes[i].name;
         if (!desired.hasAttribute(name)) {
+            if (isCanvas && (name === 'width' || name === 'height')) continue;
             existing.removeAttribute(name);
         }
     }
