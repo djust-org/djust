@@ -1,4 +1,4 @@
-# djust Roadmap
+ca# djust Roadmap
 
 > Current version: **0.3.8rc1** (Alpha) — Last updated: March 18, 2026 (roadmap refresh: Phoenix LV 1.1 parity audit, React 19.2 patterns, v0.5.0 scope split into v0.5.0/v0.5.1, new features: `handle_async`, declarative assigns, `used_input?`, programmable JS hook commands, server actions, keep-alive/activity, keyed for-loop change tracking, type-safe template validation, streaming markdown renderer, `self.defer()`, document metadata, temporary assigns, `djust_gen_live` scaffolding, transition/priority updates, suspense boundaries, named slots with attributes, static asset tracking, database change notifications, WebSocket compression, `dj-scroll-into-view`, multi-step wizard, virtual/windowed lists, `dj-paste`, runtime layout switching, i18n live switching)
 
@@ -8,7 +8,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 
 | Priority | Feature | Why | Milestone |
 |----------|---------|-----|-----------|
-| **P0** | VDOM structural patching (#559) | Blocks all conditional rendering — every new user hits this | v0.4.0 |
+| ~~**P0**~~ | ~~VDOM structural patching (#559)~~ ✅ | ~~Blocks all conditional rendering — every new user hits this~~ | v0.4.0 |
 | **P0** | Focus preservation across re-renders | Forms feel broken without it — table-stakes for any interactive framework | v0.4.0 |
 | **P0** | Event sequencing (#560) | User events silently dropped during ticks — trust-destroying | v0.4.0 |
 | **P0** | `dj-value-*` static event params | Most underrated Phoenix feature; used on virtually every event binding | v0.4.0 |
@@ -147,7 +147,7 @@ Closing the remaining gaps between the Rust engine and Django's Python engine:
 
 #### Critical Bug Fixes
 
-**VDOM structural patching** (#559) — The single biggest pain point for new users. Conditional blocks (`{% if %}`) that add/remove elements shift sibling VDOM paths, causing incorrect patches. Fix: implement stable node anchors (comment-node placeholders) so conditional content doesn't break surrounding elements. This removes the current requirement to use `style="display:none"` for all conditional rendering. *Phoenix LiveView solved this from day one with its HEEx comprehensions — we need parity.*
+**VDOM structural patching** (#559) ✅ — Fixed in PR #563. Comment node placeholders (`<!--dj-if-->`) are now included in client-side child index resolution (`getSignificantChildren`, `getNodeByPath`, `createNodeFromVNode`), matching the Rust VDOM's index computation. Conditional `{% if %}` blocks no longer break surrounding element patches.
 
 **Event sequencing during ticks** (#560) — Server-initiated ticks can collide with user events, silently dropping input. Fix: version-vector or event queue so user actions are never lost. *Phoenix handles this via Erlang's message ordering guarantees; we need explicit sequencing.*
 
@@ -1000,7 +1000,7 @@ High-impact areas for contributions:
 
 #### Major Features
 30. **JS Commands** — Biggest DX win; needs Python builder + client JS executor
-30. **VDOM structural patching** (#559) — Rust experience helpful
+30. ~~**VDOM structural patching** (#559)~~ ✅ Fixed in PR #563
 31. **Function components** — Stateless render functions with Rust engine support, ~150 lines Python + Rust
 32. **`assign_async`/`AsyncResult`** — High-level async data loading, ~200 lines Python
 33. **`handle_async` callback** — Typed async completion handler (Phoenix 1.0 parity), ~80 lines Python
