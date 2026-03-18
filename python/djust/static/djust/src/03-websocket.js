@@ -63,6 +63,12 @@ class LiveViewWebSocket {
         this.viewMounted = false;
         this.vdomVersion = null;
         this.stats.connectedAt = null; // Reset connection timestamp
+
+        // Event sequencing (#560): clear pending event state
+        _pendingEventRef = null;
+        _pendingEventName = null;
+        _pendingTriggerEl = null;
+        _tickBuffer.length = 0;
     }
 
     connect(url = null) {
@@ -124,6 +130,12 @@ class LiveViewWebSocket {
             // Phase 3: Optimistic updates
             optimisticUpdates.clear();
             pendingEvents.clear();
+
+            // Event sequencing (#560): clear pending event state
+            _pendingEventRef = null;
+            _pendingEventName = null;
+            _pendingTriggerEl = null;
+            _tickBuffer.length = 0;
 
             // Remove loading indicators from DOM
             clearOptimisticPending();
@@ -246,18 +258,65 @@ class LiveViewWebSocket {
                 break;
 
             case 'patch':
-                // Use centralized response handler
-                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
-                this.lastEventName = null;
-                this.lastTriggerElement = null;
-                break;
+            case 'html_update': {
+                // Event sequencing (#560): if this is a tick-sourced update
+                // and we have a pending user event, buffer it and apply after
+                // the event response arrives. This prevents tick patches from
+                // consuming the event's loading state and ensures version
+                // numbers stay sequential from the client's perspective.
+                const isTick = data.source === 'tick';
+                const isEventResponse = (
+                    data.ref != null && data.ref === _pendingEventRef
+                );
 
-            case 'html_update':
-                // Use centralized response handler
-                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
-                this.lastEventName = null;
-                this.lastTriggerElement = null;
+                if (isTick && _pendingEventRef !== null) {
+                    // Buffer tick patch — will be applied after event response
+                    _tickBuffer.push(data);
+                    if (globalThis.djustDebug) {
+                        console.log('[LiveView] Buffered tick patch (v' + data.version + ') — waiting for event ref ' + _pendingEventRef);
+                    }
+                    break;
+                }
+
+                // Determine event name and trigger for loading state
+                let evName = this.lastEventName;
+                let evTrigger = this.lastTriggerElement;
+
+                if (isEventResponse) {
+                    // This response matches our pending event — use tracked
+                    // event name/trigger and clear the pending state.
+                    evName = _pendingEventName || this.lastEventName;
+                    evTrigger = _pendingTriggerEl || this.lastTriggerElement;
+                    _pendingEventRef = null;
+                    _pendingEventName = null;
+                    _pendingTriggerEl = null;
+                } else if (isTick) {
+                    // Tick patch with no pending event — apply without
+                    // consuming event loading state.
+                    evName = null;
+                    evTrigger = null;
+                }
+
+                handleServerResponse(data, evName, evTrigger);
+
+                if (!isTick) {
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+
+                // After processing the event response, flush any buffered
+                // tick patches in order so the client catches up.
+                if (isEventResponse && _tickBuffer.length > 0) {
+                    if (globalThis.djustDebug) {
+                        console.log('[LiveView] Flushing ' + _tickBuffer.length + ' buffered tick patches');
+                    }
+                    const buffered = _tickBuffer.splice(0);
+                    for (const tickData of buffered) {
+                        handleServerResponse(tickData, null, null);
+                    }
+                }
                 break;
+            }
 
             case 'html_recovery': {
                 // Server response to request_html — morph DOM with recovered HTML.
@@ -306,6 +365,12 @@ class LiveViewWebSocket {
                     }
                 }));
 
+                // Clear pending event ref (#560)
+                _pendingEventRef = null;
+                _pendingEventName = null;
+                _pendingTriggerEl = null;
+                _tickBuffer.length = 0;
+
                 // Phase 5: Stop loading state on error
                 if (this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
@@ -338,19 +403,38 @@ class LiveViewWebSocket {
                 }
                 break;
 
-            case 'noop':
+            case 'noop': {
                 // Server acknowledged event but no DOM changes needed (auto-detected
                 // or explicit _skip_render). Clear loading state unless async pending.
-                if (this.lastEventName) {
+                const noopEvName = _pendingEventName || this.lastEventName;
+                const noopTrigger = _pendingTriggerEl || this.lastTriggerElement;
+
+                // Clear pending event ref (#560)
+                if (data.ref != null && data.ref === _pendingEventRef) {
+                    _pendingEventRef = null;
+                    _pendingEventName = null;
+                    _pendingTriggerEl = null;
+                }
+
+                if (noopEvName) {
                     if (!data.async_pending) {
-                        globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                        globalLoadingManager.stopLoading(noopEvName, noopTrigger);
                     } else {
                         if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
                     }
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+
+                // Flush any buffered tick patches
+                if (_tickBuffer.length > 0) {
+                    const buffered = _tickBuffer.splice(0);
+                    for (const tickData of buffered) {
+                        handleServerResponse(tickData, null, null);
+                    }
+                }
                 break;
+            }
 
             case 'push_event':
                 // Server-pushed event for JS hooks
@@ -527,10 +611,19 @@ class LiveViewWebSocket {
         this.lastEventName = eventName;
         this.lastTriggerElement = triggerElement;
 
+        // Event sequencing (#560): assign monotonic ref so we can match
+        // the server's response to this specific event and distinguish
+        // it from tick-initiated patches.
+        const ref = ++_eventRefCounter;
+        _pendingEventRef = ref;
+        _pendingEventName = eventName;
+        _pendingTriggerEl = triggerElement;
+
         this.sendMessage({
             type: 'event',
             event: eventName,
-            params: params
+            params: params,
+            ref: ref
         });
         return true;
     }
