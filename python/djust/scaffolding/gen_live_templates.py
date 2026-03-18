@@ -125,8 +125,6 @@ class %(view_class)s(LiveView):
 VIEWS_API_TEMPLATE = """\
 # LiveView API for %(app_name)s %(model_name)s CRUD - JSON responses.
 from djust import LiveView
-
-from djust import LiveView
 from djust.decorators import event_handler
 %(model_import)s
 
