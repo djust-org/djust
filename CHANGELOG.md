@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tick/event version mismatch silently drops user input** — Server-initiated ticks could collide with user events, causing VDOM version divergence that silently discarded patches. Added server-side `asyncio.Lock` to serialize tick and event render operations, priority yielding so ticks skip during user events, client-side tick patch buffering during pending event round-trips, and monotonic event ref tracking for request/response matching. ([#560](https://github.com/djust-org/djust/issues/560))
+
 - **Focus lost during VDOM patches** — When the server pushed VDOM patches (e.g., updating a counter while the user was typing), the focused input/textarea lost focus, cursor position, selection range, and scroll position. Added `saveFocusState()` / `restoreFocusState()` around the `applyPatches()` cycle to capture and restore `activeElement`, `selectionStart`/`selectionEnd`, and `scrollTop`/`scrollLeft`. Element matching uses id → name → dj-id → positional index. Broadcast (remote) updates correctly skip focus restoration.
 
 - **VDOM patching fails when `{% if %}` blocks add/remove DOM elements** — Comment node placeholders (`<!--dj-if-->`) emitted by the Rust template engine were excluded from client-side child index resolution (`getSignificantChildren` and `getNodeByPath`), causing path traversal errors and silent patch failures. Also added `#comment` handling to `createNodeFromVNode` so comment placeholders can be correctly created during `InsertChild` patches. ([#559](https://github.com/djust-org/djust/issues/559))

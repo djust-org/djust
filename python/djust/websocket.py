@@ -1245,8 +1245,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         # Event ref tracking (#560): client sends a monotonic ref with each
         # event so it can match responses to requests and distinguish event
-        # responses from tick pushes.
-        event_ref = data.get("ref")
+        # responses from tick pushes. Coerce to int to prevent type confusion.
+        raw_ref = data.get("ref")
+        event_ref = int(raw_ref) if isinstance(raw_ref, (int, float)) else None
         self._current_event_ref = event_ref
 
         # Extract cache request ID if present (for @cache decorator)
