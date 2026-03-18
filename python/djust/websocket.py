@@ -206,6 +206,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 }
             )
 
+    async def _flush_flash(self) -> None:
+        """
+        Send any pending flash messages queued by the view during handler execution.
+
+        Called after each _send_update to deliver flash notifications to the client.
+        """
+        if not self.view_instance:
+            return
+        if not hasattr(self.view_instance, "_drain_flash"):
+            return
+        commands = self.view_instance._drain_flash()
+        if not isinstance(commands, list):
+            return
+        for cmd in commands:
+            await self.send_json(
+                {
+                    "type": "flash",
+                    **cmd,
+                }
+            )
+
     async def _send_noop(self, async_pending: bool = False, ref: Optional[int] = None) -> None:
         """
         Send a lightweight noop acknowledgment to the client.
@@ -422,6 +443,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self._send_update(html=html_content, version=version, event_name=event_name)
 
             await self._flush_push_events()
+            await self._flush_flash()
 
         except Exception as e:
             error = e
@@ -549,6 +571,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 self._attach_debug_payload(response, event_name, performance)
                 await self.send_json(response)
                 await self._flush_push_events()
+                await self._flush_flash()
                 await self._flush_navigation()
                 await self._flush_accessibility()
                 await self._flush_i18n()
@@ -573,6 +596,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self._attach_debug_payload(response, event_name)
             await self.send_json(response)
             await self._flush_push_events()
+            await self._flush_flash()
             await self._flush_navigation()
             await self._flush_accessibility()
             await self._flush_i18n()
@@ -1511,6 +1535,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 getattr(self.view_instance, "_async_pending", None) is not None
                             )
                             await self._flush_push_events()
+                            await self._flush_flash()
                             await self._send_noop(async_pending=has_async, ref=event_ref)
                             if has_async:
                                 await self._dispatch_async_work()
@@ -1624,6 +1649,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         }
                     )
                     await self._flush_push_events()
+                    await self._flush_flash()
                     await self._flush_navigation()
                     await self._flush_i18n()
                 else:
@@ -2358,6 +2384,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if getattr(self.view_instance, "_skip_render", False):
                 self.view_instance._skip_render = False
                 await self._flush_push_events()
+                await self._flush_flash()
                 await self._send_noop()
                 return
 
@@ -2373,8 +2400,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     patches = json.loads(patches)
                 await self._send_update(patches=patches, version=version, broadcast=True)
             else:
-                # Even if no patches, flush any push_events
+                # Even if no patches, flush any push_events and flash messages
                 await self._flush_push_events()
+                await self._flush_flash()
 
         except Exception as e:
             logger.exception("Error in server_push: %s", e)

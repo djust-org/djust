@@ -35,12 +35,13 @@ How to build specific features.
 
 ### Real-Time Features
 
-|                                                |                                                           |
-| ---------------------------------------------- | --------------------------------------------------------- |
-| **[Streaming](guides/streaming.md)**           | Real-time partial DOM updates for LLM chat and live feeds |
-| **[Presence](guides/presence.md)**             | Track online users, live cursors, typing indicators       |
-| **[Uploads](guides/uploads.md)**               | Chunked binary file uploads via WebSocket                 |
-| **[Loading States](guides/loading-states.md)** | Spinners, skeleton screens, disabled states               |
+|                                                        |                                                           |
+| ------------------------------------------------------ | --------------------------------------------------------- |
+| **[Streaming](guides/streaming.md)**                   | Real-time partial DOM updates for LLM chat and live feeds |
+| **[Flash Messages](guides/flash-messages.md)**         | Transient notifications with `put_flash` (Phoenix-style)  |
+| **[Presence](guides/presence.md)**                     | Track online users, live cursors, typing indicators       |
+| **[Uploads](guides/uploads.md)**                       | Chunked binary file uploads via WebSocket                 |
+| **[Loading States](guides/loading-states.md)**         | Spinners, skeleton screens, disabled states               |
 
 ### Navigation
 

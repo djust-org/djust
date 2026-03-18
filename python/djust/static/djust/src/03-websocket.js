@@ -495,6 +495,13 @@ class LiveViewWebSocket {
                 }
                 break;
 
+            case 'flash':
+                // Flash message from server (put_flash / clear_flash)
+                if (window.djust.flash) {
+                    window.djust.flash.handleFlash(data);
+                }
+                break;
+
             case 'reload':
                 // Hot reload: file changed, refresh the page
                 window.location.reload();

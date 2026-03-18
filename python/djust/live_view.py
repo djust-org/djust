@@ -37,6 +37,7 @@ from .mixins import (
     ModelBindingMixin,
     PushEventMixin,
     NavigationMixin,
+    FlashMixin,
 )
 
 # Configure logger
@@ -70,6 +71,7 @@ class LiveView(
     ModelBindingMixin,
     PushEventMixin,
     NavigationMixin,
+    FlashMixin,
     AsyncWorkMixin,
     View,
 ):
