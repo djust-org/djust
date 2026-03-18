@@ -2941,6 +2941,108 @@ function sanitizeIdForLog(id) {
 }
 
 /**
+ * Save the current focus state (active element, selection, scroll position).
+ * Call before DOM mutations that may destroy focus. Pairs with restoreFocusState().
+ *
+ * @returns {Object|null} Saved focus state, or null if no form element is focused.
+ */
+function saveFocusState() {
+    const active = document.activeElement;
+    if (!active || active === document.body || active === document.documentElement) {
+        return null;
+    }
+
+    // Only save state for form elements and contenteditable
+    const isFormEl = (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT');
+    const isEditable = active.isContentEditable;
+    if (!isFormEl && !isEditable) {
+        return null;
+    }
+
+    // Skip saving during broadcast updates — remote content should take effect.
+    if (_isBroadcastUpdate) {
+        return null;
+    }
+
+    const state = { tag: active.tagName };
+
+    // Build a matching key: prefer id, then name, then dj-id, then positional index
+    if (active.id) {
+        state.findBy = 'id';
+        state.key = active.id;
+    } else if (active.name) {
+        state.findBy = 'name';
+        state.key = active.name;
+    } else if (active.getAttribute && active.getAttribute('dj-id')) {
+        state.findBy = 'dj-id';
+        state.key = active.getAttribute('dj-id');
+    } else {
+        // Positional: index among same-tag siblings in the nearest dj-view
+        state.findBy = 'index';
+        const root = active.closest('[dj-view]') || document.body;
+        const siblings = root.querySelectorAll(active.tagName.toLowerCase());
+        state.key = Array.from(siblings).indexOf(active);
+    }
+
+    // Save value and selection state
+    if (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && !['checkbox', 'radio'].includes(active.type))) {
+        state.selStart = active.selectionStart;
+        state.selEnd = active.selectionEnd;
+        state.scrollTop = active.scrollTop;
+        state.scrollLeft = active.scrollLeft;
+    }
+
+    return state;
+}
+
+/**
+ * Restore focus state saved by saveFocusState().
+ * Re-finds the element in the DOM (it may have been replaced) and restores
+ * focus, selection range, and scroll position.
+ *
+ * @param {Object|null} state - Saved state from saveFocusState()
+ */
+function restoreFocusState(state) {
+    if (!state) return;
+
+    let el = null;
+    if (state.findBy === 'id') {
+        el = document.getElementById(state.key);
+    } else if (state.findBy === 'name') {
+        el = document.querySelector(`[name="${CSS.escape(state.key)}"]`);
+    } else if (state.findBy === 'dj-id') {
+        el = document.querySelector(`[dj-id="${CSS.escape(state.key)}"]`);
+    } else {
+        // Positional fallback
+        const root = document.querySelector('[dj-view]') || document.body;
+        const candidates = root.querySelectorAll(state.tag.toLowerCase());
+        el = candidates[state.key] || null;
+    }
+
+    if (!el) return;
+
+    // Re-focus the element (won't re-trigger focus event if already focused)
+    if (document.activeElement !== el) {
+        el.focus({ preventScroll: true });
+    }
+
+    // Restore selection range for text inputs/textareas
+    if (state.selStart !== undefined && typeof el.setSelectionRange === 'function') {
+        try {
+            el.setSelectionRange(state.selStart, state.selEnd);
+        } catch (e) {
+            // setSelectionRange throws on some input types (email, number)
+        }
+    }
+
+    // Restore scroll position within the element
+    if (state.scrollTop !== undefined) {
+        el.scrollTop = state.scrollTop;
+        el.scrollLeft = state.scrollLeft;
+    }
+}
+
+/**
  * Resolve a DOM node using ID-based lookup (primary) or path traversal (fallback).
  *
  * Resolution strategy:
@@ -3852,6 +3954,8 @@ window.djust._stampDjIds = _stampDjIds;
 window.djust._getNodeByPath = getNodeByPath;
 window.djust.createNodeFromVNode = createNodeFromVNode;
 window.djust.preserveFormValues = preserveFormValues;
+window.djust.saveFocusState = saveFocusState;
+window.djust.restoreFocusState = restoreFocusState;
 window.djust.morphChildren = morphChildren;
 window.djust.morphElement = morphElement;
 
@@ -4144,6 +4248,9 @@ function applyPatches(patches) {
         return true;
     }
 
+    // Save focus state before any DOM mutations (#559 follow-up: focus preservation)
+    const focusState = saveFocusState();
+
     // Sort patches in 4-phase order for correct DOM mutation sequencing
     _sortPatches(patches);
 
@@ -4157,11 +4264,13 @@ function applyPatches(patches) {
         }
         if (failedCount > 0) {
             console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
+            restoreFocusState(focusState);
             return false;
         }
         // Update hooks and model bindings after DOM patches
         if (typeof updateHooks === 'function') { updateHooks(); }
         if (typeof bindModelElements === 'function') { bindModelElements(); }
+        restoreFocusState(focusState);
         return true;
     }
 
@@ -4237,6 +4346,7 @@ function applyPatches(patches) {
 
     if (failedCount > 0) {
         console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
+        restoreFocusState(focusState);
         return false;
     }
 
@@ -4244,6 +4354,7 @@ function applyPatches(patches) {
     if (typeof updateHooks === 'function') { updateHooks(); }
     if (typeof bindModelElements === 'function') { bindModelElements(); }
 
+    restoreFocusState(focusState);
     return true;
 }
 
