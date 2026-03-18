@@ -92,8 +92,7 @@ class TestDebugStateSizes:
         """Test handling of objects that cannot be JSON serialized."""
 
         class ComplexObject:
-            def __str__(self):
-                return "<ComplexObject instance>"
+            pass
 
         class NonSerializableView(LiveView):
             template_name = "test.html"
@@ -111,11 +110,9 @@ class TestDebugStateSizes:
         assert sizes["simple"]["memory"] > 0
         assert sizes["simple"]["serialized"] > 0
 
-        # Complex has default=str fallback, so it serializes to str() repr
-        # Memory is still tracked even if repr is used
+        # Complex should have memory but serialized=None
         assert sizes["complex"]["memory"] > 0
-        # default=str fallback is used, so serialized is the str length not None
-        assert sizes["complex"]["serialized"] > 0
+        assert sizes["complex"]["serialized"] is None
 
     def test_debug_state_sizes_sorted_output(self):
         """Test that size report keys are sorted alphabetically."""
@@ -138,30 +135,30 @@ class TestDebugStateSizes:
         assert keys == ["alpha", "middle", "zebra"]
 
     def test_debug_state_sizes_serialized_byte_accuracy(self):
-        """Test that serialized size accurately reflects JSON-encoded byte count."""
+        """Test that serialized size accurately reflects UTF-8 byte count."""
 
         class StringView(LiveView):
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
                 self.ascii = "test"  # 4 bytes
-                self.unicode = "tëst"  # ë becomes \u00eb in JSON (6-char escape)
-                self.emoji = "😀"  # 😀 becomes surrogate pair \uD83D\uDE00 in JSON
+                self.unicode = "tëst"  # 5 bytes (ë is 2 bytes in UTF-8)
+                self.emoji = "😀"  # 4 bytes
 
         view = StringView()
         view.mount(None)
 
         sizes = view._debug_state_sizes()
 
-        # JSON serialized size includes quotes and uses \u escapes for unicode
+        # JSON serialized size includes quotes
         # "test" = 6 bytes ("test" with quotes)
         assert sizes["ascii"]["serialized"] == 6
 
-        # "tëst" = 11 bytes ("t\u00ebst" with quotes — ë escaped as 6-char \u00eb)
-        assert sizes["unicode"]["serialized"] == 11
+        # "tëst" = 7 bytes ("tëst" with quotes, ë is 2 bytes)
+        assert sizes["unicode"]["serialized"] == 7
 
-        # "😀" = 14 bytes ("\uD83D\uDE00" with quotes — emoji escaped as 12-char surrogate pair)
-        assert sizes["emoji"]["serialized"] == 14
+        # "😀" = 6 bytes ("😀" with quotes, emoji is 4 bytes)
+        assert sizes["emoji"]["serialized"] == 6
 
     def test_debug_state_sizes_in_get_debug_info(self):
         """Test that state_sizes is included in get_debug_info() response."""

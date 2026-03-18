@@ -6,7 +6,6 @@ This directory contains comprehensive documentation for djust organized by topic
 
 ### 📚 Getting Started
 - **[Quick Start Guide](guides/QUICKSTART.md)** - Get up and running in 5 minutes
-- **[Scaffolding Guide](guides/scaffolding.md)** - Generate CRUD LiveViews from models with ``djust_gen_live``
 - **[Authentication & Authorization](guides/authentication.md)** - View-level and handler-level auth with Django permissions
 - **[PWA Guide](guides/pwa.md)** - Build offline-first Progressive Web Apps
 - **[Multi-Tenant Guide](guides/multi-tenant.md)** - SaaS architecture with tenant isolation
