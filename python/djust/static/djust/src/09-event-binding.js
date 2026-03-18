@@ -146,6 +146,9 @@ function bindLiveViewEvents() {
                 const formData = new FormData(e.target);
                 const params = Object.fromEntries(formData.entries());
 
+                // Merge dj-value-* attributes from the form element
+                Object.assign(params, collectDjValues(e.target));
+
                 addEventContext(params, e.target);
 
                 // Pass target element for optimistic updates (Phase 3)
@@ -181,6 +184,8 @@ function bindLiveViewEvents() {
         function buildFormEventParams(element, value) {
             const fieldName = getFieldName(element);
             const params = { value, field: fieldName };
+            // Merge dj-value-* attributes from the triggering element
+            Object.assign(params, collectDjValues(element));
             addEventContext(params, element);
             return params;
         }
@@ -343,6 +348,9 @@ function bindLiveViewEvents() {
                         value: e.target.value,
                         field: fieldName
                     };
+
+                    // Merge dj-value-* attributes from the element
+                    Object.assign(params, collectDjValues(element));
 
                     addEventContext(params, e.target);
 
