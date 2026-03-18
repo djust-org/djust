@@ -6,7 +6,7 @@ import json
 import logging
 import time
 
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.db import models
@@ -17,6 +17,7 @@ from ..validation import validate_handler_params
 from ..security import safe_setattr
 from ..security.event_guard import is_safe_event_name
 from ..decorators import is_event_handler
+from ..hooks import run_on_mount_hooks
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,11 @@ class RequestMixin:
 
         # Initialize temporary assigns with default values before mount
         self._initialize_temporary_assigns()
+
+        # Run on_mount hooks (auth guards, etc.) before mount
+        hook_redirect = run_on_mount_hooks(self, request, **kwargs)
+        if hook_redirect:
+            return HttpResponseRedirect(hook_redirect)
 
         # IMPORTANT: mount() must be called first to initialize clean state
         t0 = time.perf_counter()
@@ -206,6 +212,11 @@ class RequestMixin:
                     safe_setattr(self, key, value, allow_private=False)
 
             self._initialize_temporary_assigns()
+
+            # Run on_mount hooks (auth guards, etc.) before mount
+            hook_redirect = run_on_mount_hooks(self, request, **kwargs)
+            if hook_redirect:
+                return JsonResponse({"redirect": hook_redirect}, status=403)
 
             if not saved_state:
                 self.mount(request, **kwargs)
