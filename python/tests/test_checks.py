@@ -3549,3 +3549,113 @@ class TestV008PrimitiveReturnAnnotation:
 
         v008 = [e for e in errors if e.id == "djust.V008"]
         assert len(v008) == 1
+
+
+# ---------------------------------------------------------------------------
+# V009 -- on_mount validation
+# ---------------------------------------------------------------------------
+
+
+class TestV009OnMountValidation:
+    """V009 -- on_mount contains non-list or non-callable items."""
+
+    def test_v009_non_list_on_mount(self):
+        """V009 fires when on_mount is not a list."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.checks import check_liveviews
+
+        def mount(self, request, **kwargs):
+            pass
+
+        cls = type(
+            "V009NonListView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "t.html",
+                "mount": mount,
+                "on_mount": "not_a_list",
+            },
+        )
+
+        try:
+            errors = check_liveviews(None)
+            v009 = [e for e in errors if e.id == "djust.V009"]
+            assert any("V009NonListView" in e.msg for e in v009)
+        finally:
+            del cls
+            _force_gc()
+
+    def test_v009_non_callable_item(self):
+        """V009 fires when on_mount list contains a non-callable."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.checks import check_liveviews
+
+        def mount(self, request, **kwargs):
+            pass
+
+        cls = type(
+            "V009NonCallableView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "t.html",
+                "mount": mount,
+                "on_mount": ["not_a_function"],
+            },
+        )
+
+        try:
+            errors = check_liveviews(None)
+            v009 = [e for e in errors if e.id == "djust.V009"]
+            assert any("V009NonCallableView" in e.msg for e in v009)
+        finally:
+            del cls
+            _force_gc()
+
+    def test_v009_valid_on_mount_no_warning(self):
+        """V009 should not fire for a valid on_mount list of callables."""
+        import pytest
+
+        if not _liveview_available():
+            pytest.skip("Rust extension not available")
+
+        from djust.live_view import LiveView
+        from djust.hooks import on_mount
+        from djust.checks import check_liveviews
+
+        @on_mount
+        def require_auth(view, request, **kwargs):
+            pass
+
+        def mount(self, request, **kwargs):
+            pass
+
+        cls = type(
+            "V009ValidView",
+            (LiveView,),
+            {
+                "__module__": "myapp.views",
+                "template_name": "t.html",
+                "mount": mount,
+                "on_mount": [require_auth],
+            },
+        )
+
+        try:
+            errors = check_liveviews(None)
+            v009 = [e for e in errors if e.id == "djust.V009"]
+            assert not any("V009ValidView" in e.msg for e in v009)
+        finally:
+            del cls
+            _force_gc()

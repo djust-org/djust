@@ -24,6 +24,7 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[Streaming](guides/streaming.md)** - Real-time partial DOM updates for LLM chat and live feeds
 - **[Uploads](guides/uploads.md)** - Chunked binary file uploads via WebSocket
 - **[Hooks](guides/hooks.md)** - Client-side JavaScript lifecycle hooks
+- **[on_mount Hooks](website/guides/on-mount-hooks.md)** - Cross-cutting server-side mount hooks (auth, telemetry, tenant resolution)
 - **[Model Binding](guides/model-binding.md)** - Two-way data binding for form inputs
 
 ### 🎨 Components

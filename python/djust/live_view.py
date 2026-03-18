@@ -208,6 +208,9 @@ class LiveView(
     permission_required: Optional[Union[str, List[str]]] = None  # Django permission string(s)
     login_url: Optional[str] = None  # Override settings.LOGIN_URL
 
+    # on_mount hooks — cross-cutting mount logic (Phoenix on_mount parity)
+    on_mount: List[Any] = []
+
     # ============================================================================
     # INITIALIZATION & SETUP
     # ============================================================================

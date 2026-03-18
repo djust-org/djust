@@ -16,10 +16,35 @@ from djust import LiveView
 | `template`          | `str`  | —       | Inline HTML template string                                                   |
 | `temporary_assigns` | `dict` | `{}`    | State that resets to the default after each render (e.g., `{"messages": []}`) |
 | `use_actors`        | `bool` | `False` | Enable actor-based state management                                           |
+| `on_mount`          | `list` | `[]`    | List of hook functions to run before `mount()` (see [on_mount Hooks](../guides/on-mount-hooks.md)) |
 
 Either `template_name` or `template` is required.
 
 ### Lifecycle Methods
+
+#### `on_mount` hooks
+
+Cross-cutting functions that run before `mount()` on every mount and reconnect. Declare hooks with the `@on_mount` decorator and attach them via the `on_mount` class attribute.
+
+**Hook signature:** `def hook(view, request, **kwargs) -> Optional[str]`
+
+Return `None` to continue, or a redirect URL string to halt mounting.
+
+```python
+from djust.hooks import on_mount
+
+@on_mount
+def require_verified_email(view, request, **kwargs):
+    if not request.user.email_verified:
+        return '/verify-email/'
+
+class ProfileView(LiveView):
+    on_mount = [require_verified_email]
+```
+
+Hooks are inherited via MRO (parent-first, deduplicated). See [on_mount Hooks Guide](../guides/on-mount-hooks.md) for full details.
+
+---
 
 #### `mount(request, **kwargs)`
 

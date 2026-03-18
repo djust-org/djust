@@ -834,6 +834,52 @@ def check_liveviews(app_configs, **kwargs):
                     )
                 )
 
+        # V009 -- on_mount contains non-callable items
+        on_mount_hooks = cls.__dict__.get("on_mount")
+        if on_mount_hooks is not None:
+            if not isinstance(on_mount_hooks, (list, tuple)):
+                cls_file = ""
+                cls_line = None
+                try:
+                    cls_file = inspect.getfile(cls)
+                    cls_line = inspect.getsourcelines(cls)[1]
+                except (OSError, TypeError):
+                    pass
+                errors.append(
+                    DjustWarning(
+                        "%s: 'on_mount' should be a list of hook functions." % cls_label,
+                        hint="Set on_mount = [hook1, hook2, ...] on your LiveView class.",
+                        id="djust.V009",
+                        fix_hint=("Change `on_mount` to a list in `%s`." % cls.__qualname__),
+                        file_path=cls_file,
+                        line_number=cls_line,
+                    )
+                )
+            else:
+                for i, hook in enumerate(on_mount_hooks):
+                    if not callable(hook):
+                        cls_file = ""
+                        cls_line = None
+                        try:
+                            cls_file = inspect.getfile(cls)
+                            cls_line = inspect.getsourcelines(cls)[1]
+                        except (OSError, TypeError):
+                            pass
+                        errors.append(
+                            DjustWarning(
+                                "%s: on_mount[%d] is not callable (%s)."
+                                % (cls_label, i, type(hook).__name__),
+                                hint="Each on_mount entry must be a callable hook function.",
+                                id="djust.V009",
+                                fix_hint=(
+                                    "Ensure all items in `on_mount` are callable "
+                                    "in `%s`." % cls.__qualname__
+                                ),
+                                file_path=cls_file,
+                                line_number=cls_line,
+                            )
+                        )
+
     # V006 -- service instance in mount() (AST-based scan of project files)
     _check_service_instances_in_mount(errors)
 

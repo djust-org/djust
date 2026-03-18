@@ -19,6 +19,7 @@ from .decorators import (
     computed,
     debounce,
     throttle,
+    on_mount,
 )
 from .auth import LoginRequiredMixin, PermissionRequiredMixin
 from .react import react_components, register_react_component, ReactMixin
@@ -231,4 +232,6 @@ __all__ = [
     # Authentication & authorization
     "LoginRequiredMixin",
     "PermissionRequiredMixin",
+    # on_mount hooks
+    "on_mount",
 ]
