@@ -7,6 +7,7 @@ import logging
 from typing import Any, List, Optional, Set
 from urllib.parse import parse_qs, urlencode
 
+from ..security import sanitize_for_log
 from ..serialization import normalize_django_value
 from ..utils import get_template_dirs
 
@@ -125,7 +126,11 @@ class RustBridgeMixin:
 
                 backend = get_backend()
                 self._cache_key = f"{session_key}_{view_key}"
-                logger.debug("[LiveView] Cache lookup (WebSocket): cache_key=%s", self._cache_key)
+                # codeql[py/log-injection] — cache_key may contain request.path; sanitize
+                logger.debug(
+                    "[LiveView] Cache lookup (WebSocket): cache_key=%s",
+                    sanitize_for_log(self._cache_key),
+                )
 
                 cached = backend.get(self._cache_key)
                 if cached:
@@ -168,7 +173,11 @@ class RustBridgeMixin:
 
             template_source = self.get_template()
 
-            logger.debug("[LiveView] Creating NEW RustLiveView for cache_key=%s", self._cache_key)
+            # codeql[py/log-injection] — cache_key may contain request.path; sanitize
+            logger.debug(
+                "[LiveView] Creating NEW RustLiveView for cache_key=%s",
+                sanitize_for_log(self._cache_key),
+            )
             logger.debug("[LiveView] Template length: %d chars", len(template_source))
             logger.debug("[LiveView] Template preview: %s...", template_source[:200])
 

@@ -304,4 +304,38 @@ describe('morphElement', () => {
         expect(existing.children.length).toBe(2);
         expect(existing.querySelector('#a').textContent).toBe('kept');
     });
+
+    it('preserves canvas width and height during attribute sync', () => {
+        // Canvas elements have width/height set by scripts (Chart.js).
+        // Removing them resets the canvas context, blanking drawn content.
+        // Regression test for #561.
+        const canvas = document.createElement('canvas');
+        canvas.setAttribute('id', 'chart');
+        canvas.setAttribute('width', '800');
+        canvas.setAttribute('height', '400');
+
+        const desired = document.createElement('canvas');
+        desired.setAttribute('id', 'chart');
+        // Server HTML has no width/height — they're set by JS
+
+        morphElement(canvas, desired);
+
+        // width and height should be preserved, not removed
+        expect(canvas.getAttribute('width')).toBe('800');
+        expect(canvas.getAttribute('height')).toBe('400');
+    });
+
+    it('removes non-canvas attributes normally', () => {
+        // Ensure canvas preservation doesn't affect other elements
+        const div = document.createElement('div');
+        div.setAttribute('id', 'test');
+        div.setAttribute('data-old', 'value');
+
+        const desired = document.createElement('div');
+        desired.setAttribute('id', 'test');
+
+        morphElement(div, desired);
+
+        expect(div.hasAttribute('data-old')).toBe(false);
+    });
 });
