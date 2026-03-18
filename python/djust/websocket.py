@@ -1080,6 +1080,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if hasattr(self.view_instance, "_ensure_tenant"):
                 await sync_to_async(self.view_instance._ensure_tenant)(request)
 
+            # --- on_mount hooks (after auth, before mount) ---
+            from .hooks import run_on_mount_hooks
+
+            hook_redirect = await sync_to_async(run_on_mount_hooks)(
+                self.view_instance, request, **params
+            )
+            if hook_redirect:
+                await self.send_json({"type": "navigate", "to": hook_redirect})
+                return
+            # --- End on_mount hooks ---
+
             # --- State restoration (skip mount when pre-rendered state exists) ---
             mounted = False
             if has_prerendered:
