@@ -2337,7 +2337,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         Periodic tick loop. Calls handle_tick() on the view instance every
         interval_ms milliseconds, then re-renders and sends patches.
 
-        TODO: add patch compression (PATCH_COUNT_THRESHOLD) matching handle_event.
+        Auto-skips render when handle_tick() doesn't change any public
+        assigns, preventing unnecessary VDOM version increments that
+        cause version mismatch with user-triggered events (#560).
         """
         interval_s = interval_ms / 1000.0
         try:
@@ -2346,7 +2348,21 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if not self.view_instance:
                     break
                 try:
+                    # Snapshot state before tick to detect changes
+                    pre_assigns = _snapshot_assigns(self.view_instance)
+
                     await sync_to_async(self.view_instance.handle_tick)()
+
+                    # Skip render if tick handler didn't change any state.
+                    # This prevents VDOM version increments on no-op ticks,
+                    # which otherwise cause version mismatch with user events.
+                    post_assigns = _snapshot_assigns(self.view_instance)
+                    if pre_assigns == post_assigns:
+                        logger.debug(
+                            "[djust] Tick on %s produced no state changes, skipping render",
+                            self.view_instance.__class__.__name__,
+                        )
+                        continue
 
                     if hasattr(self.view_instance, "_sync_state_to_rust"):
                         await sync_to_async(self.view_instance._sync_state_to_rust)()
@@ -2358,7 +2374,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     if patches is not None:
                         if isinstance(patches, str):
                             patches = json.loads(patches)
-                        await self._send_update(patches=patches, version=version)
+                        await self._send_update(patches=patches, version=version, event_name="tick")
                 except Exception as e:
                     logger.exception("Error in tick handler: %s", e)
         except asyncio.CancelledError:
