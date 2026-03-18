@@ -74,7 +74,7 @@ window.djustInitialized = false;
 // Track pending turbo:load reinit
 let pendingTurboReinit = false;
 
-window.addEventListener('turbo:load', function(event) {
+window.addEventListener('turbo:load', function(_event) {
     if (globalThis.djustDebug) console.log('[LiveView:TurboNav] turbo:load event received!');
     if (globalThis.djustDebug) console.log('[LiveView:TurboNav] djustInitialized:', window.djustInitialized);
 
@@ -1553,7 +1553,7 @@ class StateBus {
     }
 }
 
-const globalStateBus = new StateBus();
+const _globalStateBus = new StateBus(); // eslint: prefixed _ (used in decorators.js, not in client.js IIFE)
 
 // DraftManager for localStorage-based draft saving
 class DraftManager {
@@ -1713,7 +1713,7 @@ function initDraftMode() {
     }
 }
 
-function collectFormData(container) {
+function _collectFormData(container) {
     const data = {};
 
     const fields = container.querySelectorAll('input, textarea, select');
@@ -1743,7 +1743,7 @@ function collectFormData(container) {
     return data;
 }
 
-function restoreFormData(container, data) {
+function _restoreFormData(container, data) {
     if (!data) return;
 
     Object.entries(data).forEach(([name, value]) => {

@@ -50,7 +50,7 @@ window.djustInitialized = false;
 // Track pending turbo:load reinit
 let pendingTurboReinit = false;
 
-window.addEventListener('turbo:load', function(event) {
+window.addEventListener('turbo:load', function(_event) {
     if (globalThis.djustDebug) console.log('[LiveView:TurboNav] turbo:load event received!');
     if (globalThis.djustDebug) console.log('[LiveView:TurboNav] djustInitialized:', window.djustInitialized);
 

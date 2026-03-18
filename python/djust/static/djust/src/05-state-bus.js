@@ -65,4 +65,4 @@ class StateBus {
     }
 }
 
-const globalStateBus = new StateBus();
+const _globalStateBus = new StateBus(); // eslint: prefixed _ (used in decorators.js, not in client.js IIFE)

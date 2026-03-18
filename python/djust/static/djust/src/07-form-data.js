@@ -1,5 +1,5 @@
 
-function collectFormData(container) {
+function _collectFormData(container) {
     const data = {};
 
     const fields = container.querySelectorAll('input, textarea, select');
@@ -29,7 +29,7 @@ function collectFormData(container) {
     return data;
 }
 
-function restoreFormData(container, data) {
+function _restoreFormData(container, data) {
     if (!data) return;
 
     Object.entries(data).forEach(([name, value]) => {
