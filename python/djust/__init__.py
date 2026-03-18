@@ -29,6 +29,7 @@ from .presence import PresenceMixin, LiveCursorMixin, PresenceManager, CursorTra
 from .routing import live_session, get_route_map_script, DjustMiddlewareStack
 from .streaming import StreamingMixin
 from .uploads import UploadMixin
+from .mixins.flash import FlashMixin
 
 # Import Rust functions
 try:
@@ -225,6 +226,8 @@ __all__ = [
     "StreamingMixin",
     # File uploads
     "UploadMixin",
+    # Flash messages
+    "FlashMixin",
     # Authentication & authorization
     "LoginRequiredMixin",
     "PermissionRequiredMixin",

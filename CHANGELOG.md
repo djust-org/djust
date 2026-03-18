@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`put_flash(level, message)` and `clear_flash()` for ephemeral flash notifications** — Phoenix `put_flash` parity. Queue transient messages (info, success, warning, error) from any event handler; they are flushed to the client over WebSocket/SSE after each response. Includes `{% dj_flash %}` template tag with auto-dismiss and ARIA `role="status"` / `role="alert"` support. ([#568](https://github.com/djust-org/djust/pull/568))
+
 - **`handle_params` called on initial mount** — `handle_params(params, uri)` is now invoked after `mount()` on the initial WebSocket connect, not just on subsequent URL changes. This matches Phoenix LiveView's `handle_params/3` contract and eliminates the need to duplicate URL-parsing logic between `mount()` and `handle_params()`. Views that don't override `handle_params` are unaffected (default is a no-op).
 
 - **`dj-value-*` — Static event parameters** — Pass static values alongside events without `data-*` attributes or hidden inputs: `<button dj-click="delete" dj-value-id:int="{{ item.id }}" dj-value-type="soft">`. Supports type-hint suffixes (`:int`, `:float`, `:bool`, `:json`, `:list`), kebab-to-snake_case conversion, and prototype pollution prevention. Works with all event types: `dj-click`, `dj-submit`, `dj-change`, `dj-input`, `dj-keydown`, `dj-keyup`, `dj-blur`, `dj-focus`, `dj-poll`. Phoenix LiveView's `phx-value-*` equivalent.

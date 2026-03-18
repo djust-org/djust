@@ -861,6 +861,13 @@ class LiveViewWebSocket {
                 }
                 break;
 
+            case 'flash':
+                // Flash message from server (put_flash / clear_flash)
+                if (window.djust.flash) {
+                    window.djust.flash.handleFlash(data);
+                }
+                break;
+
             case 'reload':
                 // Hot reload: file changed, refresh the page
                 window.location.reload();
@@ -1314,6 +1321,13 @@ class LiveViewSSE {
             case 'focus':
                 if (window.djust.accessibility) {
                     window.djust.accessibility.processFocus([data.selector, data.options]);
+                }
+                break;
+
+            case 'flash':
+                // Flash message from server (put_flash / clear_flash)
+                if (window.djust.flash) {
+                    window.djust.flash.handleFlash(data);
                 }
                 break;
 
