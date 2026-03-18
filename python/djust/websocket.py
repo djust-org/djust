@@ -1111,6 +1111,23 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_json(response)
             return
 
+        # Call handle_params() after mount (Phoenix parity: handle_params is
+        # invoked on initial render AND on subsequent URL changes).  Build the
+        # URI from the page URL and query params the client sent.
+        try:
+            uri = path_with_query  # already built above as page_url + query_string
+            await sync_to_async(self.view_instance.handle_params)(params, uri)
+        except Exception as e:
+            response = handle_exception(
+                e,
+                error_type="mount",
+                view_class=view_path,
+                logger=logger,
+                log_message=f"Error in {sanitize_for_log(view_path)}.handle_params()",
+            )
+            await self.send_json(response)
+            return
+
         # Get initial HTML (skip if client already has pre-rendered content)
         html = None
         version = 1
