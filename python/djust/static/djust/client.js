@@ -2155,12 +2155,110 @@ function extractTypedParams(element) {
         }
     }
 
+    // Merge dj-value-* attributes. dj-value-* takes precedence over data-*
+    // and dj-params, matching Phoenix's phx-value-* semantics.
+    const djValues = collectDjValues(element);
+    for (const [k, v] of Object.entries(djValues)) {
+        params[k] = v;
+    }
+
     return params;
+}
+
+/**
+ * Collect dj-value-* attributes from an element and return as a params object.
+ *
+ * dj-value-* is the standard way to pass static context alongside events
+ * (Phoenix LiveView's phx-value-* equivalent). Supports the same type-hint
+ * suffixes as data-* attributes.
+ *
+ * Examples:
+ *   dj-value-id="42"             -> { id: "42" }
+ *   dj-value-id:int="42"        -> { id: 42 }
+ *   dj-value-item-type="soft"   -> { item_type: "soft" }
+ *   dj-value-active:bool="true" -> { active: true }
+ *   dj-value-tags:list="a,b,c"  -> { tags: ["a", "b", "c"] }
+ *
+ * @param {HTMLElement} element - Element to extract dj-value-* from
+ * @returns {Object} - Collected params with coerced types
+ */
+function collectDjValues(element) {
+    const values = Object.create(null);
+
+    for (const attr of element.attributes) {
+        if (!attr.name.startsWith('dj-value-')) continue;
+
+        // Parse: dj-value-item-id:int -> key="item_id", type="int"
+        const nameWithoutPrefix = attr.name.slice(9); // Remove "dj-value-"
+        const colonIndex = nameWithoutPrefix.lastIndexOf(':');
+        let rawKey, typeHint;
+
+        if (colonIndex !== -1) {
+            rawKey = nameWithoutPrefix.slice(0, colonIndex);
+            typeHint = nameWithoutPrefix.slice(colonIndex + 1);
+        } else {
+            rawKey = nameWithoutPrefix;
+            typeHint = null;
+        }
+
+        // Convert kebab-case to snake_case
+        const key = rawKey.replace(/-/g, '_');
+
+        // Prevent prototype pollution
+        if (UNSAFE_KEYS.includes(key)) continue;
+
+        let value = attr.value;
+
+        // Apply type coercion (same logic as extractTypedParams)
+        if (typeHint) {
+            const safeAttrName = String(attr.name).slice(0, 50).replace(/[^a-z0-9-:]/gi, '_');
+            switch (typeHint) {
+                case 'int':
+                case 'integer': {
+                    if (value === '') { value = 0; }
+                    else {
+                        const parsed = parseInt(value, 10);
+                        value = isNaN(parsed) ? null : parsed;
+                    }
+                    break;
+                }
+                case 'float':
+                case 'number': {
+                    if (value === '') { value = 0.0; }
+                    else {
+                        const parsed = parseFloat(value);
+                        value = isNaN(parsed) ? null : parsed;
+                    }
+                    break;
+                }
+                case 'bool':
+                case 'boolean':
+                    value = ['true', '1', 'yes', 'on', 'checked'].includes(value.toLowerCase());
+                    break;
+                case 'json':
+                case 'object':
+                case 'array':
+                    try { value = JSON.parse(value); }
+                    catch { /* keep as string */ }
+                    break;
+                case 'list':
+                    value = value ? value.split(',').map(v => v.trim()).filter(v => v) : [];
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        values[key] = value;
+    }
+
+    return values;
 }
 
 // Export for global access
 window.djust = window.djust || {};
 window.djust.extractTypedParams = extractTypedParams;
+window.djust.collectDjValues = collectDjValues;
 /**
  * Check if element has dj-confirm and show confirmation dialog.
  * @param {HTMLElement} element - Element with potential dj-confirm attribute
@@ -2309,6 +2407,9 @@ function bindLiveViewEvents() {
                 const formData = new FormData(e.target);
                 const params = Object.fromEntries(formData.entries());
 
+                // Merge dj-value-* attributes from the form element
+                Object.assign(params, collectDjValues(e.target));
+
                 addEventContext(params, e.target);
 
                 // Pass target element for optimistic updates (Phase 3)
@@ -2344,6 +2445,8 @@ function bindLiveViewEvents() {
         function buildFormEventParams(element, value) {
             const fieldName = getFieldName(element);
             const params = { value, field: fieldName };
+            // Merge dj-value-* attributes from the triggering element
+            Object.assign(params, collectDjValues(element));
             addEventContext(params, element);
             return params;
         }
@@ -2506,6 +2609,9 @@ function bindLiveViewEvents() {
                         value: e.target.value,
                         field: fieldName
                     };
+
+                    // Merge dj-value-* attributes from the element
+                    Object.assign(params, collectDjValues(element));
 
                     addEventContext(params, e.target);
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`dj-value-*` — Static event parameters** — Pass static values alongside events without `data-*` attributes or hidden inputs: `<button dj-click="delete" dj-value-id:int="{{ item.id }}" dj-value-type="soft">`. Supports type-hint suffixes (`:int`, `:float`, `:bool`, `:json`, `:list`), kebab-to-snake_case conversion, and prototype pollution prevention. Works with all event types: `dj-click`, `dj-submit`, `dj-change`, `dj-input`, `dj-keydown`, `dj-keyup`, `dj-blur`, `dj-focus`, `dj-poll`. Phoenix LiveView's `phx-value-*` equivalent.
+
 ### Fixed
 
 - **Focus lost during VDOM patches** — When the server pushed VDOM patches (e.g., updating a counter while the user was typing), the focused input/textarea lost focus, cursor position, selection range, and scroll position. Added `saveFocusState()` / `restoreFocusState()` around the `applyPatches()` cycle to capture and restore `activeElement`, `selectionStart`/`selectionEnd`, and `scrollTop`/`scrollLeft`. Element matching uses id → name → dj-id → positional index. Broadcast (remote) updates correctly skip focus restoration.
