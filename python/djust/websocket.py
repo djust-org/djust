@@ -178,6 +178,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         self._view_group: Optional[str] = None
         self._presence_group: Optional[str] = None
         self._tick_task = None
+        # Render lock: serializes tick and event render operations so they
+        # cannot concurrently access view_instance state or increment the
+        # VDOM version. This prevents the version mismatch race in #560.
+        self._render_lock = asyncio.Lock()
+        # Track whether a user event is currently being processed so ticks
+        # can yield priority to user interactions.
+        self._processing_user_event = False
 
     async def _flush_push_events(self) -> None:
         """
@@ -199,7 +206,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 }
             )
 
-    async def _send_noop(self, async_pending: bool = False) -> None:
+    async def _send_noop(self, async_pending: bool = False, ref: Optional[int] = None) -> None:
         """
         Send a lightweight noop acknowledgment to the client.
 
@@ -210,10 +217,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         Args:
             async_pending: If True, tells the client to keep loading state active
                 because a start_async() callback is running in the background.
+            ref: Event reference number echoed back from the client's request (#560).
         """
         msg: Dict[str, Any] = {"type": "noop"}
         if async_pending:
             msg["async_pending"] = True
+        if ref is not None:
+            msg["ref"] = ref
         await self.send_json(msg)
 
     async def _flush_navigation(self) -> None:
@@ -473,6 +483,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         event_name: Optional[str] = None,
         broadcast: bool = False,
         async_pending: bool = False,
+        source: Optional[str] = None,
+        ref: Optional[int] = None,
     ) -> None:
         """
         Send a patch or full HTML update to the client.
@@ -491,6 +503,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             hotreload: Whether this is a hot reload update
             file_path: File path that triggered hot reload (if hotreload=True)
             event_name: Name of the event that triggered this update (for debug payload)
+            source: Update source — "tick" for server-initiated ticks, "event" for
+                user-initiated events. Used by the client to buffer tick patches
+                during pending user event round-trips (#560).
+            ref: Event reference number echoed back from the client's request,
+                allowing the client to match responses to sent events (#560).
         """
         # Note: patches=[] (empty list) is valid and should be sent as "patch" type
         # Only patches=None indicates we should send html_update
@@ -525,6 +542,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     response["async_pending"] = True
                 if event_name:
                     response["event_name"] = event_name
+                if source:
+                    response["source"] = source
+                if ref is not None:
+                    response["ref"] = ref
                 self._attach_debug_payload(response, event_name, performance)
                 await self.send_json(response)
                 await self._flush_push_events()
@@ -545,6 +566,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 response["async_pending"] = True
             if event_name:
                 response["event_name"] = event_name
+            if source:
+                response["source"] = source
+            if ref is not None:
+                response["ref"] = ref
             self._attach_debug_payload(response, event_name)
             await self.send_json(response)
             await self._flush_push_events()
@@ -1218,6 +1243,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         self._current_event_name = event_name  # For _dispatch_async_work
         params = data.get("params", {})
 
+        # Event ref tracking (#560): client sends a monotonic ref with each
+        # event so it can match responses to requests and distinguish event
+        # responses from tick pushes. Coerce to int to prevent type confusion.
+        raw_ref = data.get("ref")
+        event_ref = int(raw_ref) if isinstance(raw_ref, (int, float)) else None
+        self._current_event_ref = event_ref
+
         # Extract cache request ID if present (for @cache decorator)
         cache_request_id = params.get("_cacheRequestId")
 
@@ -1326,6 +1358,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             patches = None
             version = 0
 
+            # Acquire render lock to serialize with tick renders (#560).
+            # This prevents ticks from rendering and incrementing the VDOM
+            # version while an event handler is mid-execution.
+            await self._render_lock.acquire()
+            self._processing_user_event = True
             try:
                 if component_id:
                     # Component event: route to component's event handler method
@@ -1457,7 +1494,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 getattr(self.view_instance, "_async_pending", None) is not None
                             )
                             await self._flush_push_events()
-                            await self._send_noop(async_pending=has_async)
+                            await self._send_noop(async_pending=has_async, ref=event_ref)
                             if has_async:
                                 await self._dispatch_async_work()
                             return
@@ -1681,6 +1718,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             performance=perf_summary,
                             event_name=event_name,
                             async_pending=has_async,
+                            source="event",
+                            ref=event_ref,
                         )
                     else:
                         # patches=None means VDOM diff failed or was skipped - send full HTML
@@ -1756,6 +1795,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             reset_form=should_reset_form,
                             event_name=event_name,
                             async_pending=has_async,
+                            source="event",
+                            ref=event_ref,
                         )
 
                 # Check for async work scheduled by start_async()
@@ -1775,6 +1816,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     log_message=f"Error in {view_class_name}.{sanitize_for_log(event_name)}() ({event_type})",
                 )
                 await self.send_json(response)
+            finally:
+                self._processing_user_event = False
+                self._render_lock.release()
 
     # ========================================================================
     # Embedded LiveView Rendering
@@ -2337,9 +2381,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         Periodic tick loop. Calls handle_tick() on the view instance every
         interval_ms milliseconds, then re-renders and sends patches.
 
-        Auto-skips render when handle_tick() doesn't change any public
-        assigns, preventing unnecessary VDOM version increments that
-        cause version mismatch with user-triggered events (#560).
+        Event sequencing (#560):
+        - Skips render when handle_tick() doesn't change any public assigns
+        - Acquires _render_lock to serialize with event handlers
+        - Yields to user events: if a user event is being processed, the
+          tick is deferred to the next interval instead of blocking
+        - Tags tick updates with source="tick" so the client can buffer
+          them during pending user event round-trips
         """
         interval_s = interval_ms / 1000.0
         try:
@@ -2348,33 +2396,62 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if not self.view_instance:
                     break
                 try:
-                    # Snapshot state before tick to detect changes
-                    pre_assigns = _snapshot_assigns(self.view_instance)
-
-                    await sync_to_async(self.view_instance.handle_tick)()
-
-                    # Skip render if tick handler didn't change any state.
-                    # This prevents VDOM version increments on no-op ticks,
-                    # which otherwise cause version mismatch with user events.
-                    post_assigns = _snapshot_assigns(self.view_instance)
-                    if pre_assigns == post_assigns:
+                    # User events take priority over ticks (#560). If a user
+                    # event is currently being processed, skip this tick
+                    # entirely — the next tick interval will pick up any
+                    # changes. This prevents version interleaving.
+                    if self._processing_user_event:
                         logger.debug(
-                            "[djust] Tick on %s produced no state changes, skipping render",
+                            "[djust] Tick on %s deferred — user event in progress",
                             self.view_instance.__class__.__name__,
                         )
                         continue
 
-                    if hasattr(self.view_instance, "_sync_state_to_rust"):
-                        await sync_to_async(self.view_instance._sync_state_to_rust)()
+                    # Acquire render lock to serialize with event handlers.
+                    # Use a short timeout so ticks don't block indefinitely
+                    # if an event handler is slow.
+                    try:
+                        await asyncio.wait_for(self._render_lock.acquire(), timeout=0.1)
+                    except asyncio.TimeoutError:
+                        logger.debug(
+                            "[djust] Tick on %s skipped — render lock held",
+                            self.view_instance.__class__.__name__,
+                        )
+                        continue
 
-                    html, patches, version = await sync_to_async(
-                        self.view_instance.render_with_diff
-                    )()
+                    try:
+                        # Snapshot state before tick to detect changes
+                        pre_assigns = _snapshot_assigns(self.view_instance)
 
-                    if patches is not None:
-                        if isinstance(patches, str):
-                            patches = json.loads(patches)
-                        await self._send_update(patches=patches, version=version, event_name="tick")
+                        await sync_to_async(self.view_instance.handle_tick)()
+
+                        # Skip render if tick handler didn't change any state.
+                        post_assigns = _snapshot_assigns(self.view_instance)
+                        if pre_assigns == post_assigns:
+                            logger.debug(
+                                "[djust] Tick on %s produced no state changes, skipping render",
+                                self.view_instance.__class__.__name__,
+                            )
+                            continue
+
+                        if hasattr(self.view_instance, "_sync_state_to_rust"):
+                            await sync_to_async(self.view_instance._sync_state_to_rust)()
+
+                        html, patches, version = await sync_to_async(
+                            self.view_instance.render_with_diff
+                        )()
+
+                        if patches is not None:
+                            if isinstance(patches, str):
+                                patches = json.loads(patches)
+                            await self._send_update(
+                                patches=patches,
+                                version=version,
+                                event_name="tick",
+                                source="tick",
+                            )
+                    finally:
+                        self._render_lock.release()
                 except Exception as e:
                     logger.exception("Error in tick handler: %s", e)
         except asyncio.CancelledError:

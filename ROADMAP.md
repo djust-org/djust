@@ -10,7 +10,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 |----------|---------|-----|-----------|
 | ~~**P0**~~ | ~~VDOM structural patching (#559)~~ ✅ | ~~Blocks all conditional rendering — every new user hits this~~ | v0.4.0 |
 | **P0** | Focus preservation across re-renders | Forms feel broken without it — table-stakes for any interactive framework | v0.4.0 |
-| **P0** | Event sequencing (#560) | User events silently dropped during ticks — trust-destroying | v0.4.0 |
+| ~~**P0**~~ | ~~Event sequencing (#560)~~ ✅ | ~~User events silently dropped during ticks — trust-destroying~~ | v0.4.0 |
 | **P0** | `dj-value-*` static event params | Most underrated Phoenix feature; used on virtually every event binding | v0.4.0 |
 | **P0** | `handle_params` callback (complete) | `live_patch` is half-implemented without it — partial impl exists, needs finish | v0.4.0 |
 | **P1** | JS Commands (`dj.push`, `dj.show`, etc.) | Biggest DX gap vs Phoenix; eliminates server round-trip for UI interactions | v0.4.1 |
@@ -149,7 +149,7 @@ Closing the remaining gaps between the Rust engine and Django's Python engine:
 
 **VDOM structural patching** (#559) ✅ — Fixed in PR #563. Comment node placeholders (`<!--dj-if-->`) are now included in client-side child index resolution (`getSignificantChildren`, `getNodeByPath`, `createNodeFromVNode`), matching the Rust VDOM's index computation. Conditional `{% if %}` blocks no longer break surrounding element patches.
 
-**Event sequencing during ticks** (#560) — Server-initiated ticks can collide with user events, silently dropping input. Fix: version-vector or event queue so user actions are never lost. *Phoenix handles this via Erlang's message ordering guarantees; we need explicit sequencing.*
+**Event sequencing during ticks** (#560) ✅ — Fixed in PR #566. Render lock serializes tick/event operations; ticks yield to user events; client buffers tick patches during pending event round-trips; monotonic event ref for request/response matching.
 
 **Focus preservation across re-renders** — When the VDOM patches the DOM, focused elements lose focus and cursor position. This makes typing in forms feel broken when other parts of the page update. Fix: capture `document.activeElement`, selection range, and scroll position before patching; restore after. *Phoenix preserves focus automatically via `phx-update="ignore"` and morph internals; React preserves it via reconciliation. This is table-stakes for feeling like a real app.*
 
