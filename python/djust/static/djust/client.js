@@ -5478,7 +5478,6 @@ window.djust.getActiveStreams = getActiveStreams;
 // ============================================================================
 
 (function () {
-    'use strict';
 
     /**
      * Handle navigation commands from the server.
