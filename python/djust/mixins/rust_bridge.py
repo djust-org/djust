@@ -7,6 +7,7 @@ import logging
 from typing import Any, List, Optional, Set
 from urllib.parse import parse_qs, urlencode
 
+from ..security import sanitize_for_log
 from ..serialization import normalize_django_value
 from ..utils import get_template_dirs
 
@@ -103,7 +104,18 @@ class RustBridgeMixin:
                     sorted_query = urlencode(sorted(params.items()), doseq=True)
                     query_hash = hashlib.md5(sorted_query.encode()).hexdigest()[:8]
 
-                view_key = f"liveview_{ws_path}"
+                # Use the actual page path to match the HTTP render cache key.
+                # Prefer the request parameter (passed from render()/render_with_diff()),
+                # then fall back to self.request (set on the view during WS mount).
+                # Falls back to view class name + ws_path if neither is available.
+                page_path = getattr(request, "path", None) or getattr(
+                    getattr(self, "request", None), "path", None
+                )
+                if page_path:
+                    view_key = f"liveview_{page_path}"
+                else:
+                    view_class = self.__class__.__name__
+                    view_key = f"liveview_{view_class}_{ws_path}"
                 if query_hash:
                     view_key = f"{view_key}_{query_hash}"
                 session_key = (
@@ -114,7 +126,11 @@ class RustBridgeMixin:
 
                 backend = get_backend()
                 self._cache_key = f"{session_key}_{view_key}"
-                logger.debug("[LiveView] Cache lookup (WebSocket): cache_key=%s", self._cache_key)
+                # codeql[py/log-injection] — cache_key may contain request.path; sanitize
+                logger.debug(
+                    "[LiveView] Cache lookup (WebSocket): cache_key=%s",
+                    sanitize_for_log(self._cache_key),
+                )
 
                 cached = backend.get(self._cache_key)
                 if cached:
@@ -157,7 +173,11 @@ class RustBridgeMixin:
 
             template_source = self.get_template()
 
-            logger.debug("[LiveView] Creating NEW RustLiveView for cache_key=%s", self._cache_key)
+            # codeql[py/log-injection] — cache_key may contain request.path; sanitize
+            logger.debug(
+                "[LiveView] Creating NEW RustLiveView for cache_key=%s",
+                sanitize_for_log(self._cache_key),
+            )
             logger.debug("[LiveView] Template length: %d chars", len(template_source))
             logger.debug("[LiveView] Template preview: %s...", template_source[:200])
 

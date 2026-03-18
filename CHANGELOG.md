@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **WS VDOM cache key collision across tabs** — All WebSocket LiveViews shared a single RustLiveView cache slot keyed by `/ws/live/`, causing multi-tab sessions to overwrite each other's compiled templates. Cache key now uses `request.path` (the actual page URL) so each view gets its own VDOM baseline. ([#561](https://github.com/djust-org/djust/pull/561))
+- **Canvas `width`/`height` cleared during `html_update` morph** — `morphElement` removed attributes absent from server HTML, resetting canvas 2D contexts and blanking Chart.js charts. Canvas `width` and `height` are now preserved during attribute sync. ([#561](https://github.com/djust-org/djust/pull/561))
+- **`_force_full_html` not checked in `handle_url_change`** — Views that set `_force_full_html = True` in `handle_params` (e.g., when `{% for %}` loop lengths change) still received VDOM patches instead of full HTML. The flag is now checked after `render_with_diff()` in both `handle_event` and `handle_url_change`. ([#559](https://github.com/djust-org/djust/issues/559), [#561](https://github.com/djust-org/djust/pull/561))
+
+### Added
+
+- **`dj-patch` on selects/inputs uses WS `url_change`** — Select and input elements with `dj-patch` now update via pushState + WebSocket `url_change` instead of full page reload. A delegated `document` change listener survives DOM replacement by morphdom. `dj-patch-reload` attribute remains as an opt-in escape hatch for full page navigation. ([#561](https://github.com/djust-org/djust/pull/561))
+
 ## [0.3.7] - 2026-03-16
 
 ### Fixed

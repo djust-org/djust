@@ -163,8 +163,10 @@ function handleServerResponse(data, eventName, triggerElement) {
             }
             const newRoot = doc.querySelector('[dj-root]') || doc.body;
 
-            // Handle dj-update="append|prepend|ignore" for efficient list updates
-            // This preserves existing DOM elements and only adds/updates new content
+            // Handle dj-update="append|prepend|ignore" for efficient list updates.
+            // When no dj-update elements exist, applyDjUpdateElements falls back
+            // to morphChildren internally, which preserves JS state (canvas contexts,
+            // event listeners, hook properties) better than innerHTML replacement.
             applyDjUpdateElements(liveviewRoot, newRoot);
 
             clearOptimisticPending();

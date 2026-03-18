@@ -199,5 +199,52 @@ def test_cache_key_query_param_order_independent():
     ), f"Query param order should not affect cache key: {cache_key1} vs {cache_key2}"
 
 
+@pytest.mark.django_db
+def test_cache_key_uses_request_path_not_ws_path():
+    """
+    Test that WS cache key uses request.path (page URL) not _websocket_path.
+
+    When all views share /ws/live/ as the WebSocket path, using it as
+    the cache key causes cross-tab corruption. The fix uses request.path
+    so /dashboard/ and /reports/ get separate VDOM caches even though
+    they connect via the same /ws/live/ endpoint.
+
+    Regression test for #561.
+    """
+    factory = RequestFactory()
+
+    # Two views on different pages, same WS path
+    view1 = InboxView()
+    request1 = factory.get("/dashboard/")
+    request1 = add_session_to_request(request1)
+    view1._websocket_session_id = "session-abc"
+    view1._websocket_path = "/ws/live/"
+    view1._websocket_query_string = ""
+    view1._rust_view = None
+    view1._cache_key = None
+    view1._initialize_rust_view(request1)
+
+    view2 = InboxView()
+    request2 = factory.get("/reports/")
+    request2 = add_session_to_request(request2)
+    view2._websocket_session_id = "session-abc"
+    view2._websocket_path = "/ws/live/"
+    view2._websocket_query_string = ""
+    view2._rust_view = None
+    view2._cache_key = None
+    view2._initialize_rust_view(request2)
+
+    # Same WS path but different request.path → different cache keys
+    assert view1._cache_key != view2._cache_key, (
+        f"Views on different pages should have different cache keys: "
+        f"{view1._cache_key} vs {view2._cache_key}"
+    )
+    assert "/dashboard/" in view1._cache_key
+    assert "/reports/" in view2._cache_key
+    # WS path should NOT be in the key
+    assert "/ws/live/" not in view1._cache_key
+    assert "/ws/live/" not in view2._cache_key
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
