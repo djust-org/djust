@@ -411,8 +411,10 @@ class LiveViewWebSocket {
         this.ws = null;
         this.sessionId = null;
         this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 5;
+        this.maxReconnectAttempts = 10;
         this.reconnectDelay = 1000;
+        this.minReconnectDelay = 500;
+        this.maxReconnectDelayMs = 30000;
         this.viewMounted = false;
         this.enabled = true;  // Can be disabled to use HTTP fallback
         this._intentionalDisconnect = false;  // Set by disconnect() to suppress error overlay
@@ -471,6 +473,11 @@ class LiveViewWebSocket {
         document.body.classList.remove('dj-connected');
         document.body.classList.remove('dj-disconnected');
 
+        // Clear reconnection UI state
+        document.body.removeAttribute('data-dj-reconnect-attempt');
+        document.body.style.removeProperty('--dj-reconnect-attempt');
+        this._removeReconnectBanner();
+
         // Event sequencing (#560): clear pending event state
         _pendingEventRefs.clear();
         _pendingEventNames.clear();
@@ -504,6 +511,11 @@ class LiveViewWebSocket {
             // Connection state CSS classes
             document.body.classList.add('dj-connected');
             document.body.classList.remove('dj-disconnected');
+
+            // Clear reconnection UI state
+            document.body.removeAttribute('data-dj-reconnect-attempt');
+            document.body.style.removeProperty('--dj-reconnect-attempt');
+            this._removeReconnectBanner();
 
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
@@ -565,9 +577,17 @@ class LiveViewWebSocket {
 
             if (this.reconnectAttempts < this.maxReconnectAttempts) {
                 this.reconnectAttempts++;
-                const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-                if (globalThis.djustDebug) console.log(`[LiveView] Reconnecting in ${delay}ms...`);
-                setTimeout(() => this.connect(url), delay);
+                const baseDelay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+                const cappedBase = Math.min(baseDelay, this.maxReconnectDelayMs);
+                const jitteredDelay = Math.max(this.minReconnectDelay, Math.random() * cappedBase);
+                if (globalThis.djustDebug) console.log('[LiveView] Reconnecting in ' + Math.round(jitteredDelay) + 'ms (attempt ' + this.reconnectAttempts + '/' + this.maxReconnectAttempts + ')...');
+
+                // Update reconnection UI state
+                document.body.setAttribute('data-dj-reconnect-attempt', String(this.reconnectAttempts));
+                document.body.style.setProperty('--dj-reconnect-attempt', String(this.reconnectAttempts));
+                this._showReconnectBanner(this.reconnectAttempts, this.maxReconnectAttempts);
+
+                setTimeout(() => this.connect(url), jitteredDelay);
             } else {
                 console.warn('[LiveView] Max reconnection attempts reached.');
                 this.enabled = false;
@@ -665,9 +685,14 @@ class LiveViewWebSocket {
                     // Set mount ready flag so dj-mounted handlers only fire
                     // for elements added by subsequent VDOM patches, not on initial load
                     window.djust._mountReady = true;
-                    // Trigger dj-auto-recover after reconnect mount
-                    if (window.djust._isReconnect && typeof window.djust._processAutoRecover === 'function') {
-                        window.djust._processAutoRecover();
+                    // Trigger form recovery and dj-auto-recover after reconnect mount
+                    if (window.djust._isReconnect) {
+                        if (typeof window.djust._processFormRecovery === 'function') {
+                            window.djust._processFormRecovery();
+                        }
+                        if (typeof window.djust._processAutoRecover === 'function') {
+                            window.djust._processAutoRecover();
+                        }
                     }
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
@@ -687,9 +712,14 @@ class LiveViewWebSocket {
                     // Set mount ready flag so dj-mounted handlers only fire
                     // for elements added by subsequent VDOM patches, not on initial load
                     window.djust._mountReady = true;
-                    // Trigger dj-auto-recover after reconnect mount
-                    if (window.djust._isReconnect && typeof window.djust._processAutoRecover === 'function') {
-                        window.djust._processAutoRecover();
+                    // Trigger form recovery and dj-auto-recover after reconnect mount
+                    if (window.djust._isReconnect) {
+                        if (typeof window.djust._processFormRecovery === 'function') {
+                            window.djust._processFormRecovery();
+                        }
+                        if (typeof window.djust._processAutoRecover === 'function') {
+                            window.djust._processAutoRecover();
+                        }
                     }
                 }
                 break;
@@ -1121,6 +1151,23 @@ class LiveViewWebSocket {
         reinitAfterDOMUpdate();
     }
 
+    _showReconnectBanner(attempt, maxAttempts) {
+        let banner = document.getElementById('dj-reconnecting-banner');
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'dj-reconnecting-banner';
+            banner.className = 'dj-reconnecting-banner';
+            banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;background:#f59e0b;color:#1c1917;text-align:center;padding:6px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;font-weight:600;';
+            document.body.appendChild(banner);
+        }
+        banner.textContent = 'Reconnecting\u2026 (attempt ' + attempt + ' of ' + maxAttempts + ')';
+    }
+
+    _removeReconnectBanner() {
+        const banner = document.getElementById('dj-reconnecting-banner');
+        if (banner) banner.remove();
+    }
+
     _showConnectionErrorOverlay() {
         // Only show in DEBUG mode
         if (!window.DEBUG_MODE) return;
@@ -1232,6 +1279,7 @@ class LiveViewSSE {
         this.sseBaseUrl = null;
         this.enabled = true;
         this.viewMounted = false;
+        this._hasConnectedBefore = false;
         this.lastEventName = null;
         this.lastTriggerElement = null;
         // Mirror LiveViewWebSocket interface for interoperability
@@ -1263,6 +1311,12 @@ class LiveViewSSE {
             // Connection state CSS classes
             document.body.classList.add('dj-connected');
             document.body.classList.remove('dj-disconnected');
+
+            // Track reconnections for form recovery
+            if (this._hasConnectedBefore) {
+                if (window.djust) window.djust._isReconnect = true;
+            }
+            this._hasConnectedBefore = true;
         };
 
         this.eventSource.onmessage = (event) => {
@@ -1356,6 +1410,15 @@ class LiveViewSSE {
                         // Set mount ready flag so dj-mounted handlers only fire
                         // for elements added by subsequent VDOM patches, not on initial load
                         window.djust._mountReady = true;
+                    }
+                }
+                // Trigger form recovery and dj-auto-recover after reconnect mount
+                if (window.djust._isReconnect) {
+                    if (typeof window.djust._processFormRecovery === 'function') {
+                        window.djust._processFormRecovery();
+                    }
+                    if (typeof window.djust._processAutoRecover === 'function') {
+                        window.djust._processAutoRecover();
                     }
                 }
                 break;
@@ -3521,12 +3584,113 @@ function _processAutoRecover() {
     });
 }
 
+/**
+ * Process automatic form recovery after a WebSocket reconnect.
+ * Scans all form fields with dj-change or dj-input inside [dj-view] and
+ * fires synthetic change events when the DOM value differs from the
+ * server-rendered default, restoring server state transparently.
+ *
+ * Skips fields with dj-no-recover or fields inside dj-auto-recover
+ * containers (custom handlers take precedence).
+ *
+ * Fires events sequentially (batched) via handleEvent() to avoid
+ * race conditions on the server.
+ */
+function _processFormRecovery() {
+    if (!window.djust._isReconnect) return;
+
+    var root = document.querySelector('[dj-view]');
+    if (!root) root = document.querySelector('[dj-root]');
+    if (!root) return;
+
+    // Collect fields to recover
+    var fields = root.querySelectorAll('input[dj-change], textarea[dj-change], select[dj-change], input[dj-input], textarea[dj-input], select[dj-input]');
+    var pendingEvents = [];
+
+    for (var i = 0; i < fields.length; i++) {
+        var field = fields[i];
+
+        // Skip fields with dj-no-recover
+        if (field.hasAttribute('dj-no-recover')) continue;
+
+        // Skip fields inside dj-auto-recover containers (custom handler takes precedence)
+        if (field.closest('[dj-auto-recover]')) continue;
+
+        // Determine handler name — prefer dj-change, fall back to dj-input
+        var handlerAttr = field.hasAttribute('dj-change') ? 'dj-change' : 'dj-input';
+        var handlerString = field.getAttribute(handlerAttr);
+        if (!handlerString) continue;
+
+        // Parse handler string to extract function name
+        var parsed = parseEventHandler(handlerString);
+        var handlerName = parsed.name;
+
+        // Determine current DOM value and server default
+        var tagName = field.tagName.toLowerCase();
+        var fieldType = (field.type || '').toLowerCase();
+        var domValue;
+        var serverDefault;
+
+        if (fieldType === 'checkbox') {
+            domValue = field.checked;
+            serverDefault = field.hasAttribute('checked');
+        } else if (fieldType === 'radio') {
+            domValue = field.checked;
+            serverDefault = field.hasAttribute('checked');
+        } else if (tagName === 'select') {
+            domValue = field.value;
+            // Server default: the option with 'selected' attribute, or the first option
+            var selectedOption = field.querySelector('option[selected]');
+            serverDefault = selectedOption ? selectedOption.value : (field.options.length > 0 ? field.options[0].value : '');
+        } else {
+            // text, textarea, number, email, etc.
+            domValue = field.value;
+            serverDefault = field.getAttribute('value') || (tagName === 'textarea' ? field.defaultValue : '');
+        }
+
+        // Skip if DOM value matches server default (avoid unnecessary server work)
+        if (domValue === serverDefault) continue;
+
+        // Build event params matching dj-change param structure
+        var value = (fieldType === 'checkbox' || fieldType === 'radio') ? domValue : domValue;
+        var fieldName = field.name || field.id || null;
+        var params = { value: value, field: fieldName };
+
+        // Add positional arguments from handler syntax if present
+        if (parsed.args.length > 0) {
+            params._args = parsed.args;
+        }
+
+        // _target: include triggering field's name
+        params._target = fieldName;
+
+        pendingEvents.push({ handlerName: handlerName, params: params });
+    }
+
+    // Fire events sequentially to avoid server race conditions
+    if (pendingEvents.length > 0 && typeof handleEvent === 'function') {
+        if (globalThis.djustDebug) console.log('[LiveView] Form recovery: restoring ' + pendingEvents.length + ' field(s)');
+        var fireSequentially = function(index) {
+            if (index >= pendingEvents.length) return;
+            var evt = pendingEvents[index];
+            var result = handleEvent(evt.handlerName, evt.params);
+            if (result && typeof result.then === 'function') {
+                result.then(function() { fireSequentially(index + 1); });
+            } else {
+                fireSequentially(index + 1);
+            }
+        };
+        fireSequentially(0);
+    }
+}
+
 // Export for testing and for createNodeFromVNode to mark VDOM-created elements as bound
 window.djust.bindLiveViewEvents = bindLiveViewEvents;
 window.djust.reinitAfterDOMUpdate = reinitAfterDOMUpdate;
 window.djust._isHandlerBound = _isHandlerBound;
 window.djust._markHandlerBound = _markHandlerBound;
 window.djust._processAutoRecover = _processAutoRecover;
+window.djust._processFormRecovery = _processFormRecovery;
 window.djust._isReconnect = false;
 
 // Global Loading Manager (Phase 5)

@@ -21,6 +21,7 @@ class LiveViewSSE {
         this.sseBaseUrl = null;
         this.enabled = true;
         this.viewMounted = false;
+        this._hasConnectedBefore = false;
         this.lastEventName = null;
         this.lastTriggerElement = null;
         // Mirror LiveViewWebSocket interface for interoperability
@@ -52,6 +53,12 @@ class LiveViewSSE {
             // Connection state CSS classes
             document.body.classList.add('dj-connected');
             document.body.classList.remove('dj-disconnected');
+
+            // Track reconnections for form recovery
+            if (this._hasConnectedBefore) {
+                if (window.djust) window.djust._isReconnect = true;
+            }
+            this._hasConnectedBefore = true;
         };
 
         this.eventSource.onmessage = (event) => {
@@ -145,6 +152,15 @@ class LiveViewSSE {
                         // Set mount ready flag so dj-mounted handlers only fire
                         // for elements added by subsequent VDOM patches, not on initial load
                         window.djust._mountReady = true;
+                    }
+                }
+                // Trigger form recovery and dj-auto-recover after reconnect mount
+                if (window.djust._isReconnect) {
+                    if (typeof window.djust._processFormRecovery === 'function') {
+                        window.djust._processFormRecovery();
+                    }
+                    if (typeof window.djust._processAutoRecover === 'function') {
+                        window.djust._processAutoRecover();
                     }
                 }
                 break;

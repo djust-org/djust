@@ -8,8 +8,10 @@ class LiveViewWebSocket {
         this.ws = null;
         this.sessionId = null;
         this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 5;
+        this.maxReconnectAttempts = 10;
         this.reconnectDelay = 1000;
+        this.minReconnectDelay = 500;
+        this.maxReconnectDelayMs = 30000;
         this.viewMounted = false;
         this.enabled = true;  // Can be disabled to use HTTP fallback
         this._intentionalDisconnect = false;  // Set by disconnect() to suppress error overlay
@@ -68,6 +70,11 @@ class LiveViewWebSocket {
         document.body.classList.remove('dj-connected');
         document.body.classList.remove('dj-disconnected');
 
+        // Clear reconnection UI state
+        document.body.removeAttribute('data-dj-reconnect-attempt');
+        document.body.style.removeProperty('--dj-reconnect-attempt');
+        this._removeReconnectBanner();
+
         // Event sequencing (#560): clear pending event state
         _pendingEventRefs.clear();
         _pendingEventNames.clear();
@@ -101,6 +108,11 @@ class LiveViewWebSocket {
             // Connection state CSS classes
             document.body.classList.add('dj-connected');
             document.body.classList.remove('dj-disconnected');
+
+            // Clear reconnection UI state
+            document.body.removeAttribute('data-dj-reconnect-attempt');
+            document.body.style.removeProperty('--dj-reconnect-attempt');
+            this._removeReconnectBanner();
 
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
@@ -162,9 +174,17 @@ class LiveViewWebSocket {
 
             if (this.reconnectAttempts < this.maxReconnectAttempts) {
                 this.reconnectAttempts++;
-                const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-                if (globalThis.djustDebug) console.log(`[LiveView] Reconnecting in ${delay}ms...`);
-                setTimeout(() => this.connect(url), delay);
+                const baseDelay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+                const cappedBase = Math.min(baseDelay, this.maxReconnectDelayMs);
+                const jitteredDelay = Math.max(this.minReconnectDelay, Math.random() * cappedBase);
+                if (globalThis.djustDebug) console.log('[LiveView] Reconnecting in ' + Math.round(jitteredDelay) + 'ms (attempt ' + this.reconnectAttempts + '/' + this.maxReconnectAttempts + ')...');
+
+                // Update reconnection UI state
+                document.body.setAttribute('data-dj-reconnect-attempt', String(this.reconnectAttempts));
+                document.body.style.setProperty('--dj-reconnect-attempt', String(this.reconnectAttempts));
+                this._showReconnectBanner(this.reconnectAttempts, this.maxReconnectAttempts);
+
+                setTimeout(() => this.connect(url), jitteredDelay);
             } else {
                 console.warn('[LiveView] Max reconnection attempts reached.');
                 this.enabled = false;
@@ -262,9 +282,14 @@ class LiveViewWebSocket {
                     // Set mount ready flag so dj-mounted handlers only fire
                     // for elements added by subsequent VDOM patches, not on initial load
                     window.djust._mountReady = true;
-                    // Trigger dj-auto-recover after reconnect mount
-                    if (window.djust._isReconnect && typeof window.djust._processAutoRecover === 'function') {
-                        window.djust._processAutoRecover();
+                    // Trigger form recovery and dj-auto-recover after reconnect mount
+                    if (window.djust._isReconnect) {
+                        if (typeof window.djust._processFormRecovery === 'function') {
+                            window.djust._processFormRecovery();
+                        }
+                        if (typeof window.djust._processAutoRecover === 'function') {
+                            window.djust._processAutoRecover();
+                        }
                     }
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
@@ -284,9 +309,14 @@ class LiveViewWebSocket {
                     // Set mount ready flag so dj-mounted handlers only fire
                     // for elements added by subsequent VDOM patches, not on initial load
                     window.djust._mountReady = true;
-                    // Trigger dj-auto-recover after reconnect mount
-                    if (window.djust._isReconnect && typeof window.djust._processAutoRecover === 'function') {
-                        window.djust._processAutoRecover();
+                    // Trigger form recovery and dj-auto-recover after reconnect mount
+                    if (window.djust._isReconnect) {
+                        if (typeof window.djust._processFormRecovery === 'function') {
+                            window.djust._processFormRecovery();
+                        }
+                        if (typeof window.djust._processAutoRecover === 'function') {
+                            window.djust._processAutoRecover();
+                        }
                     }
                 }
                 break;
@@ -716,6 +746,23 @@ class LiveViewWebSocket {
 
         // Re-bind events within the updated container
         reinitAfterDOMUpdate();
+    }
+
+    _showReconnectBanner(attempt, maxAttempts) {
+        let banner = document.getElementById('dj-reconnecting-banner');
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'dj-reconnecting-banner';
+            banner.className = 'dj-reconnecting-banner';
+            banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;background:#f59e0b;color:#1c1917;text-align:center;padding:6px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;font-weight:600;';
+            document.body.appendChild(banner);
+        }
+        banner.textContent = 'Reconnecting\u2026 (attempt ' + attempt + ' of ' + maxAttempts + ')';
+    }
+
+    _removeReconnectBanner() {
+        const banner = document.getElementById('dj-reconnecting-banner');
+        if (banner) banner.remove();
     }
 
     _showConnectionErrorOverlay() {
