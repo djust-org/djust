@@ -994,8 +994,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             module_path,
                             ", ".join(sorted(available)),
                         )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Could not enumerate LiveView classes: %s", exc)
             await self.send_error(_safe_error(error_msg, "View not found"), hint=hint)
             return
 

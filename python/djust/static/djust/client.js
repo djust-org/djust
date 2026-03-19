@@ -5164,7 +5164,7 @@ function applySinglePatch(patch) {
         if (window.DEBUG_MODE) {
             console.groupCollapsed(`[LiveView] Patch detail (${patchType})`);
             if (globalThis.djustDebug) console.log('[LiveView] Full patch object:', JSON.stringify(patch));
-            console.log(`[LiveView] Suggested causes:\n  - The DOM may have been modified by third-party JS\n  - A template {% if %} block may have changed the node count\n  - A conditional rendering path produced a different DOM structure`);
+            if (globalThis.djustDebug) console.log(`[LiveView] Suggested causes:\n  - The DOM may have been modified by third-party JS\n  - A template {% if %} block may have changed the node count\n  - A conditional rendering path produced a different DOM structure`);
             console.groupEnd();
         }
         return false;
