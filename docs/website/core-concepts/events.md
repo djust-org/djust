@@ -454,6 +454,7 @@ Key behavior:
 
 - [Templates](./templates.md) — full template directives reference
 - [Template Cheat Sheet](../guides/template-cheatsheet.md) — quick reference for all `dj-*` attributes
+- [Document Metadata](../guides/document-metadata.md) — dynamic page titles and meta tags
 - [Loading States](../guides/loading-states.md) — loading directives, `dj-disable-with`, background work
 - [State Management](../state/index.md) — debounce, throttle, loading states, optimistic updates
 - [Hooks](../guides/hooks.md) — client-side JavaScript lifecycle hooks

@@ -282,6 +282,42 @@ See [Flash Messages Guide](../guides/flash-messages.md) for detailed examples an
 
 ---
 
+### Document Metadata
+
+#### `page_title` (property)
+
+Get or set the browser tab title. Setting this property queues a side-channel WebSocket message that updates `document.title` on the client without a VDOM diff.
+
+```python
+def mount(self, request, **kwargs):
+    self.page_title = "Dashboard"
+
+@event_handler()
+def select_tab(self, tab: str = "", **kwargs):
+    self.page_title = f"Dashboard - {tab.title()}"
+```
+
+---
+
+#### `page_meta` (property)
+
+Get or set document `<meta>` tags. Setting this property to a dict queues side-channel messages that update or create `<meta>` tags in the document `<head>`. Tags starting with `og:` or `twitter:` use the `property` attribute; all others use `name`.
+
+```python
+@event_handler()
+def select_article(self, article_id: int = 0, **kwargs):
+    article = Article.objects.get(pk=article_id)
+    self.page_meta = {
+        "description": article.summary,
+        "og:title": article.title,
+        "og:image": article.image_url,
+    }
+```
+
+See [Document Metadata Guide](../guides/document-metadata.md) for detailed examples.
+
+---
+
 ### Server-Push
 
 #### `send_update()`
