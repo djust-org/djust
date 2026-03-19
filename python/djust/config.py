@@ -55,6 +55,7 @@ class LiveViewConfig:
         "debug_vdom": False,  # Enable detailed VDOM patching debug logs
         "debug_components": False,  # Enable component lifecycle debug logs
         "debug_panel_max_history": 50,  # Maximum number of events/patches to keep in debug panel history
+        "debug_auto_open_on_error": False,  # Auto-open debug panel on first error/warning (DEBUG mode only)
         # Hot Reload (Development)
         "hot_reload": True,  # Enable hot reload in development (requires DEBUG=True)
         "hot_reload_watch_dirs": None,  # Directories to watch (None = auto-detect BASE_DIR)

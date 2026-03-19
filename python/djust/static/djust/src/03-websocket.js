@@ -221,7 +221,15 @@ class LiveViewWebSocket {
                     data: data
                 });
 
-                this.handleMessage(data);
+                // Latency simulation on receive (DEBUG_MODE only)
+                const simLatency = window.DEBUG_MODE && window.djust && window.djust._simulatedLatency;
+                if (simLatency > 0) {
+                    const jitter = (window.djust._simulatedJitter || 0);
+                    const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
+                    setTimeout(() => this.handleMessage(data), actual);
+                } else {
+                    this.handleMessage(data);
+                }
             } catch (error) {
                 console.error('[LiveView] Failed to parse message:', error);
             }
@@ -645,8 +653,16 @@ class LiveViewWebSocket {
             data: data
         });
 
-        // Send the message
-        this.ws.send(message);
+        // Latency simulation (DEBUG_MODE only)
+        const simLatency = window.DEBUG_MODE && window.djust && window.djust._simulatedLatency;
+        if (simLatency > 0) {
+            const jitter = (window.djust._simulatedJitter || 0);
+            const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
+            setTimeout(() => this.ws.send(message), actual);
+        } else {
+            // Send the message
+            this.ws.send(message);
+        }
     }
 
     autoMount() {

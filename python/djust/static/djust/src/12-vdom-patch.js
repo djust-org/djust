@@ -132,9 +132,9 @@ function getNodeByPath(path, djustId = null) {
             return byId;
         }
         // ID not found - fall through to path-based
-        if (globalThis.djustDebug) {
+        if (globalThis.djustDebug || window.DEBUG_MODE) {
             // Log without user data to avoid log injection
-            console.log('[LiveView] ID lookup failed, trying path fallback');
+            if (globalThis.djustDebug) console.log('[LiveView] ID lookup failed, trying path fallback');
         }
     }
 
@@ -162,11 +162,14 @@ function getNodeByPath(path, djustId = null) {
         });
 
         if (index >= children.length) {
-            if (globalThis.djustDebug) {
+            if (globalThis.djustDebug || window.DEBUG_MODE) {
                 // Explicit number coercion for safe logging
                 const safeIndex = Number(index) || 0;
                 const safeLen = Number(children.length) || 0;
-                console.warn(`[LiveView] Path traversal failed at index ${safeIndex}, only ${safeLen} children`);
+                const parentTag = node.tagName || '#text';
+                const parentId = node.getAttribute ? (node.getAttribute('dj-id') || node.id || '') : '';
+                const parentDesc = parentId ? `${parentTag}#${parentId}` : parentTag;
+                console.warn(`[LiveView] Path traversal failed at index ${safeIndex}, only ${safeLen} children (parent: ${parentDesc}). The DOM may have been modified by third-party JS, or a {% if %} block changed the node count.`);
             }
             return null;
         }
@@ -1137,7 +1140,14 @@ function applySinglePatch(patch) {
     if (!node) {
         // Sanitize for logging (patches come from trusted server, but log defensively)
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
-        console.warn(`[LiveView] Failed to find node: path=${safePath}, id=${sanitizeIdForLog(patch.d)}`);
+        const patchType = patch.type || 'Unknown';
+        console.warn(`[LiveView] Patch failed (${patchType}): node not found at path=${safePath}, dj-id=${sanitizeIdForLog(patch.d)}`);
+        if (window.DEBUG_MODE) {
+            console.groupCollapsed(`[LiveView] Patch detail (${patchType})`);
+            if (globalThis.djustDebug) console.log('[LiveView] Full patch object:', JSON.stringify(patch));
+            if (globalThis.djustDebug) console.log(`[LiveView] Suggested causes:\n  - The DOM may have been modified by third-party JS\n  - A template {% if %} block may have changed the node count\n  - A conditional rendering path produced a different DOM structure`);
+            console.groupEnd();
+        }
         return false;
     }
 
@@ -1330,13 +1340,15 @@ function applyPatches(patches) {
     // For small patch sets, apply directly without batching overhead
     if (patches.length <= 10) {
         let failedCount = 0;
-        for (const patch of patches) {
-            if (!applySinglePatch(patch)) {
+        const failedIndices = [];
+        for (let _pi = 0; _pi < patches.length; _pi++) {
+            if (!applySinglePatch(patches[_pi])) {
                 failedCount++;
+                failedIndices.push(_pi);
             }
         }
         if (failedCount > 0) {
-            console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
+            console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (indices: ${failedIndices.join(', ')})`);
             restoreFocusState(focusState);
             return false;
         }
@@ -1418,7 +1430,7 @@ function applyPatches(patches) {
     }
 
     if (failedCount > 0) {
-        console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
+        console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (${successCount} succeeded)`);
         restoreFocusState(focusState);
         return false;
     }
