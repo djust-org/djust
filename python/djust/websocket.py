@@ -429,7 +429,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
             if patches is not None:
                 patch_list = json.loads(patches) if patches else []
-                await self._send_update(patches=patch_list, version=version, event_name=event_name)
+                await self._send_update(
+                    patches=patch_list,
+                    version=version,
+                    event_name=event_name,
+                    source="async",
+                )
             else:
                 # Full HTML fallback
                 html_stripped, html_content = await sync_to_async(
@@ -440,7 +445,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         ),
                     )
                 )(html)
-                await self._send_update(html=html_content, version=version, event_name=event_name)
+                await self._send_update(
+                    html=html_content,
+                    version=version,
+                    event_name=event_name,
+                    source="async",
+                )
 
             await self._flush_push_events()
             await self._flush_flash()
@@ -471,7 +481,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     if patches is not None:
                         patch_list = json.loads(patches) if patches else []
                         await self._send_update(
-                            patches=patch_list, version=version, event_name=event_name
+                            patches=patch_list,
+                            version=version,
+                            event_name=event_name,
+                            source="async",
                         )
                     else:
                         html_stripped, html_content = await sync_to_async(
@@ -483,7 +496,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             )
                         )(html)
                         await self._send_update(
-                            html=html_content, version=version, event_name=event_name
+                            html=html_content,
+                            version=version,
+                            event_name=event_name,
+                            source="async",
                         )
 
                 except Exception:
@@ -2357,6 +2373,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         Called when external code (Celery tasks, management commands, etc.)
         sends an update via push_to_view().
 
+        Event sequencing: acquires _render_lock to serialize with tick and
+        event handlers. Yields to user events — if a user event is being
+        processed, the broadcast is skipped to avoid version interleaving.
+        Tags updates with source="broadcast" so the client can buffer them.
+
         Args:
             event: Channel layer event with optional 'state', 'handler', 'payload'
         """
@@ -2364,56 +2385,85 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
 
         try:
-            # Apply state updates before handler call so the handler can read
-            # the new values. _sync_state_to_rust runs after both to push the
-            # final Python state to Rust for rendering.
-            state = event.get("state")
-            if state and isinstance(state, dict):
-                for key, value in state.items():
-                    setattr(self.view_instance, key, value)
-
-            # Call handler if specified — restricted to handle_* prefixed or
-            # @event_handler-decorated methods to prevent arbitrary method calls
-            # if an attacker gains access to the channel layer backend.
-            handler_name = event.get("handler")
-            if handler_name:
-                handler_fn = getattr(self.view_instance, handler_name, None)
-                if handler_fn and callable(handler_fn):
-                    from .decorators import is_event_handler
-
-                    if not (handler_name.startswith("handle_") or is_event_handler(handler_fn)):
-                        logger.warning(
-                            "server_push: blocked handler %r — must be handle_* or @event_handler",
-                            handler_name,
-                        )
-                    else:
-                        payload = event.get("payload") or {}
-                        await sync_to_async(handler_fn)(**payload)
-
-            # Views can set _skip_render = True in a handler to
-            # suppress the re-render cycle (e.g. sender ignoring its own broadcast).
-            if getattr(self.view_instance, "_skip_render", False):
-                self.view_instance._skip_render = False
-                await self._flush_push_events()
-                await self._flush_flash()
-                await self._send_noop()
+            # Yield to user events: if a user event is being processed,
+            # skip this broadcast to avoid version interleaving (#560).
+            if self._processing_user_event:
+                logger.debug(
+                    "[djust] server_push on %s skipped — user event in progress",
+                    self.view_instance.__class__.__name__,
+                )
                 return
 
-            # Sync state and re-render
-            # TODO: add patch compression (PATCH_COUNT_THRESHOLD) matching handle_event
-            if hasattr(self.view_instance, "_sync_state_to_rust"):
-                await sync_to_async(self.view_instance._sync_state_to_rust)()
+            # Acquire render lock with timeout to serialize with tick/event
+            # renders. Use same 0.1s timeout as tick loop.
+            try:
+                await asyncio.wait_for(self._render_lock.acquire(), timeout=0.1)
+            except asyncio.TimeoutError:
+                logger.debug(
+                    "[djust] server_push on %s skipped — render lock held",
+                    self.view_instance.__class__.__name__,
+                )
+                return
 
-            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+            try:
+                # Apply state updates before handler call so the handler can read
+                # the new values. _sync_state_to_rust runs after both to push the
+                # final Python state to Rust for rendering.
+                state = event.get("state")
+                if state and isinstance(state, dict):
+                    for key, value in state.items():
+                        setattr(self.view_instance, key, value)
 
-            if patches is not None:
-                if isinstance(patches, str):
-                    patches = json.loads(patches)
-                await self._send_update(patches=patches, version=version, broadcast=True)
-            else:
-                # Even if no patches, flush any push_events and flash messages
-                await self._flush_push_events()
-                await self._flush_flash()
+                # Call handler if specified — restricted to handle_* prefixed or
+                # @event_handler-decorated methods to prevent arbitrary method calls
+                # if an attacker gains access to the channel layer backend.
+                handler_name = event.get("handler")
+                if handler_name:
+                    handler_fn = getattr(self.view_instance, handler_name, None)
+                    if handler_fn and callable(handler_fn):
+                        from .decorators import is_event_handler
+
+                        if not (handler_name.startswith("handle_") or is_event_handler(handler_fn)):
+                            logger.warning(
+                                "server_push: blocked handler %r"
+                                " — must be handle_* or @event_handler",
+                                handler_name,
+                            )
+                        else:
+                            payload = event.get("payload") or {}
+                            await sync_to_async(handler_fn)(**payload)
+
+                # Views can set _skip_render = True in a handler to
+                # suppress the re-render cycle (e.g. sender ignoring its own broadcast).
+                if getattr(self.view_instance, "_skip_render", False):
+                    self.view_instance._skip_render = False
+                    await self._flush_push_events()
+                    await self._flush_flash()
+                    await self._send_noop()
+                    return
+
+                # Sync state and re-render
+                # TODO: add patch compression (PATCH_COUNT_THRESHOLD) matching handle_event
+                if hasattr(self.view_instance, "_sync_state_to_rust"):
+                    await sync_to_async(self.view_instance._sync_state_to_rust)()
+
+                html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+
+                if patches is not None:
+                    if isinstance(patches, str):
+                        patches = json.loads(patches)
+                    await self._send_update(
+                        patches=patches,
+                        version=version,
+                        broadcast=True,
+                        source="broadcast",
+                    )
+                else:
+                    # Even if no patches, flush any push_events and flash messages
+                    await self._flush_push_events()
+                    await self._flush_flash()
+            finally:
+                self._render_lock.release()
 
         except Exception as e:
             logger.exception("Error in server_push: %s", e)

@@ -5,12 +5,13 @@
 let clientVdomVersion = null;
 
 // Event sequencing (#560): monotonic ref counter for matching event
-// responses to requests, and buffering tick pushes during pending events.
+// responses to requests, and buffering server-initiated pushes during
+// pending events. Uses a Set to track multiple concurrent pending refs.
 let _eventRefCounter = 0;
-let _pendingEventRef = null;    // ref of the event awaiting server response
-let _pendingEventName = null;   // event name for the pending event
-let _pendingTriggerEl = null;   // trigger element for loading state
-let _tickBuffer = [];           // buffered tick patches received during pending event
+let _pendingEventRefs = new Set();     // refs of events awaiting server response
+let _pendingEventNames = new Map();    // ref -> event name for pending events
+let _pendingTriggerEls = new Map();    // ref -> trigger element for loading state
+let _tickBuffer = [];                  // buffered server-initiated patches during pending events
 
 // State management for decorators
 const debounceTimers = new Map(); // Map<handlerName, {timerId, firstCallTime}>
@@ -189,8 +190,13 @@ window.djust.invalidateCache = invalidateCache;
 // Event sequencing (#560): expose accessors for testing
 window.djust._getEventSeqState = function() {
     return {
-        pendingEventRef: _pendingEventRef,
-        pendingEventName: _pendingEventName,
+        // Legacy scalar accessors (null when empty, first ref when non-empty)
+        pendingEventRef: _pendingEventRefs.size > 0 ? Array.from(_pendingEventRefs)[0] : null,
+        pendingEventName: _pendingEventRefs.size > 0
+            ? _pendingEventNames.get(Array.from(_pendingEventRefs)[0]) || null
+            : null,
+        // Set-based accessors
+        pendingEventRefs: Array.from(_pendingEventRefs),
         tickBufferLength: _tickBuffer.length,
         eventRefCounter: _eventRefCounter,
     };
