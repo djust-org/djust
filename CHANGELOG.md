@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc1] - 2026-03-19
+
 ### Added
 
 - **`manage.py djust_doctor` diagnostic command** -- checks Rust extension, Python/Django versions, Channels, Redis, templates, static files, routing, and ASGI server in one command. Supports `--json`, `--quiet`, `--check NAME`, and `--verbose` flags.
