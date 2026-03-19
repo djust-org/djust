@@ -47,6 +47,64 @@ function addEventContext(params, element) {
     if (embeddedViewId) params.view_id = embeddedViewId;
 }
 
+// WeakSet to track elements whose dj-mounted handler has already fired.
+// Using WeakSet means entries are GC'd when the DOM node is replaced,
+// allowing the handler to fire again for genuinely new elements.
+const _mountedElements = new WeakSet();
+
+/**
+ * Check if element is a form element that supports the disabled property.
+ * @param {HTMLElement} element
+ * @returns {boolean}
+ */
+function _isFormElement(element) {
+    const tag = element.tagName;
+    return tag === 'BUTTON' || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+}
+
+/**
+ * Lock an element: set data-djust-locked marker and disable/style it.
+ * For form elements (button, input, select, textarea): sets disabled = true.
+ * For non-form elements: adds CSS class 'djust-locked'.
+ * @param {HTMLElement} element
+ */
+function _lockElement(element) {
+    element.setAttribute('data-djust-locked', '');
+    if (_isFormElement(element)) {
+        element.disabled = true;
+    } else {
+        element.classList.add('djust-locked');
+    }
+}
+
+/**
+ * Check if element has dj-lock and is already locked. If locked, return true
+ * to signal the caller to skip the event. If not locked but has dj-lock, lock it.
+ * @param {HTMLElement} element
+ * @returns {boolean} true if event should be skipped (already locked)
+ */
+function _checkAndLock(element) {
+    if (!element.hasAttribute('dj-lock')) return false;
+    if (element.hasAttribute('data-djust-locked')) return true; // Already locked, skip
+    _lockElement(element);
+    return false;
+}
+
+/**
+ * Apply dj-disable-with: save original text and replace with loading text.
+ * Only saves original text if not already saved (prevents overwrite on double-submit).
+ * @param {HTMLElement} element - Element with dj-disable-with attribute
+ */
+function _applyDisableWith(element) {
+    const disableText = element.getAttribute('dj-disable-with');
+    if (!disableText) return;
+    if (!element.hasAttribute('data-djust-original-text')) {
+        element.setAttribute('data-djust-original-text', element.textContent);
+    }
+    element.textContent = disableText;
+    element.disabled = true;
+}
+
 function bindLiveViewEvents() {
     // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
     if (window.djust.uploads) {
@@ -69,6 +127,9 @@ function bindLiveViewEvents() {
             const clickHandlerFn = async (e) => {
                 e.preventDefault();
 
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
                 // Read attribute at fire time so morphElement attribute updates take effect
                 const parsed = parseEventHandler(element.getAttribute('dj-click') || '');
 
@@ -76,6 +137,9 @@ function bindLiveViewEvents() {
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
                 }
+
+                // dj-disable-with: disable and show loading text
+                _applyDisableWith(element);
 
                 // Apply optimistic update if specified
                 let optimisticUpdateId = null;
@@ -138,9 +202,20 @@ function bindLiveViewEvents() {
             element.addEventListener('submit', async (e) => {
                 e.preventDefault();
 
+                // dj-lock: skip if already locked
+                if (_checkAndLock(e.target)) return;
+
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(e.target)) {
                     return; // User cancelled
+                }
+
+                // dj-disable-with: disable submit buttons within the form
+                const submitBtns = e.target.querySelectorAll('button[type="submit"][dj-disable-with]');
+                submitBtns.forEach(btn => _applyDisableWith(btn));
+                // Also check the submitter if it has dj-disable-with
+                if (e.submitter && e.submitter.hasAttribute('dj-disable-with')) {
+                    _applyDisableWith(e.submitter);
                 }
 
                 const formData = new FormData(e.target);
@@ -150,6 +225,9 @@ function bindLiveViewEvents() {
                 Object.assign(params, collectDjValues(e.target));
 
                 addEventContext(params, e.target);
+
+                // _target: include submitter name if available
+                params._target = (e.submitter && (e.submitter.name || e.submitter.id)) || null;
 
                 // Pass target element for optimistic updates (Phase 3)
                 params._targetElement = e.target;
@@ -198,6 +276,9 @@ function bindLiveViewEvents() {
             const parsedChange = parseEventHandler(changeHandler);
 
             const changeHandlerFn = async (e) => {
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
@@ -211,6 +292,9 @@ function bindLiveViewEvents() {
                 if (parsedChange.args.length > 0) {
                     params._args = parsedChange.args;
                 }
+
+                // _target: include triggering field's name (or id, or null)
+                params._target = e.target.name || e.target.id || null;
 
                 // Add target element for loading state (consistent with other handlers)
                 params._targetElement = e.target;
@@ -256,6 +340,9 @@ function bindLiveViewEvents() {
             }
 
             const handler = async (e) => {
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
@@ -265,6 +352,10 @@ function bindLiveViewEvents() {
                 if (parsedInput.args.length > 0) {
                     params._args = parsedInput.args;
                 }
+
+                // _target: include triggering field's name (or id, or null)
+                params._target = e.target.name || e.target.id || null;
+
                 await handleEvent(parsedInput.name, params);
             };
 
@@ -285,6 +376,9 @@ function bindLiveViewEvents() {
             _markHandlerBound(element, 'blur');
             const parsedBlur = parseEventHandler(blurHandler);
             element.addEventListener('blur', async (e) => {
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
@@ -304,6 +398,9 @@ function bindLiveViewEvents() {
             _markHandlerBound(element, 'focus');
             const parsedFocus = parseEventHandler(focusHandler);
             element.addEventListener('focus', async (e) => {
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
@@ -335,6 +432,9 @@ function bindLiveViewEvents() {
                         if (requiredKey === 'space' && e.key !== ' ') return;
                         // Add more key mappings as needed
                     }
+
+                    // dj-lock: skip if already locked
+                    if (_checkAndLock(element)) return;
 
                     // dj-confirm: show confirmation dialog before sending event
                     if (!checkDjConfirm(element)) {
@@ -402,6 +502,25 @@ function bindLiveViewEvents() {
     // Re-scan dj-loading attributes after DOM updates so dynamically
     // added elements (e.g. inside modals) get registered.
     globalLoadingManager.scanAndRegister();
+
+    // dj-mounted: fire event for elements that have entered the DOM after
+    // initial mount. Uses WeakSet to track already-fired elements so each
+    // DOM node only triggers once (replaced nodes are new objects and will fire again).
+    if (window.djust._mountReady) {
+        document.querySelectorAll('[dj-mounted]').forEach(el => {
+            if (_mountedElements.has(el)) return;
+            _mountedElements.add(el);
+
+            const handlerName = el.getAttribute('dj-mounted');
+            if (!handlerName) return;
+
+            // Collect dj-value-* and data-* params from the mounted element
+            const params = extractTypedParams(el);
+            addEventContext(params, el);
+
+            handleEvent(handlerName, params);
+        });
+    }
 }
 
 // Helper: Debounce function
