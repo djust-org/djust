@@ -178,7 +178,7 @@ from djust import DJ
 
 **Window/document event scoping** ✅ — `dj-window-keydown`, `dj-window-scroll`, `dj-document-click` attributes for binding events to `window` or `document` rather than the element itself. Phoenix has `phx-window-*`. Essential for keyboard shortcuts, infinite scroll triggers, and click-outside-to-close patterns.
 
-**`dj-debounce` / `dj-throttle` as HTML attributes** — Currently debounce/throttle only works as Python decorators on event handlers, applying the same delay to every caller. Phoenix allows per-element control: `<input dj-change="search" dj-debounce="300">` vs `<select dj-change="filter" dj-debounce="0">`. This is strictly more flexible — the Python decorator becomes the default, the attribute becomes the override. Implementation: client-side timer per element+event pair, ~50 lines of JS.
+**`dj-debounce` / `dj-throttle` as HTML attributes** ✅ — Currently debounce/throttle only works as Python decorators on event handlers, applying the same delay to every caller. Phoenix allows per-element control: `<input dj-change="search" dj-debounce="300">` vs `<select dj-change="filter" dj-debounce="0">`. This is strictly more flexible — the Python decorator becomes the default, the attribute becomes the override. Implementation: client-side timer per element+event pair, ~50 lines of JS.
 
 **`live_title` & document metadata** — Update `<title>` and `<meta>` tags from the server without a page reload. Phoenix's `live_title_tag` is trivial but surprisingly impactful — it enables unread counts, status indicators, and notification badges in browser tabs. React 19 went further with native document metadata support (title, link, meta hoisted to `<head>` automatically). API: `self.page_title = "Chat (3 unread)"` and `self.page_meta = {"description": "...", "og:image": "..."}` in any event handler, sent as a lightweight WS message that updates `document.title` and `<meta>` tags without a VDOM diff. The meta tag support is especially valuable for SPAs that need dynamic Open Graph tags for link previews. ~50 lines total.
 
@@ -188,7 +188,7 @@ from djust import DJ
 
 **`dj-lock` — Prevent concurrent event execution** ✅ — Disable an element until its event handler completes. `<button dj-click="save" dj-lock>Save</button>` prevents double-clicks and concurrent submissions. Different from `dj-disable-with` (which is cosmetic) — `dj-lock` actually blocks the event from firing again until the server acknowledges completion. Phoenix handles this implicitly via its event acknowledgment protocol. Uses `data-djust-locked` marker attribute and `disabled` for form elements or `djust-locked` CSS class for non-form elements. All locked elements unlocked on server response.
 
-**`dj-auto-recover` — Custom reconnection recovery** — Fires a custom server event on WebSocket reconnect instead of the default form-value replay. `<div dj-auto-recover="restore_state">`. Use case: views with complex state (drag positions, canvas state, multi-step wizard progress) that can't be recovered from form values alone. The handler receives `params` with whatever the client can serialize from the DOM. Phoenix's `phx-auto-recover` solves the same problem — not every reconnection fits the "replay form values" pattern.
+**`dj-auto-recover` — Custom reconnection recovery** ✅ — Fires a custom server event on WebSocket reconnect instead of the default form-value replay. `<div dj-auto-recover="restore_state">`. Use case: views with complex state (drag positions, canvas state, multi-step wizard progress) that can't be recovered from form values alone. The handler receives `params` with whatever the client can serialize from the DOM. Phoenix's `phx-auto-recover` solves the same problem — not every reconnection fits the "replay form values" pattern.
 
 **`dj-value-*` — Static event parameters** — Pass static values alongside events without `data-*` attributes or hidden inputs. `<button dj-click="delete" dj-value-id="{{ item.id }}" dj-value-type="soft">Delete</button>` sends `{"id": "42", "type": "soft"}` as params. Phoenix's `phx-value-*` is used everywhere — it's the standard way to pass context with events. Currently djust requires either `data-*` attributes (which the client must extract) or hidden form fields. This is ~20 lines of JS (collect `dj-value-*` attributes on the trigger element and merge into event params) but eliminates boilerplate in every template. *This is arguably the single most underrated Phoenix feature — once developers have it, they use it on every event.*
 
@@ -196,7 +196,7 @@ from djust import DJ
 
 **`dj-shortcut` — Keyboard shortcut binding** ✅ — Declarative keyboard shortcuts on any element. `<div dj-shortcut="ctrl+k:open_search, escape:close_modal">`. Use cases: command palettes (`Ctrl+K`), close modals (`Escape`), save (`Ctrl+S`), undo (`Ctrl+Z`), navigation (`j`/`k` for list items). Currently requires `dj-window-keydown` + manual key checking in Python event handlers — a round-trip for every keypress. `dj-shortcut` handles matching client-side and only fires the event on match. Supports modifier keys (`ctrl`, `shift`, `alt`, `meta`), key combos, and `prevent` modifier to suppress browser defaults (`dj-shortcut="ctrl+s:save" dj-shortcut-prevent`). ~60 lines of JS. *Every productivity app needs keyboard shortcuts. React developers use `react-hotkeys-hook`; this is the built-in equivalent.*
 
-**`dj-copy` — Copy to clipboard** — Copy text content to clipboard on click without a server round-trip. `<button dj-copy="#code-block">Copy</button>` copies the text content of `#code-block`. `<button dj-copy="literal text here">Copy</button>` copies the literal string. Optionally fires a server event for analytics: `dj-copy="#code-block" dj-copy-event="copied"`. Shows visual feedback (configurable CSS class, default: `dj-copied` for 2s). Use cases: code snippets, share links, API keys, referral codes. Currently requires a `dj-hook` for every copy button. ~30 lines of JS. *This is the kind of small built-in that makes developers think "this framework gets it" — every documentation site, every admin panel needs copy buttons.*
+**`dj-copy` — Copy to clipboard** ✅ — Copy text content to clipboard on click without a server round-trip. `<button dj-copy="#code-block">Copy</button>` copies the text content of `#code-block`. `<button dj-copy="literal text here">Copy</button>` copies the literal string. Optionally fires a server event for analytics: `dj-copy="#code-block" dj-copy-event="copied"`. Shows visual feedback (configurable CSS class, default: `dj-copied` for 2s). Use cases: code snippets, share links, API keys, referral codes. Currently requires a `dj-hook` for every copy button. ~30 lines of JS. *This is the kind of small built-in that makes developers think "this framework gets it" — every documentation site, every admin panel needs copy buttons.*
 
 **`dj-cloak` — Prevent flash of unstyled content** ✅ — Elements with `dj-cloak` are hidden (`display: none !important`) until the WebSocket/SSE mount response is received. CSS is injected automatically by client.js. Vue has `v-cloak`, Alpine has `x-cloak` — this is expected in any framework that enhances server-rendered HTML.
 
@@ -261,7 +261,7 @@ class DashboardView(LiveView):
 
 **`dj-paste` — Paste event handling** — Fire a server event when the user pastes content (text, images, files) into an element. `<textarea dj-paste="handle_paste">`. The client extracts paste payload: plain text via `clipboardData.getData('text/plain')`, images via `clipboardData.files` (auto-routed to `UploadMixin` if an upload slot is configured), and rich HTML via `getData('text/html')`. Sends structured params: `{"text": "...", "html": "...", "has_files": true}`. Use cases: paste images into chat (Slack/Discord-style), paste formatted text into rich editors, paste CSV data into tables, paste code snippets with language detection. Currently requires a `dj-hook` for every paste target. ~40 lines JS. *Every chat app and content editor needs paste handling. Combined with `UploadMixin` for image paste, this is the complete clipboard-to-server pipeline.*
 
-**Remaining v0.4.0 quick wins** — Any items from the v0.4.0 quick wins list that didn't ship in the initial release (`dj-copy`, `dj-auto-recover`, `live_title`) ship here. (`dj-lock`, `dj-mounted`, `dj-shortcut`, `dj-click-away`, window/document event scoping, connection CSS, `dj-cloak`, `dj-page-loading`, and `dj-scroll-into-view` shipped in v0.4.0.)
+**Remaining v0.4.0 quick wins** — Any items from the v0.4.0 quick wins list that didn't ship in the initial release (`live_title`) ship here. (`dj-lock`, `dj-mounted`, `dj-shortcut`, `dj-click-away`, window/document event scoping, connection CSS, `dj-cloak`, `dj-page-loading`, `dj-scroll-into-view`, `dj-copy`, `dj-auto-recover`, and `dj-debounce`/`dj-throttle` shipped in v0.4.0.)
 
 ### Milestone: v0.5.0 — Async Loading, Core Components & Streams
 
@@ -759,7 +759,7 @@ Features where djust leads rather than follows — things Phoenix LiveView and R
 | **Server functions (RPC)** | Call Python functions from JS, get structured results without re-render. Like tRPC but zero config | v0.7.0 |
 | **MCP server** | AI coding assistants can introspect and scaffold djust code via Model Context Protocol | **Done** |
 | **~5KB client JS** | Entire client runtime smaller than React's `useState` hook. No build step, no node_modules | **Done** |
-| **`dj-copy` clipboard** | Built-in copy-to-clipboard — not available in Phoenix or React without libraries | v0.4.0 |
+| **`dj-copy` clipboard** | Built-in copy-to-clipboard — not available in Phoenix or React without libraries | **Done** |
 | **`dj-shortcut` keyboard** | Declarative keyboard shortcuts — Phoenix requires custom JS hooks | **Done** |
 | **`dj-page-loading`** | Built-in navigation loading bar — neither Phoenix nor React include this natively | **Done** |
 | **`dj-paste` clipboard** | Built-in paste handling (text + images) — routes images to UploadMixin automatically | v0.4.1 |
@@ -944,8 +944,8 @@ Features tracked against Phoenix LiveView 1.1 and React where applicable.
 
 | Milestone | Theme | Key Deliverables | Priority |
 |-----------|-------|-----------------|----------|
-| v0.4.0 | Stability & Core DX | Fix #559/#560, focus preservation, **`dj-value-*`**, **`handle_params`** (complete), **`on_mount` hooks**, **flash messages**, **`_target` param** ✅, **`dj-scroll-into-view`** ✅, **connection CSS** ✅, **`dj-cloak`** ✅, **`dj-page-loading`** ✅, form recovery, `dj-disable-with` ✅, `dj-lock` ✅, `dj-mounted` ✅, window events ✅, `dj-click-away` ✅, `dj-shortcut` ✅, `dj-debounce`/`dj-throttle` attrs, error messages, `djust_doctor`, latency simulator | **Critical** |
-| v0.4.1 | JS Commands & Polish | **JS Commands**, programmable JS from hooks, scoped selectors (`closest`/`inner`), `page_loading` on push, **`dj-paste`**, `dj-copy`, `dj-auto-recover`, `live_title` | **Critical** |
+| v0.4.0 | Stability & Core DX | Fix #559/#560, focus preservation, **`dj-value-*`**, **`handle_params`** (complete), **`on_mount` hooks**, **flash messages**, **`_target` param** ✅, **`dj-scroll-into-view`** ✅, **connection CSS** ✅, **`dj-cloak`** ✅, **`dj-page-loading`** ✅, form recovery, `dj-disable-with` ✅, `dj-lock` ✅, `dj-mounted` ✅, window events ✅, `dj-click-away` ✅, `dj-shortcut` ✅, `dj-debounce`/`dj-throttle` attrs ✅, `dj-copy` ✅, `dj-auto-recover` ✅, error messages, `djust_doctor`, latency simulator | **Critical** |
+| v0.4.1 | JS Commands & Polish | **JS Commands**, programmable JS from hooks, scoped selectors (`closest`/`inner`), `page_loading` on push, **`dj-paste`**, `live_title` | **Critical** |
 | v0.5.0 | Async, Core Components & Streams | **`assign_async`/`AsyncResult`**, **`handle_async`**, **function components**, **declarative assigns**, **`used_input?`**, nested LiveComponents + targeted events + slots, **component `update` callback**, `dj-spread`, **View Transitions API**, direct-to-S3 uploads, stream enhancements + **`dj-viewport-top/bottom`**, **`handle_info`**, **template fragments**, **keyed for-loop change tracking**, **`self.defer()`**, selective re-rendering, Rust engine parity, **database change notifications (pg_notify)**, **virtual/windowed lists** | **Critical** |
 | v0.5.1 | Developer Experience & Forms | **Testing utilities**, **error overlay**, **`@computed`**, **`dj-lazy`**, **component context sharing**, **`dj-trigger-action`**, **scoped loading**, **error boundaries**, **nested forms**, **stable IDs**, **native `<dialog>`**, **dirty tracking**, **`dj-no-submit`**, **type-safe template validation**, **multi-step wizard (`WizardMixin`)** | **Critical** |
 | v0.6.0 | Production & Interactivity | Animations/transitions + **`dj-transition-group`**, **CSS `@starting-style`**, **hot view replacement**, **streaming initial render**, **time-travel debugging**, **state undo/redo**, **connection multiplexing**, sticky LiveViews, `dj-mutation`, `dj-sticky-scroll`, monitoring, graceful degradation, CSP nonce, batch state updates, multi-tab sync, offline mutation queue, `dj-resize`, **WebSocket compression (permessage-deflate)**, **runtime layout switching** | **High** |
@@ -967,7 +967,7 @@ High-impact areas for contributions:
 2. ~~**`_target` param in change events**~~ ✅
 3. ~~**`dj-disable-with`**~~ ✅
 4. ~~**Connection state CSS classes**~~ ✅
-5. **`dj-copy`** — Copy to clipboard, ~30 lines JS
+5. ~~**`dj-copy`**~~ ✅
 6. ~~**`dj-cloak`**~~ ✅
 7. **`live_title`** — Dynamic page title via WS message, ~30 lines total
 8. ~~**`dj-click-away`**~~ ✅
@@ -981,7 +981,7 @@ High-impact areas for contributions:
 #### Medium Effort (1-3 days)
 14. **`self.defer(callback)`** — Post-render work scheduling, ~40 lines Python
 15. ~~**`dj-shortcut`**~~ ✅
-15. **`dj-debounce`/`dj-throttle` HTML attributes** — Client-side timer per element, ~50 lines JS
+15. ~~**`dj-debounce`/`dj-throttle` HTML attributes**~~ ✅
 16. **`on_mount` hooks** — Cross-cutting mount logic, ~100 lines Python
 17. **Flash messages** — `FlashMixin` + `{% dj_flash %}` + client JS auto-dismiss
 18. **`handle_params` callback** — URL param change handler, ~50 lines Python

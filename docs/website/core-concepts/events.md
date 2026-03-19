@@ -261,7 +261,29 @@ Use cases: trigger data loading when a tab becomes active, initialize third-part
 
 ## Rate Limiting
 
-Use decorators to control how often handlers fire:
+### HTML Attributes (`dj-debounce` / `dj-throttle`)
+
+Apply debounce or throttle to any `dj-*` event attribute directly in HTML, giving per-element control without changing the Python handler:
+
+```html
+<!-- Debounce: wait 300ms after last keystroke before firing -->
+<input dj-input="search" dj-debounce="300" />
+
+<!-- Throttle: fire at most every 500ms -->
+<button dj-click="poll_status" dj-throttle="500">Refresh</button>
+
+<!-- Disable default debounce on dj-input (fires immediately) -->
+<input dj-input="on_change" dj-debounce="0" />
+
+<!-- Defer until blur (Phoenix parity) -->
+<input dj-input="validate" dj-debounce="blur" />
+```
+
+`dj-debounce` and `dj-throttle` work with all event types: `dj-click`, `dj-change`, `dj-input`, `dj-keydown`, `dj-keyup`. Each element gets its own independent timer. HTML attributes take precedence over `data-debounce`/`data-throttle`.
+
+### Python Decorators
+
+Use decorators to control how often handlers fire server-side:
 
 ```python
 from djust.decorators import event_handler, debounce, throttle
@@ -279,6 +301,8 @@ def search(self, value: str = "", **kwargs):
 def on_scroll(self, position: int = 0, **kwargs):
     self.scroll_pos = position
 ```
+
+HTML attributes and Python decorators can be combined: the HTML attribute controls client-side timing, the decorator controls server-side timing.
 
 ## Loading States
 
@@ -369,6 +393,62 @@ One-shot per DOM node. Supports values: `""` (smooth/nearest), `"instant"`, `"ce
 ### Page Loading Bar
 
 An NProgress-style loading bar appears automatically during TurboNav and `live_redirect` navigation. Control via `window.djust.pageLoading.start()` / `.finish()` or disable with `window.djust.pageLoading.enabled = false`.
+
+## Clipboard Copy (`dj-copy`)
+
+Copy text to the clipboard on click without a server round-trip:
+
+```html
+<!-- Copy literal text -->
+<button dj-copy="{{ share_url }}">Copy Link</button>
+
+<!-- Copy text content from another element -->
+<button dj-copy="#code-block">Copy Code</button>
+
+<!-- Custom feedback text (default: "Copied!") -->
+<button dj-copy="{{ api_key }}" dj-copy-feedback="Done!">Copy Key</button>
+
+<!-- Custom CSS class feedback (adds class for 2 seconds) -->
+<button dj-copy="{{ token }}" dj-copy-class="btn-success">Copy</button>
+
+<!-- Fire a server event after successful copy (e.g., for analytics) -->
+<button dj-copy="#snippet" dj-copy-event="copied" dj-value-snippet-id="{{ snippet.id }}">Copy</button>
+```
+
+| Attribute | Description |
+|---|---|
+| `dj-copy="text"` | Literal text to copy |
+| `dj-copy="#selector"` | Copy `textContent` of the matched element |
+| `dj-copy-feedback="text"` | Button text shown for 2s after copy (default: `"Copied!"`) |
+| `dj-copy-class="class"` | CSS class added for 2s after copy (default: `dj-copied`) |
+| `dj-copy-event="handler"` | Server event fired after successful copy |
+
+All enhancements are backward compatible with existing `dj-copy` usage.
+
+## Reconnection Recovery (`dj-auto-recover`)
+
+After a WebSocket reconnect, elements with `dj-auto-recover` automatically fire a server event with serialized DOM state, enabling the server to restore state that the default form-value replay cannot:
+
+```html
+<div dj-auto-recover="restore_canvas" dj-value-canvas-id="main">
+    <canvas id="drawing-canvas"></canvas>
+    <input name="brush_size" value="5" />
+</div>
+```
+
+```python
+@event_handler()
+def restore_canvas(self, brush_size: str = "", canvas_id: str = "", **kwargs):
+    """Called automatically after reconnect with DOM state from the container."""
+    self.brush_size = int(brush_size) if brush_size else 5
+    self.canvas_id = canvas_id
+```
+
+Key behavior:
+- Does **not** fire on initial page load — only after reconnection
+- Serializes form field values and `data-*` attributes from the container element
+- Multiple independent `dj-auto-recover` elements can coexist on the same page
+- Use for complex state (drag positions, canvas state, multi-step wizard progress) that form replay cannot restore
 
 ## Next Steps
 

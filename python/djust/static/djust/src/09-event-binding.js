@@ -245,10 +245,11 @@ function bindLiveViewEvents() {
                 await handleEvent(parsed.name, params);
             };
 
-            // Apply rate limiting if specified
-            const wrappedHandler = window.djust.rateLimit
-                ? window.djust.rateLimit.wrapWithRateLimit(element, 'click', clickHandlerFn)
-                : clickHandlerFn;
+            // Apply dj-debounce/dj-throttle HTML attributes first, then server rate limit
+            let wrappedHandler = _applyRateLimitAttrs(element, clickHandlerFn);
+            if (wrappedHandler === clickHandlerFn && window.djust.rateLimit) {
+                wrappedHandler = window.djust.rateLimit.wrapWithRateLimit(element, 'click', clickHandlerFn);
+            }
 
             element.addEventListener('click', wrappedHandler);
         }
@@ -261,10 +262,37 @@ function bindLiveViewEvents() {
                 // Read attribute at click time (not bind time) so morph updates take effect
                 var currentValue = element.getAttribute('dj-copy');
                 if (!currentValue) return;
-                navigator.clipboard.writeText(currentValue).then(function() {
+
+                // Selector-based copy: if value starts with #, . or [, try querySelector
+                var textToCopy = currentValue;
+                if (currentValue.charAt(0) === '#' || currentValue.charAt(0) === '.' || currentValue.charAt(0) === '[') {
+                    try {
+                        var target = document.querySelector(currentValue);
+                        if (target) {
+                            textToCopy = target.textContent;
+                        }
+                    } catch (err) {
+                        // Invalid selector — fall back to literal copy
+                    }
+                }
+
+                navigator.clipboard.writeText(textToCopy).then(function() {
+                    // CSS class feedback: add class and remove after 2s
+                    var cssClass = element.getAttribute('dj-copy-class') || 'dj-copied';
+                    element.classList.add(cssClass);
+                    setTimeout(function() { element.classList.remove(cssClass); }, 2000);
+
+                    // Text feedback: custom or default "Copied!"
+                    var feedbackText = element.getAttribute('dj-copy-feedback') || 'Copied!';
                     var original = element.textContent;
-                    element.textContent = 'Copied!';
+                    element.textContent = feedbackText;
                     setTimeout(function() { element.textContent = original; }, 1500);
+
+                    // Optional server event for analytics
+                    var copyEvent = element.getAttribute('dj-copy-event');
+                    if (copyEvent && typeof handleEvent === 'function') {
+                        handleEvent(copyEvent, { text: textToCopy });
+                    }
                 });
             });
         }
@@ -385,12 +413,13 @@ function bindLiveViewEvents() {
                 await handleEvent(parsedChange.name, params);
             };
 
-            // Apply rate limiting if specified
-            const wrappedHandler = window.djust.rateLimit
-                ? window.djust.rateLimit.wrapWithRateLimit(element, 'change', changeHandlerFn)
-                : changeHandlerFn;
+            // Apply dj-debounce/dj-throttle HTML attributes first, then server rate limit
+            let wrappedChangeHandler = _applyRateLimitAttrs(element, changeHandlerFn);
+            if (wrappedChangeHandler === changeHandlerFn && window.djust.rateLimit) {
+                wrappedChangeHandler = window.djust.rateLimit.wrapWithRateLimit(element, 'change', changeHandlerFn);
+            }
 
-            element.addEventListener('change', wrappedHandler);
+            element.addEventListener('change', wrappedChangeHandler);
         }
 
         // Handle dj-input events (with smart debouncing/throttling)
@@ -404,8 +433,20 @@ function bindLiveViewEvents() {
             const inputType = element.type || element.tagName.toLowerCase();
             const rateLimit = Object.prototype.hasOwnProperty.call(DEFAULT_RATE_LIMITS, inputType) ? DEFAULT_RATE_LIMITS[inputType] : { type: 'debounce', ms: 300 };
 
-            // Check for explicit overrides
-            if (element.hasAttribute('data-debounce')) {
+            // Check for explicit overrides: dj-* attributes take precedence
+            if (element.hasAttribute('dj-debounce')) {
+                const djVal = element.getAttribute('dj-debounce');
+                if (djVal === 'blur') {
+                    rateLimit.type = 'blur';
+                    rateLimit.ms = 0;
+                } else {
+                    rateLimit.type = 'debounce';
+                    rateLimit.ms = parseInt(djVal, 10);
+                }
+            } else if (element.hasAttribute('dj-throttle')) {
+                rateLimit.type = 'throttle';
+                rateLimit.ms = parseInt(element.getAttribute('dj-throttle'), 10);
+            } else if (element.hasAttribute('data-debounce')) {
                 rateLimit.type = 'debounce';
                 rateLimit.ms = parseInt(element.getAttribute('data-debounce'));
             } else if (element.hasAttribute('data-throttle')) {
@@ -435,7 +476,19 @@ function bindLiveViewEvents() {
 
             // Apply rate limiting wrapper
             let wrappedHandler;
-            if (rateLimit.type === 'throttle') {
+            if (rateLimit.type === 'blur') {
+                // dj-debounce="blur": defer until element loses focus
+                let latestArgs = null;
+                wrappedHandler = function (...args) {
+                    latestArgs = args;
+                };
+                element.addEventListener('blur', function () {
+                    if (latestArgs !== null) {
+                        handler(...latestArgs);
+                        latestArgs = null;
+                    }
+                });
+            } else if (rateLimit.type === 'throttle') {
                 wrappedHandler = throttle(handler, rateLimit.ms);
             } else {
                 wrappedHandler = debounce(handler, rateLimit.ms);
@@ -538,12 +591,13 @@ function bindLiveViewEvents() {
                     await handleEvent(handlerName, params);
                 };
 
-                // Apply rate limiting if specified
-                const wrappedHandler = window.djust.rateLimit
-                    ? window.djust.rateLimit.wrapWithRateLimit(element, eventType, keyHandlerFn)
-                    : keyHandlerFn;
+                // Apply dj-debounce/dj-throttle HTML attributes first, then server rate limit
+                let wrappedKeyHandler = _applyRateLimitAttrs(element, keyHandlerFn);
+                if (wrappedKeyHandler === keyHandlerFn && window.djust.rateLimit) {
+                    wrappedKeyHandler = window.djust.rateLimit.wrapWithRateLimit(element, eventType, keyHandlerFn);
+                }
 
-                element.addEventListener(eventType, wrappedHandler);
+                element.addEventListener(eventType, wrappedKeyHandler);
             }
         });
 
@@ -782,6 +836,45 @@ function bindLiveViewEvents() {
     }
 }
 
+/**
+ * Apply dj-debounce / dj-throttle HTML attributes to an event handler.
+ * If the element has dj-debounce or dj-throttle, wraps the handler accordingly.
+ * dj-debounce="blur" is a special value that defers until the element loses focus.
+ * Returns the (potentially wrapped) handler.
+ * @param {HTMLElement} element - Element with potential dj-debounce/dj-throttle
+ * @param {Function} handler - Original event handler
+ * @returns {Function} - Wrapped or original handler
+ */
+function _applyRateLimitAttrs(element, handler) {
+    if (element.hasAttribute('dj-debounce')) {
+        const val = element.getAttribute('dj-debounce');
+        if (val === 'blur') {
+            // Special: defer event until element loses focus
+            let latestArgs = null;
+            const blurWrapper = function (...args) {
+                latestArgs = args;
+            };
+            element.addEventListener('blur', function () {
+                if (latestArgs !== null) {
+                    handler(...latestArgs);
+                    latestArgs = null;
+                }
+            });
+            return blurWrapper;
+        }
+        const ms = parseInt(val, 10);
+        if (ms === 0) {
+            return handler; // dj-debounce="0" means no debounce
+        }
+        return debounce(handler, ms);
+    }
+    if (element.hasAttribute('dj-throttle')) {
+        const ms = parseInt(element.getAttribute('dj-throttle'), 10);
+        return throttle(handler, ms);
+    }
+    return handler;
+}
+
 // Helper: Debounce function
 function debounce(func, wait) {
     let timeout;
@@ -868,8 +961,59 @@ function reinitAfterDOMUpdate() {
     });
 }
 
+/**
+ * Process dj-auto-recover elements after a WebSocket reconnect.
+ * Scans for [dj-auto-recover] elements, serializes their DOM state
+ * (form values + data-* attributes), and fires the named event.
+ * Only fires when _isReconnect flag is set; clears the flag after processing.
+ */
+function _processAutoRecover() {
+    if (!window.djust._isReconnect) return;
+    window.djust._isReconnect = false;
+
+    document.querySelectorAll('[dj-auto-recover]').forEach(function(container) {
+        var handlerName = container.getAttribute('dj-auto-recover');
+        if (!handlerName) return;
+
+        // Serialize form field values within the container
+        var formValues = {};
+        container.querySelectorAll('input, textarea, select').forEach(function(field) {
+            var name = field.name;
+            if (!name) return;
+            if (field.type === 'checkbox') {
+                formValues[name] = field.checked;
+            } else if (field.type === 'radio') {
+                if (field.checked) formValues[name] = field.value;
+            } else {
+                formValues[name] = field.value;
+            }
+        });
+
+        // Collect data-* attributes from the container element
+        var dataAttrs = {};
+        for (var i = 0; i < container.attributes.length; i++) {
+            var attr = container.attributes[i];
+            if (attr.name.startsWith('data-')) {
+                var key = attr.name.slice(5); // Strip 'data-' prefix
+                dataAttrs[key] = attr.value;
+            }
+        }
+
+        var params = {
+            _form_values: formValues,
+            _data_attrs: dataAttrs
+        };
+
+        if (typeof handleEvent === 'function') {
+            handleEvent(handlerName, params);
+        }
+    });
+}
+
 // Export for testing and for createNodeFromVNode to mark VDOM-created elements as bound
 window.djust.bindLiveViewEvents = bindLiveViewEvents;
 window.djust.reinitAfterDOMUpdate = reinitAfterDOMUpdate;
 window.djust._isHandlerBound = _isHandlerBound;
 window.djust._markHandlerBound = _markHandlerBound;
+window.djust._processAutoRecover = _processAutoRecover;
+window.djust._isReconnect = false;

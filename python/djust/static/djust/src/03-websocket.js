@@ -105,6 +105,8 @@ class LiveViewWebSocket {
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
                 this.stats.reconnections++;
+                // Set reconnect flag for dj-auto-recover
+                if (window.djust) window.djust._isReconnect = true;
                 // Notify hooks of reconnection
                 if (typeof notifyHooksReconnected === 'function') notifyHooksReconnected();
             }
@@ -260,6 +262,10 @@ class LiveViewWebSocket {
                     // Set mount ready flag so dj-mounted handlers only fire
                     // for elements added by subsequent VDOM patches, not on initial load
                     window.djust._mountReady = true;
+                    // Trigger dj-auto-recover after reconnect mount
+                    if (window.djust._isReconnect && typeof window.djust._processAutoRecover === 'function') {
+                        window.djust._processAutoRecover();
+                    }
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
@@ -278,6 +284,10 @@ class LiveViewWebSocket {
                     // Set mount ready flag so dj-mounted handlers only fire
                     // for elements added by subsequent VDOM patches, not on initial load
                     window.djust._mountReady = true;
+                    // Trigger dj-auto-recover after reconnect mount
+                    if (window.djust._isReconnect && typeof window.djust._processAutoRecover === 'function') {
+                        window.djust._processAutoRecover();
+                    }
                 }
                 break;
 
