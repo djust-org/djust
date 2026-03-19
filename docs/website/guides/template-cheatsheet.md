@@ -144,6 +144,39 @@ Supported key modifiers: `.enter`, `.escape`, `.space`
 <div dj-poll="refresh" dj-poll-interval="10000"></div>
 ```
 
+### Submit Protection
+
+| Attribute | Description |
+|---|---|
+| `dj-disable-with="text"` | Disable button + replace text during submission |
+| `dj-lock` | Block event until server responds (prevents double-fire) |
+
+```html
+<!-- Disable + replace text while submitting -->
+<button type="submit" dj-disable-with="Saving...">Save</button>
+
+<!-- Lock to prevent concurrent events -->
+<button dj-click="save" dj-lock>Save</button>
+
+<!-- Combined: lock + visual feedback -->
+<button dj-click="save" dj-lock dj-disable-with="Saving...">Save</button>
+```
+
+### Lifecycle
+
+| Attribute | Fires On | Handler Receives |
+|---|---|---|
+| `dj-mounted="handler"` | Element enters DOM (after VDOM patch) | `dj-value-*` attrs as kwargs |
+
+```html
+<!-- Fire event when element appears after a VDOM patch -->
+<div dj-mounted="on_widget_ready" dj-value-widget-id="{{ widget.id }}">
+    ...
+</div>
+```
+
+Does not fire on initial page load — only after subsequent VDOM patches insert the element.
+
 ---
 
 ## Loading States
@@ -204,6 +237,17 @@ Type coercion rules:
     Edit
 </button>
 ```
+
+### `_target` (automatic)
+
+For `dj-change` and `dj-input`, the `_target` parameter is included automatically with the triggering element's `name` attribute. Useful when multiple fields share one handler:
+
+```html
+<input name="email" dj-change="validate" />
+<input name="username" dj-change="validate" />
+```
+
+Handler receives `_target="email"` or `_target="username"`.
 
 ---
 
@@ -428,7 +472,11 @@ Event attributes:
   dj-click        dj-submit       dj-change       dj-input
   dj-blur         dj-focus        dj-keydown      dj-keyup
   dj-poll         dj-patch        dj-navigate     dj-copy
-  dj-confirm      dj-model
+  dj-confirm      dj-model        dj-mounted
+
+Submit protection:
+  dj-disable-with="text"          (disable + replace text during submit)
+  dj-lock                         (block event until server responds)
 
 Loading directives:
   dj-loading                      (toggle djust-loading class)
