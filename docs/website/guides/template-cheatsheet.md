@@ -49,6 +49,7 @@ Every LiveView template needs these two things:
 | `dj-click="handler"` | Click | `data-*` attributes as kwargs |
 | `dj-submit="handler"` | Form submit | All named form fields as kwargs |
 | `dj-copy="text"` | Click | Client-only clipboard copy, no server round-trip |
+| `dj-copy="#selector"` | Click | Copy `textContent` of matched element |
 
 ```html
 <!-- Simple click -->
@@ -70,9 +71,23 @@ Every LiveView template needs these two things:
     <button type="submit">Save</button>
 </form>
 
-<!-- Client-side clipboard copy -->
+<!-- Client-side clipboard copy (literal text) -->
 <button dj-copy="{{ share_url }}">Copy link</button>
+
+<!-- Copy from another element -->
+<button dj-copy="#code-block">Copy Code</button>
+
+<!-- Copy with feedback and server event -->
+<button dj-copy="{{ api_key }}" dj-copy-feedback="Done!" dj-copy-event="copied">Copy</button>
 ```
+
+#### `dj-copy` options
+
+| Attribute | Description |
+|---|---|
+| `dj-copy-feedback="text"` | Button text shown for 2s after copy (default: `"Copied!"`) |
+| `dj-copy-class="class"` | CSS class added for 2s after copy (default: `dj-copied`) |
+| `dj-copy-event="handler"` | Server event fired after successful copy |
 
 ### Input & Change
 
@@ -88,10 +103,20 @@ Every LiveView template needs these two things:
 <!-- Live search -->
 <input type="text" dj-input="search" value="{{ query }}" />
 
-<!-- Debounce override (default: 300ms for text inputs) -->
-<input dj-input="search" data-debounce="500" />
+<!-- Debounce via HTML attribute (preferred) -->
+<input dj-input="search" dj-debounce="300" />
 
-<!-- Throttle instead of debounce -->
+<!-- Throttle via HTML attribute -->
+<button dj-click="poll" dj-throttle="500">Refresh</button>
+
+<!-- Defer until blur -->
+<input dj-input="validate" dj-debounce="blur" />
+
+<!-- Disable default debounce on dj-input -->
+<input dj-input="on_change" dj-debounce="0" />
+
+<!-- Legacy data-* attributes (still supported) -->
+<input dj-input="search" data-debounce="500" />
 <input dj-input="on_resize" data-throttle="100" />
 
 <!-- Select change -->
@@ -219,15 +244,23 @@ Syntax: `[modifier+...]key:handler[:prevent]` (comma-separated for multiple). Th
 | Attribute | Fires On | Handler Receives |
 |---|---|---|
 | `dj-mounted="handler"` | Element enters DOM (after VDOM patch) | `dj-value-*` attrs as kwargs |
+| `dj-auto-recover="handler"` | WebSocket reconnects | Form values + `data-*` from container |
 
 ```html
 <!-- Fire event when element appears after a VDOM patch -->
 <div dj-mounted="on_widget_ready" dj-value-widget-id="{{ widget.id }}">
     ...
 </div>
+
+<!-- Restore complex state after reconnection -->
+<div dj-auto-recover="restore_state" dj-value-canvas-id="main">
+    <input name="brush_size" value="5" />
+</div>
 ```
 
-Does not fire on initial page load — only after subsequent VDOM patches insert the element.
+`dj-mounted` does not fire on initial page load — only after subsequent VDOM patches insert the element.
+
+`dj-auto-recover` does not fire on initial page load — only after WebSocket reconnection. Serializes form field values and `data-*` attributes from the container.
 
 ---
 
@@ -613,7 +646,7 @@ Event attributes:
   dj-click        dj-submit       dj-change       dj-input
   dj-blur         dj-focus        dj-keydown      dj-keyup
   dj-poll         dj-patch        dj-navigate     dj-copy
-  dj-confirm      dj-model        dj-mounted
+  dj-confirm      dj-model        dj-mounted      dj-auto-recover
   dj-click-away   dj-shortcut
 
 Window/document scoping:
@@ -625,6 +658,18 @@ Window/document scoping:
   dj-document-keydown             (keydown on document)
   dj-document-keyup               (keyup on document)
   dj-document-click               (click on document)
+
+Rate limiting (HTML attributes):
+  dj-debounce="300"               (debounce ms, per element)
+  dj-debounce="blur"              (defer until blur)
+  dj-debounce="0"                 (disable default debounce)
+  dj-throttle="500"               (throttle ms, per element)
+
+Copy enhancements:
+  dj-copy="#selector"             (copy element textContent)
+  dj-copy-feedback="Done!"        (custom feedback text, 2s)
+  dj-copy-class="btn-success"     (custom CSS class, 2s)
+  dj-copy-event="handler"         (server event after copy)
 
 Submit protection:
   dj-disable-with="text"          (disable + replace text during submit)
