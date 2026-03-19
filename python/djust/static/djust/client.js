@@ -146,6 +146,11 @@ function reinitLiveViewForTurboNav() {
         if (el._djustPollVisibilityHandler) document.removeEventListener('visibilitychange', el._djustPollVisibilityHandler);
     });
 
+    // Clean up scoped (window/document) listeners before re-binding
+    for (const el of _scopedListenerElements) {
+        _cleanupScopedListeners(el);
+    }
+
     // Re-bind events and hooks
     reinitAfterDOMUpdate();
 
@@ -2469,6 +2474,80 @@ function _markHandlerBound(element, type) {
     set.add(type);
 }
 
+// ============================================================================
+// Scoped Listener Helpers (window/document event binding)
+// ============================================================================
+
+// Track all elements that have scoped (window/document) listeners so we can
+// sweep and clean up listeners for elements removed from the DOM.
+const _scopedListenerElements = new Set();
+
+/**
+ * Clean up all scoped (window/document) listeners stored on an element.
+ * Each listener is stored as { target, eventType, handler, capture } in
+ * element._djustScopedListeners.
+ * @param {HTMLElement} element
+ */
+function _cleanupScopedListeners(element) {
+    if (!element._djustScopedListeners) return;
+    for (const entry of element._djustScopedListeners) {
+        entry.target.removeEventListener(entry.eventType, entry.handler, entry.capture || false);
+    }
+    element._djustScopedListeners = [];
+    _scopedListenerElements.delete(element);
+}
+
+/**
+ * Register a scoped listener on an element. Stores the reference for cleanup.
+ * @param {HTMLElement} element - Declaring element (anchor)
+ * @param {EventTarget} target - window or document
+ * @param {string} eventType - DOM event type (e.g. 'keydown')
+ * @param {Function} handler - Event handler function
+ * @param {boolean} [capture=false] - Use capture phase
+ */
+function _addScopedListener(element, target, eventType, handler, capture) {
+    if (!element._djustScopedListeners) element._djustScopedListeners = [];
+    const useCapture = capture || false;
+    element._djustScopedListeners.push({ target, eventType, handler, capture: useCapture });
+    target.addEventListener(eventType, handler, useCapture);
+    _scopedListenerElements.add(element);
+}
+
+/**
+ * Sweep all tracked scoped-listener elements and remove listeners for any
+ * elements that are no longer in the DOM. Called before binding new scoped
+ * listeners to prevent accumulation from conditional rendering.
+ */
+function _sweepOrphanedScopedListeners() {
+    for (const element of _scopedListenerElements) {
+        if (!document.contains(element)) {
+            _cleanupScopedListeners(element);
+        }
+    }
+}
+
+/**
+ * Normalize a key name to match KeyboardEvent.key values.
+ * @param {string} name - Key name from attribute (e.g. 'escape', 'enter', 'k')
+ * @returns {string} - Normalized key name
+ */
+function _normalizeKeyName(name) {
+    const lower = name.toLowerCase();
+    const keyMap = {
+        'escape': 'Escape',
+        'enter': 'Enter',
+        'tab': 'Tab',
+        'space': ' ',
+        'backspace': 'Backspace',
+        'delete': 'Delete',
+        'arrowup': 'ArrowUp',
+        'arrowdown': 'ArrowDown',
+        'arrowleft': 'ArrowLeft',
+        'arrowright': 'ArrowRight',
+    };
+    return keyMap[lower] || name;
+}
+
 /**
  * Add component and embedded view context to event params.
  * Extracts component_id and view_id from the element's ancestry.
@@ -2932,6 +3011,191 @@ function bindLiveViewEvents() {
             document.addEventListener('visibilitychange', visHandler);
             element._djustPollVisibilityHandler = visHandler;
         }
+    });
+
+    // ================================================================
+    // Scoped listeners: dj-window-*, dj-document-*, dj-click-away, dj-shortcut
+    // ================================================================
+
+    // Sweep orphaned scoped listeners (elements removed from DOM by conditional rendering)
+    _sweepOrphanedScopedListeners();
+
+    // --- Feature 1: dj-window-* and dj-document-* event scoping ---
+    const scopedPrefixes = [
+        { prefix: 'dj-window-', target: window },
+        { prefix: 'dj-document-', target: document },
+    ];
+    const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
+
+    // Collect all elements that have any dj-window-* or dj-document-* attributes
+    // by scanning once through allElements (already queried above).
+    for (const { prefix, target } of scopedPrefixes) {
+        for (const evtType of scopedEventTypes) {
+            // scroll and resize only make sense on window
+            if (target === document && (evtType === 'scroll' || evtType === 'resize')) continue;
+
+            const attrBase = prefix + evtType;
+            // Scan all elements for attributes starting with this prefix+eventType
+            // (covers both exact matches and key-modifier variants like dj-window-keydown.escape)
+            allElements.forEach(element => {
+                for (const attr of element.attributes) {
+                    if (!attr.name.startsWith(attrBase)) continue;
+                    const bindType = attr.name; // e.g. 'dj-window-keydown' or 'dj-window-keydown.escape'
+                    if (_isHandlerBound(element, bindType)) continue;
+                    _markHandlerBound(element, bindType);
+
+                    // Parse handler name and optional key modifier
+                    const attrValue = attr.value;
+                    const suffix = attr.name.slice(attrBase.length); // '' or '.escape'
+                    const requiredKey = suffix.startsWith('.') ? _normalizeKeyName(suffix.slice(1)) : null;
+
+                    // Parse handler name (supports handler(args) syntax)
+                    const parsed = parseEventHandler(attrValue);
+
+                    const scopedHandler = async (e) => {
+                        // Key filtering for keydown/keyup
+                        if (requiredKey && e.key !== requiredKey) return;
+
+                        // Build params from the declaring element
+                        const params = extractTypedParams(element);
+                        addEventContext(params, element);
+
+                        // Add event-specific params
+                        if (evtType === 'keydown' || evtType === 'keyup') {
+                            params.key = e.key;
+                            params.code = e.code;
+                        } else if (evtType === 'click') {
+                            params.clientX = e.clientX;
+                            params.clientY = e.clientY;
+                        } else if (evtType === 'scroll') {
+                            params.scrollY = window.scrollY;
+                            params.scrollX = window.scrollX;
+                        } else if (evtType === 'resize') {
+                            params.innerWidth = window.innerWidth;
+                            params.innerHeight = window.innerHeight;
+                        }
+
+                        if (parsed.args.length > 0) {
+                            params._args = parsed.args;
+                        }
+
+                        await handleEvent(parsed.name, params);
+                    };
+
+                    // Apply default throttle for scroll/resize
+                    let finalHandler = scopedHandler;
+                    if (evtType === 'scroll' || evtType === 'resize') {
+                        const throttleMs = parseInt(element.getAttribute('data-throttle'), 10) || 150;
+                        finalHandler = throttle(scopedHandler, throttleMs);
+                    } else if (element.hasAttribute('data-debounce')) {
+                        finalHandler = debounce(scopedHandler, parseInt(element.getAttribute('data-debounce'), 10));
+                    } else if (element.hasAttribute('data-throttle')) {
+                        finalHandler = throttle(scopedHandler, parseInt(element.getAttribute('data-throttle'), 10));
+                    }
+
+                    _addScopedListener(element, target, evtType, finalHandler, false);
+                }
+            });
+        }
+    }
+
+    // --- Feature 2: dj-click-away ---
+    document.querySelectorAll('[dj-click-away]').forEach(element => {
+        if (_isHandlerBound(element, 'click-away')) return;
+        _markHandlerBound(element, 'click-away');
+
+        const handlerName = element.getAttribute('dj-click-away');
+
+        const clickAwayHandler = async (e) => {
+            // Only fire if click is outside the element
+            if (element.contains(e.target)) return;
+
+            // dj-confirm support
+            if (!checkDjConfirm(element)) return;
+
+            const params = extractTypedParams(element);
+            addEventContext(params, element);
+
+            await handleEvent(handlerName, params);
+        };
+
+        // Use capture phase so stopPropagation inside doesn't prevent detection
+        _addScopedListener(element, document, 'click', clickAwayHandler, true);
+    });
+
+    // --- Feature 3: dj-shortcut ---
+    document.querySelectorAll('[dj-shortcut]').forEach(element => {
+        if (_isHandlerBound(element, 'shortcut')) return;
+        _markHandlerBound(element, 'shortcut');
+
+        const attrValue = element.getAttribute('dj-shortcut');
+        const allowInInput = element.hasAttribute('dj-shortcut-in-input');
+
+        // Parse comma-separated bindings
+        // Each binding: [modifier+...]key:handler[:prevent]
+        const bindings = attrValue.split(',').map(b => b.trim()).filter(b => b).map(binding => {
+            const parts = binding.split(':');
+            const keyCombo = parts[0].trim(); // e.g. 'ctrl+k' or 'escape'
+            const handler = parts[1] ? parts[1].trim() : '';
+            const preventDefault = parts[2] ? parts[2].trim() === 'prevent' : false;
+
+            // Parse key combo into modifiers + key
+            const comboParts = keyCombo.split('+');
+            const key = _normalizeKeyName(comboParts[comboParts.length - 1]);
+            const modifiers = new Set();
+            for (let i = 0; i < comboParts.length - 1; i++) {
+                modifiers.add(comboParts[i].toLowerCase());
+            }
+
+            return { key, modifiers, handler, preventDefault, comboString: keyCombo };
+        });
+
+        const shortcutHandler = async (e) => {
+            // Skip if active element is a form input (unless opt-out)
+            if (!allowInInput) {
+                const active = document.activeElement;
+                if (active) {
+                    const tag = active.tagName;
+                    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || active.isContentEditable) {
+                        return;
+                    }
+                }
+            }
+
+            // Skip if element is not visible (hidden modals etc.)
+            // Check hidden attribute and display:none; offsetParent is used as
+            // a secondary check when available (not in JSDOM/SSR environments).
+            if (element.hidden || element.style.display === 'none') return;
+            if (!document.contains(element)) return;
+
+            for (const binding of bindings) {
+                if (e.key !== binding.key) continue;
+
+                // Check modifiers
+                const ctrlMatch = binding.modifiers.has('ctrl') === e.ctrlKey;
+                const altMatch = binding.modifiers.has('alt') === e.altKey;
+                const shiftMatch = binding.modifiers.has('shift') === e.shiftKey;
+                const metaMatch = binding.modifiers.has('meta') === e.metaKey;
+
+                if (!ctrlMatch || !altMatch || !shiftMatch || !metaMatch) continue;
+
+                // Match found
+                if (binding.preventDefault) {
+                    e.preventDefault();
+                }
+
+                const params = extractTypedParams(element);
+                addEventContext(params, element);
+                params.key = e.key;
+                params.code = e.code;
+                params.shortcut = binding.comboString;
+
+                await handleEvent(binding.handler, params);
+                return; // Fire first match only
+            }
+        };
+
+        _addScopedListener(element, document, 'keydown', shortcutHandler, false);
     });
 
     // Re-scan dj-loading attributes after DOM updates so dynamically
@@ -4048,6 +4312,8 @@ function morphElement(existing, desired) {
                 document.removeEventListener('visibilitychange', existing._djustPollVisibilityHandler);
             }
         }
+        // Clean up scoped (window/document) listeners before replacing
+        _cleanupScopedListeners(existing);
         existing.parentNode.replaceChild(desired.cloneNode(true), existing);
         return;
     }

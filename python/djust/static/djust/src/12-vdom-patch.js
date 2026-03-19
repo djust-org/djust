@@ -720,6 +720,8 @@ function morphElement(existing, desired) {
                 document.removeEventListener('visibilitychange', existing._djustPollVisibilityHandler);
             }
         }
+        // Clean up scoped (window/document) listeners before replacing
+        _cleanupScopedListeners(existing);
         existing.parentNode.replaceChild(desired.cloneNode(true), existing);
         return;
     }
