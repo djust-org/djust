@@ -1008,7 +1008,7 @@ wheels = [
 
 [[package]]
 name = "djust"
-version = "0.3.7"
+version = "0.3.8rc1"
 source = { editable = "." }
 dependencies = [
     { name = "channels", version = "4.2.2", source = { registry = "https://pypi.org/simple" }, extra = ["daphne"], marker = "python_full_version < '3.9'" },

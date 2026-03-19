@@ -292,4 +292,225 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().tickBufferLength).toBe(0);
         });
     });
+
+    describe('broadcast and async patch buffering', () => {
+        it('broadcast patches are buffered when event is pending', () => {
+            const { dom, getSeqState } = createDom();
+            const ws = makeWS(dom);
+
+            ws.sendEvent('click', {});
+
+            // Simulate broadcast arriving while event is pending
+            ws.handleMessage({
+                type: 'patch',
+                patches: [],
+                version: 2,
+                source: 'broadcast'
+            });
+
+            // Broadcast should be buffered
+            expect(getSeqState().tickBufferLength).toBe(1);
+        });
+
+        it('async patches are buffered when event is pending', () => {
+            const { dom, getSeqState } = createDom();
+            const ws = makeWS(dom);
+
+            ws.sendEvent('click', {});
+
+            // Simulate async completion arriving while event is pending
+            ws.handleMessage({
+                type: 'patch',
+                patches: [],
+                version: 2,
+                source: 'async'
+            });
+
+            // Async should be buffered
+            expect(getSeqState().tickBufferLength).toBe(1);
+        });
+
+        it('broadcast and async patches are flushed after event response', () => {
+            const { dom, getSeqState } = createDom();
+            const ws = makeWS(dom);
+
+            ws.sendEvent('click', {});
+            const ref = getSeqState().pendingEventRef;
+
+            // Buffer both broadcast and async patches
+            ws.handleMessage({
+                type: 'patch',
+                patches: [],
+                version: 2,
+                source: 'broadcast'
+            });
+            ws.handleMessage({
+                type: 'patch',
+                patches: [],
+                version: 3,
+                source: 'async'
+            });
+            expect(getSeqState().tickBufferLength).toBe(2);
+
+            // Event response arrives — should flush all buffered patches
+            ws.handleMessage({
+                type: 'patch',
+                patches: [],
+                version: 4,
+                source: 'event',
+                ref: ref
+            });
+
+            expect(getSeqState().tickBufferLength).toBe(0);
+        });
+
+        it('broadcast patches without pending event pass through', () => {
+            const { dom, getSeqState } = createDom();
+            const ws = makeWS(dom);
+
+            // No pending event
+            expect(getSeqState().pendingEventRef).toBeNull();
+
+            ws.handleMessage({
+                type: 'patch',
+                patches: [],
+                version: 2,
+                source: 'broadcast'
+            });
+
+            // Should not buffer — applied immediately
+            expect(getSeqState().tickBufferLength).toBe(0);
+        });
+
+        it('async patches without pending event pass through', () => {
+            const { dom, getSeqState } = createDom();
+            const ws = makeWS(dom);
+
+            // No pending event
+            expect(getSeqState().pendingEventRef).toBeNull();
+
+            ws.handleMessage({
+                type: 'patch',
+                patches: [],
+                version: 2,
+                source: 'async'
+            });
+
+            // Should not buffer — applied immediately
+            expect(getSeqState().tickBufferLength).toBe(0);
+        });
+    });
+
+    describe('multiple pending events (Set-based tracking)', () => {
+        it('multiple sendEvent calls track all pending refs', () => {
+            const { dom, getSeqState } = createDom();
+            const ws = makeWS(dom);
+
+            ws.sendEvent('click', { id: 1 });
+            const state1 = getSeqState();
+            const refs1 = state1.pendingEventRefs;
+
+            ws.sendEvent('click', { id: 2 });
+            const state2 = getSeqState();
+            const refs2 = state2.pendingEventRefs;
+
+            // Both refs should be tracked
+            expect(refs2.length).toBe(2);
+            expect(refs2).toContain(refs1[0]);
+        });
+
+        it('buffer flushes only when all pending events resolve', () => {
+            const { dom, getSeqState } = createDom();
+            const ws = makeWS(dom);
+
+            ws.sendEvent('click', { id: 1 });
+            const ref1 = getSeqState().pendingEventRefs[0];
+
+            ws.sendEvent('click', { id: 2 });
+            const refs = getSeqState().pendingEventRefs;
+            const ref2 = refs.find(r => r !== ref1);
+
+            // Buffer a tick patch
+            ws.handleMessage({
+                type: 'patch',
+                patches: [],
+                version: 2,
+                source: 'tick'
+            });
+            expect(getSeqState().tickBufferLength).toBe(1);
+
+            // First event response — still one pending
+            ws.handleMessage({
+                type: 'patch',
+                patches: [],
+                version: 3,
+                source: 'event',
+                ref: ref1
+            });
+
+            // Buffer should NOT be flushed yet (ref2 still pending)
+            expect(getSeqState().tickBufferLength).toBe(1);
+            expect(getSeqState().pendingEventRefs.length).toBe(1);
+
+            // Second event response — all resolved
+            ws.handleMessage({
+                type: 'patch',
+                patches: [],
+                version: 4,
+                source: 'event',
+                ref: ref2
+            });
+
+            expect(getSeqState().tickBufferLength).toBe(0);
+            expect(getSeqState().pendingEventRefs.length).toBe(0);
+        });
+
+        it('disconnect clears all pending refs', () => {
+            const { dom, getSeqState } = createDom();
+            const ws = makeWS(dom);
+
+            ws.sendEvent('a', {});
+            ws.sendEvent('b', {});
+            expect(getSeqState().pendingEventRefs.length).toBe(2);
+
+            ws._intentionalDisconnect = true;
+            ws.disconnect();
+
+            expect(getSeqState().pendingEventRefs.length).toBe(0);
+            expect(getSeqState().tickBufferLength).toBe(0);
+        });
+
+        it('error clears all pending refs', () => {
+            const { dom, getSeqState } = createDom();
+            const ws = makeWS(dom);
+
+            ws.sendEvent('a', {});
+            ws.sendEvent('b', {});
+            expect(getSeqState().pendingEventRefs.length).toBe(2);
+
+            ws.handleMessage({
+                type: 'error',
+                error: 'Something went wrong'
+            });
+
+            expect(getSeqState().pendingEventRefs.length).toBe(0);
+            expect(getSeqState().tickBufferLength).toBe(0);
+        });
+
+        it('non-source patches pass through (backward compat)', () => {
+            const { dom, getSeqState } = createDom();
+            const ws = makeWS(dom);
+
+            ws.sendEvent('click', {});
+
+            // Patch without source — backward compat, should not buffer
+            ws.handleMessage({
+                type: 'patch',
+                patches: [],
+                version: 2,
+            });
+
+            expect(getSeqState().tickBufferLength).toBe(0);
+        });
+    });
 });
