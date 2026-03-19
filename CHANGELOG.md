@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`manage.py djust_gen_live` — Model-to-LiveView scaffolding generator** — Generate a complete CRUD LiveView scaffold from a model name and field definitions: `python manage.py djust_gen_live blog Post title:string body:text`. Creates views.py (with `@event_handler` CRUD operations), urls.py (using `live_session()` routing), HTML template (with `dj-*` directives), and tests.py. Supports `--dry-run`, `--force`, `--no-tests`, `--api` (JSON mode) options. Handles all Django field types including FK relationships. Search uses `Q` objects for OR logic across text fields.
+
 - **`on_mount` hooks for cross-cutting mount logic** — Module-level hooks that run on every LiveView mount, declared via `@on_mount` decorator and `on_mount` class attribute. Use cases: authentication checks, telemetry, tenant resolution, feature flags. Hooks run after auth checks, before `mount()`. Return a redirect URL string to halt the mount pipeline. Hooks are inherited via MRO (parent-first, deduplicated). Includes V009 system check for validation. Phoenix `on_mount` v0.17+ parity.
 
 - **`put_flash(level, message)` and `clear_flash()` for ephemeral flash notifications** — Phoenix `put_flash` parity. Queue transient messages (info, success, warning, error) from any event handler; they are flushed to the client over WebSocket/SSE after each response. Includes `{% dj_flash %}` template tag with auto-dismiss and ARIA `role="status"` / `role="alert"` support. ([#568](https://github.com/djust-org/djust/pull/568))
