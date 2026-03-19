@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`dj-copy` enhancements** — Selector-based copy (`dj-copy="#code-block"` copies the element's `textContent`), configurable feedback text (`dj-copy-feedback="Done!"`), CSS class feedback (`dj-copy-class` adds a custom class for 2s, default `dj-copied`), and optional server event (`dj-copy-event="copied"` fires after successful copy for analytics). Backward compatible with existing literal copy behavior.
+
+- **`dj-auto-recover` attribute for reconnection recovery** — After WebSocket reconnects, elements with `dj-auto-recover="handler_name"` automatically fire a server event with serialized DOM state (form field values and `data-*` attributes from the container). Enables the server to restore custom state lost during disconnection. Does not fire on initial page load. Supports multiple independent recovery elements per page.
+
+- **`dj-debounce` / `dj-throttle` HTML attributes** — Apply debounce or throttle to any `dj-*` event attribute (`dj-click`, `dj-change`, `dj-input`, `dj-keydown`, `dj-keyup`) directly in HTML: `<button dj-click="search" dj-debounce="300">`. Takes precedence over `data-debounce`/`data-throttle`. Supports `dj-debounce="blur"` to defer until element loses focus (Phoenix parity). `dj-debounce="0"` disables default debounce on `dj-input`. Each element gets its own independent timer.
+
 - **Connection state CSS classes** — `dj-connected` and `dj-disconnected` classes are automatically applied to `<body>` based on WebSocket/SSE transport state. Enables CSS-driven UI feedback for connection status (e.g., dimming content, showing offline banners). Both classes are removed on intentional disconnect (TurboNav). Phoenix LiveView's `phx-connected`/`phx-disconnected` equivalent.
 
 - **`dj-cloak` attribute for FOUC prevention** — Elements with `dj-cloak` are hidden (`display: none !important`) until the WebSocket/SSE mount response is received, preventing flash of unconnected content. CSS is injected automatically by client.js — no user stylesheet changes needed. Phoenix LiveView's `phx-no-feedback` equivalent.
