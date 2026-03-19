@@ -64,6 +64,10 @@ class LiveViewWebSocket {
         this.vdomVersion = null;
         this.stats.connectedAt = null; // Reset connection timestamp
 
+        // Remove connection state CSS classes on intentional disconnect
+        document.body.classList.remove('dj-connected');
+        document.body.classList.remove('dj-disconnected');
+
         // Event sequencing (#560): clear pending event state
         _pendingEventRefs.clear();
         _pendingEventNames.clear();
@@ -94,6 +98,10 @@ class LiveViewWebSocket {
             this.reconnectAttempts = 0;
             this._intentionalDisconnect = false;
 
+            // Connection state CSS classes
+            document.body.classList.add('dj-connected');
+            document.body.classList.remove('dj-disconnected');
+
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
                 this.stats.reconnections++;
@@ -106,6 +114,10 @@ class LiveViewWebSocket {
         this.ws.onclose = (_event) => {
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
+
+            // Connection state CSS classes
+            document.body.classList.add('dj-disconnected');
+            document.body.classList.remove('dj-connected');
 
             // Notify hooks of disconnection
             if (typeof notifyHooksDisconnected === 'function') notifyHooksDisconnected();
@@ -207,6 +219,12 @@ class LiveViewWebSocket {
             case 'mount':
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[LiveView] View mounted:', data.view);
+
+                // Remove dj-cloak from all elements (FOUC prevention)
+                document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
+
+                // Finish page loading bar on mount
+                if (window.djust.pageLoading) window.djust.pageLoading.finish();
 
                 // Initialize VDOM version from mount response (critical for patch generation)
                 if (data.version !== undefined) {

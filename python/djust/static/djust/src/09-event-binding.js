@@ -829,11 +829,43 @@ function clearOptimisticState(eventName) {
  * instead of manually calling initReactCounters + initTodoItems +
  * bindLiveViewEvents + updateHooks individually.
  */
+// WeakSet to track elements that have already been scrolled into view.
+// Fresh DOM nodes (from VDOM replacement) won't be in the set, so they
+// will scroll again — correct behavior for newly inserted content.
+const _scrolledElements = new WeakSet();
+
 function reinitAfterDOMUpdate() {
     initReactCounters();
     initTodoItems();
     bindLiveViewEvents();
     if (typeof updateHooks === 'function') { updateHooks(); }
+
+    // dj-scroll-into-view: auto-scroll elements into view after DOM updates
+    document.querySelectorAll('[dj-scroll-into-view]').forEach(el => {
+        if (_scrolledElements.has(el)) return;
+        _scrolledElements.add(el);
+
+        const value = el.getAttribute('dj-scroll-into-view') || '';
+        let options;
+        switch (value) {
+            case 'instant':
+                options = { behavior: 'instant', block: 'nearest' };
+                break;
+            case 'center':
+                options = { behavior: 'smooth', block: 'center' };
+                break;
+            case 'start':
+                options = { behavior: 'smooth', block: 'start' };
+                break;
+            case 'end':
+                options = { behavior: 'smooth', block: 'end' };
+                break;
+            default:
+                options = { behavior: 'smooth', block: 'nearest' };
+                break;
+        }
+        el.scrollIntoView(options);
+    });
 }
 
 // Export for testing and for createNodeFromVNode to mark VDOM-created elements as bound

@@ -48,6 +48,12 @@ class LiveViewSSE {
 
         this.eventSource = new EventSource(streamUrl);
 
+        this.eventSource.onopen = () => {
+            // Connection state CSS classes
+            document.body.classList.add('dj-connected');
+            document.body.classList.remove('dj-disconnected');
+        };
+
         this.eventSource.onmessage = (event) => {
             try {
                 this.stats.received++;
@@ -65,6 +71,9 @@ class LiveViewSSE {
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED) {
                 console.warn('[SSE] EventSource closed unexpectedly.');
                 this.enabled = false;
+                // Connection state CSS classes
+                document.body.classList.add('dj-disconnected');
+                document.body.classList.remove('dj-connected');
             }
         };
     }
@@ -79,6 +88,11 @@ class LiveViewSSE {
         }
         this.viewMounted = false;
         this.sessionId = null;
+
+        // Remove connection state CSS classes on intentional disconnect
+        document.body.classList.remove('dj-connected');
+        document.body.classList.remove('dj-disconnected');
+
         if (globalThis.djustDebug) console.log('[SSE] Disconnected');
     }
 
@@ -102,6 +116,12 @@ class LiveViewSSE {
             case 'mount':
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
+
+                // Remove dj-cloak from all elements (FOUC prevention)
+                document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
+
+                // Finish page loading bar on mount
+                if (window.djust.pageLoading) window.djust.pageLoading.finish();
 
                 if (data.version !== undefined) {
                     clientVdomVersion = data.version;

@@ -22,3 +22,12 @@ window._djustClientLoaded = true;
 // ============================================================================
 // Dangerous keys that could cause prototype pollution attacks
 const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
+
+// ============================================================================
+// dj-cloak CSS injection — hide [dj-cloak] elements until mount completes
+// ============================================================================
+(function() {
+    const style = document.createElement('style');
+    style.textContent = '[dj-cloak] { display: none !important; }';
+    document.head.appendChild(style);
+})();
