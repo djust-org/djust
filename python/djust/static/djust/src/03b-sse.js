@@ -122,6 +122,9 @@ class LiveViewSSE {
                             container.innerHTML = data.html;
                         }
                         reinitAfterDOMUpdate();
+                        // Set mount ready flag so dj-mounted handlers only fire
+                        // for elements added by subsequent VDOM patches, not on initial load
+                        window.djust._mountReady = true;
                     }
                 }
                 break;

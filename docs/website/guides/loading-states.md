@@ -329,7 +329,13 @@ Without `start_async()`, loading states end as soon as the server responds. With
 
 ### Swap Button Text
 
+For simple text replacement on submit buttons, use `dj-disable-with` instead of loading directives:
+
 ```html
+<!-- Simple: dj-disable-with (one attribute, automatic) -->
+<button type="submit" dj-disable-with="Deploying...">Deploy</button>
+
+<!-- Advanced: loading directives (more control over layout) -->
 <button dj-click="deploy">
     <span dj-loading.hide dj-loading.for="deploy">Deploy</span>
     <span dj-loading.show dj-loading.for="deploy" style="display:none">
@@ -337,6 +343,8 @@ Without `start_async()`, loading states end as soon as the server responds. With
     </span>
 </button>
 ```
+
+`dj-disable-with` is the simpler choice for most cases. Use loading directives when you need more complex layouts (spinners, icons, multiple elements reacting to the same event).
 
 ### Full-Page Overlay
 

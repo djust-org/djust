@@ -239,6 +239,9 @@ class LiveViewWebSocket {
                     }
                     this.skipMountHtml = false;
                     reinitAfterDOMUpdate();
+                    // Set mount ready flag so dj-mounted handlers only fire
+                    // for elements added by subsequent VDOM patches, not on initial load
+                    window.djust._mountReady = true;
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
@@ -254,6 +257,9 @@ class LiveViewWebSocket {
                         reinitAfterDOMUpdate();
                     }
                     this.skipMountHtml = false;
+                    // Set mount ready flag so dj-mounted handlers only fire
+                    // for elements added by subsequent VDOM patches, not on initial load
+                    window.djust._mountReady = true;
                 }
                 break;
 

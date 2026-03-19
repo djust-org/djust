@@ -172,7 +172,7 @@ from djust import DJ
 
 **`dj-confirm` attribute** — ✅ Already implemented in `09-event-binding.js`. Native browser confirmation dialog before executing an event.
 
-**`dj-disable-with` attribute** — Automatically disable submit buttons and replace text during form submission. `<button type="submit" dj-disable-with="Saving...">Save</button>`. Prevents double-submit and provides instant visual feedback. Phoenix's `phx-disable-with` is one of its most-loved small features.
+**`dj-disable-with` attribute** ✅ — Automatically disable submit buttons and replace text during form submission. `<button type="submit" dj-disable-with="Saving...">Save</button>`. Prevents double-submit and provides instant visual feedback. Phoenix's `phx-disable-with` is one of its most-loved small features.
 
 **`dj-key` attribute** — ✅ Already implemented. Keyed VDOM diff with LIS optimization.
 
@@ -182,11 +182,11 @@ from djust import DJ
 
 **`live_title` & document metadata** — Update `<title>` and `<meta>` tags from the server without a page reload. Phoenix's `live_title_tag` is trivial but surprisingly impactful — it enables unread counts, status indicators, and notification badges in browser tabs. React 19 went further with native document metadata support (title, link, meta hoisted to `<head>` automatically). API: `self.page_title = "Chat (3 unread)"` and `self.page_meta = {"description": "...", "og:image": "..."}` in any event handler, sent as a lightweight WS message that updates `document.title` and `<meta>` tags without a VDOM diff. The meta tag support is especially valuable for SPAs that need dynamic Open Graph tags for link previews. ~50 lines total.
 
-**`dj-mounted` event** — Fire a server event when an element enters the DOM (after VDOM patch inserts it). Use cases: scroll-into-view for new chat messages, trigger data loading when a tab becomes active, animate elements on appearance. Phoenix has `phx-mounted`. Pairs naturally with `dj-remove` (exit event). Implementation: MutationObserver watching for elements with `dj-mounted` attribute.
+**`dj-mounted` event** ✅ — Fire a server event when an element enters the DOM (after VDOM patch inserts it). Use cases: scroll-into-view for new chat messages, trigger data loading when a tab becomes active, animate elements on appearance. Phoenix has `phx-mounted`. Pairs naturally with `dj-remove` (exit event). Uses a WeakSet in `bindLiveViewEvents()` to detect newly-added elements after VDOM patches (not initial page load).
 
 **`dj-click-away`** — Fire an event when the user clicks outside an element. `<div dj-click-away="close_dropdown">`. This is the single most common pattern developers manually implement in every interactive app (dropdowns, modals, popovers). Currently requires `dj-window-click` + manual coordinate checking or a JS hook. One attribute, ~20 lines of JS, eliminates boilerplate in every project.
 
-**`dj-lock` — Prevent concurrent event execution** — Disable an element until its event handler completes. `<button dj-click="save" dj-lock>Save</button>` prevents double-clicks and concurrent submissions. Different from `dj-disable-with` (which is cosmetic) — `dj-lock` actually blocks the event from firing again until the server acknowledges completion. Phoenix handles this implicitly via its event acknowledgment protocol. Implementation: client-side `disabled` flag per element, cleared on server response. ~30 lines of JS. Pairs with `dj-disable-with` for the full pattern: lock + visual feedback.
+**`dj-lock` — Prevent concurrent event execution** ✅ — Disable an element until its event handler completes. `<button dj-click="save" dj-lock>Save</button>` prevents double-clicks and concurrent submissions. Different from `dj-disable-with` (which is cosmetic) — `dj-lock` actually blocks the event from firing again until the server acknowledges completion. Phoenix handles this implicitly via its event acknowledgment protocol. Uses `data-djust-locked` marker attribute and `disabled` for form elements or `djust-locked` CSS class for non-form elements. All locked elements unlocked on server response.
 
 **`dj-auto-recover` — Custom reconnection recovery** — Fires a custom server event on WebSocket reconnect instead of the default form-value replay. `<div dj-auto-recover="restore_state">`. Use case: views with complex state (drag positions, canvas state, multi-step wizard progress) that can't be recovered from form values alone. The handler receives `params` with whatever the client can serialize from the DOM. Phoenix's `phx-auto-recover` solves the same problem — not every reconnection fits the "replay form values" pattern.
 
@@ -215,7 +215,7 @@ class DashboardView(LiveView):
     on_mount = [require_auth]
 ```
 
-**`_target` param in form change events** — When multiple fields share one `dj-change="validate"` handler, Phoenix sends a `_target` parameter identifying which field triggered the change. This is essential for efficient per-field validation without needing separate handlers per field. Currently djust fires `dj-change` with the field value but doesn't tell the server *which* field changed, forcing developers to either write one handler per field or re-validate everything. Implementation: the client includes the triggering element's `name` attribute as `_target` in the event params. ~10 lines JS, ~5 lines Python. *This is one of those "obvious in hindsight" features — once developers have it, they wonder how they ever wrote forms without it. Phoenix has had it since day one.*
+**`_target` param in form change events** ✅ — When multiple fields share one `dj-change="validate"` handler, the `_target` parameter identifies which field triggered the change. Essential for efficient per-field validation without needing separate handlers per field. The client includes the triggering element's `name` (or `id`, or `null`) as `_target` in the event params for `dj-change`, `dj-input`, and `dj-submit` (submitter button name). Matches Phoenix LiveView's `_target` convention.
 
 **`dj-scroll-into-view` — Auto-scroll to element on render** — Declaratively scroll an element into the viewport when it appears or updates. `<div dj-scroll-into-view>` on a new chat message scrolls it visible. Supports modifiers: `dj-scroll-into-view.smooth` (smooth scroll), `dj-scroll-into-view.instant` (jump), `dj-scroll-into-view.nearest` (minimal scroll). Fires after VDOM patch, so it targets the newly-inserted element. Use cases: chat messages, form validation errors ("scroll to first error"), anchor navigation within LiveViews, notification toasts. Currently requires a `dj-hook` with `this.el.scrollIntoView()` — this is boilerplate in every app that does list appending. ~25 lines JS (MutationObserver + `scrollIntoView()`). *This pairs with `dj-sticky-scroll` (container-level) but operates at the element level — both are needed for complete scroll UX.*
 
@@ -261,7 +261,7 @@ class DashboardView(LiveView):
 
 **`dj-paste` — Paste event handling** — Fire a server event when the user pastes content (text, images, files) into an element. `<textarea dj-paste="handle_paste">`. The client extracts paste payload: plain text via `clipboardData.getData('text/plain')`, images via `clipboardData.files` (auto-routed to `UploadMixin` if an upload slot is configured), and rich HTML via `getData('text/html')`. Sends structured params: `{"text": "...", "html": "...", "has_files": true}`. Use cases: paste images into chat (Slack/Discord-style), paste formatted text into rich editors, paste CSV data into tables, paste code snippets with language detection. Currently requires a `dj-hook` for every paste target. ~40 lines JS. *Every chat app and content editor needs paste handling. Combined with `UploadMixin` for image paste, this is the complete clipboard-to-server pipeline.*
 
-**Remaining v0.4.0 quick wins** — Any items from the v0.4.0 quick wins list that didn't ship in the initial release (`dj-shortcut`, `dj-copy`, `dj-page-loading`, `dj-click-away`, `dj-lock`, `dj-auto-recover`, `dj-cloak`, `dj-mounted`, `live_title`, `dj-scroll-into-view`) ship here.
+**Remaining v0.4.0 quick wins** — Any items from the v0.4.0 quick wins list that didn't ship in the initial release (`dj-shortcut`, `dj-copy`, `dj-page-loading`, `dj-click-away`, `dj-auto-recover`, `dj-cloak`, `live_title`, `dj-scroll-into-view`) ship here. (`dj-lock` and `dj-mounted` shipped in v0.4.0.)
 
 ### Milestone: v0.5.0 — Async Loading, Core Components & Streams
 
@@ -833,7 +833,7 @@ Features tracked against Phoenix LiveView 1.1 and React where applicable.
 | `live_session` routing | `live_session/3` | — | **Done** (basic) | — |
 | Streaming (LLM/partial) | — | Server Components | **Done** (`StreamingMixin`) | — |
 | Dead view → live view | Built-in | SSR hydration | Partial (HTTP fallback) | Post-1.0 |
-| **Form `_target` param** | **`_target` in params** | — | **Not started** | **v0.4.0** |
+| ~~**Form `_target` param**~~ | ~~**`_target` in params**~~ | — | ✅ **Done** | v0.4.0 |
 | **Navigation loading bar** | — | NProgress | **Not started** | **v0.4.0** |
 | **Static event params** | **`phx-value-*`** | `data-*` attrs | **Not started** | **v0.4.0** |
 | **Handle params callback** | **`handle_params/3`** | React Router loaders | **Partial** (in navigation mixin) | **v0.4.0** |
@@ -844,7 +844,7 @@ Features tracked against Phoenix LiveView 1.1 and React where applicable.
 | **Event ordering** | **Erlang mailbox** | — | **Broken (#560)** | **v0.4.0** |
 | **Focus preservation** | **Auto (morph)** | **Reconciliation** | **Not started** | **v0.4.0** |
 | **Confirm dialog** | **`data-confirm`** | — | **Done** | — |
-| **Disable with** | **`phx-disable-with`** | — | **Not started** | **v0.4.0** |
+| ~~**Disable with**~~ | ~~**`phx-disable-with`**~~ | — | ✅ **Done** | v0.4.0 |
 | **Window/doc events** | **`phx-window-*`** | — | **Not started** | **v0.4.0** |
 | **Debounce/throttle attrs** | **`phx-debounce`** | — | **Decorator only** | **v0.4.0** |
 | **Dynamic page title** | **`live_title`** | `document.title` | **Not started** | **v0.4.0** |
@@ -944,8 +944,8 @@ Features tracked against Phoenix LiveView 1.1 and React where applicable.
 
 | Milestone | Theme | Key Deliverables | Priority |
 |-----------|-------|-----------------|----------|
-| v0.4.0 | Stability & Core DX | Fix #559/#560, focus preservation, **`dj-value-*`**, **`handle_params`** (complete), **`on_mount` hooks**, **flash messages**, **`_target` param**, **`dj-scroll-into-view`**, connection CSS, form recovery, `dj-disable-with`, window events, `dj-debounce`/`dj-throttle` attrs, error messages, `djust_doctor`, latency simulator | **Critical** |
-| v0.4.1 | JS Commands & Polish | **JS Commands**, programmable JS from hooks, scoped selectors (`closest`/`inner`), `page_loading` on push, **`dj-paste`**, `dj-shortcut`, `dj-copy`, `dj-page-loading`, `dj-click-away`, `dj-lock`, `dj-auto-recover`, `dj-cloak`, `dj-mounted`, `live_title` | **Critical** |
+| v0.4.0 | Stability & Core DX | Fix #559/#560, focus preservation, **`dj-value-*`**, **`handle_params`** (complete), **`on_mount` hooks**, **flash messages**, **`_target` param** ✅, **`dj-scroll-into-view`**, connection CSS, form recovery, `dj-disable-with` ✅, `dj-lock` ✅, `dj-mounted` ✅, window events, `dj-debounce`/`dj-throttle` attrs, error messages, `djust_doctor`, latency simulator | **Critical** |
+| v0.4.1 | JS Commands & Polish | **JS Commands**, programmable JS from hooks, scoped selectors (`closest`/`inner`), `page_loading` on push, **`dj-paste`**, `dj-shortcut`, `dj-copy`, `dj-page-loading`, `dj-click-away`, `dj-auto-recover`, `dj-cloak`, `live_title` | **Critical** |
 | v0.5.0 | Async, Core Components & Streams | **`assign_async`/`AsyncResult`**, **`handle_async`**, **function components**, **declarative assigns**, **`used_input?`**, nested LiveComponents + targeted events + slots, **component `update` callback**, `dj-spread`, **View Transitions API**, direct-to-S3 uploads, stream enhancements + **`dj-viewport-top/bottom`**, **`handle_info`**, **template fragments**, **keyed for-loop change tracking**, **`self.defer()`**, selective re-rendering, Rust engine parity, **database change notifications (pg_notify)**, **virtual/windowed lists** | **Critical** |
 | v0.5.1 | Developer Experience & Forms | **Testing utilities**, **error overlay**, **`@computed`**, **`dj-lazy`**, **component context sharing**, **`dj-trigger-action`**, **scoped loading**, **error boundaries**, **nested forms**, **stable IDs**, **native `<dialog>`**, **dirty tracking**, **`dj-no-submit`**, **type-safe template validation**, **multi-step wizard (`WizardMixin`)** | **Critical** |
 | v0.6.0 | Production & Interactivity | Animations/transitions + **`dj-transition-group`**, **CSS `@starting-style`**, **hot view replacement**, **streaming initial render**, **time-travel debugging**, **state undo/redo**, **connection multiplexing**, sticky LiveViews, `dj-mutation`, `dj-sticky-scroll`, monitoring, graceful degradation, CSP nonce, batch state updates, multi-tab sync, offline mutation queue, `dj-resize`, **WebSocket compression (permessage-deflate)**, **runtime layout switching** | **High** |
@@ -963,15 +963,15 @@ Want to help? See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 High-impact areas for contributions:
 
 #### Quick Wins (< 1 day, great first contributions)
-1. **`dj-value-*` static params** — ~20 lines JS, used in every template (P0)
-2. **`_target` param in change events** — ~10 lines JS + ~5 lines Python, essential for forms (P0)
-3. **`dj-disable-with`** — Auto-disable buttons during submission, ~20 lines JS
+1. ~~**`dj-value-*` static params**~~ ✅
+2. ~~**`_target` param in change events**~~ ✅
+3. ~~**`dj-disable-with`**~~ ✅
 4. **Connection state CSS classes** — `dj-connected`/`dj-disconnected` on body, ~10 lines JS
 5. **`dj-copy`** — Copy to clipboard, ~30 lines JS
 6. **`dj-cloak`** — FOUC prevention, ~5 lines JS + 1 line CSS
 7. **`live_title`** — Dynamic page title via WS message, ~30 lines total
 8. **`dj-click-away`** — Click outside handler, ~20 lines JS
-9. **`dj-lock`** — Prevent concurrent event execution, ~30 lines JS
+9. ~~**`dj-lock`**~~ ✅
 10. **`dj-page-loading`** — NProgress-style loading bar, ~40 lines JS + 10 lines CSS
 11. **Native `<dialog>` integration** — `dj-dialog="open|close"`, ~20 lines JS
 12. **`dj-no-submit`** — Prevent enter-key form submission, ~10 lines JS
@@ -985,7 +985,7 @@ High-impact areas for contributions:
 16. **`on_mount` hooks** — Cross-cutting mount logic, ~100 lines Python
 17. **Flash messages** — `FlashMixin` + `{% dj_flash %}` + client JS auto-dismiss
 18. **`handle_params` callback** — URL param change handler, ~50 lines Python
-19. **`dj-mounted`** — Element entered DOM event, ~30 lines JS
+19. ~~**`dj-mounted`**~~ ✅
 20. **`dj-sticky-scroll`** — Auto-scroll chat/log containers, ~40 lines JS
 21. **`dj-lazy` viewport loading** — Lazy component rendering, ~40 lines JS
 22. **Multi-tab sync** — BroadcastChannel API integration, ~60 lines JS

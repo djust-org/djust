@@ -4,14 +4,15 @@ djust uses `dj-*` HTML attributes to bind server-side Python handlers to client-
 
 ## Event Bindings
 
-| Attribute                     | Fires when                  | Handler receives           |
-| ----------------------------- | --------------------------- | -------------------------- |
-| `dj-click="handler"`          | Element is clicked          | `data-*` attrs as kwargs   |
-| `dj-input="handler"`          | Input value changes (keyup) | `value=` string            |
-| `dj-change="handler"`         | Input/select loses focus    | `value=` string            |
-| `dj-submit="handler"`         | Form is submitted           | All named fields as kwargs |
-| `dj-keydown.enter="handler"`  | Enter key pressed           | `**kwargs`                 |
-| `dj-keydown.escape="handler"` | Escape key pressed          | `**kwargs`                 |
+| Attribute                     | Fires when                       | Handler receives                  |
+| ----------------------------- | -------------------------------- | --------------------------------- |
+| `dj-click="handler"`          | Element is clicked               | `data-*` attrs as kwargs          |
+| `dj-input="handler"`          | Input value changes (keyup)      | `value=` string, `_target=` name  |
+| `dj-change="handler"`         | Input/select loses focus         | `value=` string, `_target=` name  |
+| `dj-submit="handler"`         | Form is submitted                | All named fields as kwargs        |
+| `dj-keydown.enter="handler"`  | Enter key pressed                | `**kwargs`                        |
+| `dj-keydown.escape="handler"` | Escape key pressed               | `**kwargs`                        |
+| `dj-mounted="handler"`        | Element enters DOM (after patch) | `dj-value-*` attrs as kwargs      |
 
 ## Defining Handlers
 
@@ -98,6 +99,92 @@ class MyView(LiveView):
 <input dj-keydown.enter="submit_search" dj-keydown.escape="clear_search" />
 ```
 
+## Form Field Targeting (`_target`)
+
+When multiple form fields share one handler (e.g., `dj-change="validate"`), the `_target` parameter tells the server which field triggered the event. This enables efficient per-field validation without needing a separate handler per field.
+
+```html
+<form>
+    <input name="email" dj-change="validate" />
+    <input name="username" dj-change="validate" />
+</form>
+```
+
+```python
+@event_handler()
+def validate(self, value: str = "", _target: str = "", **kwargs):
+    if _target == "email":
+        self.email_error = "" if "@" in value else "Invalid email"
+    elif _target == "username":
+        self.username_error = "" if len(value) >= 3 else "Too short"
+```
+
+`_target` is the triggering element's `name` attribute (falling back to `id`, then `null`). It is included automatically in `dj-change`, `dj-input`, and `dj-submit` (submitter button name) events. Matches Phoenix LiveView's `_target` convention.
+
+## Preventing Double Submits
+
+### `dj-disable-with`
+
+Automatically disable a submit button and replace its text during form submission:
+
+```html
+<form dj-submit="save">
+    {% csrf_token %}
+    <input name="title" value="{{ title }}" />
+    <button type="submit" dj-disable-with="Saving...">Save</button>
+</form>
+```
+
+While the server processes the event, the button shows "Saving..." and is disabled. After the server responds, the original text and enabled state are restored. Also works with `dj-click`:
+
+```html
+<button dj-click="generate" dj-disable-with="Generating...">Generate Report</button>
+```
+
+### `dj-lock`
+
+Prevent an element from firing its event again until the server responds:
+
+```html
+<button dj-click="save" dj-lock>Save</button>
+```
+
+Unlike `dj-disable-with` (which is cosmetic feedback), `dj-lock` blocks the event from firing at all while a previous invocation is in flight. For form elements (button, input, select, textarea), the element is disabled. For non-form elements (e.g., `<div dj-click="..." dj-lock>`), a `djust-locked` CSS class is applied instead.
+
+Combine both for the full pattern:
+
+```html
+<button dj-click="save" dj-lock dj-disable-with="Saving...">Save</button>
+```
+
+All locked elements are unlocked when any server response arrives.
+
+## Mounted Event (`dj-mounted`)
+
+Fire a server event when an element enters the DOM after a VDOM patch:
+
+```html
+{% if show_chart %}
+<div dj-mounted="on_chart_ready" dj-value-chart-type="bar">
+    <canvas id="my-chart"></canvas>
+</div>
+{% endif %}
+```
+
+```python
+@event_handler()
+def on_chart_ready(self, chart_type: str = "", **kwargs):
+    self.chart_data = load_chart_data(chart_type)
+```
+
+Key behavior:
+- Only fires after VDOM patches (not on initial page load)
+- Includes `dj-value-*` attributes from the mounted element as event params
+- Uses a WeakSet internally to prevent duplicate fires for the same DOM node
+- Handlers should be idempotent (if the element is replaced by a patch, it fires again for the new node)
+
+Use cases: trigger data loading when a tab becomes active, initialize third-party widgets, scroll new elements into view, animate elements on appearance.
+
 ## Rate Limiting
 
 Use decorators to control how often handlers fire:
@@ -167,5 +254,7 @@ If a subtree is managed by external JavaScript (charts, editors), prevent djust 
 ## Next Steps
 
 - [Templates](./templates.md) — full template directives reference
+- [Template Cheat Sheet](../guides/template-cheatsheet.md) — quick reference for all `dj-*` attributes
+- [Loading States](../guides/loading-states.md) — loading directives, `dj-disable-with`, background work
 - [State Management](../state/index.md) — debounce, throttle, loading states, optimistic updates
 - [Hooks](../guides/hooks.md) — client-side JavaScript lifecycle hooks
