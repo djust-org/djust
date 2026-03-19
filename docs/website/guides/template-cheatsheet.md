@@ -119,6 +119,58 @@ Every LiveView template needs these two things:
 
 Supported key modifiers: `.enter`, `.escape`, `.space`
 
+### Window & Document Events
+
+| Attribute | Target | Event |
+|---|---|---|
+| `dj-window-keydown="handler"` | `window` | `keydown` |
+| `dj-window-keyup="handler"` | `window` | `keyup` |
+| `dj-window-scroll="handler"` | `window` | `scroll` (150ms throttle) |
+| `dj-window-click="handler"` | `window` | `click` |
+| `dj-window-resize="handler"` | `window` | `resize` (150ms throttle) |
+| `dj-document-keydown="handler"` | `document` | `keydown` |
+| `dj-document-keyup="handler"` | `document` | `keyup` |
+| `dj-document-click="handler"` | `document` | `click` |
+
+```html
+<!-- Close modal on Escape anywhere -->
+<div dj-window-keydown.escape="close_modal">
+
+<!-- Track scroll position -->
+<div dj-window-scroll="on_scroll">
+
+<!-- Detect background clicks -->
+<div dj-document-click="on_click">
+```
+
+Key modifier filtering works: `dj-window-keydown.escape="handler"`. The element provides context (`dj-value-*`, component ID) but the listener attaches to `window`/`document`.
+
+### Click Away
+
+```html
+<!-- Fire event when user clicks outside this element -->
+<div dj-click-away="close_dropdown" class="dropdown">
+    ...
+</div>
+```
+
+Uses capture-phase document listener (works even if inner elements call `stopPropagation()`). Supports `dj-confirm` and `dj-value-*`.
+
+### Keyboard Shortcuts
+
+```html
+<!-- Single shortcut -->
+<div dj-shortcut="escape:close_modal">
+
+<!-- Multiple shortcuts, modifier keys -->
+<div dj-shortcut="ctrl+k:open_search:prevent, escape:close_modal">
+
+<!-- Modifiers: ctrl, alt, shift, meta (cmd on Mac) -->
+<div dj-shortcut="ctrl+shift+s:save:prevent">
+```
+
+Syntax: `[modifier+...]key:handler[:prevent]` (comma-separated for multiple). The `prevent` suffix calls `preventDefault()`. Shortcuts skip form inputs by default; add `dj-shortcut-in-input` to override.
+
 ### Navigation
 
 | Attribute | Description |
@@ -473,6 +525,17 @@ Event attributes:
   dj-blur         dj-focus        dj-keydown      dj-keyup
   dj-poll         dj-patch        dj-navigate     dj-copy
   dj-confirm      dj-model        dj-mounted
+  dj-click-away   dj-shortcut
+
+Window/document scoping:
+  dj-window-keydown               (keydown on window)
+  dj-window-keyup                 (keyup on window)
+  dj-window-scroll                (scroll on window, 150ms throttle)
+  dj-window-click                 (click on window)
+  dj-window-resize                (resize on window, 150ms throttle)
+  dj-document-keydown             (keydown on document)
+  dj-document-keyup               (keyup on document)
+  dj-document-click               (click on document)
 
 Submit protection:
   dj-disable-with="text"          (disable + replace text during submit)
