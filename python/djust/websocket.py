@@ -351,9 +351,48 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         Send an error response to the client with consistent formatting.
         Also emits the liveview_server_error signal for monitor integrations.
+
+        In DEBUG mode, includes additional fields for developer diagnostics:
+        - ``debug_detail``: unsanitized error message
+        - ``traceback``: abbreviated traceback (last 3 frames)
+        - ``hint``: actionable suggestion when available
         """
+        import traceback as tb_module
+
+        from django.conf import settings
+
+        # Keys that are debug-only and should never appear in production
+        _debug_keys = {"debug_detail", "hint", "_exc_info"}
+
+        is_debug = getattr(settings, "DEBUG", False)
+
+        # Build base response, excluding debug-only keys from context
         response: Dict[str, Any] = {"type": "error", "error": error}
-        response.update(context)
+        for k, v in context.items():
+            if k not in _debug_keys:
+                response[k] = v
+
+        if is_debug:
+            # Include the raw detail if a sanitised version was used
+            debug_detail = context.get("debug_detail")
+            if debug_detail and debug_detail != error:
+                response["debug_detail"] = debug_detail
+
+            # Abbreviated traceback (last 3 frames) from the current exception
+            exc_info = context.get("_exc_info")
+            if exc_info is None:
+                import sys as _sys
+
+                exc_info = _sys.exc_info()
+            if exc_info and exc_info[2] is not None:
+                frames = tb_module.format_tb(exc_info[2])
+                response["traceback"] = "".join(frames[-3:])
+
+            # Actionable hint
+            hint = context.get("hint")
+            if hint:
+                response["hint"] = hint
+
         await self.send_json(response)
         _emit_liveview_server_error(getattr(self, "view_instance", None), error, context)
 
@@ -938,7 +977,26 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         except AttributeError:
             error_msg = f"Class {class_name} not found in module {module_path}"
             logger.error(error_msg)
-            await self.send_error(_safe_error(error_msg, "View not found"))
+            hint = None
+            if getattr(settings, "DEBUG", False):
+                try:
+                    import inspect as _inspect
+
+                    from .live_view import LiveView as _LV
+
+                    available = [
+                        name
+                        for name, obj in _inspect.getmembers(module, _inspect.isclass)
+                        if issubclass(obj, _LV) and obj is not _LV
+                    ]
+                    if available:
+                        hint = "Available LiveView classes in %s: %s" % (
+                            module_path,
+                            ", ".join(sorted(available)),
+                        )
+                except Exception:
+                    pass
+            await self.send_error(_safe_error(error_msg, "View not found"), hint=hint)
             return
 
         # Security: Validate that the class is actually a LiveView

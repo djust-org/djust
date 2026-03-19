@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`manage.py djust_doctor` diagnostic command** -- checks Rust extension, Python/Django versions, Channels, Redis, templates, static files, routing, and ASGI server in one command. Supports `--json`, `--quiet`, `--check NAME`, and `--verbose` flags.
+
+- **Enhanced VDOM patch error messages** -- patch failures now include patch type, `dj-id`, parent element info, and suggested causes (third-party DOM modification, `{% if %}` block changes). In `DEBUG_MODE`, a console group with full patch detail is shown. Batch failure summaries include which patch indices failed.
+
+- **DEBUG-mode enriched WebSocket errors** -- `send_error` includes `debug_detail` (unsanitized message), `traceback` (last 3 frames), and `hint` (actionable suggestion) when `settings.DEBUG=True`. `handle_mount` lists available LiveView classes when class lookup fails.
+
+- **Debug panel warning interceptor** -- intercepts `console.warn` calls matching `[LiveView]` prefix and surfaces them as a warning badge on the debug button. Configurable auto-open via `LIVEVIEW_CONFIG.debug_auto_open_on_error`.
+
+- **Latency simulator in debug panel** -- test loading states and optimistic updates with simulated network delay. Presets (Off/50/100/200/500ms), custom value, jitter control, localStorage persistence, and visual badge on the debug button. Latency is injected on both WebSocket send and receive for full round-trip simulation. Only active when `DEBUG_MODE=true`.
+
 - **Form recovery on reconnect** — After WebSocket reconnects, form fields with `dj-change` or `dj-input` automatically fire change events to restore server state. Compares DOM values against server-rendered defaults and only fires for fields that differ. Use `dj-no-recover` to opt out individual fields. Fields inside `dj-auto-recover` containers are skipped (custom handler takes precedence). Works over both WebSocket and SSE transports.
 
 - **Reconnection backoff with jitter** — Exponential backoff with random jitter (AWS full-jitter strategy) prevents thundering herd on server restart. Min delay 500ms, max delay 30s, increased from 5 to 10 max attempts. Attempt count shown in reconnection banner (`dj-reconnecting-banner` CSS class) and exposed via `data-dj-reconnect-attempt` attribute and `--dj-reconnect-attempt` CSS custom property on `<body>`. Banner and attributes cleared on successful reconnect or intentional disconnect.
