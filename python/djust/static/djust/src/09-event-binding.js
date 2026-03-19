@@ -1010,10 +1010,111 @@ function _processAutoRecover() {
     });
 }
 
+/**
+ * Process automatic form recovery after a WebSocket reconnect.
+ * Scans all form fields with dj-change or dj-input inside [dj-view] and
+ * fires synthetic change events when the DOM value differs from the
+ * server-rendered default, restoring server state transparently.
+ *
+ * Skips fields with dj-no-recover or fields inside dj-auto-recover
+ * containers (custom handlers take precedence).
+ *
+ * Fires events sequentially (batched) via handleEvent() to avoid
+ * race conditions on the server.
+ */
+function _processFormRecovery() {
+    if (!window.djust._isReconnect) return;
+
+    var root = document.querySelector('[dj-view]');
+    if (!root) root = document.querySelector('[dj-root]');
+    if (!root) return;
+
+    // Collect fields to recover
+    var fields = root.querySelectorAll('input[dj-change], textarea[dj-change], select[dj-change], input[dj-input], textarea[dj-input], select[dj-input]');
+    var pendingEvents = [];
+
+    for (var i = 0; i < fields.length; i++) {
+        var field = fields[i];
+
+        // Skip fields with dj-no-recover
+        if (field.hasAttribute('dj-no-recover')) continue;
+
+        // Skip fields inside dj-auto-recover containers (custom handler takes precedence)
+        if (field.closest('[dj-auto-recover]')) continue;
+
+        // Determine handler name — prefer dj-change, fall back to dj-input
+        var handlerAttr = field.hasAttribute('dj-change') ? 'dj-change' : 'dj-input';
+        var handlerString = field.getAttribute(handlerAttr);
+        if (!handlerString) continue;
+
+        // Parse handler string to extract function name
+        var parsed = parseEventHandler(handlerString);
+        var handlerName = parsed.name;
+
+        // Determine current DOM value and server default
+        var tagName = field.tagName.toLowerCase();
+        var fieldType = (field.type || '').toLowerCase();
+        var domValue;
+        var serverDefault;
+
+        if (fieldType === 'checkbox') {
+            domValue = field.checked;
+            serverDefault = field.hasAttribute('checked');
+        } else if (fieldType === 'radio') {
+            domValue = field.checked;
+            serverDefault = field.hasAttribute('checked');
+        } else if (tagName === 'select') {
+            domValue = field.value;
+            // Server default: the option with 'selected' attribute, or the first option
+            var selectedOption = field.querySelector('option[selected]');
+            serverDefault = selectedOption ? selectedOption.value : (field.options.length > 0 ? field.options[0].value : '');
+        } else {
+            // text, textarea, number, email, etc.
+            domValue = field.value;
+            serverDefault = field.getAttribute('value') || (tagName === 'textarea' ? field.defaultValue : '');
+        }
+
+        // Skip if DOM value matches server default (avoid unnecessary server work)
+        if (domValue === serverDefault) continue;
+
+        // Build event params matching dj-change param structure
+        var value = (fieldType === 'checkbox' || fieldType === 'radio') ? domValue : domValue;
+        var fieldName = field.name || field.id || null;
+        var params = { value: value, field: fieldName };
+
+        // Add positional arguments from handler syntax if present
+        if (parsed.args.length > 0) {
+            params._args = parsed.args;
+        }
+
+        // _target: include triggering field's name
+        params._target = fieldName;
+
+        pendingEvents.push({ handlerName: handlerName, params: params });
+    }
+
+    // Fire events sequentially to avoid server race conditions
+    if (pendingEvents.length > 0 && typeof handleEvent === 'function') {
+        if (globalThis.djustDebug) console.log('[LiveView] Form recovery: restoring ' + pendingEvents.length + ' field(s)');
+        var fireSequentially = function(index) {
+            if (index >= pendingEvents.length) return;
+            var evt = pendingEvents[index];
+            var result = handleEvent(evt.handlerName, evt.params);
+            if (result && typeof result.then === 'function') {
+                result.then(function() { fireSequentially(index + 1); });
+            } else {
+                fireSequentially(index + 1);
+            }
+        };
+        fireSequentially(0);
+    }
+}
+
 // Export for testing and for createNodeFromVNode to mark VDOM-created elements as bound
 window.djust.bindLiveViewEvents = bindLiveViewEvents;
 window.djust.reinitAfterDOMUpdate = reinitAfterDOMUpdate;
 window.djust._isHandlerBound = _isHandlerBound;
 window.djust._markHandlerBound = _markHandlerBound;
 window.djust._processAutoRecover = _processAutoRecover;
+window.djust._processFormRecovery = _processFormRecovery;
 window.djust._isReconnect = false;
