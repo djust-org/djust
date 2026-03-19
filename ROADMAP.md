@@ -180,7 +180,7 @@ from djust import DJ
 
 **`dj-debounce` / `dj-throttle` as HTML attributes** ✅ — Currently debounce/throttle only works as Python decorators on event handlers, applying the same delay to every caller. Phoenix allows per-element control: `<input dj-change="search" dj-debounce="300">` vs `<select dj-change="filter" dj-debounce="0">`. This is strictly more flexible — the Python decorator becomes the default, the attribute becomes the override. Implementation: client-side timer per element+event pair, ~50 lines of JS.
 
-**`live_title` & document metadata** — Update `<title>` and `<meta>` tags from the server without a page reload. Phoenix's `live_title_tag` is trivial but surprisingly impactful — it enables unread counts, status indicators, and notification badges in browser tabs. React 19 went further with native document metadata support (title, link, meta hoisted to `<head>` automatically). API: `self.page_title = "Chat (3 unread)"` and `self.page_meta = {"description": "...", "og:image": "..."}` in any event handler, sent as a lightweight WS message that updates `document.title` and `<meta>` tags without a VDOM diff. The meta tag support is especially valuable for SPAs that need dynamic Open Graph tags for link previews. ~50 lines total.
+**`live_title` & document metadata** ✅ — Update `<title>` and `<meta>` tags from the server without a page reload. Phoenix's `live_title_tag` is trivial but surprisingly impactful — it enables unread counts, status indicators, and notification badges in browser tabs. React 19 went further with native document metadata support (title, link, meta hoisted to `<head>` automatically). API: `self.page_title = "Chat (3 unread)"` and `self.page_meta = {"description": "...", "og:image": "..."}` in any event handler, sent as a lightweight WS message that updates `document.title` and `<meta>` tags without a VDOM diff. The meta tag support is especially valuable for SPAs that need dynamic Open Graph tags for link previews. ~50 lines total.
 
 **`dj-mounted` event** ✅ — Fire a server event when an element enters the DOM (after VDOM patch inserts it). Use cases: scroll-into-view for new chat messages, trigger data loading when a tab becomes active, animate elements on appearance. Phoenix has `phx-mounted`. Pairs naturally with `dj-remove` (exit event). Uses a WeakSet in `bindLiveViewEvents()` to detect newly-added elements after VDOM patches (not initial page load).
 
@@ -261,7 +261,7 @@ class DashboardView(LiveView):
 
 **`dj-paste` — Paste event handling** — Fire a server event when the user pastes content (text, images, files) into an element. `<textarea dj-paste="handle_paste">`. The client extracts paste payload: plain text via `clipboardData.getData('text/plain')`, images via `clipboardData.files` (auto-routed to `UploadMixin` if an upload slot is configured), and rich HTML via `getData('text/html')`. Sends structured params: `{"text": "...", "html": "...", "has_files": true}`. Use cases: paste images into chat (Slack/Discord-style), paste formatted text into rich editors, paste CSV data into tables, paste code snippets with language detection. Currently requires a `dj-hook` for every paste target. ~40 lines JS. *Every chat app and content editor needs paste handling. Combined with `UploadMixin` for image paste, this is the complete clipboard-to-server pipeline.*
 
-**Remaining v0.4.0 quick wins** — Any items from the v0.4.0 quick wins list that didn't ship in the initial release (`live_title`) ship here. (`dj-lock`, `dj-mounted`, `dj-shortcut`, `dj-click-away`, window/document event scoping, connection CSS, `dj-cloak`, `dj-page-loading`, `dj-scroll-into-view`, `dj-copy`, `dj-auto-recover`, and `dj-debounce`/`dj-throttle` shipped in v0.4.0.)
+**Remaining v0.4.0 quick wins** — Any items from the v0.4.0 quick wins list that didn't ship in the initial release ship here. (`dj-lock`, `dj-mounted`, `dj-shortcut`, `dj-click-away`, window/document event scoping, connection CSS, `dj-cloak`, `dj-page-loading`, `dj-scroll-into-view`, `dj-copy`, `dj-auto-recover`, `dj-debounce`/`dj-throttle`, and `live_title`/document metadata shipped in v0.4.0.)
 
 ### Milestone: v0.5.0 — Async Loading, Core Components & Streams
 
@@ -847,7 +847,7 @@ Features tracked against Phoenix LiveView 1.1 and React where applicable.
 | ~~**Disable with**~~ | ~~**`phx-disable-with`**~~ | — | ✅ **Done** | v0.4.0 |
 | ~~**Window/doc events**~~ | ~~**`phx-window-*`**~~ | — | ✅ **Done** | v0.4.0 |
 | **Debounce/throttle attrs** | **`phx-debounce`** | — | **Decorator only** | **v0.4.0** |
-| **Dynamic page title** | **`live_title`** | `document.title` | **Not started** | **v0.4.0** |
+| ~~**Dynamic page title**~~ | ~~**`live_title`**~~ | ~~`document.title`~~ | ✅ **Done** | v0.4.0 |
 | **Mounted event** | **`phx-mounted`** | `useEffect` | **Not started** | **v0.4.0** |
 | ~~**Click-away**~~ | — | ~~`useClickOutside`~~ | ✅ **Done** | v0.4.0 |
 | **Lock (prevent double-fire)** | **Event ack protocol** | — | **Not started** | **v0.4.0** |
@@ -925,7 +925,7 @@ Features tracked against Phoenix LiveView 1.1 and React where applicable.
 | Django admin LiveView widgets | — | — | Not started | v0.7.0 |
 | Prefetch on hover/intent | — | Remix prefetch | Not started | v0.7.0 |
 | **Keep-Alive / Activity** | — | **`<Activity>`** (19.2) | **Not started** | **v0.7.0** |
-| **Document metadata** | `live_title` | **Native** (React 19) | **Not started** | **v0.4.0** |
+| ~~**Document metadata**~~ | ~~`live_title`~~ | ~~**Native** (React 19)~~ | ✅ **Done** | v0.4.0 |
 | **Type-safe template validation** | — | TypeScript | **Not started** | **v0.5.1** |
 | **Streaming markdown renderer** | — | — | **Not started** | **v0.7.0** |
 | **DB change notifications** | **PubSub + Ecto** | — | **Not started** | **v0.5.0** |
@@ -944,8 +944,8 @@ Features tracked against Phoenix LiveView 1.1 and React where applicable.
 
 | Milestone | Theme | Key Deliverables | Priority |
 |-----------|-------|-----------------|----------|
-| v0.4.0 | Stability & Core DX | Fix #559/#560, focus preservation, **`dj-value-*`**, **`handle_params`** (complete), **`on_mount` hooks**, **flash messages**, **`_target` param** ✅, **`dj-scroll-into-view`** ✅, **connection CSS** ✅, **`dj-cloak`** ✅, **`dj-page-loading`** ✅, form recovery, `dj-disable-with` ✅, `dj-lock` ✅, `dj-mounted` ✅, window events ✅, `dj-click-away` ✅, `dj-shortcut` ✅, `dj-debounce`/`dj-throttle` attrs ✅, `dj-copy` ✅, `dj-auto-recover` ✅, error messages, `djust_doctor`, latency simulator | **Critical** |
-| v0.4.1 | JS Commands & Polish | **JS Commands**, programmable JS from hooks, scoped selectors (`closest`/`inner`), `page_loading` on push, **`dj-paste`**, `live_title` | **Critical** |
+| v0.4.0 | Stability & Core DX | Fix #559/#560, focus preservation, **`dj-value-*`**, **`handle_params`** (complete), **`on_mount` hooks**, **flash messages**, **`_target` param** ✅, **`dj-scroll-into-view`** ✅, **connection CSS** ✅, **`dj-cloak`** ✅, **`dj-page-loading`** ✅, form recovery, `dj-disable-with` ✅, `dj-lock` ✅, `dj-mounted` ✅, window events ✅, `dj-click-away` ✅, `dj-shortcut` ✅, `dj-debounce`/`dj-throttle` attrs ✅, `dj-copy` ✅, `dj-auto-recover` ✅, `live_title`/document metadata ✅, error messages, `djust_doctor`, latency simulator | **Critical** |
+| v0.4.1 | JS Commands & Polish | **JS Commands**, programmable JS from hooks, scoped selectors (`closest`/`inner`), `page_loading` on push, **`dj-paste`** | **Critical** |
 | v0.5.0 | Async, Core Components & Streams | **`assign_async`/`AsyncResult`**, **`handle_async`**, **function components**, **declarative assigns**, **`used_input?`**, nested LiveComponents + targeted events + slots, **component `update` callback**, `dj-spread`, **View Transitions API**, direct-to-S3 uploads, stream enhancements + **`dj-viewport-top/bottom`**, **`handle_info`**, **template fragments**, **keyed for-loop change tracking**, **`self.defer()`**, selective re-rendering, Rust engine parity, **database change notifications (pg_notify)**, **virtual/windowed lists** | **Critical** |
 | v0.5.1 | Developer Experience & Forms | **Testing utilities**, **error overlay**, **`@computed`**, **`dj-lazy`**, **component context sharing**, **`dj-trigger-action`**, **scoped loading**, **error boundaries**, **nested forms**, **stable IDs**, **native `<dialog>`**, **dirty tracking**, **`dj-no-submit`**, **type-safe template validation**, **multi-step wizard (`WizardMixin`)** | **Critical** |
 | v0.6.0 | Production & Interactivity | Animations/transitions + **`dj-transition-group`**, **CSS `@starting-style`**, **hot view replacement**, **streaming initial render**, **time-travel debugging**, **state undo/redo**, **connection multiplexing**, sticky LiveViews, `dj-mutation`, `dj-sticky-scroll`, monitoring, graceful degradation, CSP nonce, batch state updates, multi-tab sync, offline mutation queue, `dj-resize`, **WebSocket compression (permessage-deflate)**, **runtime layout switching** | **High** |
@@ -969,7 +969,7 @@ High-impact areas for contributions:
 4. ~~**Connection state CSS classes**~~ ✅
 5. ~~**`dj-copy`**~~ ✅
 6. ~~**`dj-cloak`**~~ ✅
-7. **`live_title`** — Dynamic page title via WS message, ~30 lines total
+7. ~~**`live_title`**~~ ✅
 8. ~~**`dj-click-away`**~~ ✅
 9. ~~**`dj-lock`**~~ ✅
 10. ~~**`dj-page-loading`**~~ ✅

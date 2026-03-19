@@ -697,6 +697,10 @@ Page loading bar:
   Always active for TurboNav / live_redirect
   window.djust.pageLoading.start/finish  (manual control)
 
+Document metadata (Python-side, no template directive):
+  self.page_title = "..."              (update document.title)
+  self.page_meta = {"key": "value"}    (update/create <meta> tags)
+
 VDOM identity:
   dj-view="{{ dj_view_id }}"      (on body — required)
   dj-root                         (reactive region — required)

@@ -229,6 +229,13 @@ class LiveViewSSE {
                 }
                 break;
 
+            case 'page_metadata':
+                // Page metadata from server (page_title / page_meta)
+                if (window.djust.pageMetadata) {
+                    window.djust.pageMetadata.handlePageMetadata(data);
+                }
+                break;
+
             case 'reload':
                 window.location.reload();
                 break;

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`page_title` / `page_meta` dynamic document metadata** — Update `document.title` and `<meta>` tags from any LiveView handler via property setters (`self.page_title = "..."`, `self.page_meta = {"description": "..."}`). Uses side-channel WebSocket messages (no VDOM diff needed). Supports `og:` and `twitter:` meta tags with correct `property` attribute. Works over both WebSocket and SSE transports.
+
 - **`dj-copy` enhancements** — Selector-based copy (`dj-copy="#code-block"` copies the element's `textContent`), configurable feedback text (`dj-copy-feedback="Done!"`), CSS class feedback (`dj-copy-class` adds a custom class for 2s, default `dj-copied`), and optional server event (`dj-copy-event="copied"` fires after successful copy for analytics). Backward compatible with existing literal copy behavior.
 
 - **`dj-auto-recover` attribute for reconnection recovery** — After WebSocket reconnects, elements with `dj-auto-recover="handler_name"` automatically fire a server event with serialized DOM state (form field values and `data-*` attributes from the container). Enables the server to restore custom state lost during disconnection. Does not fire on initial page load. Supports multiple independent recovery elements per page.
