@@ -325,6 +325,51 @@ If a subtree is managed by external JavaScript (charts, editors), prevent djust 
 <div dj-update="ignore" id="my-chart"></div>
 ```
 
+## UI Feedback Attributes
+
+### Connection State CSS Classes
+
+djust automatically applies CSS classes to `<body>` based on transport state:
+
+- `dj-connected` — WebSocket/SSE connection is open
+- `dj-disconnected` — WebSocket/SSE connection is lost
+
+Both classes are removed on intentional disconnect (TurboNav navigation). Use these for CSS-driven connection indicators:
+
+```css
+body.dj-disconnected [dj-root] { opacity: 0.5; }
+.offline-banner { display: none; }
+body.dj-disconnected .offline-banner { display: block; }
+```
+
+### `dj-cloak` (FOUC Prevention)
+
+Hide elements until the WebSocket/SSE mount completes:
+
+```html
+<div dj-cloak>
+    <button dj-click="increment">+</button>
+</div>
+```
+
+The CSS rule is injected automatically by client.js. The `dj-cloak` attribute is removed when the mount response arrives.
+
+### `dj-scroll-into-view`
+
+Auto-scroll an element into view after it appears in the DOM (mount or VDOM patch):
+
+```html
+<div dj-scroll-into-view>New chat message</div>
+<div dj-scroll-into-view="instant">Alert</div>
+<div dj-scroll-into-view="center">Highlighted item</div>
+```
+
+One-shot per DOM node. Supports values: `""` (smooth/nearest), `"instant"`, `"center"`, `"start"`, `"end"`.
+
+### Page Loading Bar
+
+An NProgress-style loading bar appears automatically during TurboNav and `live_redirect` navigation. Control via `window.djust.pageLoading.start()` / `.finish()` or disable with `window.djust.pageLoading.enabled = false`.
+
 ## Next Steps
 
 - [Templates](./templates.md) — full template directives reference

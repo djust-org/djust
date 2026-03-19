@@ -168,7 +168,7 @@ from djust import DJ
 
 #### Quick Wins (High impact, low effort)
 
-**Connection state CSS classes** — Auto-apply `dj-connected` / `dj-disconnected` / `dj-loading` CSS classes to the body element based on WebSocket state. Phoenix does this with `phx-connected`/`phx-disconnected` — trivial to implement, big DX win for showing connection status without custom JS.
+**Connection state CSS classes** ✅ — Auto-apply `dj-connected` / `dj-disconnected` CSS classes to the body element based on WebSocket/SSE state. Phoenix does this with `phx-connected`/`phx-disconnected` — trivial to implement, big DX win for showing connection status without custom JS.
 
 **`dj-confirm` attribute** — ✅ Already implemented in `09-event-binding.js`. Native browser confirmation dialog before executing an event.
 
@@ -198,7 +198,7 @@ from djust import DJ
 
 **`dj-copy` — Copy to clipboard** — Copy text content to clipboard on click without a server round-trip. `<button dj-copy="#code-block">Copy</button>` copies the text content of `#code-block`. `<button dj-copy="literal text here">Copy</button>` copies the literal string. Optionally fires a server event for analytics: `dj-copy="#code-block" dj-copy-event="copied"`. Shows visual feedback (configurable CSS class, default: `dj-copied` for 2s). Use cases: code snippets, share links, API keys, referral codes. Currently requires a `dj-hook` for every copy button. ~30 lines of JS. *This is the kind of small built-in that makes developers think "this framework gets it" — every documentation site, every admin panel needs copy buttons.*
 
-**`dj-cloak` — Prevent flash of unstyled content** — Add a `dj-cloak` CSS class to elements that should be hidden until the LiveView WebSocket connects. djust's client JS removes the class on connection. Ship a one-line CSS rule (`[dj-cloak] { display: none !important; }`) in the default stylesheet. Use case: interactive elements (dropdowns, tabs, live search) that look broken before JS hydrates them. Vue has `v-cloak`, Alpine has `x-cloak` — this is expected in any framework that enhances server-rendered HTML. ~5 lines of JS.
+**`dj-cloak` — Prevent flash of unstyled content** ✅ — Elements with `dj-cloak` are hidden (`display: none !important`) until the WebSocket/SSE mount response is received. CSS is injected automatically by client.js. Vue has `v-cloak`, Alpine has `x-cloak` — this is expected in any framework that enhances server-rendered HTML.
 
 **`on_mount` hooks (promoted from v0.6.0)** — Module-level hooks that run on every LiveView mount, declared via `@on_mount` decorator or class attribute. Use cases: authentication checks, telemetry, tenant resolution, feature flags. Phoenix added this in v0.17 and it's now the standard pattern for cross-cutting concerns. Replaces repetitive auth checks in individual `mount()` methods. *Promoted to v0.4.0 because every real app needs cross-cutting mount logic from day one — auth, tenant resolution, telemetry. Without this, developers copy-paste the same 5 lines into every view's `mount()`. Simple to implement (~100 lines Python), massive DX win.*
 
@@ -217,11 +217,9 @@ class DashboardView(LiveView):
 
 **`_target` param in form change events** ✅ — When multiple fields share one `dj-change="validate"` handler, the `_target` parameter identifies which field triggered the change. Essential for efficient per-field validation without needing separate handlers per field. The client includes the triggering element's `name` (or `id`, or `null`) as `_target` in the event params for `dj-change`, `dj-input`, and `dj-submit` (submitter button name). Matches Phoenix LiveView's `_target` convention.
 
-**`dj-scroll-into-view` — Auto-scroll to element on render** — Declaratively scroll an element into the viewport when it appears or updates. `<div dj-scroll-into-view>` on a new chat message scrolls it visible. Supports modifiers: `dj-scroll-into-view.smooth` (smooth scroll), `dj-scroll-into-view.instant` (jump), `dj-scroll-into-view.nearest` (minimal scroll). Fires after VDOM patch, so it targets the newly-inserted element. Use cases: chat messages, form validation errors ("scroll to first error"), anchor navigation within LiveViews, notification toasts. Currently requires a `dj-hook` with `this.el.scrollIntoView()` — this is boilerplate in every app that does list appending. ~25 lines JS (MutationObserver + `scrollIntoView()`). *This pairs with `dj-sticky-scroll` (container-level) but operates at the element level — both are needed for complete scroll UX.*
+**`dj-scroll-into-view` — Auto-scroll to element on render** ✅ — Elements with `dj-scroll-into-view` are automatically scrolled into view after DOM updates (mount, VDOM patch). Supports scroll behavior via attribute value: `""` (smooth/nearest), `"instant"`, `"center"`, `"start"`, `"end"`. One-shot per DOM node via WeakSet tracking. VDOM-replaced fresh nodes scroll again correctly. Use cases: chat messages, form validation errors, notification toasts.
 
-**`dj-scroll-into-view` — Auto-scroll to element on render** — Declaratively scroll an element into the viewport when it appears or updates. `<div dj-scroll-into-view>` on a new chat message scrolls it visible. Supports modifiers: `dj-scroll-into-view.smooth` (smooth scroll), `dj-scroll-into-view.instant` (jump), `dj-scroll-into-view.nearest` (minimal scroll). Fires after VDOM patch, so it targets the newly-inserted element. Use cases: chat messages, form validation errors ("scroll to first error"), anchor navigation within LiveViews, notification toasts. Currently requires a `dj-hook` with `this.el.scrollIntoView()` — this is boilerplate in every app that does list appending. ~25 lines JS (MutationObserver + `scrollIntoView()`). *This pairs with `dj-sticky-scroll` (container-level) but operates at the element level — both are needed for complete scroll UX.*
-
-**`dj-page-loading` — Navigation loading bar** — A thin animated progress bar at the top of the viewport during `live_redirect`, `live_patch`, and TurboNav navigation. `<div dj-page-loading class="my-loading-bar">`. Auto-shows when navigation starts, auto-hides on completion. Configurable appearance via CSS (color, height, animation). YouTube, GitHub, and every modern SPA use this pattern (NProgress). Currently djust navigations have no visual feedback — the page appears to freeze. ~40 lines JS + 10 lines CSS. *This is the single cheapest way to make navigation feel fast — a visible progress indicator makes 200ms feel instant while no indicator makes 100ms feel broken. Neither Phoenix nor React include this natively.*
+**`dj-page-loading` — Navigation loading bar** ✅ — NProgress-style thin loading bar at the top of the page during TurboNav and `live_redirect` navigation. Always active by default. Exposed as `window.djust.pageLoading` with `start()`, `finish()`, and `enabled` for manual control. Disable via `window.djust.pageLoading.enabled = false` or CSS override.
 
 **Flash messages (promoted from v0.5.0)** — Built-in ephemeral notification pattern with `self.put_flash(level, message)` and auto-dismissing client-side rendering. Phoenix's `put_flash` is used in virtually every app. *Promoted to v0.4.0 because this is the #1 pattern developers reinvent in every project. A `FlashMixin` with `put_flash('info', 'Saved!')`, a `{% dj_flash %}` template tag, and ~40 lines of client JS for appear/auto-dismiss animations. Flash messages survive `live_patch` but clear on `live_redirect`. Without this, every djust app ships with a slightly different homegrown toast system.*
 
@@ -263,7 +261,7 @@ class DashboardView(LiveView):
 
 **`dj-paste` — Paste event handling** — Fire a server event when the user pastes content (text, images, files) into an element. `<textarea dj-paste="handle_paste">`. The client extracts paste payload: plain text via `clipboardData.getData('text/plain')`, images via `clipboardData.files` (auto-routed to `UploadMixin` if an upload slot is configured), and rich HTML via `getData('text/html')`. Sends structured params: `{"text": "...", "html": "...", "has_files": true}`. Use cases: paste images into chat (Slack/Discord-style), paste formatted text into rich editors, paste CSV data into tables, paste code snippets with language detection. Currently requires a `dj-hook` for every paste target. ~40 lines JS. *Every chat app and content editor needs paste handling. Combined with `UploadMixin` for image paste, this is the complete clipboard-to-server pipeline.*
 
-**Remaining v0.4.0 quick wins** — Any items from the v0.4.0 quick wins list that didn't ship in the initial release (`dj-copy`, `dj-page-loading`, `dj-auto-recover`, `dj-cloak`, `live_title`, `dj-scroll-into-view`) ship here. (`dj-lock`, `dj-mounted`, `dj-shortcut`, `dj-click-away`, and window/document event scoping shipped in v0.4.0.)
+**Remaining v0.4.0 quick wins** — Any items from the v0.4.0 quick wins list that didn't ship in the initial release (`dj-copy`, `dj-auto-recover`, `live_title`) ship here. (`dj-lock`, `dj-mounted`, `dj-shortcut`, `dj-click-away`, window/document event scoping, connection CSS, `dj-cloak`, `dj-page-loading`, and `dj-scroll-into-view` shipped in v0.4.0.)
 
 ### Milestone: v0.5.0 — Async Loading, Core Components & Streams
 
@@ -763,7 +761,7 @@ Features where djust leads rather than follows — things Phoenix LiveView and R
 | **~5KB client JS** | Entire client runtime smaller than React's `useState` hook. No build step, no node_modules | **Done** |
 | **`dj-copy` clipboard** | Built-in copy-to-clipboard — not available in Phoenix or React without libraries | v0.4.0 |
 | **`dj-shortcut` keyboard** | Declarative keyboard shortcuts — Phoenix requires custom JS hooks | **Done** |
-| **`dj-page-loading`** | Built-in navigation loading bar — neither Phoenix nor React include this natively | v0.4.1 |
+| **`dj-page-loading`** | Built-in navigation loading bar — neither Phoenix nor React include this natively | **Done** |
 | **`dj-paste` clipboard** | Built-in paste handling (text + images) — routes images to UploadMixin automatically | v0.4.1 |
 | **Database change notifications** | PostgreSQL LISTEN/NOTIFY → LiveView push — one-liner reactive database UIs | v0.5.0 |
 | **Virtual/windowed lists** | Built-in DOM virtualization for 100K+ row lists at 60fps — react-window equivalent | v0.5.0 |
@@ -840,7 +838,7 @@ Features tracked against Phoenix LiveView 1.1 and React where applicable.
 | **Static event params** | **`phx-value-*`** | `data-*` attrs | **Not started** | **v0.4.0** |
 | **Handle params callback** | **`handle_params/3`** | React Router loaders | **Partial** (in navigation mixin) | **v0.4.0** |
 | **JS Commands** | **`JS.*` module** | — | **Not started** | **v0.4.0** |
-| **Connection CSS classes** | **`phx-connected`** | — | **Not started** | **v0.4.0** |
+| ~~**Connection CSS classes**~~ | ~~**`phx-connected`**~~ | — | ✅ **Done** | v0.4.0 |
 | **Form recovery** | **Auto on reconnect** | — | **Not started** | **v0.4.0** |
 | **Stable conditional DOM** | **HEEx anchors** | — | **Broken (#559)** | **v0.4.0** |
 | **Event ordering** | **Erlang mailbox** | — | **Broken (#560)** | **v0.4.0** |
@@ -946,8 +944,8 @@ Features tracked against Phoenix LiveView 1.1 and React where applicable.
 
 | Milestone | Theme | Key Deliverables | Priority |
 |-----------|-------|-----------------|----------|
-| v0.4.0 | Stability & Core DX | Fix #559/#560, focus preservation, **`dj-value-*`**, **`handle_params`** (complete), **`on_mount` hooks**, **flash messages**, **`_target` param** ✅, **`dj-scroll-into-view`**, connection CSS, form recovery, `dj-disable-with` ✅, `dj-lock` ✅, `dj-mounted` ✅, window events ✅, `dj-click-away` ✅, `dj-shortcut` ✅, `dj-debounce`/`dj-throttle` attrs, error messages, `djust_doctor`, latency simulator | **Critical** |
-| v0.4.1 | JS Commands & Polish | **JS Commands**, programmable JS from hooks, scoped selectors (`closest`/`inner`), `page_loading` on push, **`dj-paste`**, `dj-copy`, `dj-page-loading`, `dj-auto-recover`, `dj-cloak`, `live_title` | **Critical** |
+| v0.4.0 | Stability & Core DX | Fix #559/#560, focus preservation, **`dj-value-*`**, **`handle_params`** (complete), **`on_mount` hooks**, **flash messages**, **`_target` param** ✅, **`dj-scroll-into-view`** ✅, **connection CSS** ✅, **`dj-cloak`** ✅, **`dj-page-loading`** ✅, form recovery, `dj-disable-with` ✅, `dj-lock` ✅, `dj-mounted` ✅, window events ✅, `dj-click-away` ✅, `dj-shortcut` ✅, `dj-debounce`/`dj-throttle` attrs, error messages, `djust_doctor`, latency simulator | **Critical** |
+| v0.4.1 | JS Commands & Polish | **JS Commands**, programmable JS from hooks, scoped selectors (`closest`/`inner`), `page_loading` on push, **`dj-paste`**, `dj-copy`, `dj-auto-recover`, `live_title` | **Critical** |
 | v0.5.0 | Async, Core Components & Streams | **`assign_async`/`AsyncResult`**, **`handle_async`**, **function components**, **declarative assigns**, **`used_input?`**, nested LiveComponents + targeted events + slots, **component `update` callback**, `dj-spread`, **View Transitions API**, direct-to-S3 uploads, stream enhancements + **`dj-viewport-top/bottom`**, **`handle_info`**, **template fragments**, **keyed for-loop change tracking**, **`self.defer()`**, selective re-rendering, Rust engine parity, **database change notifications (pg_notify)**, **virtual/windowed lists** | **Critical** |
 | v0.5.1 | Developer Experience & Forms | **Testing utilities**, **error overlay**, **`@computed`**, **`dj-lazy`**, **component context sharing**, **`dj-trigger-action`**, **scoped loading**, **error boundaries**, **nested forms**, **stable IDs**, **native `<dialog>`**, **dirty tracking**, **`dj-no-submit`**, **type-safe template validation**, **multi-step wizard (`WizardMixin`)** | **Critical** |
 | v0.6.0 | Production & Interactivity | Animations/transitions + **`dj-transition-group`**, **CSS `@starting-style`**, **hot view replacement**, **streaming initial render**, **time-travel debugging**, **state undo/redo**, **connection multiplexing**, sticky LiveViews, `dj-mutation`, `dj-sticky-scroll`, monitoring, graceful degradation, CSP nonce, batch state updates, multi-tab sync, offline mutation queue, `dj-resize`, **WebSocket compression (permessage-deflate)**, **runtime layout switching** | **High** |
@@ -968,17 +966,17 @@ High-impact areas for contributions:
 1. ~~**`dj-value-*` static params**~~ ✅
 2. ~~**`_target` param in change events**~~ ✅
 3. ~~**`dj-disable-with`**~~ ✅
-4. **Connection state CSS classes** — `dj-connected`/`dj-disconnected` on body, ~10 lines JS
+4. ~~**Connection state CSS classes**~~ ✅
 5. **`dj-copy`** — Copy to clipboard, ~30 lines JS
-6. **`dj-cloak`** — FOUC prevention, ~5 lines JS + 1 line CSS
+6. ~~**`dj-cloak`**~~ ✅
 7. **`live_title`** — Dynamic page title via WS message, ~30 lines total
 8. ~~**`dj-click-away`**~~ ✅
 9. ~~**`dj-lock`**~~ ✅
-10. **`dj-page-loading`** — NProgress-style loading bar, ~40 lines JS + 10 lines CSS
+10. ~~**`dj-page-loading`**~~ ✅
 11. **Native `<dialog>` integration** — `dj-dialog="open|close"`, ~20 lines JS
 12. **`dj-no-submit`** — Prevent enter-key form submission, ~10 lines JS
 13. **`page_loading` on `dj.push`** — Trigger loading bar during heavy events, ~15 lines JS
-14. **`dj-scroll-into-view`** — Auto-scroll element into viewport on render, ~25 lines JS
+14. ~~**`dj-scroll-into-view`**~~ ✅
 
 #### Medium Effort (1-3 days)
 14. **`self.defer(callback)`** — Post-render work scheduling, ~40 lines Python

@@ -231,6 +231,95 @@ Does not fire on initial page load — only after subsequent VDOM patches insert
 
 ---
 
+## UI Feedback Attributes
+
+### Connection State CSS Classes
+
+djust automatically applies CSS classes to `<body>` based on WebSocket/SSE connection state:
+
+| Class | Applied when |
+|---|---|
+| `dj-connected` | WebSocket/SSE connection is open |
+| `dj-disconnected` | WebSocket/SSE connection is lost |
+
+Both classes are removed on intentional disconnect (e.g., TurboNav navigation). Use these for CSS-driven connection feedback:
+
+```css
+/* Dim content when disconnected */
+body.dj-disconnected dj-root { opacity: 0.5; }
+
+/* Show an offline banner */
+.offline-banner { display: none; }
+body.dj-disconnected .offline-banner { display: block; }
+```
+
+### `dj-cloak` (FOUC Prevention)
+
+Hide elements until the WebSocket/SSE connection is established, preventing flash of unconnected content:
+
+```html
+<!-- Hidden until mount response is received -->
+<div dj-cloak>
+    <button dj-click="increment">+</button>
+</div>
+```
+
+The CSS rule `[dj-cloak] { display: none !important; }` is injected automatically by client.js. The `dj-cloak` attribute is removed from all elements when the mount response arrives.
+
+**Note:** If the WebSocket never connects, cloaked elements stay hidden. Only cloak elements that are WebSocket-dependent.
+
+### `dj-scroll-into-view` (Auto-scroll on Render)
+
+Automatically scroll an element into view after it appears in the DOM (via mount or VDOM patch):
+
+```html
+<!-- Smooth scroll (default) -->
+<div dj-scroll-into-view>New message</div>
+
+<!-- Instant scroll (no animation) -->
+<div dj-scroll-into-view="instant">Alert</div>
+
+<!-- Scroll to center of viewport -->
+<div dj-scroll-into-view="center">Highlighted item</div>
+
+<!-- Scroll to start or end -->
+<div dj-scroll-into-view="start">Section header</div>
+<div dj-scroll-into-view="end">Latest entry</div>
+```
+
+| Value | Behavior |
+|---|---|
+| `""` (default) | `{ behavior: 'smooth', block: 'nearest' }` |
+| `"instant"` | `{ behavior: 'instant', block: 'nearest' }` |
+| `"center"` | `{ behavior: 'smooth', block: 'center' }` |
+| `"start"` | `{ behavior: 'smooth', block: 'start' }` |
+| `"end"` | `{ behavior: 'smooth', block: 'end' }` |
+
+One-shot per DOM node: each element scrolls only once. VDOM-replaced elements (fresh nodes) scroll again correctly.
+
+### Page Loading Bar
+
+An NProgress-style thin loading bar at the top of the page during TurboNav and `live_redirect` navigation. Always active by default -- no opt-in attribute needed.
+
+Control programmatically:
+
+```javascript
+// Manual control
+window.djust.pageLoading.start();
+window.djust.pageLoading.finish();
+
+// Disable entirely
+window.djust.pageLoading.enabled = false;
+```
+
+Or hide via CSS:
+
+```css
+.djust-page-loading-bar { display: none !important; }
+```
+
+---
+
 ## Loading States
 
 Loading state directives apply CSS classes or show/hide elements while a server round-trip is in progress.
@@ -548,6 +637,20 @@ Loading directives:
   dj-loading.show                 (show only while loading)
   dj-loading.disable              (disable while loading)
   dj-loading.target=#id           (apply to target element)
+
+UI feedback:
+  dj-cloak                        (hide until WS/SSE mount completes)
+  dj-scroll-into-view             (auto-scroll on render, smooth default)
+  dj-scroll-into-view="instant"   (auto-scroll, no animation)
+  dj-scroll-into-view="center"    (auto-scroll to viewport center)
+
+Connection state (auto on <body>):
+  .dj-connected                   (body class when connected)
+  .dj-disconnected                (body class when disconnected)
+
+Page loading bar:
+  Always active for TurboNav / live_redirect
+  window.djust.pageLoading.start/finish  (manual control)
 
 VDOM identity:
   dj-view="{{ dj_view_id }}"      (on body — required)
