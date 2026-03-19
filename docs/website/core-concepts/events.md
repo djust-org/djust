@@ -12,6 +12,10 @@ djust uses `dj-*` HTML attributes to bind server-side Python handlers to client-
 | `dj-submit="handler"`         | Form is submitted                | All named fields as kwargs        |
 | `dj-keydown.enter="handler"`  | Enter key pressed                | `**kwargs`                        |
 | `dj-keydown.escape="handler"` | Escape key pressed               | `**kwargs`                        |
+| `dj-window-keydown="handler"` | Keydown on `window`              | `key`, `code` + `dj-value-*`     |
+| `dj-document-click="handler"` | Click on `document`              | `clientX`, `clientY` + `dj-value-*` |
+| `dj-click-away="handler"`     | Click outside element            | `dj-value-*` attrs as kwargs      |
+| `dj-shortcut="bindings"`      | Keyboard shortcut matched        | `key`, `code`, `shortcut`         |
 | `dj-mounted="handler"`        | Element enters DOM (after patch) | `dj-value-*` attrs as kwargs      |
 
 ## Defining Handlers
@@ -98,6 +102,76 @@ class MyView(LiveView):
 ```html
 <input dj-keydown.enter="submit_search" dj-keydown.escape="clear_search" />
 ```
+
+### Window & Document Events
+
+Bind event listeners on `window` or `document` instead of the element itself. The declaring element provides context (component ID, `dj-value-*` params) but the listener is attached to the global target.
+
+```html
+<!-- Close modal on Escape (anywhere on page) -->
+<div dj-window-keydown.escape="close_modal">
+
+<!-- Track scroll position -->
+<div dj-window-scroll="on_scroll" dj-value-section="hero">
+
+<!-- Detect clicks anywhere on page -->
+<div dj-document-click="on_background_click">
+
+<!-- Handle window resize -->
+<div dj-window-resize="on_resize">
+```
+
+Supported attributes:
+
+| Attribute | Target | Event |
+|---|---|---|
+| `dj-window-keydown` | `window` | `keydown` |
+| `dj-window-keyup` | `window` | `keyup` |
+| `dj-window-scroll` | `window` | `scroll` |
+| `dj-window-click` | `window` | `click` |
+| `dj-window-resize` | `window` | `resize` |
+| `dj-document-keydown` | `document` | `keydown` |
+| `dj-document-keyup` | `document` | `keyup` |
+| `dj-document-click` | `document` | `click` |
+
+Key modifier filtering works the same as `dj-keydown`: `dj-window-keydown.escape="close"`.
+
+`dj-window-scroll` and `dj-window-resize` default to 150ms throttle to prevent flooding. Override with `data-throttle` or `data-debounce` on the element.
+
+### Click Away
+
+Fire an event when the user clicks outside an element. Common for dropdowns, modals, and popovers:
+
+```html
+<div dj-click-away="close_dropdown" class="dropdown-menu">
+    <!-- clicking outside this div fires close_dropdown -->
+</div>
+```
+
+Uses a capture-phase document listener, so `stopPropagation()` inside the element does not prevent detection. Supports `dj-confirm` for confirmation dialogs and `dj-value-*` params.
+
+### Keyboard Shortcuts (`dj-shortcut`)
+
+Declarative keyboard shortcuts with modifier key support:
+
+```html
+<!-- Single shortcut -->
+<div dj-shortcut="escape:close_modal">
+
+<!-- Multiple shortcuts on one element -->
+<div dj-shortcut="ctrl+k:open_search:prevent, escape:close_modal">
+
+<!-- Modifier keys: ctrl, alt, shift, meta (cmd on Mac) -->
+<button dj-shortcut="ctrl+shift+s:save_draft:prevent">Save</button>
+```
+
+Syntax: `[modifier+...]key:handler[:prevent]`, comma-separated for multiple bindings.
+
+The `prevent` modifier calls `e.preventDefault()` to suppress browser defaults (e.g., `ctrl+k` normally opens the browser URL bar).
+
+Shortcuts are automatically skipped when the user is typing in form inputs (input, textarea, select, contenteditable). Add `dj-shortcut-in-input` to force shortcuts even in inputs.
+
+Handler receives `key`, `code`, and `shortcut` (the matched binding string, e.g., `"ctrl+k"`) as event params, along with any `dj-value-*` attributes.
 
 ## Form Field Targeting (`_target`)
 

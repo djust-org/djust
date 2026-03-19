@@ -1463,7 +1463,7 @@ _LIVEVIEW_CONTENT_RE = re.compile(r"\{\{\s*liveview_content\s*\|\s*safe\s*\}\}")
 _DOC_DJUST_EVENT_RE = re.compile(r"""document\s*\.\s*addEventListener\s*\(\s*['"]djust:""")
 _NAV_DATA_ATTRS = re.compile(r"data-(view|tab|page|section)")  # Navigation-style data attributes
 _DJ_EVENT_DIRECTIVES_RE = re.compile(
-    r"dj-(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave)="
+    r"dj-(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave|window-\w+|document-\w+|click-away|shortcut)="
 )
 _DJ_COMPONENT_RE = re.compile(r"dj-component")
 _DEPRECATED_DATA_DJ_ID_RE = re.compile(r"""data-dj-id\s*=\s*["'][^"']*["']""")

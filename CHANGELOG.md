@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`dj-window-*` / `dj-document-*` event scoping** — Bind event listeners on `window` or `document` while using the declaring element for context extraction (component_id, dj-value-* params). Supports `dj-window-keydown`, `dj-window-keyup`, `dj-window-scroll`, `dj-window-click`, `dj-window-resize`, `dj-document-keydown`, `dj-document-keyup`, `dj-document-click`. Key modifier filtering (e.g., `dj-window-keydown.escape="close_modal"`) works the same as `dj-keydown`. Scroll and resize events default to 150ms throttle. Phoenix LiveView's `phx-window-*` equivalent, plus `dj-document-*` as a djust extension.
+
+- **`dj-click-away` attribute** — Fire a server event when the user clicks outside an element: `<div dj-click-away="close_dropdown">`. Uses capture-phase document listener so `stopPropagation()` inside the element doesn't prevent detection. Supports `dj-confirm` for confirmation dialogs and `dj-value-*` params from the declaring element.
+
+- **`dj-shortcut` attribute for declarative keyboard shortcuts** — Bind keyboard shortcuts on any element with modifier key support: `<div dj-shortcut="ctrl+k:open_search:prevent, escape:close_modal">`. Supports `ctrl`, `alt`, `shift`, `meta` modifiers, comma-separated multiple bindings, and `prevent` modifier to suppress browser defaults. Shortcuts are automatically skipped when the user is typing in form inputs (override with `dj-shortcut-in-input` attribute). Event params include `key`, `code`, and `shortcut` (the matched binding string).
+
 - **`_target` param in form change/input events** — When multiple form fields share one `dj-change` or `dj-input` handler, the `_target` param now includes the triggering element's `name` (or `id`, or `null`), letting the server know which field changed. For `dj-submit`, includes the submitter button's name if available. Matches Phoenix LiveView's `_target` convention.
 
 - **`dj-disable-with` attribute for submit buttons** — Automatically disable submit buttons during form submission and replace their text with a loading message: `<button type="submit" dj-disable-with="Saving...">Save</button>`. Prevents double-submit and gives instant visual feedback. Works with both `dj-submit` forms and `dj-click` buttons. Original text is restored after server response.
