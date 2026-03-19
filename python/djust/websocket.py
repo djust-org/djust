@@ -384,6 +384,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         When the callback completes, render_with_diff is called and the result
         is sent to the client, completing the loading cycle.
 
+        Updates are tagged with ``source="async"`` so the client can buffer
+        them during pending user event round-trips (event sequencing #560).
+
         If the task was cancelled via cancel_async(), the re-render is skipped.
 
         Args:
@@ -541,9 +544,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             hotreload: Whether this is a hot reload update
             file_path: File path that triggered hot reload (if hotreload=True)
             event_name: Name of the event that triggered this update (for debug payload)
-            source: Update source — "tick" for server-initiated ticks, "event" for
-                user-initiated events. Used by the client to buffer tick patches
-                during pending user event round-trips (#560).
+            source: Update source tag for client-side event sequencing (#560).
+                Values: "tick" (periodic ticks), "broadcast" (server_push),
+                "async" (start_async completions), "event" (user-initiated).
+                The client buffers tick/broadcast/async patches during pending
+                user event round-trips to prevent version interleaving.
             ref: Event reference number echoed back from the client's request,
                 allowing the client to match responses to sent events (#560).
         """
