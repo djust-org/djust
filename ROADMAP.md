@@ -243,9 +243,9 @@ class DashboardView(LiveView):
 
 #### Reconnection Resilience
 
-**Form recovery on reconnect** — When WebSocket reconnects after a disconnect, the client should auto-fire `dj-change` with current DOM form values to restore server state. Phoenix does this automatically — users type into a form, lose connection briefly, reconnect, and nothing is lost. Currently djust loses all form state on reconnect.
+~~**Form recovery on reconnect**~~ ✅ — After WebSocket reconnects, the client auto-fires `dj-change` with current DOM form values to restore server state. Compares DOM values against server-rendered defaults, skips unchanged fields. Supports `dj-no-recover` opt-out and defers to `dj-auto-recover` containers.
 
-**Reconnection backoff with jitter** — Exponential backoff with random jitter on WebSocket reconnection to prevent thundering herd after a server restart. Display reconnection attempt count in the connection status UI.
+~~**Reconnection backoff with jitter**~~ ✅ — Exponential backoff with random jitter (AWS full-jitter strategy). Min 500ms, max 30s, 10 attempts. Reconnection banner with attempt count, `data-dj-reconnect-attempt` attribute and `--dj-reconnect-attempt` CSS custom property on `<body>`.
 
 ### Milestone: v0.4.1 — JS Commands & Interaction Polish
 
@@ -839,7 +839,7 @@ Features tracked against Phoenix LiveView 1.1 and React where applicable.
 | **Handle params callback** | **`handle_params/3`** | React Router loaders | **Partial** (in navigation mixin) | **v0.4.0** |
 | **JS Commands** | **`JS.*` module** | — | **Not started** | **v0.4.0** |
 | ~~**Connection CSS classes**~~ | ~~**`phx-connected`**~~ | — | ✅ **Done** | v0.4.0 |
-| **Form recovery** | **Auto on reconnect** | — | **Not started** | **v0.4.0** |
+| ~~**Form recovery**~~ | ~~**Auto on reconnect**~~ | — | ✅ **Done** | v0.4.0 |
 | **Stable conditional DOM** | **HEEx anchors** | — | **Broken (#559)** | **v0.4.0** |
 | **Event ordering** | **Erlang mailbox** | — | **Broken (#560)** | **v0.4.0** |
 | **Focus preservation** | **Auto (morph)** | **Reconciliation** | **Not started** | **v0.4.0** |
@@ -944,7 +944,7 @@ Features tracked against Phoenix LiveView 1.1 and React where applicable.
 
 | Milestone | Theme | Key Deliverables | Priority |
 |-----------|-------|-----------------|----------|
-| v0.4.0 | Stability & Core DX | Fix #559/#560, focus preservation, **`dj-value-*`**, **`handle_params`** (complete), **`on_mount` hooks**, **flash messages**, **`_target` param** ✅, **`dj-scroll-into-view`** ✅, **connection CSS** ✅, **`dj-cloak`** ✅, **`dj-page-loading`** ✅, form recovery, `dj-disable-with` ✅, `dj-lock` ✅, `dj-mounted` ✅, window events ✅, `dj-click-away` ✅, `dj-shortcut` ✅, `dj-debounce`/`dj-throttle` attrs ✅, `dj-copy` ✅, `dj-auto-recover` ✅, `live_title`/document metadata ✅, error messages, `djust_doctor`, latency simulator | **Critical** |
+| v0.4.0 | Stability & Core DX | Fix #559/#560, focus preservation, **`dj-value-*`**, **`handle_params`** (complete), **`on_mount` hooks**, **flash messages**, **`_target` param** ✅, **`dj-scroll-into-view`** ✅, **connection CSS** ✅, **`dj-cloak`** ✅, **`dj-page-loading`** ✅, form recovery ✅, reconnection backoff ✅, `dj-disable-with` ✅, `dj-lock` ✅, `dj-mounted` ✅, window events ✅, `dj-click-away` ✅, `dj-shortcut` ✅, `dj-debounce`/`dj-throttle` attrs ✅, `dj-copy` ✅, `dj-auto-recover` ✅, `live_title`/document metadata ✅, error messages, `djust_doctor`, latency simulator | **Critical** |
 | v0.4.1 | JS Commands & Polish | **JS Commands**, programmable JS from hooks, scoped selectors (`closest`/`inner`), `page_loading` on push, **`dj-paste`** | **Critical** |
 | v0.5.0 | Async, Core Components & Streams | **`assign_async`/`AsyncResult`**, **`handle_async`**, **function components**, **declarative assigns**, **`used_input?`**, nested LiveComponents + targeted events + slots, **component `update` callback**, `dj-spread`, **View Transitions API**, direct-to-S3 uploads, stream enhancements + **`dj-viewport-top/bottom`**, **`handle_info`**, **template fragments**, **keyed for-loop change tracking**, **`self.defer()`**, selective re-rendering, Rust engine parity, **database change notifications (pg_notify)**, **virtual/windowed lists** | **Critical** |
 | v0.5.1 | Developer Experience & Forms | **Testing utilities**, **error overlay**, **`@computed`**, **`dj-lazy`**, **component context sharing**, **`dj-trigger-action`**, **scoped loading**, **error boundaries**, **nested forms**, **stable IDs**, **native `<dialog>`**, **dirty tracking**, **`dj-no-submit`**, **type-safe template validation**, **multi-step wizard (`WizardMixin`)** | **Critical** |

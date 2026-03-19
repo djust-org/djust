@@ -239,12 +239,13 @@ Syntax: `[modifier+...]key:handler[:prevent]` (comma-separated for multiple). Th
 <button dj-click="save" dj-lock dj-disable-with="Saving...">Save</button>
 ```
 
-### Lifecycle
+### Lifecycle & Reconnection
 
 | Attribute | Fires On | Handler Receives |
 |---|---|---|
 | `dj-mounted="handler"` | Element enters DOM (after VDOM patch) | `dj-value-*` attrs as kwargs |
 | `dj-auto-recover="handler"` | WebSocket reconnects | Form values + `data-*` from container |
+| `dj-no-recover` | — | Opts field out of automatic form recovery on reconnect |
 
 ```html
 <!-- Fire event when element appears after a VDOM patch -->
@@ -256,11 +257,16 @@ Syntax: `[modifier+...]key:handler[:prevent]` (comma-separated for multiple). Th
 <div dj-auto-recover="restore_state" dj-value-canvas-id="main">
     <input name="brush_size" value="5" />
 </div>
+
+<!-- Opt out of automatic form recovery -->
+<input name="scratch" dj-change="on_change" dj-no-recover />
 ```
 
 `dj-mounted` does not fire on initial page load — only after subsequent VDOM patches insert the element.
 
 `dj-auto-recover` does not fire on initial page load — only after WebSocket reconnection. Serializes form field values and `data-*` attributes from the container.
+
+`dj-no-recover` prevents a field from being auto-recovered on reconnect. Useful for ephemeral search fields or fields where server state is the source of truth. Fields inside `dj-auto-recover` containers are automatically skipped (custom handler takes precedence).
 
 ---
 
@@ -647,7 +653,7 @@ Event attributes:
   dj-blur         dj-focus        dj-keydown      dj-keyup
   dj-poll         dj-patch        dj-navigate     dj-copy
   dj-confirm      dj-model        dj-mounted      dj-auto-recover
-  dj-click-away   dj-shortcut
+  dj-click-away   dj-shortcut     dj-no-recover
 
 Window/document scoping:
   dj-window-keydown               (keydown on window)
@@ -692,6 +698,11 @@ UI feedback:
 Connection state (auto on <body>):
   .dj-connected                   (body class when connected)
   .dj-disconnected                (body class when disconnected)
+
+Reconnection UI (auto on <body>):
+  data-dj-reconnect-attempt       (current attempt number)
+  --dj-reconnect-attempt          (CSS custom property, attempt number)
+  .dj-reconnecting-banner         (auto-shown banner with attempt count)
 
 Page loading bar:
   Always active for TurboNav / live_redirect
