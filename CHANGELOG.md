@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Connection state CSS classes** — `dj-connected` and `dj-disconnected` classes are automatically applied to `<body>` based on WebSocket/SSE transport state. Enables CSS-driven UI feedback for connection status (e.g., dimming content, showing offline banners). Both classes are removed on intentional disconnect (TurboNav). Phoenix LiveView's `phx-connected`/`phx-disconnected` equivalent.
+
+- **`dj-cloak` attribute for FOUC prevention** — Elements with `dj-cloak` are hidden (`display: none !important`) until the WebSocket/SSE mount response is received, preventing flash of unconnected content. CSS is injected automatically by client.js — no user stylesheet changes needed. Phoenix LiveView's `phx-no-feedback` equivalent.
+
+- **Page loading bar for navigation transitions** — NProgress-style thin loading bar at the top of the page during TurboNav and `live_redirect` navigation. Always active by default. Exposed as `window.djust.pageLoading` with `start()`, `finish()`, and `enabled` for manual control. Disable via `window.djust.pageLoading.enabled = false` or CSS override.
+
+- **`dj-scroll-into-view` attribute for auto-scroll on render** — Elements with `dj-scroll-into-view` are automatically scrolled into view after DOM updates (mount, VDOM patch). Supports scroll behavior options: `""` (smooth/nearest, default), `"instant"`, `"center"`, `"start"`, `"end"`. One-shot per DOM node — uses WeakSet tracking so the same element isn't re-scrolled on every patch, but VDOM-replaced fresh nodes scroll correctly.
+
 - **`dj-window-*` / `dj-document-*` event scoping** — Bind event listeners on `window` or `document` while using the declaring element for context extraction (component_id, dj-value-* params). Supports `dj-window-keydown`, `dj-window-keyup`, `dj-window-scroll`, `dj-window-click`, `dj-window-resize`, `dj-document-keydown`, `dj-document-keyup`, `dj-document-click`. Key modifier filtering (e.g., `dj-window-keydown.escape="close_modal"`) works the same as `dj-keydown`. Scroll and resize events default to 150ms throttle. Phoenix LiveView's `phx-window-*` equivalent, plus `dj-document-*` as a djust extension.
 
 - **`dj-click-away` attribute** — Fire a server event when the user clicks outside an element: `<div dj-click-away="close_dropdown">`. Uses capture-phase document listener so `stopPropagation()` inside the element doesn't prevent detection. Supports `dj-confirm` for confirmation dialogs and `dj-value-*` params from the declaring element.

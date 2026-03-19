@@ -24,6 +24,15 @@ window._djustClientLoaded = true;
 const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
 
 // ============================================================================
+// dj-cloak CSS injection — hide [dj-cloak] elements until mount completes
+// ============================================================================
+(function() {
+    const style = document.createElement('style');
+    style.textContent = '[dj-cloak] { display: none !important; }';
+    document.head.appendChild(style);
+})();
+
+// ============================================================================
 // DOM Helper Functions
 // ============================================================================
 
@@ -458,6 +467,10 @@ class LiveViewWebSocket {
         this.vdomVersion = null;
         this.stats.connectedAt = null; // Reset connection timestamp
 
+        // Remove connection state CSS classes on intentional disconnect
+        document.body.classList.remove('dj-connected');
+        document.body.classList.remove('dj-disconnected');
+
         // Event sequencing (#560): clear pending event state
         _pendingEventRefs.clear();
         _pendingEventNames.clear();
@@ -488,6 +501,10 @@ class LiveViewWebSocket {
             this.reconnectAttempts = 0;
             this._intentionalDisconnect = false;
 
+            // Connection state CSS classes
+            document.body.classList.add('dj-connected');
+            document.body.classList.remove('dj-disconnected');
+
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
                 this.stats.reconnections++;
@@ -500,6 +517,10 @@ class LiveViewWebSocket {
         this.ws.onclose = (_event) => {
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
+
+            // Connection state CSS classes
+            document.body.classList.add('dj-disconnected');
+            document.body.classList.remove('dj-connected');
 
             // Notify hooks of disconnection
             if (typeof notifyHooksDisconnected === 'function') notifyHooksDisconnected();
@@ -601,6 +622,12 @@ class LiveViewWebSocket {
             case 'mount':
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[LiveView] View mounted:', data.view);
+
+                // Remove dj-cloak from all elements (FOUC prevention)
+                document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
+
+                // Finish page loading bar on mount
+                if (window.djust.pageLoading) window.djust.pageLoading.finish();
 
                 // Initialize VDOM version from mount response (critical for patch generation)
                 if (data.version !== undefined) {
@@ -1215,6 +1242,12 @@ class LiveViewSSE {
 
         this.eventSource = new EventSource(streamUrl);
 
+        this.eventSource.onopen = () => {
+            // Connection state CSS classes
+            document.body.classList.add('dj-connected');
+            document.body.classList.remove('dj-disconnected');
+        };
+
         this.eventSource.onmessage = (event) => {
             try {
                 this.stats.received++;
@@ -1232,6 +1265,9 @@ class LiveViewSSE {
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED) {
                 console.warn('[SSE] EventSource closed unexpectedly.');
                 this.enabled = false;
+                // Connection state CSS classes
+                document.body.classList.add('dj-disconnected');
+                document.body.classList.remove('dj-connected');
             }
         };
     }
@@ -1246,6 +1282,11 @@ class LiveViewSSE {
         }
         this.viewMounted = false;
         this.sessionId = null;
+
+        // Remove connection state CSS classes on intentional disconnect
+        document.body.classList.remove('dj-connected');
+        document.body.classList.remove('dj-disconnected');
+
         if (globalThis.djustDebug) console.log('[SSE] Disconnected');
     }
 
@@ -1269,6 +1310,12 @@ class LiveViewSSE {
             case 'mount':
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
+
+                // Remove dj-cloak from all elements (FOUC prevention)
+                document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
+
+                // Finish page loading bar on mount
+                if (window.djust.pageLoading) window.djust.pageLoading.finish();
 
                 if (data.version !== undefined) {
                     clientVdomVersion = data.version;
@@ -3269,11 +3316,43 @@ function clearOptimisticState(eventName) {
  * instead of manually calling initReactCounters + initTodoItems +
  * bindLiveViewEvents + updateHooks individually.
  */
+// WeakSet to track elements that have already been scrolled into view.
+// Fresh DOM nodes (from VDOM replacement) won't be in the set, so they
+// will scroll again — correct behavior for newly inserted content.
+const _scrolledElements = new WeakSet();
+
 function reinitAfterDOMUpdate() {
     initReactCounters();
     initTodoItems();
     bindLiveViewEvents();
     if (typeof updateHooks === 'function') { updateHooks(); }
+
+    // dj-scroll-into-view: auto-scroll elements into view after DOM updates
+    document.querySelectorAll('[dj-scroll-into-view]').forEach(el => {
+        if (_scrolledElements.has(el)) return;
+        _scrolledElements.add(el);
+
+        const value = el.getAttribute('dj-scroll-into-view') || '';
+        let options;
+        switch (value) {
+            case 'instant':
+                options = { behavior: 'instant', block: 'nearest' };
+                break;
+            case 'center':
+                options = { behavior: 'smooth', block: 'center' };
+                break;
+            case 'start':
+                options = { behavior: 'smooth', block: 'start' };
+                break;
+            case 'end':
+                options = { behavior: 'smooth', block: 'end' };
+                break;
+            default:
+                options = { behavior: 'smooth', block: 'nearest' };
+                break;
+        }
+        el.scrollIntoView(options);
+    });
 }
 
 // Export for testing and for createNodeFromVNode to mark VDOM-created elements as bound
@@ -6321,6 +6400,11 @@ window.djust.getActiveStreams = getActiveStreams;
      * Updates URL, then sends a mount message for the new view.
      */
     function handleLiveRedirect(data) {
+        // Start page loading bar for live_redirect navigation
+        if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
+            window.djust.pageLoading.start();
+        }
+
         const newUrl = new URL(data.path, window.location.origin);
 
         if (data.params) {
@@ -7167,4 +7251,92 @@ window.djust.bindModelElements = bindModelElements;
         dismiss: dismissFlash,
     };
 
+})();
+
+// ============================================================================
+// Page Loading Bar — NProgress-style loading indicator for navigation
+// ============================================================================
+
+(function () {
+    // Inject CSS for the loading bar
+    const style = document.createElement('style');
+    style.textContent = `
+        #djust-page-loading-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #818cf8, #6366f1, #4f46e5);
+            z-index: 99999;
+            transition: width 2s ease-out, opacity 0.3s ease;
+            pointer-events: none;
+        }
+    `;
+    document.head.appendChild(style);
+
+    let barElement = null;
+    let finishTimeout = null;
+
+    function start() {
+        // Clean up any existing bar
+        if (barElement) {
+            barElement.remove();
+            barElement = null;
+        }
+        if (finishTimeout) {
+            clearTimeout(finishTimeout);
+            finishTimeout = null;
+        }
+
+        barElement = document.createElement('div');
+        barElement.id = 'djust-page-loading-bar';
+        barElement.style.width = '0%';
+        barElement.style.opacity = '1';
+        document.body.appendChild(barElement);
+
+        // Animate to 90% (never completes until finish() is called)
+        requestAnimationFrame(() => {
+            if (barElement) {
+                barElement.style.width = '90%';
+            }
+        });
+    }
+
+    function finish() {
+        if (!barElement) return;
+
+        // Snap to 100%
+        barElement.style.transition = 'width 0.2s ease, opacity 0.3s ease 0.2s';
+        barElement.style.width = '100%';
+        barElement.style.opacity = '0';
+
+        const bar = barElement;
+        finishTimeout = setTimeout(() => {
+            bar.remove();
+            if (barElement === bar) {
+                barElement = null;
+            }
+            finishTimeout = null;
+        }, 500);
+    }
+
+    window.djust.pageLoading = {
+        start: start,
+        finish: finish,
+        enabled: true,
+    };
+
+    // Hook into TurboNav: start bar before navigation
+    window.addEventListener('turbo:before-visit', function () {
+        if (window.djust.pageLoading.enabled) {
+            start();
+        }
+    });
+
+    // Hook into TurboNav: finish bar after load
+    window.addEventListener('turbo:load', function () {
+        if (window.djust.pageLoading.enabled) {
+            finish();
+        }
+    });
 })();

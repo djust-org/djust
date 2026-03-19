@@ -60,6 +60,11 @@
      * Updates URL, then sends a mount message for the new view.
      */
     function handleLiveRedirect(data) {
+        // Start page loading bar for live_redirect navigation
+        if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
+            window.djust.pageLoading.start();
+        }
+
         const newUrl = new URL(data.path, window.location.origin);
 
         if (data.params) {
