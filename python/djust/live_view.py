@@ -38,6 +38,7 @@ from .mixins import (
     PushEventMixin,
     NavigationMixin,
     FlashMixin,
+    PageMetadataMixin,
 )
 
 # Configure logger
@@ -72,6 +73,7 @@ class LiveView(
     PushEventMixin,
     NavigationMixin,
     FlashMixin,
+    PageMetadataMixin,
     AsyncWorkMixin,
     View,
 ):
