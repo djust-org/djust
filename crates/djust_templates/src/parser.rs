@@ -164,6 +164,33 @@ fn is_inside_html_tag(text: &str) -> bool {
     in_tag
 }
 
+/// Scan backwards through all preceding tokens to determine if we are inside
+/// an HTML opening tag. Variable/expression tokens (`{{ }}`) produce escaped
+/// text that cannot contain raw `<` or `>`, so they are skipped — only Text
+/// tokens contribute to the tag-open/close state.
+///
+/// This fixes the case where `<option value="{{ var }}" {% if cond %}selected{% endif %}>`
+/// has a Variable token between the `<option` and the `{% if %}`, causing the
+/// single-token check to miss the unclosed tag context.
+fn is_inside_html_tag_at(tokens: &[Token], pos: usize) -> bool {
+    let mut combined = String::new();
+    // Walk backwards, collecting Text tokens. Stop early if we find a `>`
+    // outside quotes (definitely closed) or have enough context.
+    for j in (0..pos).rev() {
+        if let Token::Text(t) = &tokens[j] {
+            combined.insert_str(0, t);
+            // Optimization: if the combined text contains a `>` we have enough
+            // context — the final state from is_inside_html_tag will be correct.
+            if t.contains('>') {
+                break;
+            }
+        }
+        // Variable tokens produce HTML-escaped content (no raw < or >), skip them.
+        // Tag tokens ({% %}) are structural and don't emit < or >, skip them too.
+    }
+    is_inside_html_tag(&combined)
+}
+
 pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
     let mut nodes = Vec::new();
     let mut i = 0;
@@ -219,17 +246,12 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                 "if" => {
                     let condition = args.join(" ");
                     // Capture attribute context BEFORE advancing i.
-                    // If the immediately preceding token is text that ends inside an
-                    // unclosed HTML tag (e.g. `<div class="`), we are inside an
-                    // attribute value and must not emit <!--dj-if--> when false.
-                    let in_tag_context = if *i > 0 {
-                        match &tokens[*i - 1] {
-                            Token::Text(t) => is_inside_html_tag(t),
-                            _ => false,
-                        }
-                    } else {
-                        false
-                    };
+                    // Scan backwards through ALL preceding tokens (not just the
+                    // immediately previous one) to determine if we are inside an
+                    // unclosed HTML tag. This handles cases like:
+                    //   <option value="{{ var }}" {% if cond %}selected{% endif %}>
+                    // where Variable tokens separate the tag opening from the {% if %}.
+                    let in_tag_context = is_inside_html_tag_at(tokens, *i);
                     let (true_nodes, false_nodes, end_pos) =
                         parse_if_block(tokens, *i + 1, in_tag_context)?;
                     *i = end_pos;
