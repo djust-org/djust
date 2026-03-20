@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc2] - 2026-03-20
+
 ### Added
 
 - **Navigation lifecycle events and CSS class** — `djust:navigate-start` / `djust:navigate-end` CustomEvents and `.djust-navigating` CSS class on `[dj-root]` during `dj-navigate` transitions. Enables CSS-only page transitions without monkey-patching `pageLoading`. ([#585](https://github.com/djust-org/djust/issues/585))
