@@ -357,6 +357,23 @@ Or hide via CSS:
 .djust-page-loading-bar { display: none !important; }
 ```
 
+Navigation lifecycle events and CSS class for page transitions:
+
+```css
+/* CSS-only page transition (zero JS) */
+[dj-root].djust-navigating main {
+    opacity: 0.3;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+}
+```
+
+```javascript
+// JS hooks for advanced use cases
+document.addEventListener('djust:navigate-start', () => showSkeleton());
+document.addEventListener('djust:navigate-end', () => hideSkeleton());
+```
+
 ---
 
 ## Loading States
@@ -707,6 +724,9 @@ Reconnection UI (auto on <body>):
 Page loading bar:
   Always active for TurboNav / live_redirect
   window.djust.pageLoading.start/finish  (manual control)
+  .djust-navigating             (on [dj-root] during navigation)
+  djust:navigate-start          (CustomEvent on document)
+  djust:navigate-end            (CustomEvent on document)
 
 Document metadata (Python-side, no template directive):
   self.page_title = "..."              (update document.title)

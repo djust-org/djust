@@ -7615,6 +7615,20 @@ window.djust.bindModelElements = bindModelElements;
 
 // ============================================================================
 // Page Loading Bar — NProgress-style loading indicator for navigation
+//
+// Lifecycle events:
+//   djust:navigate-start  — dispatched when navigation begins
+//   djust:navigate-end    — dispatched when navigation completes
+//
+// CSS class:
+//   .djust-navigating     — added to [dj-root] during navigation
+//
+// Example (zero-JS page transition):
+//   [dj-root].djust-navigating main {
+//       opacity: 0.3;
+//       transition: opacity 0.15s ease;
+//       pointer-events: none;
+//   }
 // ============================================================================
 
 (function () {
@@ -7660,10 +7674,24 @@ window.djust.bindModelElements = bindModelElements;
                 barElement.style.width = '90%';
             }
         });
+
+        // Add navigating class to dj-root for CSS-based transitions
+        const root = document.querySelector('[dj-root]');
+        if (root) root.classList.add('djust-navigating');
+
+        // Dispatch lifecycle event
+        document.dispatchEvent(new CustomEvent('djust:navigate-start'));
     }
 
     function finish() {
         if (!barElement) return;
+
+        // Remove navigating class from dj-root
+        const root = document.querySelector('[dj-root]');
+        if (root) root.classList.remove('djust-navigating');
+
+        // Dispatch lifecycle event
+        document.dispatchEvent(new CustomEvent('djust:navigate-end'));
 
         // Snap to 100%
         barElement.style.transition = 'width 0.2s ease, opacity 0.3s ease 0.2s';
