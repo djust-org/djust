@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Navigation lifecycle events and CSS class** — `djust:navigate-start` / `djust:navigate-end` CustomEvents and `.djust-navigating` CSS class on `[dj-root]` during `dj-navigate` transitions. Enables CSS-only page transitions without monkey-patching `pageLoading`. ([#585](https://github.com/djust-org/djust/issues/585))
 
+### Fixed
+
+- **`{% if %}` inside HTML tag after `{{ variable }}` emits `<!--dj-if-->` comment** — `is_inside_html_tag()` only checked the immediately preceding token, missing tag context when `{{ variable }}` tokens appeared between the tag opening and `{% if %}`. Added `is_inside_html_tag_at()` that scans all preceding tokens. ([#580](https://github.com/djust-org/djust/issues/580))
+
 ## [0.4.0rc1] - 2026-03-19
 
 ### Added
