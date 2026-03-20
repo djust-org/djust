@@ -394,6 +394,28 @@ One-shot per DOM node. Supports values: `""` (smooth/nearest), `"instant"`, `"ce
 
 An NProgress-style loading bar appears automatically during TurboNav and `live_redirect` navigation. Control via `window.djust.pageLoading.start()` / `.finish()` or disable with `window.djust.pageLoading.enabled = false`.
 
+**Navigation lifecycle events** are dispatched during `dj-navigate` transitions:
+
+- `djust:navigate-start` — fires when navigation begins
+- `djust:navigate-end` — fires when the new page renders
+
+The `.djust-navigating` CSS class is added to `[dj-root]` during navigation, enabling CSS-only page transitions:
+
+```css
+[dj-root].djust-navigating main {
+    opacity: 0.3;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+}
+```
+
+For advanced use cases, listen for the events in JS:
+
+```javascript
+document.addEventListener('djust:navigate-start', () => showSkeleton());
+document.addEventListener('djust:navigate-end', () => hideSkeleton());
+```
+
 ## Clipboard Copy (`dj-copy`)
 
 Copy text to the clipboard on click without a server round-trip:
