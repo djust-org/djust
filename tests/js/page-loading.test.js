@@ -111,3 +111,78 @@ describe('Page Loading Bar', () => {
         expect(found).toBe(true);
     });
 });
+
+describe('Navigation lifecycle events', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('dispatches djust:navigate-start on start()', () => {
+        const { dom } = createDom();
+        const doc = dom.window.document;
+        const handler = vi.fn();
+        doc.addEventListener('djust:navigate-start', handler);
+
+        dom.window.djust.pageLoading.start();
+
+        expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('dispatches djust:navigate-end on finish() after start()', () => {
+        const { dom } = createDom();
+        const doc = dom.window.document;
+        const handler = vi.fn();
+        doc.addEventListener('djust:navigate-end', handler);
+
+        dom.window.djust.pageLoading.start();
+        dom.window.djust.pageLoading.finish();
+
+        expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not dispatch djust:navigate-end on finish() without prior start()', () => {
+        const { dom } = createDom();
+        const doc = dom.window.document;
+        const handler = vi.fn();
+        doc.addEventListener('djust:navigate-end', handler);
+
+        dom.window.djust.pageLoading.finish();
+
+        expect(handler).not.toHaveBeenCalled();
+    });
+});
+
+describe('Navigation CSS class', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('adds .djust-navigating to [dj-root] on start()', () => {
+        const { dom } = createDom();
+        const root = dom.window.document.querySelector('[dj-root]');
+
+        expect(root.classList.contains('djust-navigating')).toBe(false);
+        dom.window.djust.pageLoading.start();
+        expect(root.classList.contains('djust-navigating')).toBe(true);
+    });
+
+    it('removes .djust-navigating from [dj-root] on finish()', () => {
+        const { dom } = createDom();
+        const root = dom.window.document.querySelector('[dj-root]');
+
+        dom.window.djust.pageLoading.start();
+        expect(root.classList.contains('djust-navigating')).toBe(true);
+
+        dom.window.djust.pageLoading.finish();
+        expect(root.classList.contains('djust-navigating')).toBe(false);
+    });
+
+    it('does not touch .djust-navigating on finish() without prior start()', () => {
+        const { dom } = createDom();
+        const root = dom.window.document.querySelector('[dj-root]');
+
+        expect(root.classList.contains('djust-navigating')).toBe(false);
+        dom.window.djust.pageLoading.finish();
+        expect(root.classList.contains('djust-navigating')).toBe(false);
+    });
+});

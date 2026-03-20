@@ -7684,14 +7684,14 @@ window.djust.bindModelElements = bindModelElements;
     }
 
     function finish() {
+        if (!barElement) return;
+
         // Remove navigating class from dj-root
         const root = document.querySelector('[dj-root]');
         if (root) root.classList.remove('djust-navigating');
 
         // Dispatch lifecycle event
         document.dispatchEvent(new CustomEvent('djust:navigate-end'));
-
-        if (!barElement) return;
 
         // Snap to 100%
         barElement.style.transition = 'width 0.2s ease, opacity 0.3s ease 0.2s';
