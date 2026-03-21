@@ -588,7 +588,21 @@ fn render_node_with_loader<L: TemplateLoader>(
             //
             // The handler must return a string to be inserted in the output.
 
-            // First, resolve any variable references in args
+            // First, resolve any variable references in args.
+            // For scalar values (strings, ints, floats, bools) we inline
+            // the value.  For lists and objects we serialize to JSON so the
+            // Python handler can recover the structured data from the arg
+            // string (plain `.to_string()` would produce the opaque
+            // placeholders "[List]" / "[Object]").
+            fn value_to_arg_string(v: &Value) -> String {
+                match v {
+                    Value::List(_) | Value::Object(_) => {
+                        serde_json::to_string(v).unwrap_or_else(|_| v.to_string())
+                    }
+                    _ => v.to_string(),
+                }
+            }
+
             let resolved_args: Vec<String> = args
                 .iter()
                 .map(|arg| {
@@ -611,14 +625,16 @@ fn render_node_with_loader<L: TemplateLoader>(
                         } else {
                             // Value is a variable - try to resolve
                             match context.get(value) {
-                                Some(resolved) => format!("{}={}", key, resolved),
+                                Some(resolved) => {
+                                    format!("{}={}", key, value_to_arg_string(resolved))
+                                }
                                 None => arg.clone(),
                             }
                         }
                     } else {
                         // Might be a variable - try to resolve
                         match context.get(arg_trimmed) {
-                            Some(resolved) => resolved.to_string(),
+                            Some(resolved) => value_to_arg_string(resolved),
                             None => arg.clone(),
                         }
                     }
