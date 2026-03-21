@@ -2439,4 +2439,35 @@ mod tests {
             "expected empty attribute value: {result}"
         );
     }
+
+    #[test]
+    fn test_value_list_serializes_as_json() {
+        // value_to_arg_string should serialize Value::List as JSON
+        // so Python tag handlers receive structured data, not "[List]"
+        let list = Value::List(vec![
+            Value::String("a".to_string()),
+            Value::Integer(1),
+            Value::Bool(true),
+        ]);
+        let json = serde_json::to_string(&list).unwrap();
+        assert_eq!(json, r#"["a",1,true]"#);
+    }
+
+    #[test]
+    fn test_value_object_serializes_as_json() {
+        // value_to_arg_string should serialize Value::Object as JSON
+        let mut map = std::collections::HashMap::new();
+        map.insert("key".to_string(), Value::String("val".to_string()));
+        let obj = Value::Object(map);
+        let json = serde_json::to_string(&obj).unwrap();
+        assert_eq!(json, r#"{"key":"val"}"#);
+    }
+
+    #[test]
+    fn test_value_scalar_to_string_not_json() {
+        // Scalars should use to_string(), not JSON serialization
+        assert_eq!(Value::Integer(42).to_string(), "42");
+        assert_eq!(Value::Bool(true).to_string(), "true");
+        assert_eq!(Value::String("hello".to_string()).to_string(), "hello");
+    }
 }
