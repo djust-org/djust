@@ -623,19 +623,19 @@ fn render_node_with_loader<L: TemplateLoader>(
                             // Value is a string literal
                             arg.clone()
                         } else {
-                            // Value is a variable - try to resolve
-                            match context.get(value) {
-                                Some(resolved) => {
-                                    format!("{}={}", key, value_to_arg_string(resolved))
+                            // Value is a variable (possibly with filters) - try to resolve
+                            match get_value(value, context) {
+                                Ok(resolved) => {
+                                    format!("{}={}", key, value_to_arg_string(&resolved))
                                 }
-                                None => arg.clone(),
+                                Err(_) => arg.clone(),
                             }
                         }
                     } else {
-                        // Might be a variable - try to resolve
-                        match context.get(arg_trimmed) {
-                            Some(resolved) => value_to_arg_string(resolved),
-                            None => arg.clone(),
+                        // Might be a variable (possibly with filters) - try to resolve
+                        match get_value(arg_trimmed, context) {
+                            Ok(resolved) => value_to_arg_string(&resolved),
+                            Err(_) => arg.clone(),
                         }
                     }
                 })
