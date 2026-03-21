@@ -12,7 +12,6 @@ Usage in templates::
 """
 
 import logging
-import re
 from typing import Any, Dict, List
 
 from . import TagHandler, register
@@ -43,19 +42,13 @@ class DjFlashTagHandler(TagHandler):
                     except (ValueError, TypeError):
                         pass
                 elif key == "position":
-                    # Sanitize: only allow alphanumeric and hyphens
-                    raw = str(value).strip("'\"")
-                    position = re.sub(r"[^a-zA-Z0-9-]", "", raw)
+                    position = str(value).strip("'\"")
 
         css_class = "dj-flash-container"
         if position:
             css_class = f"{css_class} dj-flash-{position}"
 
-        from django.utils.html import format_html
-
-        return format_html(
-            '<div id="dj-flash-container" class="{}" dj-update="ignore"'
-            ' data-dj-auto-dismiss="{}" aria-live="polite" role="status"></div>',
-            css_class,
-            auto_dismiss,
+        return (
+            f'<div id="dj-flash-container" class="{css_class}" dj-update="ignore"'
+            f' data-dj-auto-dismiss="{auto_dismiss}" aria-live="polite" role="status"></div>'
         )
