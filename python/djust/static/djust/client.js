@@ -359,6 +359,18 @@ function handleServerResponse(data, eventName, triggerElement) {
             if (form) form.reset();
         }
 
+        // Process side-channel commands from HTTP response (flash, page metadata)
+        if (data._flash && window.djust.flash) {
+            data._flash.forEach(function(cmd) {
+                window.djust.flash.handleFlash(cmd);
+            });
+        }
+        if (data._page_metadata && window.djust.pageMetadata) {
+            data._page_metadata.forEach(function(cmd) {
+                window.djust.pageMetadata.handlePageMetadata(cmd);
+            });
+        }
+
         // Forward debug info to debug panel (HTTP-only mode)
         if (data._debug && window.djustDebugPanel && typeof window.djustDebugPanel.processDebugInfo === 'function') {
             window.djustDebugPanel.processDebugInfo(data._debug);

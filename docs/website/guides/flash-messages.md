@@ -303,10 +303,13 @@ window.djust.flash.dismiss(element);
 ## How It Works Under the Hood
 
 1. `put_flash()` appends a command to an internal `_pending_flash` queue on the view instance
-2. After each WebSocket response (event, tick, server push), the consumer calls `_drain_flash()` to collect pending commands
-3. Each command is sent as a separate `{"type": "flash", "action": "put", "level": "...", "message": "..."}` WebSocket message
-4. The client JS (`23-flash.js`) receives the message and inserts a `<div>` into `#dj-flash-container`
-5. After the auto-dismiss timeout, the element gets the `dj-flash-removing` class (for CSS transitions) and is removed from the DOM 300ms later
+2. After each response, pending commands are drained and delivered to the client:
+   - **WebSocket mode:** The consumer calls `_drain_flash()` and sends each command as a `{"type": "flash", ...}` message
+   - **HTTP POST mode:** The `_inject_side_channels()` helper includes all pending commands as a `_flash` array in the JSON response
+3. The client JS (`23-flash.js`) receives the commands and inserts `<div>` elements into `#dj-flash-container`
+4. After the auto-dismiss timeout, the element gets the `dj-flash-removing` class (for CSS transitions) and is removed from the DOM 300ms later
+
+Flash messages work identically in both WebSocket and HTTP-only modes -- no extra configuration needed.
 
 ## See Also
 

@@ -311,6 +311,18 @@ class RequestMixin:
                     except Exception:
                         logger.debug("Failed to inject debug info", exc_info=True)
 
+            # Drain side-channel commands (flash, page metadata) so they
+            # are delivered in the HTTP response, not only via WebSocket.
+            def _inject_side_channels(resp_data):
+                if hasattr(self, "_drain_flash"):
+                    flash_commands = self._drain_flash()
+                    if flash_commands:
+                        resp_data["_flash"] = flash_commands
+                if hasattr(self, "_drain_page_metadata"):
+                    meta_commands = self._drain_page_metadata()
+                    if meta_commands:
+                        resp_data["_page_metadata"] = meta_commands
+
             if patches_json:
                 patches = json_module.loads(patches_json)
                 patch_count = len(patches)
@@ -319,6 +331,7 @@ class RequestMixin:
                     response_data = {"patches": patches, "version": version}
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
+                    _inject_side_channels(response_data)
                     _inject_debug(response_data)
                     return JsonResponse(response_data)
                 else:
@@ -326,12 +339,14 @@ class RequestMixin:
                     response_data = {"html": html, "version": version}
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
+                    _inject_side_channels(response_data)
                     _inject_debug(response_data)
                     return JsonResponse(response_data)
             else:
                 response_data = {"html": html, "version": version}
                 if cache_request_id:
                     response_data["cache_request_id"] = cache_request_id
+                _inject_side_channels(response_data)
                 _inject_debug(response_data)
                 return JsonResponse(response_data)
 

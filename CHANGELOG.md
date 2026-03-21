@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`{% dj_flash %}` template tag in Rust renderer** — Registered `DjFlashTagHandler` so the flash container renders correctly when templates are processed by the Rust engine. Previously, the tag was only registered as a Django template tag and silently dropped by the Rust renderer. ([#590](https://github.com/djust-org/djust/pull/590))
+
+### Fixed
+
+- **Flash and page_metadata not delivered over HTTP POST fallback** — `put_flash()` and `page_title`/`page_meta` side-channel commands were only flushed over WebSocket. HTTP POST responses now drain `_pending_flash` and `_pending_page_metadata` and include them as `_flash` and `_page_metadata` arrays in the JSON response. ([#590](https://github.com/djust-org/djust/pull/590))
+- **Custom tag args containing lists/objects serialized as `[List]`/`[Object]`** — `Value::List` and `Value::Object` in custom tag arguments were stringified via the `Display` trait, destroying structured data before it reached Python handlers. Now serialized as JSON via `serde_json`. ([#589](https://github.com/djust-org/djust/issues/589))
+
 ## [0.4.0rc2] - 2026-03-20
 
 ### Added
