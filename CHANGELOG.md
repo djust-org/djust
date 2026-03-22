@@ -99,7 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **VDOM patching fails when `{% if %}` blocks add/remove DOM elements** — Comment node placeholders (`<!--dj-if-->`) emitted by the Rust template engine were excluded from client-side child index resolution (`getSignificantChildren` and `getNodeByPath`), causing path traversal errors and silent patch failures. Also added `#comment` handling to `createNodeFromVNode` so comment placeholders can be correctly created during `InsertChild` patches. ([#559](https://github.com/djust-org/djust/issues/559))
 
-## [0.3.8rc1] - 2026-03-17
+## [0.3.8] - 2026-03-19
 
 ### Fixed
 

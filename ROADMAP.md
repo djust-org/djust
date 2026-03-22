@@ -347,49 +347,6 @@ class ChatView(LiveView):
 # </table>
 ```
 
-**Component `update` callback** — Phoenix's `update/2` on LiveComponents lets you transform assigns before render — essential for components that need to derive internal state from parent-provided props. Without this, components must put derivation logic in `render()` or `get_context_data()`, mixing state transformation with presentation. API: `def update(self, assigns)` called before every render when parent assigns change. The component can transform, validate, or ignore incoming assigns. ~40 lines Python. *This is the key to building reusable component libraries — components need to control how external data maps to internal state. React's `getDerivedStateFromProps` / `useMemo` + `useEffect` serve the same purpose.*
-
-**View Transitions API integration (promoted from v0.6.0)** — Use the browser's native View Transitions API for animated page transitions during `live_redirect` and TurboNav navigation. `<main dj-transition="slide-left">` applies a named view transition when the content changes. Falls back gracefully in unsupported browsers. Low implementation effort (~60 lines JS), supported in Chrome, Edge, Safari, and Firefox (implementing). *Promoted because this is the single biggest perceived-quality improvement available — animated transitions make server-rendered apps feel like native apps. No other server-side framework has first-class View Transitions API support yet. Combined with `dj-page-loading`, navigation goes from "feels like 2010 Django" to "feels like a native app" — a critical perception for adoption.*
-
-**Nested LiveComponents with targeted events** — LiveComponents within LiveComponents with event bubbling through the component tree. Each component maintains its own VDOM tree for independent diffing. Events target their owning component via a `dj-target="component_id"` attribute (Phoenix's `@myself`). Named slots for composition (`<slot:header>`, `<slot:footer>`). Declarative assigns with validation. This is the foundation for building complex UIs from reusable pieces.
-
-**Direct-to-S3 uploads** — The core upload system (chunked binary WS frames, drag-and-drop, progress, validation) is complete. Add optional direct-to-S3/GCS with pre-signed URLs via `presign_upload()` callback, bypassing the server for large files. Django `UploadedFile` compatibility so existing model `FileField`/`ImageField` patterns work unchanged with the pre-signed flow.
-
-**Stream enhancements** — The existing `StreamsMixin` handles basic append/replace, but needs parity with Phoenix streams: `:limit` option to cap client-side DOM elements (enables virtual scrolling with minimal memory), `dj-viewport-top` / `dj-viewport-bottom` events that fire when the first/last stream child enters the viewport (enables bidirectional infinite scroll), and `stream_configure()` for per-stream options. Combined, these let you build infinite-scroll feeds, chat histories, and large data tables without keeping items in server memory.
-
-**`handle_async` callback (Phoenix 1.0 parity)** — When `start_async()` or `assign_async()` completes, invoke `handle_async(name, result)` with `result` being either `(ok=value)` or `(error=exception)`. Phoenix 1.0's `handle_async/3` lets developers transform async results before they hit the template — essential for error mapping, data normalization, and retry logic. Currently djust's `start_async` either auto-assigns the result or calls a raw callback; there's no standardized completion handler with typed success/failure. API: `def handle_async(self, name, result)` — receives the task name and an `AsyncResult` with `.ok`, `.failed`, `.loading` states. If a task with the same name is started while one is in-flight, the previous result is discarded (last-write-wins). ~80 lines Python. *This is the missing counterpart to `assign_async` — without it, developers can't cleanly handle errors or transform results from async operations.*
-
-```python
-# Target API
-class DashboardView(LiveView):
-    def mount(self, request, **kwargs):
-        self.start_async('metrics', self._load_metrics)
-
-    def handle_async(self, name, result):
-        if name == 'metrics':
-            if result.ok:
-                self.metrics = result.value
-            elif result.failed:
-                self.metrics_error = str(result.error)
-                self.put_flash('error', 'Failed to load metrics')
-
-    async def _load_metrics(self):
-        return await expensive_query()
-```
-
-**`handle_info` pattern (promoted from v0.6.0)** — Explicit handler for external messages (Celery task completion, webhook notifications, admin broadcasts) that arrive via Channels layer but aren't user-initiated events. Phoenix's `handle_info/2` is the standard pattern for reacting to external signals. *Promoted because any production app with background tasks (Celery, webhooks) needs this immediately. Currently djust handles this implicitly through broadcasting, but a dedicated `handle_info()` method with typed message dispatching is cleaner and more discoverable.* API: `self.subscribe('topic')` in mount, `def handle_info(self, message)` with `match` dispatch.
-
-**Keyed for-loop change tracking (Phoenix 1.1 parity)** — Phoenix LiveView 1.1 performs automatic change tracking in comprehensions — when items in a `for` loop have keys, only changed items are re-rendered and diffed. Without keys, it falls back to index-based tracking (still better than re-rendering everything). djust's `dj-key` attribute already enables keyed VDOM diffing on the *client*, but the *server* still re-renders the entire `{% for %}` loop body for every item on every event. Implementation: the Rust template engine tracks which loop items' context changed between renders and only emits VDOM nodes for changed items. Unchanged items are sent as a stable fingerprint reference. Combined with template fragments, this is the key to O(changed) rendering instead of O(total) — essential for lists with 100+ items. ~200 lines Rust. *This is how Phoenix achieves sub-millisecond updates on large lists. Without it, a 500-item list re-renders 500 items even when only 1 changed.*
-
-**`self.defer(callback)` — Post-render server-side work** — Schedule a callback to run *after* the current render has been sent to the client. Use cases: sending notifications after a successful save, updating analytics counters, cleaning up temporary state, triggering follow-up async work. Different from `start_async` (which runs concurrently with the render) — `defer` guarantees the client has received the render before the callback executes, so any state changes in the callback trigger a *second* render. Phoenix's `send(self(), :after_render)` pattern serves the same purpose. API: `self.defer(self._send_notification, user_id=42)` in any event handler. ~40 lines Python. *This is the clean way to do "render first, then do work" — currently developers hack this with `start_async` + a sleep, which is fragile.*
-
-**Template fragments (static subtree tracking)** — Track which parts of a template are static (never change between renders) and which are dynamic. Only re-render and diff the dynamic subtrees. Phoenix does this at compile time with HEEx — static parts are sent once and never re-transmitted. For djust, the Rust template engine can fingerprint static subtrees on first render, then skip them in subsequent VDOM diffs. This is the single biggest wire-size optimization possible — most templates are 80%+ static HTML. Combined with selective re-rendering, this makes large pages as efficient as small ones. Implementation: Rust-side static tree fingerprinting + client-side fragment cache. *This is how Phoenix achieves sub-millisecond updates on complex pages — we need it for parity.*
-
-**`used_input?` / server-side feedback control (Phoenix 1.0 parity)** — Phoenix 1.0 *removed* the client-side `phx-feedback-for` attribute and replaced it with `Phoenix.Component.used_input?/2` — a server-side function that checks whether a form input has been interacted with. This is strictly better: it's testable, works without JS, and doesn't flash errors during re-renders. djust equivalent: `self.field_touched(field_name)` returning `True` after the field has received any `dj-change` or `dj-blur` event. Template usage: `{% if form.email.errors and field_touched.email %}`. ~40 lines Python + ~10 lines JS. *This supersedes the earlier `dj-feedback` proposal — server-side is more robust and aligns with Phoenix 1.0's direction.*
-
-**Selective re-rendering** — Only re-render and diff components whose state actually changed. Currently, every event triggers a full template re-render and VDOM diff for the entire view. Track which instance attributes changed and only re-render affected component subtrees. *React does this via reconciliation; Phoenix does this via separate component VDOM trees.*
-
-**`dj-spread` / attribute rest** — Pass remaining HTML attributes through to the root element of a component. Phoenix's `{@rest}` pattern. API: `<div {{ attrs|spread }}>`. Implementation: Rust template filter. Essential for reusable component libraries.
 
 ```python
 # Component usage in parent template:
@@ -553,34 +510,6 @@ class OnboardingView(WizardMixin, LiveView):
 
 **Runtime layout switching** — Change the base layout template during a LiveView session without a full page reload. `self.set_layout('layouts/fullscreen.html')` in an event handler swaps the surrounding layout (nav, sidebar, footer) while preserving the inner LiveView state. Use cases: toggle between admin layout and public layout, switch to fullscreen mode for a presentation or editor, show a minimal layout during onboarding then switch to the full app layout. Phoenix 1.1 added runtime layout support. Implementation: the layout is rendered server-side and sent as a special WS message; the client replaces everything outside `[data-djust-root]`. ~80 lines Python + ~30 lines JS. *This is how real apps work — layouts aren't static. A document editor that goes fullscreen, a dashboard that hides the sidebar, an onboarding flow that uses a minimal layout then switches to the app layout on completion. Without runtime layout switching, these patterns require a full page reload, losing all state.*
 
-**Graceful degradation** — Handle Redis unavailability without crashing. Fall back to in-memory state with a warning. Health check endpoint (`/djust/health/`) for load balancer integration. Connection pool metrics via Django's `check` framework.
-
-**Monitoring integration** — First-class Sentry integration. OpenTelemetry spans for template rendering, VDOM diffing, and WebSocket message handling. Lifecycle telemetry events (mount, handle_event, render) matching Phoenix's telemetry pattern. Custom telemetry hooks for application-specific metrics.
-
-**CSP nonce support** — Content-Security-Policy nonce propagation for inline scripts and styles. djust's client JS and any inline handlers should respect CSP nonces passed via template context.
-
-**`dj-intersection` — Viewport visibility events** — Fire server events when elements enter/leave the viewport via IntersectionObserver. `<div dj-intersection="load_more" dj-intersection-threshold="0.5">`. Use cases beyond infinite scroll: lazy-load expensive components, analytics (track which sections users actually see), pause/resume animations, load images on demand. This is the modern replacement for scroll listeners and powers the best infinite scroll / lazy-loading patterns. React libraries like `react-intersection-observer` are extremely popular — having this built-in is a meaningful DX win.
-
-**State undo/redo** — Built-in undo stack for state changes with `self.undo()` and `self.redo()` methods. `<button dj-click="undo" dj-shortcut="ctrl+z:undo">Undo</button>`. Opt-in per view via `undo_fields = ['items', 'layout']` — only tracked fields are snapshotted. Configurable history depth (default: 50 steps). Use cases: kanban board reordering, form wizards, diagram editors, any app where "oops, undo that" is expected behavior. React apps use libraries like `use-undo` or `immer` patches; Phoenix has no built-in equivalent — making this a djust differentiator. Implementation: state snapshot ring buffer (~100 lines Python), paired with `@event_handler(undoable=True)` to mark which actions create undo points. *Every productivity app needs undo. Building it into the framework means it works correctly with VDOM diffing, broadcasting, and optimistic updates — getting these interactions right is non-trivial and shouldn't be left to each developer.*
-
-**Connection multiplexing** — Share a single WebSocket connection across multiple LiveView instances on the same page. Currently, each `{% live_render %}` opens its own WebSocket — a page with 5 live components makes 5 connections. Multiplexing routes messages by view ID over one connection, reducing server resources and connection overhead. Phoenix does this via its channel multiplexer. Implementation: client-side message router + server-side consumer dispatch. ~200 lines JS + Python. *Essential for pages with multiple independent live sections (dashboard widgets, sidebar + main content, notification badge + page body).*
-
-**Batch state updates** — Multiple `self.x = ...` assignments within a single event handler should always produce exactly one re-render and one VDOM diff. This already works for synchronous handlers, but ensure it's guaranteed for `start_async` callbacks, `handle_info`, and component-to-parent communication. React batches state updates automatically; djust should too, everywhere.
-
-**Multi-tab state sync** — Use the BroadcastChannel API to keep state synchronized across browser tabs without additional WebSocket connections. When a user performs an action in one tab (e.g., marks a notification as read, toggles dark mode, completes a task), all other tabs update instantly. Currently, each tab is an independent LiveView instance — changes in one tab require a full page refresh or server broadcast to reflect in others. Implementation: client-side BroadcastChannel listener that receives state diffs and applies them via the existing VDOM patch pipeline. Opt-in per view via `sync_across_tabs = ['notifications_count', 'theme']` class attribute. ~60 lines of JS.
-
-**Offline mutation queue** — When the WebSocket disconnects, queue user events in IndexedDB instead of dropping them. On reconnect, replay the queue in order. Combined with optimistic UI (`@optimistic`), this creates a seamless offline experience — users can keep clicking, typing, and submitting; the UI responds instantly; and everything syncs when connectivity returns. Phoenix doesn't have this (Erlang assumes connectivity), making it a differentiator for djust in mobile/spotty-connection scenarios. Implementation: IndexedDB event queue + replay logic in the reconnection handler. ~150 lines of JS + Python replay validation.
-
-**Streaming initial render (chunked HTTP)** — Send the page shell (head, nav, footer) immediately as a chunked HTTP response, then stream expensive content sections as they complete — without waiting for the slowest query. Different from WebSocket streaming (which requires JS) — this works on the initial HTTP request before any JS loads. The browser renders the shell instantly, then progressively fills in content. React 18's streaming SSR (`renderToPipeableStream`) popularized this; Rails Turbo uses a similar "page shell" pattern. Implementation: Django `StreamingHttpResponse` with template fragment rendering + Rust engine support for `{% dj_stream_placeholder "section_name" %}` markers that get replaced as data arrives. ~150 lines Python + Rust template tag. *This eliminates the biggest perceived-performance problem in server-rendered apps: the blank screen while the slowest database query runs. Users see the navigation and layout immediately, with skeleton states for pending content. Combined with `assign_async` (WebSocket-based), this covers both initial load and subsequent interactions.*
-
-**Time-travel debugging** — Extend the existing debug panel with state snapshot recording and replay. Every state change (event handler, async result, handle_info) captures a before/after snapshot. Developers can scrub through the timeline, inspect state at any point, and replay from a snapshot to reproduce bugs. Export snapshots as JSON for bug reports. React DevTools' "Components" tab and Redux DevTools' time-travel are the gold standard here. Implementation: state diff ring buffer in the debug panel's JS (~100 lines), snapshot serialization via existing JIT serializer. *The current debug panel shows event history but can't answer "what was the state when the user clicked X?" — time-travel fills that gap and makes djust's debugging story best-in-class.*
-
-**`dj-resize` — Element resize events** — Fire a server event when an element's dimensions change via ResizeObserver. `<div dj-resize="handle_resize" dj-resize-debounce="200">`. Use cases: responsive component behavior (switch from table to card layout at breakpoints), chart re-rendering on container resize, editor pane resize handling. Unlike CSS media queries (which watch viewport), ResizeObserver watches individual elements — essential for components that live inside resizable containers (split panes, sidebars). Implementation: ResizeObserver + debounced event push. ~40 lines of JS.
-
-**CSS `@starting-style` animations (zero-JS entry animations)** — The CSS `@starting-style` rule (supported in Chrome 117+, Safari 17.5+, Firefox 129+) enables entry animations without any JavaScript — the browser animates from the `@starting-style` values to the normal values when an element enters the DOM. For djust, this means elements inserted by VDOM patches can animate in with pure CSS, no `dj-transition` JS needed: `@starting-style { .card { opacity: 0; transform: translateY(10px); } }`. djust's role: (1) document the pattern, (2) ensure VDOM morphing creates new DOM nodes (not just attribute updates) when `dj-animate` is present so `@starting-style` triggers, (3) ship a small `djust-animations.css` utility file with common entry patterns. ~0 lines JS, ~30 lines CSS. *This is the modern replacement for JS-driven enter animations. Combined with `dj-transition` for exit animations (which still need JS), this gives a complete animation story with minimal framework code. djust would be the first server-rendered framework to document and optimize for `@starting-style`.*
-
-**Hot View Replacement (dev mode)** — When a developer saves a Python view file during development, push the re-rendered template to connected clients without a full page reload or WebSocket reconnect. Currently, Python changes require a manual page refresh (and daphne requires a full server restart). Implementation: file watcher detects `.py` changes → hot-reload the module → call `render()` with existing state → push the diff. The existing hot-reload infrastructure handles template changes; extending it to view classes requires re-importing the module and re-instantiating the view with preserved state. ~200 lines Python. *React's Fast Refresh and Phoenix's code reloading both preserve state across saves. This is the difference between "I'm developing a web app" and "I'm developing a web app that fights me" — every save-refresh-scroll-back cycle breaks flow state.*
-
 **Advanced service worker features** — VDOM patch caching (cache last rendered DOM per page; diff against fresh response on back-navigation). LiveView state snapshots (serialize on unmount, restore on back-nav). Request batching for multi-component pages.
 
 ### Milestone: v0.7.0 — Navigation, Smart Rendering & AI Patterns
@@ -601,26 +530,6 @@ class DashboardView(LiveView):
         # Settings panel stays mounted, form state preserved
         # Charts panel pre-renders data in background
 ```
-
-**`live_session` enhancements** — Basic `live_session()` routing is implemented (shared WS connections, route map injection). Remaining work: shared `on_mount` hooks per session, root layout declaration, and automatic full-HTTP navigation when crossing session boundaries. This is how Phoenix structures apps — each session is a logical unit with shared auth, layout, and state lifecycle.
-
-**Push navigation from server** — `self.push_navigate('/new-path/')` to trigger SPA-like navigation from an event handler. Different from `redirect()` (full HTTP) — this keeps the WebSocket alive and mounts a new LiveView without a page reload. Combined with `self.push_patch('/same-view/?page=2')` (update URL without remount, triggers `handle_params()`), this gives full Phoenix navigation parity.
-
-**Portal rendering** — Render content into a DOM container outside the component's tree. Use case: modals, toasts, tooltips, and dropdowns that are logically owned by a deeply nested component but need to render at `<body>` level for z-index/overflow reasons. Template directive: `{% dj_portal target="#modal-container" %}...{% enddj_portal %}`.
-
-**Back/forward state restoration** — When the user navigates with browser back/forward, restore the previous view state from a serialized snapshot rather than remounting from scratch. The URL `popstate` event triggers `handle_params()` with the previous parameters, but expensive state (search results, scroll position, expanded accordions) should be cached client-side and restored instantly. *React Router does this with loader caching; Phoenix does it with `push_patch` state. This is what makes SPA navigation feel native.*
-
-**Stale-while-revalidate pattern** — Show the previous/cached render instantly on mount, then update asynchronously when fresh data loads. Combined with `assign_async`, this creates instant page transitions — the user sees the last-known state immediately (< 16ms) while the server fetches current data. API: `self.assign_stale('metrics', self._load_metrics, stale_ttl=30)` — serves cached value within TTL, fetches fresh in background, re-renders on completion. *React Query / SWR popularized this pattern; it's the key to making server-rendered apps feel as fast as client-side SPAs. Phoenix doesn't have this natively, making it a djust differentiator.*
-
-**Islands of interactivity** — Mark specific sections of a page as "live" while the rest stays static HTML. `{% dj_island %}...{% enddj_island %}` wraps interactive zones that establish their own WebSocket connections. The surrounding page renders once via HTTP and is never re-rendered. Use case: a blog post (static) with a comment section (live), a product page (static) with an add-to-cart button (live). Reduces WebSocket connections, server memory, and VDOM tree size dramatically for content-heavy pages. *Astro popularized this pattern; Fresh (Deno) and Qwik use it. React Server Components achieve similar results. This is the most requested architectural pattern for content-heavy sites that need small interactive zones.* Implementation: each island is a lightweight LiveView with its own VDOM tree, mounted lazily on scroll-into-view (reusing existing `dj-lazy` infrastructure).
-
-**Server-only components** — Components that render once on HTTP and never establish a WebSocket connection. Use case: static headers, footers, marketing sections, and any content that doesn't need interactivity. Reduces WebSocket connection count and server memory for pages that mix interactive and static content. *React Server Components popularized this pattern — not everything needs to be live.*
-
-**AI application primitives** — First-class patterns for building AI-powered applications, djust's strongest vertical. Building on the existing `StreamingMixin`, add: `{% dj_ai_stream %}` template component with built-in markdown rendering, code syntax highlighting, and copy buttons. `self.stream_ai(stream_name, llm_generator)` helper that handles backpressure, token batching, and error recovery for any LLM API (OpenAI, Anthropic, local models). Typing indicator that auto-shows during AI generation. Conversation history component with scroll anchoring. Tool-use visualization (show when AI is "thinking" or calling tools). *Django's ORM + Celery + djust's streaming is already the best stack for AI apps — these primitives make it 10x faster to build ChatGPT-like interfaces. No other framework has purpose-built AI streaming components.*
-
-**Streaming markdown renderer** — Purpose-built incremental markdown parser that renders tokens as they arrive from an LLM stream, without waiting for the full response. Handles the hard edge cases: incomplete code fences (don't close the `<pre>` until the closing ``` arrives), partial links, incremental table rendering, and nested list continuation. Includes syntax highlighting via a lightweight Rust-side highlighter (no external JS dependency). API: `self.stream_markdown('response', llm_generator)` — the template renders `<div dj-stream="response" dj-markdown>` and tokens are parsed and rendered incrementally. Compare to the current approach where developers must either (a) send raw text and parse client-side with a 50KB+ JS library, or (b) wait for the full response and render server-side. Implementation: Rust-side incremental CommonMark parser (~500 lines Rust) + client-side `dj-markdown` attribute that applies syntax highlighting classes. ~200 lines total Python/JS glue. *Every AI chatbot needs streaming markdown with code highlighting. Making this a framework primitive — not a third-party dependency — is the strongest possible signal that djust is the AI application framework.*
-
-**i18n live language switching** — Switch the active language/locale in a LiveView session without a page reload. `self.set_locale('es')` in an event handler activates Django's `translation.activate()` for the current session, re-renders the template with the new locale's translations, and sends the diff. All connected views in the same `live_session` switch together. Django's i18n infrastructure (`{% trans %}`, `{% blocktrans %}`, `gettext`) works unchanged — the Rust template engine delegates `{% trans %}` tags to Python for resolution. API: `self.set_locale(lang_code)` + `self.current_locale` property. Template: `<select dj-change="set_locale">{% for lang in LANGUAGES %}<option value="{{ lang.0 }}">{{ lang.1 }}</option>{% endfor %}</select>`. ~60 lines Python. *Internationalized apps are 40%+ of all Django deployments. Currently, language switching requires a full page reload (Django's `set_language` view). Making it instant via LiveView is a meaningful UX improvement — the user clicks a language selector and the entire page re-renders in the new language with a smooth transition. No other LiveView framework has this built-in.*
 
 **Django admin LiveView widgets** — Drop-in LiveView-powered widgets for Django's admin interface. `DjustAdminMixin` on any `ModelAdmin` enables real-time dashboards, live search/filter, inline editing, and bulk action progress within the admin. Use cases: real-time order status dashboards, live log viewers, monitoring panels, AI-powered admin actions with streaming output. This is a unique djust differentiator — no other LiveView-style framework integrates with an existing admin like Django's. Implementation: admin template overrides + a `DjustAdminWidget` base class that renders a mini LiveView inside admin change forms/list views. ~300 lines Python. *Django's admin is used by 90%+ of Django projects. Making it reactive with zero config is the single most effective demo of djust's value proposition — "add one mixin and your admin goes live."*
 
@@ -661,127 +570,6 @@ class TodoView(LiveView):
 
 **Form status awareness (React 19 `useFormStatus` equivalent)** — Child components inside a form should be able to read whether the parent form is currently submitting, without prop drilling. React 19's `useFormStatus` lets any nested component access `{ pending, data, method, action }` from the nearest `<form>`. djust equivalent: any element with `dj-form-pending` attribute auto-toggles visibility/class based on whether its ancestor form's `dj-submit` event is in-flight. Template: `<button type="submit"><span dj-form-pending="hide">Save</span><span dj-form-pending="show">Saving...</span></button>`. Works with the existing `dj-lock` and `dj-disable-with` but provides a more general-purpose pattern for any element — not just the submit button. ~30 lines JS. *This is how React 19 handles loading states in forms, and it's more composable than per-button solutions.*
 
-**`dj-model` two-way binding improvements** — Currently `dj-model` sends every change to the server. Add client-side validation hooks (`dj-model-validate="pattern"` for regex, `dj-model-transform="uppercase"` for input transformation) that run before the server round-trip. Phoenix's form bindings with changesets are the gold standard — we need the equivalent ergonomics using Django's form/model validation. Also: `dj-model-lazy` that only syncs on blur (not every keystroke), reducing WS traffic for text inputs.
-
-**Form recovery improvements** — Beyond basic reconnection recovery: serialize the entire form state (all field values, validation errors, dirty flags, focus position) on disconnect and restore it atomically on reconnect. Phoenix 1.0 handles this seamlessly. Also add `dj-recover="custom_handler"` for views with complex state that can't be inferred from DOM form values alone.
-
-**`self.stream_to(component_id, ...)` — Targeted streaming** — Stream updates to a specific LiveComponent rather than the whole page. Use case: a dashboard with 6 panels where only one is receiving real-time data — currently streaming re-diffs the entire VDOM tree. With targeted streaming, only the receiving component's subtree is patched. Implementation: route stream operations through the component hierarchy, diff only the target subtree. ~100 lines Python + Rust component-scoped VDOM.
-
-### Milestone: v1.0.0 — Stable Release
-
-**Chrome DevTools extension** — Standalone extension showing VDOM tree alongside DOM, WebSocket message stream, component hierarchy with state, performance profiling.
-
-**Documentation consolidation** — Single navigable `docs/` site with getting-started guide, auto-generated API reference, common pitfalls page, migration guides, cookbook of patterns. Migration guides from htmx, Laravel Livewire, and Phoenix LiveView for developers switching frameworks.
-
-**Performance benchmarks** — Published, reproducible benchmarks comparing djust vs Phoenix LiveView, Laravel Livewire, and htmx on template render time, VDOM diff time, WebSocket message size, client JS bundle size, time-to-interactive.
-
-**Plugin/extension system** — Third-party packages can register custom decorators, LiveComponent libraries, state backend implementations, and Rust template tag handlers.
-
-**Starter templates** — 3-5 production-quality starter apps: blog with real-time comments, dashboard with live charts, e-commerce product browser, chat application, kanban board.
-
-**VS Code / IDE extension** — Syntax highlighting and autocomplete for `dj-*` attributes in HTML templates. Go-to-definition from `dj-click="handler_name"` to the Python method. Template validation warnings for missing handlers. Snippet library for common patterns.
-
-**TypeScript definitions for client hooks** — Type-safe `dj-hook` development with `.d.ts` files for the djust client API. Developers writing custom JS hooks should get autocomplete for lifecycle methods (`mounted`, `updated`, `destroyed`) and the hook API (`this.pushEvent`, `this.el`, etc.).
-
-**Dead View / Progressive Enhancement (promoted from post-1.0)** — Initial HTTP render produces fully functional HTML that works without JavaScript (forms submit via POST, links navigate via HTTP). When JS loads, the LiveView takes over seamlessly. Phoenix calls this the "dead view" → "live view" transition. Combined with `dj-trigger-action`, this enables true progressive enhancement. *Promoted because progressive enhancement is a 1.0-worthy feature — shipping a framework that requires JS for basic form submissions in 2026 is a hard sell for government, accessibility-mandated, and SEO-critical projects. Django already renders forms server-side; we just need to keep them working without JS.*
-
-**Accessibility audit & ARIA integration** — Ensure all built-in components and patterns meet WCAG 2.1 AA. `dj-live-region` attribute for automatic `aria-live` announcements when content updates via WebSocket (screen readers don't detect DOM mutations by default). `dj-focus-trap` for modals/dialogs. Built-in keyboard navigation for `dj-show`/`dj-hide` targets. Audit all `dj-*` attributes for screen reader compatibility. *Accessibility is a 1.0 requirement, not a nice-to-have. Phoenix LiveView was criticized for shipping without `aria-live` support — djust should lead here.*
-
----
-
-## Future (Post-1.0)
-
-### Framework Portability (Flask/FastAPI)
-
-The Rust crates (`djust_vdom`, `djust_templates`, `djust_core`) are already framework-agnostic. Post-1.0, adapter packages could bring djust's rendering to other Python frameworks:
-
-- **FastAPI adapter** (~800-1500 lines) — Starlette WebSocket handler, route registration, session bridge
-- **Flask adapter** (~800-1500 lines) — Quart/Flask-SocketIO WebSocket handler, Blueprint routing
-- **Standalone Rust crates** — Published independently for non-Python use
-
-The `StateBackend` ABC and `TemplateLoader` trait provide clean abstraction boundaries. Status: gauging community interest via [GitHub Discussions](https://github.com/johnrtipton/djust/discussions).
-
-### Advanced Collaboration
-
-- Operational Transform (OT) or CRDT for conflict-free multi-user editing
-- Real-time cursor positions and user-specific selections
-- Collaborative form editing with field-level locking
-
-### AI Integration
-
-- `manage.py djust_generate` — Scaffold a LiveView from natural language description
-- `.cursorrules` / IDE integration files for popular AI coding assistants
-- Expanded MCP server coverage for all scaffolding patterns
-
-### Binary Protocol
-
-- MessagePack wire format (WebSocket binary frames) replacing JSON for smaller payloads and faster serialization. The client JS and Rust serializer already have stubs for this. Target: 30-50% reduction in WebSocket message size.
-
-### Dynamic Form Fields
-
-First-class API for adding/removing form fields dynamically. Phoenix supports this with `sort_param` and `drop_param`. Map to Django's formset patterns with LiveView-aware wrappers: `self.add_form_field()`, `self.remove_form_field()`, automatic re-indexing. Use case: invoice line items, survey builders, multi-step wizards with conditional fields.
-
-### Distributed Presence (CRDTs)
-
-Current presence tracking works within a single Channels layer. Phoenix Presence uses CRDTs for distributed consistency across clustered nodes. Evaluate whether Django Channels' group layer provides sufficient distribution or if we need a CRDT-based approach for multi-node deployments.
-
-### Embedded LiveView (WebComponent export)
-
-Package a LiveView as a standalone `<dj-widget>` Web Component that can be embedded in any HTML page (WordPress, Shopify, static sites). The Web Component bundles the djust client JS, establishes its own WebSocket connection, and renders inside a shadow DOM. Use case: add a live chat widget, a real-time price calculator, or a booking form to any existing site without rewriting it in Django. Implementation: `manage.py djust_export WidgetView --tag dj-booking-widget` generates a `.js` bundle + deployment instructions. ~300 lines JS + Python management command. *This is how djust escapes the "must be a Django project" constraint — any site can embed a djust-powered interactive widget. Stimulus, Turbo, and LiveWire all stay locked inside their framework; Web Component export is a unique distribution advantage.*
-
-### Collaborative Cursor/Selection Sync
-
-Real-time cursor positions, text selections, and pointer tracking across connected users. `CursorTracker` (presence.py) exists but is limited to basic position broadcasting. Full implementation needs: per-field text selection ranges (not just cursor position), pointer tracking on arbitrary elements (not just text inputs), visual overlays with user colors/names (like Google Docs), and conflict resolution for simultaneous edits. Builds on the existing `PresenceMixin` infrastructure.
-
-### Predictive Prefetch (ML-Based)
-
-Go beyond hover-based prefetch with intent prediction. Use client-side ML (TensorFlow.js micro-model, <50KB) to predict which link the user will click based on mouse trajectory, scroll velocity, and navigation history. Pre-fetch the predicted page's data before the user even hovers. Speculative — research needed on model size vs accuracy tradeoff. *Could be a genuine differentiator if the model is small enough — no framework does this today.*
-
-### SSE Fallback — ✅ Completed (v0.3.8)
-
-Implemented in `03b-sse.js`. Server → EventSource (GET), Client → HTTP POST. Same message handler interface as WebSocket.
-
----
-
-## djust Differentiators
-
-Features where djust leads rather than follows — things Phoenix LiveView and React don't offer natively:
-
-| Feature | Why It Matters | Status |
-|---------|---------------|--------|
-| **Rust-powered rendering** | 10-100x faster templates than any Python framework; sub-ms VDOM diffs | **Done** |
-| **Multi-tenant built-in** | Automatic data isolation per tenant — no third-party package needed | **Done** |
-| **AI streaming primitives** | Purpose-built `StreamingMixin` for LLM token streaming with 60fps batching | **Done** (basic), v0.7.0 (full) |
-| **Django ecosystem** | ORM, admin, auth, Celery, 10K+ packages — Phoenix/Elixir ecosystem is tiny by comparison | **Done** |
-| **Offline mutation queue** | Queue events in IndexedDB during disconnect, replay on reconnect. Phoenix assumes connectivity | v0.6.0 |
-| **Stale-while-revalidate** | Instant page transitions with cached renders + async refresh. Neither Phoenix nor React have this natively | v0.7.0 |
-| **State undo/redo** | Built-in undo stack for event handlers. No equivalent in Phoenix | v0.6.0 |
-| **Server functions (RPC)** | Call Python functions from JS, get structured results without re-render. Like tRPC but zero config | v0.7.0 |
-| **MCP server** | AI coding assistants can introspect and scaffold djust code via Model Context Protocol | **Done** |
-| **~5KB client JS** | Entire client runtime smaller than React's `useState` hook. No build step, no node_modules | **Done** |
-| **`dj-copy` clipboard** | Built-in copy-to-clipboard — not available in Phoenix or React without libraries | **Done** |
-| **`dj-shortcut` keyboard** | Declarative keyboard shortcuts — Phoenix requires custom JS hooks | **Done** |
-| **`dj-page-loading`** | Built-in navigation loading bar — neither Phoenix nor React include this natively | **Done** |
-| **`dj-paste` clipboard** | Built-in paste handling (text + images) — routes images to UploadMixin automatically | v0.4.1 |
-| **Database change notifications** | PostgreSQL LISTEN/NOTIFY → LiveView push — one-liner reactive database UIs | v0.5.0 |
-| **Virtual/windowed lists** | Built-in DOM virtualization for 100K+ row lists at 60fps — react-window equivalent | v0.5.0 |
-| **Multi-step wizard** | First-class `WizardMixin` with per-step validation, URL sync, progress — no framework has this natively | v0.5.1 |
-| **Function components** | Stateless render functions — Phoenix has this, but djust's Rust engine resolves them at near-zero cost | v0.5.0 |
-| **Error overlay (dev)** | In-browser Python stack traces — Phoenix shows errors in terminal only; this matches Next.js DX | v0.5.1 |
-| **Native `<dialog>` integration** | First LiveView framework with first-class browser-native modal support | v0.5.1 |
-| **Dirty tracking** | Built-in `is_dirty` / `changed_fields` for unsaved-changes UX — no equivalent in Phoenix or React without manual tracking | v0.5.1 |
-| **Server Actions (`@action`)** | React 19-style mutation handlers with auto pending/error/success states — combines best of Phoenix events + React 19 patterns | v0.8.0 |
-| **Type-safe template validation** | Static analysis catches template variable typos at CI time — neither Phoenix nor React has this without TypeScript | v0.5.1 |
-| **Streaming markdown renderer** | Incremental Rust-side CommonMark parser for LLM streaming — no framework has a built-in solution | v0.7.0 |
-| **Keep-Alive / Activity** | Pre-render hidden routes, preserve state across tab switches — React 19.2 has this, Phoenix doesn't | v0.7.0 |
-| **Keyed for-loop change tracking** | Only re-render changed items in loops — Rust engine makes this O(changed) not O(total) | v0.5.0 |
-| **`self.defer()` post-render** | Clean "render first, then do work" pattern — no other LiveView framework has a first-class API for this | v0.5.0 |
-| **CSS `@starting-style` animations** | Zero-JS entry animations using modern CSS — no framework has optimized for this yet | v0.6.0 |
-| **Hot View Replacement** | Edit Python → see result without refresh. Phoenix reloads but loses state; React Fast Refresh preserves it | v0.6.0 |
-| **Django admin LiveView widgets** | Real-time admin dashboards — no other LiveView framework integrates with an existing admin | v0.7.0 |
-| **WebSocket compression** | `permessage-deflate` for 60-80% bandwidth reduction — on by default, zero code changes | v0.6.0 |
-| **Runtime layout switching** | Swap nav/sidebar/layout without reload — Phoenix 1.1 has it, React doesn't natively | v0.6.0 |
-| **i18n live language switching** | Switch locale without page reload — no LiveView framework has this built-in | v0.7.0 |
 | **Streaming initial render** | Chunked HTTP page shell + progressive content — faster perceived load than full-page wait | v0.6.0 |
 | **Time-travel debugging** | State snapshot recording + replay in debug panel — beyond Phoenix's debug tools | v0.6.0 |
 
@@ -808,48 +596,6 @@ Open questions that inform future direction:
 - **Django async views integration** — Django 4.1+ supports `async def` views natively. Evaluate deeper integration: `async def mount()`, `async def handle_event()`, native `await` in event handlers without `start_async` wrapper. Could simplify the async story significantly for Django 5.0+ projects.
 - **Trusted Types API** — Chrome enforces Trusted Types to prevent DOM XSS. Evaluate ensuring all djust client-side DOM writes (`innerHTML` in morph, streaming HTML injection) go through Trusted Types policies. This would make djust the first LiveView framework with Trusted Types compliance — a selling point for enterprise/security-conscious teams.
 - **Federated LiveView (cross-origin embedding)** — Evaluate a protocol for embedding a LiveView from one Django app inside another app's page, with cross-origin WebSocket communication. Use case: microservices architecture where each team owns a LiveView widget. Related to the WebComponent export idea but more dynamic.
-
----
-
-## Phoenix LiveView Parity Tracker
-
-Features tracked against Phoenix LiveView 1.1 and React where applicable.
-
-| Feature | Phoenix | React Equivalent | djust Status | Milestone |
-|---------|---------|-----------------|--------------|-----------|
-| Server-side event handling | `handle_event` | Server Actions | **Done** | — |
-| Real-time form validation | `phx-change` | `useActionState` | **Done** | — |
-| Debounce / throttle | `phx-debounce/throttle` | `useDeferredValue` | **Done** | — |
-| Presence tracking | `Phoenix.Presence` | — | **Done** | — |
-| PubSub / broadcasting | `Phoenix.PubSub` | — | **Done** | — |
-| Streaming collections | `stream/4` | — | **Done** (basic) | — |
-| Optimistic UI | `JS` commands | `useOptimistic` | **Done** (`@optimistic`) | — |
-| Background async | `start_async` | `useTransition` | **Done** (`start_async`) | — |
-| JS hooks (lifecycle) | `phx-hook` | `useEffect` | **Done** (`dj-hook`) | — |
-| Live navigation (patch) | `push_patch` | React Router | **Done** (`live_patch`) | — |
-| File uploads + progress | `allow_upload` | — | **Done** (`UploadMixin`) | — |
-| Drag-and-drop uploads | `phx-drop-target` | — | **Done** (`dj-upload`) | — |
-| SSE fallback | — | — | **Done** (`03b-sse.js`) | — |
-| `live_session` routing | `live_session/3` | — | **Done** (basic) | — |
-| Streaming (LLM/partial) | — | Server Components | **Done** (`StreamingMixin`) | — |
-| Dead view → live view | Built-in | SSR hydration | Partial (HTTP fallback) | Post-1.0 |
-| ~~**Form `_target` param**~~ | ~~**`_target` in params**~~ | — | ✅ **Done** | v0.4.0 |
-| **Navigation loading bar** | — | NProgress | **Not started** | **v0.4.0** |
-| **Static event params** | **`phx-value-*`** | `data-*` attrs | **Not started** | **v0.4.0** |
-| **Handle params callback** | **`handle_params/3`** | React Router loaders | **Partial** (in navigation mixin) | **v0.4.0** |
-| **JS Commands** | **`JS.*` module** | — | **Not started** | **v0.4.0** |
-| ~~**Connection CSS classes**~~ | ~~**`phx-connected`**~~ | — | ✅ **Done** | v0.4.0 |
-| ~~**Form recovery**~~ | ~~**Auto on reconnect**~~ | — | ✅ **Done** | v0.4.0 |
-| **Stable conditional DOM** | **HEEx anchors** | — | **Broken (#559)** | **v0.4.0** |
-| **Event ordering** | **Erlang mailbox** | — | **Broken (#560)** | **v0.4.0** |
-| **Focus preservation** | **Auto (morph)** | **Reconciliation** | **Not started** | **v0.4.0** |
-| **Confirm dialog** | **`data-confirm`** | — | **Done** | — |
-| ~~**Disable with**~~ | ~~**`phx-disable-with`**~~ | — | ✅ **Done** | v0.4.0 |
-| ~~**Window/doc events**~~ | ~~**`phx-window-*`**~~ | — | ✅ **Done** | v0.4.0 |
-| **Debounce/throttle attrs** | **`phx-debounce`** | — | **Decorator only** | **v0.4.0** |
-| ~~**Dynamic page title**~~ | ~~**`live_title`**~~ | ~~`document.title`~~ | ✅ **Done** | v0.4.0 |
-| **Mounted event** | **`phx-mounted`** | `useEffect` | **Not started** | **v0.4.0** |
-| ~~**Click-away**~~ | — | ~~`useClickOutside`~~ | ✅ **Done** | v0.4.0 |
 | **Lock (prevent double-fire)** | **Event ack protocol** | — | **Not started** | **v0.4.0** |
 | **Auto-recover (custom)** | **`phx-auto-recover`** | — | **Not started** | **v0.4.0** |
 | **Cloak (FOUC prevention)** | — | **`v-cloak` (Vue)** | **Not started** | **v0.4.0** |
@@ -936,23 +682,6 @@ Features tracked against Phoenix LiveView 1.1 and React where applicable.
 | **WS compression** | **Built-in (Cowboy)** | — | **Not started** | **v0.6.0** |
 | **Runtime layout switching** | **Runtime layouts (1.1)** | — | **Not started** | **v0.6.0** |
 | **i18n live switching** | — | — | **Not started** | **v0.7.0** |
-| Dynamic form fields | `sort_param`/`drop_param` | — | Not started | Post-1.0 |
-
----
-
-## Priority Matrix
-
-| Milestone | Theme | Key Deliverables | Priority |
-|-----------|-------|-----------------|----------|
-| v0.4.0 | Stability & Core DX | Fix #559/#560, focus preservation, **`dj-value-*`**, **`handle_params`** (complete), **`on_mount` hooks**, **flash messages**, **`_target` param** ✅, **`dj-scroll-into-view`** ✅, **connection CSS** ✅, **`dj-cloak`** ✅, **`dj-page-loading`** ✅, form recovery ✅, reconnection backoff ✅, `dj-disable-with` ✅, `dj-lock` ✅, `dj-mounted` ✅, window events ✅, `dj-click-away` ✅, `dj-shortcut` ✅, `dj-debounce`/`dj-throttle` attrs ✅, `dj-copy` ✅, `dj-auto-recover` ✅, `live_title`/document metadata ✅, error messages ✅, `djust_doctor` ✅, latency simulator ✅ | **Critical** |
-| v0.4.1 | JS Commands & Polish | **JS Commands**, programmable JS from hooks, scoped selectors (`closest`/`inner`), `page_loading` on push, **`dj-paste`** | **Critical** |
-| v0.5.0 | Async, Core Components & Streams | **`assign_async`/`AsyncResult`**, **`handle_async`**, **function components**, **declarative assigns**, **`used_input?`**, nested LiveComponents + targeted events + slots, **component `update` callback**, `dj-spread`, **View Transitions API**, direct-to-S3 uploads, stream enhancements + **`dj-viewport-top/bottom`**, **`handle_info`**, **template fragments**, **keyed for-loop change tracking**, **`self.defer()`**, selective re-rendering, Rust engine parity, **database change notifications (pg_notify)**, **virtual/windowed lists** | **Critical** |
-| v0.5.1 | Developer Experience & Forms | **Testing utilities**, **error overlay**, **`@computed`**, **`dj-lazy`**, **component context sharing**, **`dj-trigger-action`**, **scoped loading**, **error boundaries**, **nested forms**, **stable IDs**, **native `<dialog>`**, **dirty tracking**, **`dj-no-submit`**, **type-safe template validation**, **multi-step wizard (`WizardMixin`)** | **Critical** |
-| v0.6.0 | Production & Interactivity | Animations/transitions + **`dj-transition-group`**, **CSS `@starting-style`**, **hot view replacement**, **streaming initial render**, **time-travel debugging**, **state undo/redo**, **connection multiplexing**, sticky LiveViews, `dj-mutation`, `dj-sticky-scroll`, monitoring, graceful degradation, CSP nonce, batch state updates, multi-tab sync, offline mutation queue, `dj-resize`, **WebSocket compression (permessage-deflate)**, **runtime layout switching** | **High** |
-| v0.7.0 | Navigation, AI & Smart Rendering | **keep-alive/`dj-activity`**, **stale-while-revalidate**, **AI streaming primitives**, **streaming markdown renderer**, **server functions (RPC)**, **Django admin LiveView widgets**, **prefetch on hover/intent**, **i18n live language switching**, `live_session` enhancements, push navigate, portal rendering, back/forward restoration, server-only components, islands of interactivity | **High** |
-| v0.8.0 | Server Actions & Async Streams | **Server Actions (`@action`)**, **form status awareness**, **async stream enumeration**, **`dj-model` improvements**, **form recovery improvements**, **targeted streaming** | **High** |
-| v1.0.0 | Stable Release | DevTools extension, docs site, benchmarks, plugin system, starters, VS Code extension, TypeScript hook definitions, dead view/progressive enhancement, accessibility audit | **High** |
-| Post-1.0 | Ecosystem | Framework portability, CRDT collab, AI generation, binary protocol, dynamic form fields, embedded LiveView (WebComponent) | **Medium** |
 
 ---
 
