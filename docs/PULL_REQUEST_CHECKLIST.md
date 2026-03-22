@@ -42,6 +42,9 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **Separation of concerns** - UI, business logic, and data access properly separated
 - [ ] **No placeholder/stub implementations** - No hardcoded `return True`, simulated APIs, or fake data in shipped code. If a feature isn't ready, mark it clearly as `NotImplementedError` or exclude it from the PR
 - [ ] **No simulated/stub code** - Comments containing "simulate", "would be implemented", "in a real implementation", or "for now" indicate incomplete code that should not ship
+- [ ] **Dual-path wiring** - Features touching mount, lifecycle, events, or state must be wired into BOTH `LiveViewConsumer` (WebSocket in `websocket.py`) AND `RequestMixin.get/post` (HTTP in `mixins/request.py`). Missing one creates silent failures — e.g., auth hooks that only enforce on WebSocket *(PRs #568, #569)*
+- [ ] **Mixin wiring checklist** - New mixins must verify: (a) added to LiveView MRO, (b) exported from `__init__.py`, (c) consumer calls flush/process methods, (d) client JS routes the new command type, (e) HTTP request path calls mixin methods *(PRs #568, #569)*
+- [ ] **Test file location** - Test files must be in a directory listed in pytest `testpaths` (`pyproject.toml`). Tests in unlisted directories are never executed *(PR #570)*
 
 ### Python Code Standards
 
@@ -280,6 +283,13 @@ If the PR modifies any file listed in [Security Hot Spot Files](SECURITY_GUIDELI
 - Comments indicate incomplete code ("simulate", "would be implemented", "for now")
 - Changes to [security hot spot files](SECURITY_GUIDELINES.md#security-hot-spot-files) without a security-qualified reviewer approval
 - Hot spot file changes without targeted security tests covering the affected property
+- Lifecycle/mount/event features only wired into WebSocket path but not HTTP path (dual-path requirement) *(PRs #568, #569)*
+- New mixins missing any wiring step: MRO, `__init__.py` export, consumer hooks, client JS routing, HTTP path *(PRs #568, #569)*
+- New system checks (V/C/S/T/Q codes) without corresponding test coverage
+- Test files placed outside pytest `testpaths` (check `pyproject.toml [tool.pytest.ini_options] testpaths`) — tests that never run give false confidence *(PR #570)*
+- Test files that fail at import time due to eager imports of unavailable modules *(PR #570)*
+- Code generators/scaffolding with tests that only verify "it ran" without asserting on output content correctness (syntax, imports, routing patterns) *(PR #570 → #571)*
+- Generated/scaffolded code containing silent exception handling (`except Model.DoesNotExist: pass`) — generated code teaches patterns, use logging *(PR #571)*
 
 ## 📋 Reviewer Responsibility
 

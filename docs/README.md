@@ -16,13 +16,16 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[Working with External Services](guides/services.md)** - AWS, REST APIs, Redis integration patterns
 - **[Error Code Reference](guides/error-codes.md)** - Complete error code guide with fixes
 - **[System Checks Reference](system-checks.md)** - All 37 check IDs (C/V/S/T/Q), severities, suppression patterns, and false positives
+- **[Scaffolding Generator](guides/scaffolding.md)** - Generate CRUD LiveView scaffolds from model definitions
 
 ### 🔌 Real-Time Features
 - **[Navigation](guides/navigation.md)** - URL state management with live_patch and live_redirect
+- **[Flash Messages](website/guides/flash-messages.md)** - Transient notifications with put_flash (Phoenix-style)
 - **[Presence](guides/presence.md)** - Real-time user presence tracking and live cursors
 - **[Streaming](guides/streaming.md)** - Real-time partial DOM updates for LLM chat and live feeds
 - **[Uploads](guides/uploads.md)** - Chunked binary file uploads via WebSocket
 - **[Hooks](guides/hooks.md)** - Client-side JavaScript lifecycle hooks
+- **[on_mount Hooks](website/guides/on-mount-hooks.md)** - Cross-cutting server-side mount hooks (auth, telemetry, tenant resolution)
 - **[Model Binding](guides/model-binding.md)** - Two-way data binding for form inputs
 
 ### 🎨 Components

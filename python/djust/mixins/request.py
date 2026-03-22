@@ -6,7 +6,7 @@ import json
 import logging
 import time
 
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.db import models
@@ -17,6 +17,7 @@ from ..validation import validate_handler_params
 from ..security import safe_setattr
 from ..security.event_guard import is_safe_event_name
 from ..decorators import is_event_handler
+from ..hooks import run_on_mount_hooks
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,11 @@ class RequestMixin:
 
         # Initialize temporary assigns with default values before mount
         self._initialize_temporary_assigns()
+
+        # Run on_mount hooks (auth guards, etc.) before mount
+        hook_redirect = run_on_mount_hooks(self, request, **kwargs)
+        if hook_redirect:
+            return HttpResponseRedirect(hook_redirect)
 
         # IMPORTANT: mount() must be called first to initialize clean state
         t0 = time.perf_counter()
@@ -207,6 +213,11 @@ class RequestMixin:
 
             self._initialize_temporary_assigns()
 
+            # Run on_mount hooks (auth guards, etc.) before mount
+            hook_redirect = run_on_mount_hooks(self, request, **kwargs)
+            if hook_redirect:
+                return JsonResponse({"redirect": hook_redirect}, status=403)
+
             if not saved_state:
                 self.mount(request, **kwargs)
             else:
@@ -300,6 +311,18 @@ class RequestMixin:
                     except Exception:
                         logger.debug("Failed to inject debug info", exc_info=True)
 
+            # Drain side-channel commands (flash, page metadata) so they
+            # are delivered in the HTTP response, not only via WebSocket.
+            def _inject_side_channels(resp_data):
+                if hasattr(self, "_drain_flash"):
+                    flash_commands = self._drain_flash()
+                    if flash_commands:
+                        resp_data["_flash"] = flash_commands
+                if hasattr(self, "_drain_page_metadata"):
+                    meta_commands = self._drain_page_metadata()
+                    if meta_commands:
+                        resp_data["_page_metadata"] = meta_commands
+
             if patches_json:
                 patches = json_module.loads(patches_json)
                 patch_count = len(patches)
@@ -308,6 +331,7 @@ class RequestMixin:
                     response_data = {"patches": patches, "version": version}
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
+                    _inject_side_channels(response_data)
                     _inject_debug(response_data)
                     return JsonResponse(response_data)
                 else:
@@ -315,12 +339,14 @@ class RequestMixin:
                     response_data = {"html": html, "version": version}
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
+                    _inject_side_channels(response_data)
                     _inject_debug(response_data)
                     return JsonResponse(response_data)
             else:
                 response_data = {"html": html, "version": version}
                 if cache_request_id:
                     response_data["cache_request_id"] = cache_request_id
+                _inject_side_channels(response_data)
                 _inject_debug(response_data)
                 return JsonResponse(response_data)
 

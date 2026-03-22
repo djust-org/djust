@@ -35,20 +35,22 @@ How to build specific features.
 
 ### Real-Time Features
 
-|                                                |                                                           |
-| ---------------------------------------------- | --------------------------------------------------------- |
-| **[Streaming](guides/streaming.md)**           | Real-time partial DOM updates for LLM chat and live feeds |
-| **[Presence](guides/presence.md)**             | Track online users, live cursors, typing indicators       |
-| **[Uploads](guides/uploads.md)**               | Chunked binary file uploads via WebSocket                 |
-| **[Loading States](guides/loading-states.md)** | Spinners, skeleton screens, disabled states               |
+|                                                        |                                                           |
+| ------------------------------------------------------ | --------------------------------------------------------- |
+| **[Streaming](guides/streaming.md)**                   | Real-time partial DOM updates for LLM chat and live feeds |
+| **[Flash Messages](guides/flash-messages.md)**         | Transient notifications with `put_flash` (Phoenix-style)  |
+| **[Presence](guides/presence.md)**                     | Track online users, live cursors, typing indicators       |
+| **[Uploads](guides/uploads.md)**                       | Chunked binary file uploads via WebSocket                 |
+| **[Loading States](guides/loading-states.md)**         | Spinners, skeleton screens, disabled states               |
 
 ### Navigation
 
 |                                              |                                                     |
 | -------------------------------------------- | --------------------------------------------------- |
-| **[Navigation](guides/navigation.md)**       | `live_patch`, `live_redirect`, URL state management |
-| **[Hooks](guides/hooks.md)**                 | Client-side JavaScript lifecycle hooks              |
-| **[Model Binding](guides/model-binding.md)** | Two-way `dj-model` data binding                     |
+| **[Navigation](guides/navigation.md)**             | `live_patch`, `live_redirect`, URL state management           |
+| **[Hooks](guides/hooks.md)**                       | Client-side JavaScript lifecycle hooks                        |
+| **[on_mount Hooks](guides/on-mount-hooks.md)**     | Cross-cutting server-side mount hooks (auth, telemetry, etc.) |
+| **[Model Binding](guides/model-binding.md)**       | Two-way `dj-model` data binding                               |
 
 ### Integration
 
@@ -125,7 +127,7 @@ Complete API documentation.
 
 |                                               |                                                                                                         |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| **[LiveView](api-reference/liveview.md)**     | `mount()`, `get_context_data()`, `handle_params()`, `handle_info()`, `start_async()`, navigation                         |
+| **[LiveView](api-reference/liveview.md)**     | `on_mount`, `mount()`, `get_context_data()`, `handle_params()`, `handle_info()`, `start_async()`, navigation             |
 | **[Decorators](api-reference/decorators.md)** | `@event_handler`, `@debounce`, `@throttle`, `@loading`, `@cache`, `@optimistic`, `@background`, `@permission_required` |
 | **[Components](api-reference/components.md)** | `Component`, `LiveComponent`, built-in components, registry                                             |
 | **[Testing](api-reference/testing.md)**       | `LiveViewTestClient`, `SnapshotTestMixin`, `LiveViewSmokeTest`, `@performance_test`                     |

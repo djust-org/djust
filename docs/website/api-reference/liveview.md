@@ -16,10 +16,35 @@ from djust import LiveView
 | `template`          | `str`  | —       | Inline HTML template string                                                   |
 | `temporary_assigns` | `dict` | `{}`    | State that resets to the default after each render (e.g., `{"messages": []}`) |
 | `use_actors`        | `bool` | `False` | Enable actor-based state management                                           |
+| `on_mount`          | `list` | `[]`    | List of hook functions to run before `mount()` (see [on_mount Hooks](../guides/on-mount-hooks.md)) |
 
 Either `template_name` or `template` is required.
 
 ### Lifecycle Methods
+
+#### `on_mount` hooks
+
+Cross-cutting functions that run before `mount()` on every mount and reconnect. Declare hooks with the `@on_mount` decorator and attach them via the `on_mount` class attribute.
+
+**Hook signature:** `def hook(view, request, **kwargs) -> Optional[str]`
+
+Return `None` to continue, or a redirect URL string to halt mounting.
+
+```python
+from djust.hooks import on_mount
+
+@on_mount
+def require_verified_email(view, request, **kwargs):
+    if not request.user.email_verified:
+        return '/verify-email/'
+
+class ProfileView(LiveView):
+    on_mount = [require_verified_email]
+```
+
+Hooks are inherited via MRO (parent-first, deduplicated). See [on_mount Hooks Guide](../guides/on-mount-hooks.md) for full details.
+
+---
 
 #### `mount(request, **kwargs)`
 
@@ -215,6 +240,81 @@ def handle_async_result(self, name: str, result=None, error=None):
     elif name == "export":
         self.status = "Export complete"
 ```
+
+---
+
+### Flash Messages
+
+#### `put_flash(level, message)`
+
+Queue a flash message to be sent to the connected client. The message is rendered into the `#dj-flash-container` element (inserted by the `{% dj_flash %}` template tag).
+
+**Parameters:**
+
+- `level` (`str`) -- Severity/category string. Common values: `"info"`, `"success"`, `"warning"`, `"error"`. Any string is accepted -- it becomes a CSS class `dj-flash-{level}`.
+- `message` (`str`) -- Human-readable message text.
+
+```python
+@event_handler()
+def save(self, **kwargs):
+    save_item(self.name)
+    self.put_flash("success", "Item saved!")
+```
+
+---
+
+#### `clear_flash(level=None)`
+
+Queue a command to clear flash messages on the client.
+
+**Parameters:**
+
+- `level` (`str`, optional) -- If provided, only clear messages with this level. If `None`, clear all flash messages.
+
+```python
+@event_handler()
+def dismiss_errors(self, **kwargs):
+    self.clear_flash("error")   # clear only errors
+    self.clear_flash()          # clear all
+```
+
+See [Flash Messages Guide](../guides/flash-messages.md) for detailed examples and CSS styling.
+
+---
+
+### Document Metadata
+
+#### `page_title` (property)
+
+Get or set the browser tab title. Setting this property queues a side-channel WebSocket message that updates `document.title` on the client without a VDOM diff.
+
+```python
+def mount(self, request, **kwargs):
+    self.page_title = "Dashboard"
+
+@event_handler()
+def select_tab(self, tab: str = "", **kwargs):
+    self.page_title = f"Dashboard - {tab.title()}"
+```
+
+---
+
+#### `page_meta` (property)
+
+Get or set document `<meta>` tags. Setting this property to a dict queues side-channel messages that update or create `<meta>` tags in the document `<head>`. Tags starting with `og:` or `twitter:` use the `property` attribute; all others use `name`.
+
+```python
+@event_handler()
+def select_article(self, article_id: int = 0, **kwargs):
+    article = Article.objects.get(pk=article_id)
+    self.page_meta = {
+        "description": article.summary,
+        "og:title": article.title,
+        "og:image": article.image_url,
+    }
+```
+
+See [Document Metadata Guide](../guides/document-metadata.md) for detailed examples.
 
 ---
 

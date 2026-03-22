@@ -12,6 +12,108 @@ function sanitizeIdForLog(id) {
 }
 
 /**
+ * Save the current focus state (active element, selection, scroll position).
+ * Call before DOM mutations that may destroy focus. Pairs with restoreFocusState().
+ *
+ * @returns {Object|null} Saved focus state, or null if no form element is focused.
+ */
+function saveFocusState() {
+    const active = document.activeElement;
+    if (!active || active === document.body || active === document.documentElement) {
+        return null;
+    }
+
+    // Only save state for form elements and contenteditable
+    const isFormEl = (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT');
+    const isEditable = active.isContentEditable;
+    if (!isFormEl && !isEditable) {
+        return null;
+    }
+
+    // Skip saving during broadcast updates — remote content should take effect.
+    if (_isBroadcastUpdate) {
+        return null;
+    }
+
+    const state = { tag: active.tagName };
+
+    // Build a matching key: prefer id, then name, then dj-id, then positional index
+    if (active.id) {
+        state.findBy = 'id';
+        state.key = active.id;
+    } else if (active.name) {
+        state.findBy = 'name';
+        state.key = active.name;
+    } else if (active.getAttribute && active.getAttribute('dj-id')) {
+        state.findBy = 'dj-id';
+        state.key = active.getAttribute('dj-id');
+    } else {
+        // Positional: index among same-tag siblings in the nearest dj-view
+        state.findBy = 'index';
+        const root = active.closest('[dj-view]') || document.body;
+        const siblings = root.querySelectorAll(active.tagName.toLowerCase());
+        state.key = Array.from(siblings).indexOf(active);
+    }
+
+    // Save value and selection state
+    if (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && !['checkbox', 'radio'].includes(active.type))) {
+        state.selStart = active.selectionStart;
+        state.selEnd = active.selectionEnd;
+        state.scrollTop = active.scrollTop;
+        state.scrollLeft = active.scrollLeft;
+    }
+
+    return state;
+}
+
+/**
+ * Restore focus state saved by saveFocusState().
+ * Re-finds the element in the DOM (it may have been replaced) and restores
+ * focus, selection range, and scroll position.
+ *
+ * @param {Object|null} state - Saved state from saveFocusState()
+ */
+function restoreFocusState(state) {
+    if (!state) return;
+
+    let el = null;
+    if (state.findBy === 'id') {
+        el = document.getElementById(state.key);
+    } else if (state.findBy === 'name') {
+        el = document.querySelector(`[name="${CSS.escape(state.key)}"]`);
+    } else if (state.findBy === 'dj-id') {
+        el = document.querySelector(`[dj-id="${CSS.escape(state.key)}"]`);
+    } else {
+        // Positional fallback
+        const root = document.querySelector('[dj-view]') || document.body;
+        const candidates = root.querySelectorAll(state.tag.toLowerCase());
+        el = candidates[state.key] || null;
+    }
+
+    if (!el) return;
+
+    // Re-focus the element (won't re-trigger focus event if already focused)
+    if (document.activeElement !== el) {
+        el.focus({ preventScroll: true });
+    }
+
+    // Restore selection range for text inputs/textareas
+    if (state.selStart !== undefined && typeof el.setSelectionRange === 'function') {
+        try {
+            el.setSelectionRange(state.selStart, state.selEnd);
+        } catch (e) {
+            // setSelectionRange throws on some input types (email, number)
+        }
+    }
+
+    // Restore scroll position within the element
+    if (state.scrollTop !== undefined) {
+        el.scrollTop = state.scrollTop;
+        el.scrollLeft = state.scrollLeft;
+    }
+}
+
+/**
  * Resolve a DOM node using ID-based lookup (primary) or path traversal (fallback).
  *
  * Resolution strategy:
@@ -30,9 +132,9 @@ function getNodeByPath(path, djustId = null) {
             return byId;
         }
         // ID not found - fall through to path-based
-        if (globalThis.djustDebug) {
+        if (globalThis.djustDebug || window.DEBUG_MODE) {
             // Log without user data to avoid log injection
-            console.log('[LiveView] ID lookup failed, trying path fallback');
+            if (globalThis.djustDebug) console.log('[LiveView] ID lookup failed, trying path fallback');
         }
     }
 
@@ -53,15 +155,21 @@ function getNodeByPath(path, djustId = null) {
                 // JS \s includes \u00A0, so we use an explicit ASCII whitespace pattern instead.
                 return (/[^ \t\n\r\f]/.test(child.textContent));
             }
+            // Include comment nodes — the Rust VDOM parser preserves <!--dj-if-->
+            // placeholders and counts them when computing child indices (#559).
+            if (child.nodeType === Node.COMMENT_NODE) return true;
             return false;
         });
 
         if (index >= children.length) {
-            if (globalThis.djustDebug) {
+            if (globalThis.djustDebug || window.DEBUG_MODE) {
                 // Explicit number coercion for safe logging
                 const safeIndex = Number(index) || 0;
                 const safeLen = Number(children.length) || 0;
-                console.warn(`[LiveView] Path traversal failed at index ${safeIndex}, only ${safeLen} children`);
+                const parentTag = node.tagName || '#text';
+                const parentId = node.getAttribute ? (node.getAttribute('dj-id') || node.id || '') : '';
+                const parentDesc = parentId ? `${parentTag}#${parentId}` : parentTag;
+                console.warn(`[LiveView] Path traversal failed at index ${safeIndex}, only ${safeLen} children (parent: ${parentDesc}). The DOM may have been modified by third-party JS, or a {% if %} block changed the node count.`);
             }
             return null;
         }
@@ -303,6 +411,11 @@ function createHtmlElement(tagLower) {
 function createNodeFromVNode(vnode, inSvgContext = false) {
     if (vnode.tag === '#text') {
         return document.createTextNode(vnode.text || '');
+    }
+    // Handle comment nodes — Rust emits <!--dj-if--> placeholders for
+    // {% if %} blocks that evaluate to False (#559).
+    if (vnode.tag === '#comment') {
+        return document.createComment(vnode.text || '');
     }
 
     // Validate tag name against whitelist (security: prevents script injection)
@@ -610,6 +723,8 @@ function morphElement(existing, desired) {
                 document.removeEventListener('visibilitychange', existing._djustPollVisibilityHandler);
             }
         }
+        // Clean up scoped (window/document) listeners before replacing
+        _cleanupScopedListeners(existing);
         existing.parentNode.replaceChild(desired.cloneNode(true), existing);
         return;
     }
@@ -885,6 +1000,9 @@ function getSignificantChildren(node) {
             // Only filter out ASCII whitespace-only text nodes.
             return (/[^ \t\n\r\f]/.test(child.textContent));
         }
+        // Include comment nodes — the Rust VDOM parser preserves <!--dj-if-->
+        // placeholders and counts them in child indices (#559).
+        if (child.nodeType === Node.COMMENT_NODE) return true;
         return false;
     });
 }
@@ -912,6 +1030,8 @@ window.djust._stampDjIds = _stampDjIds;
 window.djust._getNodeByPath = getNodeByPath;
 window.djust.createNodeFromVNode = createNodeFromVNode;
 window.djust.preserveFormValues = preserveFormValues;
+window.djust.saveFocusState = saveFocusState;
+window.djust.restoreFocusState = restoreFocusState;
 window.djust.morphChildren = morphChildren;
 window.djust.morphElement = morphElement;
 
@@ -1020,7 +1140,14 @@ function applySinglePatch(patch) {
     if (!node) {
         // Sanitize for logging (patches come from trusted server, but log defensively)
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
-        console.warn(`[LiveView] Failed to find node: path=${safePath}, id=${sanitizeIdForLog(patch.d)}`);
+        const patchType = patch.type || 'Unknown';
+        console.warn(`[LiveView] Patch failed (${patchType}): node not found at path=${safePath}, dj-id=${sanitizeIdForLog(patch.d)}`);
+        if (window.DEBUG_MODE) {
+            console.groupCollapsed(`[LiveView] Patch detail (${patchType})`);
+            if (globalThis.djustDebug) console.log('[LiveView] Full patch object:', JSON.stringify(patch));
+            if (globalThis.djustDebug) console.log(`[LiveView] Suggested causes:\n  - The DOM may have been modified by third-party JS\n  - A template {% if %} block may have changed the node count\n  - A conditional rendering path produced a different DOM structure`);
+            console.groupEnd();
+        }
         return false;
     }
 
@@ -1204,24 +1331,31 @@ function applyPatches(patches) {
         return true;
     }
 
+    // Save focus state before any DOM mutations (#559 follow-up: focus preservation)
+    const focusState = saveFocusState();
+
     // Sort patches in 4-phase order for correct DOM mutation sequencing
     _sortPatches(patches);
 
     // For small patch sets, apply directly without batching overhead
     if (patches.length <= 10) {
         let failedCount = 0;
-        for (const patch of patches) {
-            if (!applySinglePatch(patch)) {
+        const failedIndices = [];
+        for (let _pi = 0; _pi < patches.length; _pi++) {
+            if (!applySinglePatch(patches[_pi])) {
                 failedCount++;
+                failedIndices.push(_pi);
             }
         }
         if (failedCount > 0) {
-            console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
+            console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (indices: ${failedIndices.join(', ')})`);
+            restoreFocusState(focusState);
             return false;
         }
         // Update hooks and model bindings after DOM patches
         if (typeof updateHooks === 'function') { updateHooks(); }
         if (typeof bindModelElements === 'function') { bindModelElements(); }
+        restoreFocusState(focusState);
         return true;
     }
 
@@ -1296,7 +1430,8 @@ function applyPatches(patches) {
     }
 
     if (failedCount > 0) {
-        console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
+        console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (${successCount} succeeded)`);
+        restoreFocusState(focusState);
         return false;
     }
 
@@ -1304,5 +1439,6 @@ function applyPatches(patches) {
     if (typeof updateHooks === 'function') { updateHooks(); }
     if (typeof bindModelElements === 'function') { bindModelElements(); }
 
+    restoreFocusState(focusState);
     return true;
 }

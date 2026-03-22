@@ -228,6 +228,7 @@ def _register_builtins():
         from . import static  # noqa: F401
         from . import pwa  # noqa: F401
         from . import templatetag  # noqa: F401
+        from . import flash  # noqa: F401
     except ImportError as e:
         logger.debug("Could not import built-in handlers: %s", e)
 

@@ -438,7 +438,6 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
-    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -548,7 +547,7 @@ urlpatterns = [
     print(f"\nCreated djust project '{name}/'")
     print("\nNext steps:")
     print(f"  cd {name}")
-    print("  pip install djust daphne whitenoise channels")
+    print("  pip install djust daphne channels")
     print("  python manage.py migrate")
     print("  python -m djust startapp home")
     print("  python manage.py runserver")

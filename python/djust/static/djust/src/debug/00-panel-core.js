@@ -74,6 +74,16 @@
             this.hookIntoLiveView();
             this.loadState();
 
+            // Intercept console.warn for [LiveView] messages
+            if (typeof this._initWarningInterceptor === 'function') {
+                this._initWarningInterceptor();
+            }
+
+            // Initialize latency simulator
+            if (typeof this._initLatencySim === 'function') {
+                this._initLatencySim();
+            }
+
             if (globalThis.djustDebug) {
                 console.log('[djust] Developer Bar initialized 🐍');
             }

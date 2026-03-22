@@ -34,6 +34,80 @@ function _markHandlerBound(element, type) {
     set.add(type);
 }
 
+// ============================================================================
+// Scoped Listener Helpers (window/document event binding)
+// ============================================================================
+
+// Track all elements that have scoped (window/document) listeners so we can
+// sweep and clean up listeners for elements removed from the DOM.
+const _scopedListenerElements = new Set();
+
+/**
+ * Clean up all scoped (window/document) listeners stored on an element.
+ * Each listener is stored as { target, eventType, handler, capture } in
+ * element._djustScopedListeners.
+ * @param {HTMLElement} element
+ */
+function _cleanupScopedListeners(element) {
+    if (!element._djustScopedListeners) return;
+    for (const entry of element._djustScopedListeners) {
+        entry.target.removeEventListener(entry.eventType, entry.handler, entry.capture || false);
+    }
+    element._djustScopedListeners = [];
+    _scopedListenerElements.delete(element);
+}
+
+/**
+ * Register a scoped listener on an element. Stores the reference for cleanup.
+ * @param {HTMLElement} element - Declaring element (anchor)
+ * @param {EventTarget} target - window or document
+ * @param {string} eventType - DOM event type (e.g. 'keydown')
+ * @param {Function} handler - Event handler function
+ * @param {boolean} [capture=false] - Use capture phase
+ */
+function _addScopedListener(element, target, eventType, handler, capture) {
+    if (!element._djustScopedListeners) element._djustScopedListeners = [];
+    const useCapture = capture || false;
+    element._djustScopedListeners.push({ target, eventType, handler, capture: useCapture });
+    target.addEventListener(eventType, handler, useCapture);
+    _scopedListenerElements.add(element);
+}
+
+/**
+ * Sweep all tracked scoped-listener elements and remove listeners for any
+ * elements that are no longer in the DOM. Called before binding new scoped
+ * listeners to prevent accumulation from conditional rendering.
+ */
+function _sweepOrphanedScopedListeners() {
+    for (const element of _scopedListenerElements) {
+        if (!document.contains(element)) {
+            _cleanupScopedListeners(element);
+        }
+    }
+}
+
+/**
+ * Normalize a key name to match KeyboardEvent.key values.
+ * @param {string} name - Key name from attribute (e.g. 'escape', 'enter', 'k')
+ * @returns {string} - Normalized key name
+ */
+function _normalizeKeyName(name) {
+    const lower = name.toLowerCase();
+    const keyMap = {
+        'escape': 'Escape',
+        'enter': 'Enter',
+        'tab': 'Tab',
+        'space': ' ',
+        'backspace': 'Backspace',
+        'delete': 'Delete',
+        'arrowup': 'ArrowUp',
+        'arrowdown': 'ArrowDown',
+        'arrowleft': 'ArrowLeft',
+        'arrowright': 'ArrowRight',
+    };
+    return keyMap[lower] || name;
+}
+
 /**
  * Add component and embedded view context to event params.
  * Extracts component_id and view_id from the element's ancestry.
@@ -45,6 +119,64 @@ function addEventContext(params, element) {
     if (componentId) params.component_id = componentId;
     const embeddedViewId = getEmbeddedViewId(element);
     if (embeddedViewId) params.view_id = embeddedViewId;
+}
+
+// WeakSet to track elements whose dj-mounted handler has already fired.
+// Using WeakSet means entries are GC'd when the DOM node is replaced,
+// allowing the handler to fire again for genuinely new elements.
+const _mountedElements = new WeakSet();
+
+/**
+ * Check if element is a form element that supports the disabled property.
+ * @param {HTMLElement} element
+ * @returns {boolean}
+ */
+function _isFormElement(element) {
+    const tag = element.tagName;
+    return tag === 'BUTTON' || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+}
+
+/**
+ * Lock an element: set data-djust-locked marker and disable/style it.
+ * For form elements (button, input, select, textarea): sets disabled = true.
+ * For non-form elements: adds CSS class 'djust-locked'.
+ * @param {HTMLElement} element
+ */
+function _lockElement(element) {
+    element.setAttribute('data-djust-locked', '');
+    if (_isFormElement(element)) {
+        element.disabled = true;
+    } else {
+        element.classList.add('djust-locked');
+    }
+}
+
+/**
+ * Check if element has dj-lock and is already locked. If locked, return true
+ * to signal the caller to skip the event. If not locked but has dj-lock, lock it.
+ * @param {HTMLElement} element
+ * @returns {boolean} true if event should be skipped (already locked)
+ */
+function _checkAndLock(element) {
+    if (!element.hasAttribute('dj-lock')) return false;
+    if (element.hasAttribute('data-djust-locked')) return true; // Already locked, skip
+    _lockElement(element);
+    return false;
+}
+
+/**
+ * Apply dj-disable-with: save original text and replace with loading text.
+ * Only saves original text if not already saved (prevents overwrite on double-submit).
+ * @param {HTMLElement} element - Element with dj-disable-with attribute
+ */
+function _applyDisableWith(element) {
+    const disableText = element.getAttribute('dj-disable-with');
+    if (!disableText) return;
+    if (!element.hasAttribute('data-djust-original-text')) {
+        element.setAttribute('data-djust-original-text', element.textContent);
+    }
+    element.textContent = disableText;
+    element.disabled = true;
 }
 
 function bindLiveViewEvents() {
@@ -69,6 +201,9 @@ function bindLiveViewEvents() {
             const clickHandlerFn = async (e) => {
                 e.preventDefault();
 
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
                 // Read attribute at fire time so morphElement attribute updates take effect
                 const parsed = parseEventHandler(element.getAttribute('dj-click') || '');
 
@@ -76,6 +211,9 @@ function bindLiveViewEvents() {
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
                 }
+
+                // dj-disable-with: disable and show loading text
+                _applyDisableWith(element);
 
                 // Apply optimistic update if specified
                 let optimisticUpdateId = null;
@@ -107,10 +245,11 @@ function bindLiveViewEvents() {
                 await handleEvent(parsed.name, params);
             };
 
-            // Apply rate limiting if specified
-            const wrappedHandler = window.djust.rateLimit
-                ? window.djust.rateLimit.wrapWithRateLimit(element, 'click', clickHandlerFn)
-                : clickHandlerFn;
+            // Apply dj-debounce/dj-throttle HTML attributes first, then server rate limit
+            let wrappedHandler = _applyRateLimitAttrs(element, clickHandlerFn);
+            if (wrappedHandler === clickHandlerFn && window.djust.rateLimit) {
+                wrappedHandler = window.djust.rateLimit.wrapWithRateLimit(element, 'click', clickHandlerFn);
+            }
 
             element.addEventListener('click', wrappedHandler);
         }
@@ -123,10 +262,37 @@ function bindLiveViewEvents() {
                 // Read attribute at click time (not bind time) so morph updates take effect
                 var currentValue = element.getAttribute('dj-copy');
                 if (!currentValue) return;
-                navigator.clipboard.writeText(currentValue).then(function() {
+
+                // Selector-based copy: if value starts with #, . or [, try querySelector
+                var textToCopy = currentValue;
+                if (currentValue.charAt(0) === '#' || currentValue.charAt(0) === '.' || currentValue.charAt(0) === '[') {
+                    try {
+                        var target = document.querySelector(currentValue);
+                        if (target) {
+                            textToCopy = target.textContent;
+                        }
+                    } catch (err) {
+                        // Invalid selector — fall back to literal copy
+                    }
+                }
+
+                navigator.clipboard.writeText(textToCopy).then(function() {
+                    // CSS class feedback: add class and remove after 2s
+                    var cssClass = element.getAttribute('dj-copy-class') || 'dj-copied';
+                    element.classList.add(cssClass);
+                    setTimeout(function() { element.classList.remove(cssClass); }, 2000);
+
+                    // Text feedback: custom or default "Copied!"
+                    var feedbackText = element.getAttribute('dj-copy-feedback') || 'Copied!';
                     var original = element.textContent;
-                    element.textContent = 'Copied!';
+                    element.textContent = feedbackText;
                     setTimeout(function() { element.textContent = original; }, 1500);
+
+                    // Optional server event for analytics
+                    var copyEvent = element.getAttribute('dj-copy-event');
+                    if (copyEvent && typeof handleEvent === 'function') {
+                        handleEvent(copyEvent, { text: textToCopy });
+                    }
                 });
             });
         }
@@ -138,15 +304,32 @@ function bindLiveViewEvents() {
             element.addEventListener('submit', async (e) => {
                 e.preventDefault();
 
+                // dj-lock: skip if already locked
+                if (_checkAndLock(e.target)) return;
+
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(e.target)) {
                     return; // User cancelled
                 }
 
+                // dj-disable-with: disable submit buttons within the form
+                const submitBtns = e.target.querySelectorAll('button[type="submit"][dj-disable-with]');
+                submitBtns.forEach(btn => _applyDisableWith(btn));
+                // Also check the submitter if it has dj-disable-with
+                if (e.submitter && e.submitter.hasAttribute('dj-disable-with')) {
+                    _applyDisableWith(e.submitter);
+                }
+
                 const formData = new FormData(e.target);
                 const params = Object.fromEntries(formData.entries());
 
+                // Merge dj-value-* attributes from the form element
+                Object.assign(params, collectDjValues(e.target));
+
                 addEventContext(params, e.target);
+
+                // _target: include submitter name if available
+                params._target = (e.submitter && (e.submitter.name || e.submitter.id)) || null;
 
                 // Pass target element for optimistic updates (Phase 3)
                 params._targetElement = e.target;
@@ -181,6 +364,8 @@ function bindLiveViewEvents() {
         function buildFormEventParams(element, value) {
             const fieldName = getFieldName(element);
             const params = { value, field: fieldName };
+            // Merge dj-value-* attributes from the triggering element
+            Object.assign(params, collectDjValues(element));
             addEventContext(params, element);
             return params;
         }
@@ -193,6 +378,9 @@ function bindLiveViewEvents() {
             const parsedChange = parseEventHandler(changeHandler);
 
             const changeHandlerFn = async (e) => {
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
@@ -206,6 +394,9 @@ function bindLiveViewEvents() {
                 if (parsedChange.args.length > 0) {
                     params._args = parsedChange.args;
                 }
+
+                // _target: include triggering field's name (or id, or null)
+                params._target = e.target.name || e.target.id || null;
 
                 // Add target element for loading state (consistent with other handlers)
                 params._targetElement = e.target;
@@ -222,12 +413,13 @@ function bindLiveViewEvents() {
                 await handleEvent(parsedChange.name, params);
             };
 
-            // Apply rate limiting if specified
-            const wrappedHandler = window.djust.rateLimit
-                ? window.djust.rateLimit.wrapWithRateLimit(element, 'change', changeHandlerFn)
-                : changeHandlerFn;
+            // Apply dj-debounce/dj-throttle HTML attributes first, then server rate limit
+            let wrappedChangeHandler = _applyRateLimitAttrs(element, changeHandlerFn);
+            if (wrappedChangeHandler === changeHandlerFn && window.djust.rateLimit) {
+                wrappedChangeHandler = window.djust.rateLimit.wrapWithRateLimit(element, 'change', changeHandlerFn);
+            }
 
-            element.addEventListener('change', wrappedHandler);
+            element.addEventListener('change', wrappedChangeHandler);
         }
 
         // Handle dj-input events (with smart debouncing/throttling)
@@ -241,8 +433,20 @@ function bindLiveViewEvents() {
             const inputType = element.type || element.tagName.toLowerCase();
             const rateLimit = Object.prototype.hasOwnProperty.call(DEFAULT_RATE_LIMITS, inputType) ? DEFAULT_RATE_LIMITS[inputType] : { type: 'debounce', ms: 300 };
 
-            // Check for explicit overrides
-            if (element.hasAttribute('data-debounce')) {
+            // Check for explicit overrides: dj-* attributes take precedence
+            if (element.hasAttribute('dj-debounce')) {
+                const djVal = element.getAttribute('dj-debounce');
+                if (djVal === 'blur') {
+                    rateLimit.type = 'blur';
+                    rateLimit.ms = 0;
+                } else {
+                    rateLimit.type = 'debounce';
+                    rateLimit.ms = parseInt(djVal, 10);
+                }
+            } else if (element.hasAttribute('dj-throttle')) {
+                rateLimit.type = 'throttle';
+                rateLimit.ms = parseInt(element.getAttribute('dj-throttle'), 10);
+            } else if (element.hasAttribute('data-debounce')) {
                 rateLimit.type = 'debounce';
                 rateLimit.ms = parseInt(element.getAttribute('data-debounce'));
             } else if (element.hasAttribute('data-throttle')) {
@@ -251,6 +455,9 @@ function bindLiveViewEvents() {
             }
 
             const handler = async (e) => {
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
@@ -260,12 +467,28 @@ function bindLiveViewEvents() {
                 if (parsedInput.args.length > 0) {
                     params._args = parsedInput.args;
                 }
+
+                // _target: include triggering field's name (or id, or null)
+                params._target = e.target.name || e.target.id || null;
+
                 await handleEvent(parsedInput.name, params);
             };
 
             // Apply rate limiting wrapper
             let wrappedHandler;
-            if (rateLimit.type === 'throttle') {
+            if (rateLimit.type === 'blur') {
+                // dj-debounce="blur": defer until element loses focus
+                let latestArgs = null;
+                wrappedHandler = function (...args) {
+                    latestArgs = args;
+                };
+                element.addEventListener('blur', function () {
+                    if (latestArgs !== null) {
+                        handler(...latestArgs);
+                        latestArgs = null;
+                    }
+                });
+            } else if (rateLimit.type === 'throttle') {
                 wrappedHandler = throttle(handler, rateLimit.ms);
             } else {
                 wrappedHandler = debounce(handler, rateLimit.ms);
@@ -280,6 +503,9 @@ function bindLiveViewEvents() {
             _markHandlerBound(element, 'blur');
             const parsedBlur = parseEventHandler(blurHandler);
             element.addEventListener('blur', async (e) => {
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
@@ -299,6 +525,9 @@ function bindLiveViewEvents() {
             _markHandlerBound(element, 'focus');
             const parsedFocus = parseEventHandler(focusHandler);
             element.addEventListener('focus', async (e) => {
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
@@ -331,6 +560,9 @@ function bindLiveViewEvents() {
                         // Add more key mappings as needed
                     }
 
+                    // dj-lock: skip if already locked
+                    if (_checkAndLock(element)) return;
+
                     // dj-confirm: show confirmation dialog before sending event
                     if (!checkDjConfirm(element)) {
                         return; // User cancelled
@@ -344,6 +576,9 @@ function bindLiveViewEvents() {
                         field: fieldName
                     };
 
+                    // Merge dj-value-* attributes from the element
+                    Object.assign(params, collectDjValues(element));
+
                     addEventContext(params, e.target);
 
                     // Add target element and handle dj-target
@@ -356,12 +591,13 @@ function bindLiveViewEvents() {
                     await handleEvent(handlerName, params);
                 };
 
-                // Apply rate limiting if specified
-                const wrappedHandler = window.djust.rateLimit
-                    ? window.djust.rateLimit.wrapWithRateLimit(element, eventType, keyHandlerFn)
-                    : keyHandlerFn;
+                // Apply dj-debounce/dj-throttle HTML attributes first, then server rate limit
+                let wrappedKeyHandler = _applyRateLimitAttrs(element, keyHandlerFn);
+                if (wrappedKeyHandler === keyHandlerFn && window.djust.rateLimit) {
+                    wrappedKeyHandler = window.djust.rateLimit.wrapWithRateLimit(element, eventType, keyHandlerFn);
+                }
 
-                element.addEventListener(eventType, wrappedHandler);
+                element.addEventListener(eventType, wrappedKeyHandler);
             }
         });
 
@@ -391,9 +627,252 @@ function bindLiveViewEvents() {
         }
     });
 
+    // ================================================================
+    // Scoped listeners: dj-window-*, dj-document-*, dj-click-away, dj-shortcut
+    // ================================================================
+
+    // Sweep orphaned scoped listeners (elements removed from DOM by conditional rendering)
+    _sweepOrphanedScopedListeners();
+
+    // --- Feature 1: dj-window-* and dj-document-* event scoping ---
+    const scopedPrefixes = [
+        { prefix: 'dj-window-', target: window },
+        { prefix: 'dj-document-', target: document },
+    ];
+    const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
+
+    // Collect all elements that have any dj-window-* or dj-document-* attributes
+    // by scanning once through allElements (already queried above).
+    for (const { prefix, target } of scopedPrefixes) {
+        for (const evtType of scopedEventTypes) {
+            // scroll and resize only make sense on window
+            if (target === document && (evtType === 'scroll' || evtType === 'resize')) continue;
+
+            const attrBase = prefix + evtType;
+            // Scan all elements for attributes starting with this prefix+eventType
+            // (covers both exact matches and key-modifier variants like dj-window-keydown.escape)
+            allElements.forEach(element => {
+                for (const attr of element.attributes) {
+                    if (!attr.name.startsWith(attrBase)) continue;
+                    const bindType = attr.name; // e.g. 'dj-window-keydown' or 'dj-window-keydown.escape'
+                    if (_isHandlerBound(element, bindType)) continue;
+                    _markHandlerBound(element, bindType);
+
+                    // Parse handler name and optional key modifier
+                    const attrValue = attr.value;
+                    const suffix = attr.name.slice(attrBase.length); // '' or '.escape'
+                    const requiredKey = suffix.startsWith('.') ? _normalizeKeyName(suffix.slice(1)) : null;
+
+                    // Parse handler name (supports handler(args) syntax)
+                    const parsed = parseEventHandler(attrValue);
+
+                    const scopedHandler = async (e) => {
+                        // Key filtering for keydown/keyup
+                        if (requiredKey && e.key !== requiredKey) return;
+
+                        // Build params from the declaring element
+                        const params = extractTypedParams(element);
+                        addEventContext(params, element);
+
+                        // Add event-specific params
+                        if (evtType === 'keydown' || evtType === 'keyup') {
+                            params.key = e.key;
+                            params.code = e.code;
+                        } else if (evtType === 'click') {
+                            params.clientX = e.clientX;
+                            params.clientY = e.clientY;
+                        } else if (evtType === 'scroll') {
+                            params.scrollY = window.scrollY;
+                            params.scrollX = window.scrollX;
+                        } else if (evtType === 'resize') {
+                            params.innerWidth = window.innerWidth;
+                            params.innerHeight = window.innerHeight;
+                        }
+
+                        if (parsed.args.length > 0) {
+                            params._args = parsed.args;
+                        }
+
+                        await handleEvent(parsed.name, params);
+                    };
+
+                    // Apply default throttle for scroll/resize
+                    let finalHandler = scopedHandler;
+                    if (evtType === 'scroll' || evtType === 'resize') {
+                        const throttleMs = parseInt(element.getAttribute('data-throttle'), 10) || 150;
+                        finalHandler = throttle(scopedHandler, throttleMs);
+                    } else if (element.hasAttribute('data-debounce')) {
+                        finalHandler = debounce(scopedHandler, parseInt(element.getAttribute('data-debounce'), 10));
+                    } else if (element.hasAttribute('data-throttle')) {
+                        finalHandler = throttle(scopedHandler, parseInt(element.getAttribute('data-throttle'), 10));
+                    }
+
+                    _addScopedListener(element, target, evtType, finalHandler, false);
+                }
+            });
+        }
+    }
+
+    // --- Feature 2: dj-click-away ---
+    document.querySelectorAll('[dj-click-away]').forEach(element => {
+        if (_isHandlerBound(element, 'click-away')) return;
+        _markHandlerBound(element, 'click-away');
+
+        const handlerName = element.getAttribute('dj-click-away');
+
+        const clickAwayHandler = async (e) => {
+            // Only fire if click is outside the element
+            if (element.contains(e.target)) return;
+
+            // dj-confirm support
+            if (!checkDjConfirm(element)) return;
+
+            const params = extractTypedParams(element);
+            addEventContext(params, element);
+
+            await handleEvent(handlerName, params);
+        };
+
+        // Use capture phase so stopPropagation inside doesn't prevent detection
+        _addScopedListener(element, document, 'click', clickAwayHandler, true);
+    });
+
+    // --- Feature 3: dj-shortcut ---
+    document.querySelectorAll('[dj-shortcut]').forEach(element => {
+        if (_isHandlerBound(element, 'shortcut')) return;
+        _markHandlerBound(element, 'shortcut');
+
+        const attrValue = element.getAttribute('dj-shortcut');
+        const allowInInput = element.hasAttribute('dj-shortcut-in-input');
+
+        // Parse comma-separated bindings
+        // Each binding: [modifier+...]key:handler[:prevent]
+        const bindings = attrValue.split(',').map(b => b.trim()).filter(b => b).map(binding => {
+            const parts = binding.split(':');
+            const keyCombo = parts[0].trim(); // e.g. 'ctrl+k' or 'escape'
+            const handler = parts[1] ? parts[1].trim() : '';
+            const preventDefault = parts[2] ? parts[2].trim() === 'prevent' : false;
+
+            // Parse key combo into modifiers + key
+            const comboParts = keyCombo.split('+');
+            const key = _normalizeKeyName(comboParts[comboParts.length - 1]);
+            const modifiers = new Set();
+            for (let i = 0; i < comboParts.length - 1; i++) {
+                modifiers.add(comboParts[i].toLowerCase());
+            }
+
+            return { key, modifiers, handler, preventDefault, comboString: keyCombo };
+        });
+
+        const shortcutHandler = async (e) => {
+            // Skip if active element is a form input (unless opt-out)
+            if (!allowInInput) {
+                const active = document.activeElement;
+                if (active) {
+                    const tag = active.tagName;
+                    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || active.isContentEditable) {
+                        return;
+                    }
+                }
+            }
+
+            // Skip if element is not visible (hidden modals etc.)
+            // Check hidden attribute and display:none; offsetParent is used as
+            // a secondary check when available (not in JSDOM/SSR environments).
+            if (element.hidden || element.style.display === 'none') return;
+            if (!document.contains(element)) return;
+
+            for (const binding of bindings) {
+                if (e.key !== binding.key) continue;
+
+                // Check modifiers
+                const ctrlMatch = binding.modifiers.has('ctrl') === e.ctrlKey;
+                const altMatch = binding.modifiers.has('alt') === e.altKey;
+                const shiftMatch = binding.modifiers.has('shift') === e.shiftKey;
+                const metaMatch = binding.modifiers.has('meta') === e.metaKey;
+
+                if (!ctrlMatch || !altMatch || !shiftMatch || !metaMatch) continue;
+
+                // Match found
+                if (binding.preventDefault) {
+                    e.preventDefault();
+                }
+
+                const params = extractTypedParams(element);
+                addEventContext(params, element);
+                params.key = e.key;
+                params.code = e.code;
+                params.shortcut = binding.comboString;
+
+                await handleEvent(binding.handler, params);
+                return; // Fire first match only
+            }
+        };
+
+        _addScopedListener(element, document, 'keydown', shortcutHandler, false);
+    });
+
     // Re-scan dj-loading attributes after DOM updates so dynamically
     // added elements (e.g. inside modals) get registered.
     globalLoadingManager.scanAndRegister();
+
+    // dj-mounted: fire event for elements that have entered the DOM after
+    // initial mount. Uses WeakSet to track already-fired elements so each
+    // DOM node only triggers once (replaced nodes are new objects and will fire again).
+    if (window.djust._mountReady) {
+        document.querySelectorAll('[dj-mounted]').forEach(el => {
+            if (_mountedElements.has(el)) return;
+            _mountedElements.add(el);
+
+            const handlerName = el.getAttribute('dj-mounted');
+            if (!handlerName) return;
+
+            // Collect dj-value-* and data-* params from the mounted element
+            const params = extractTypedParams(el);
+            addEventContext(params, el);
+
+            handleEvent(handlerName, params);
+        });
+    }
+}
+
+/**
+ * Apply dj-debounce / dj-throttle HTML attributes to an event handler.
+ * If the element has dj-debounce or dj-throttle, wraps the handler accordingly.
+ * dj-debounce="blur" is a special value that defers until the element loses focus.
+ * Returns the (potentially wrapped) handler.
+ * @param {HTMLElement} element - Element with potential dj-debounce/dj-throttle
+ * @param {Function} handler - Original event handler
+ * @returns {Function} - Wrapped or original handler
+ */
+function _applyRateLimitAttrs(element, handler) {
+    if (element.hasAttribute('dj-debounce')) {
+        const val = element.getAttribute('dj-debounce');
+        if (val === 'blur') {
+            // Special: defer event until element loses focus
+            let latestArgs = null;
+            const blurWrapper = function (...args) {
+                latestArgs = args;
+            };
+            element.addEventListener('blur', function () {
+                if (latestArgs !== null) {
+                    handler(...latestArgs);
+                    latestArgs = null;
+                }
+            });
+            return blurWrapper;
+        }
+        const ms = parseInt(val, 10);
+        if (ms === 0) {
+            return handler; // dj-debounce="0" means no debounce
+        }
+        return debounce(handler, ms);
+    }
+    if (element.hasAttribute('dj-throttle')) {
+        const ms = parseInt(element.getAttribute('dj-throttle'), 10);
+        return throttle(handler, ms);
+    }
+    return handler;
 }
 
 // Helper: Debounce function
@@ -443,11 +922,192 @@ function clearOptimisticState(eventName) {
  * instead of manually calling initReactCounters + initTodoItems +
  * bindLiveViewEvents + updateHooks individually.
  */
+// WeakSet to track elements that have already been scrolled into view.
+// Fresh DOM nodes (from VDOM replacement) won't be in the set, so they
+// will scroll again — correct behavior for newly inserted content.
+const _scrolledElements = new WeakSet();
+
 function reinitAfterDOMUpdate() {
     initReactCounters();
     initTodoItems();
     bindLiveViewEvents();
     if (typeof updateHooks === 'function') { updateHooks(); }
+
+    // dj-scroll-into-view: auto-scroll elements into view after DOM updates
+    document.querySelectorAll('[dj-scroll-into-view]').forEach(el => {
+        if (_scrolledElements.has(el)) return;
+        _scrolledElements.add(el);
+
+        const value = el.getAttribute('dj-scroll-into-view') || '';
+        let options;
+        switch (value) {
+            case 'instant':
+                options = { behavior: 'instant', block: 'nearest' };
+                break;
+            case 'center':
+                options = { behavior: 'smooth', block: 'center' };
+                break;
+            case 'start':
+                options = { behavior: 'smooth', block: 'start' };
+                break;
+            case 'end':
+                options = { behavior: 'smooth', block: 'end' };
+                break;
+            default:
+                options = { behavior: 'smooth', block: 'nearest' };
+                break;
+        }
+        el.scrollIntoView(options);
+    });
+}
+
+/**
+ * Process dj-auto-recover elements after a WebSocket reconnect.
+ * Scans for [dj-auto-recover] elements, serializes their DOM state
+ * (form values + data-* attributes), and fires the named event.
+ * Only fires when _isReconnect flag is set; clears the flag after processing.
+ */
+function _processAutoRecover() {
+    if (!window.djust._isReconnect) return;
+    window.djust._isReconnect = false;
+
+    document.querySelectorAll('[dj-auto-recover]').forEach(function(container) {
+        var handlerName = container.getAttribute('dj-auto-recover');
+        if (!handlerName) return;
+
+        // Serialize form field values within the container
+        var formValues = {};
+        container.querySelectorAll('input, textarea, select').forEach(function(field) {
+            var name = field.name;
+            if (!name) return;
+            if (field.type === 'checkbox') {
+                formValues[name] = field.checked;
+            } else if (field.type === 'radio') {
+                if (field.checked) formValues[name] = field.value;
+            } else {
+                formValues[name] = field.value;
+            }
+        });
+
+        // Collect data-* attributes from the container element
+        var dataAttrs = {};
+        for (var i = 0; i < container.attributes.length; i++) {
+            var attr = container.attributes[i];
+            if (attr.name.startsWith('data-')) {
+                var key = attr.name.slice(5); // Strip 'data-' prefix
+                dataAttrs[key] = attr.value;
+            }
+        }
+
+        var params = {
+            _form_values: formValues,
+            _data_attrs: dataAttrs
+        };
+
+        if (typeof handleEvent === 'function') {
+            handleEvent(handlerName, params);
+        }
+    });
+}
+
+/**
+ * Process automatic form recovery after a WebSocket reconnect.
+ * Scans all form fields with dj-change or dj-input inside [dj-view] and
+ * fires synthetic change events when the DOM value differs from the
+ * server-rendered default, restoring server state transparently.
+ *
+ * Skips fields with dj-no-recover or fields inside dj-auto-recover
+ * containers (custom handlers take precedence).
+ *
+ * Fires events sequentially (batched) via handleEvent() to avoid
+ * race conditions on the server.
+ */
+function _processFormRecovery() {
+    if (!window.djust._isReconnect) return;
+
+    var root = document.querySelector('[dj-view]');
+    if (!root) root = document.querySelector('[dj-root]');
+    if (!root) return;
+
+    // Collect fields to recover
+    var fields = root.querySelectorAll('input[dj-change], textarea[dj-change], select[dj-change], input[dj-input], textarea[dj-input], select[dj-input]');
+    var pendingEvents = [];
+
+    for (var i = 0; i < fields.length; i++) {
+        var field = fields[i];
+
+        // Skip fields with dj-no-recover
+        if (field.hasAttribute('dj-no-recover')) continue;
+
+        // Skip fields inside dj-auto-recover containers (custom handler takes precedence)
+        if (field.closest('[dj-auto-recover]')) continue;
+
+        // Determine handler name — prefer dj-change, fall back to dj-input
+        var handlerAttr = field.hasAttribute('dj-change') ? 'dj-change' : 'dj-input';
+        var handlerString = field.getAttribute(handlerAttr);
+        if (!handlerString) continue;
+
+        // Parse handler string to extract function name
+        var parsed = parseEventHandler(handlerString);
+        var handlerName = parsed.name;
+
+        // Determine current DOM value and server default
+        var tagName = field.tagName.toLowerCase();
+        var fieldType = (field.type || '').toLowerCase();
+        var domValue;
+        var serverDefault;
+
+        if (fieldType === 'checkbox') {
+            domValue = field.checked;
+            serverDefault = field.hasAttribute('checked');
+        } else if (fieldType === 'radio') {
+            domValue = field.checked;
+            serverDefault = field.hasAttribute('checked');
+        } else if (tagName === 'select') {
+            domValue = field.value;
+            // Server default: the option with 'selected' attribute, or the first option
+            var selectedOption = field.querySelector('option[selected]');
+            serverDefault = selectedOption ? selectedOption.value : (field.options.length > 0 ? field.options[0].value : '');
+        } else {
+            // text, textarea, number, email, etc.
+            domValue = field.value;
+            serverDefault = field.getAttribute('value') || (tagName === 'textarea' ? field.defaultValue : '');
+        }
+
+        // Skip if DOM value matches server default (avoid unnecessary server work)
+        if (domValue === serverDefault) continue;
+
+        // Build event params matching dj-change param structure
+        var value = (fieldType === 'checkbox' || fieldType === 'radio') ? domValue : domValue;
+        var fieldName = field.name || field.id || null;
+        var params = { value: value, field: fieldName };
+
+        // Add positional arguments from handler syntax if present
+        if (parsed.args.length > 0) {
+            params._args = parsed.args;
+        }
+
+        // _target: include triggering field's name
+        params._target = fieldName;
+
+        pendingEvents.push({ handlerName: handlerName, params: params });
+    }
+
+    // Fire events sequentially to avoid server race conditions
+    if (pendingEvents.length > 0 && typeof handleEvent === 'function') {
+        if (globalThis.djustDebug) console.log('[LiveView] Form recovery: restoring ' + pendingEvents.length + ' field(s)');
+        var fireSequentially = function(index) {
+            if (index >= pendingEvents.length) return;
+            var evt = pendingEvents[index];
+            var result = handleEvent(evt.handlerName, evt.params);
+            if (result && typeof result.then === 'function') {
+                void result.then(function() { fireSequentially(index + 1); });
+            } else {
+                fireSequentially(index + 1);
+            }
+        };
+        fireSequentially(0);
+    }
 }
 
 // Export for testing and for createNodeFromVNode to mark VDOM-created elements as bound
@@ -455,3 +1115,6 @@ window.djust.bindLiveViewEvents = bindLiveViewEvents;
 window.djust.reinitAfterDOMUpdate = reinitAfterDOMUpdate;
 window.djust._isHandlerBound = _isHandlerBound;
 window.djust._markHandlerBound = _markHandlerBound;
+window.djust._processAutoRecover = _processAutoRecover;
+window.djust._processFormRecovery = _processFormRecovery;
+window.djust._isReconnect = false;

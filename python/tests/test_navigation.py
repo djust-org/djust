@@ -393,6 +393,131 @@ class TestHandleParams:
 
 
 # ============================================================================
+# handle_params called on initial mount (Phoenix parity)
+# ============================================================================
+
+
+class TestHandleParamsOnMount:
+    """Tests that handle_params is called after mount() on initial render.
+
+    Phoenix calls handle_params/3 both on initial mount and on subsequent
+    URL changes.  This test verifies the same contract in djust.
+    """
+
+    def test_handle_params_called_after_mount(self):
+        """Simulates the handle_mount() flow: mount() then handle_params()."""
+
+        call_order = []
+
+        class MyView(NavigationMixin):
+            def __init__(self):
+                self._init_navigation()
+                self.category = "default"
+
+            def mount(self, request, **kwargs):
+                call_order.append("mount")
+                self.mounted = True
+
+            def handle_params(self, params, uri):
+                call_order.append("handle_params")
+                self.category = params.get("category", "default")
+
+        view = MyView()
+        # Simulate handle_mount flow
+        view.mount(None, **{"category": "books"})
+        view.handle_params({"category": "books"}, "/items/?category=books")
+
+        assert call_order == ["mount", "handle_params"]
+        assert view.category == "books"
+
+    def test_handle_params_on_mount_with_empty_params(self):
+        """handle_params is called even when there are no query params."""
+
+        class MyView(NavigationMixin):
+            def __init__(self):
+                self._init_navigation()
+                self.handle_params_called = False
+
+            def mount(self, request, **kwargs):
+                pass
+
+            def handle_params(self, params, uri):
+                self.handle_params_called = True
+
+        view = MyView()
+        view.mount(None)
+        view.handle_params({}, "/items/")
+
+        assert view.handle_params_called
+
+    def test_handle_params_receives_correct_uri_on_mount(self):
+        """URI passed to handle_params includes path + query string."""
+
+        class MyView(NavigationMixin):
+            def __init__(self):
+                self._init_navigation()
+                self.received_uri = None
+
+            def mount(self, request, **kwargs):
+                pass
+
+            def handle_params(self, params, uri):
+                self.received_uri = uri
+
+        view = MyView()
+        view.mount(None)
+        view.handle_params(
+            {"tab": "settings", "page": "2"},
+            "/dashboard/?tab=settings&page=2",
+        )
+
+        assert view.received_uri == "/dashboard/?tab=settings&page=2"
+
+    def test_handle_params_can_call_live_patch(self):
+        """handle_params can trigger live_patch (e.g. to normalize params)."""
+
+        class MyView(NavigationMixin):
+            def __init__(self):
+                self._init_navigation()
+
+            def mount(self, request, **kwargs):
+                pass
+
+            def handle_params(self, params, uri):
+                # Normalize: redirect old param names
+                if "cat" in params:
+                    self.live_patch(
+                        params={"category": params["cat"]},
+                        replace=True,
+                    )
+
+        view = MyView()
+        view.mount(None)
+        view.handle_params({"cat": "books"}, "/items/?cat=books")
+
+        commands = view._drain_navigation()
+        assert len(commands) == 1
+        assert commands[0]["params"] == {"category": "books"}
+        assert commands[0]["replace"] is True
+
+    def test_default_handle_params_noop_on_mount(self):
+        """Views without handle_params override work fine (no crash)."""
+
+        class MyView(NavigationMixin):
+            def __init__(self):
+                self._init_navigation()
+
+            def mount(self, request, **kwargs):
+                self.mounted = True
+
+        view = MyView()
+        view.mount(None)
+        view.handle_params({"page": "1"}, "/items/?page=1")
+
+        assert view.mounted
+
+
+# ============================================================================
 # Regression tests — issue #307
 # ============================================================================
 

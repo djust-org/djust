@@ -19,6 +19,7 @@ from .decorators import (
     computed,
     debounce,
     throttle,
+    on_mount,
 )
 from .auth import LoginRequiredMixin, PermissionRequiredMixin
 from .react import react_components, register_react_component, ReactMixin
@@ -29,6 +30,8 @@ from .presence import PresenceMixin, LiveCursorMixin, PresenceManager, CursorTra
 from .routing import live_session, get_route_map_script, DjustMiddlewareStack
 from .streaming import StreamingMixin
 from .uploads import UploadMixin
+from .mixins.flash import FlashMixin
+from .mixins.page_metadata import PageMetadataMixin
 
 # Import Rust functions
 try:
@@ -57,7 +60,7 @@ except ImportError:
     # Rust components not yet built - this is optional
     rust_components = None
 
-__version__ = "0.3.8"
+__version__ = "0.4.0rc2"
 
 
 def enable_hot_reload():
@@ -225,7 +228,13 @@ __all__ = [
     "StreamingMixin",
     # File uploads
     "UploadMixin",
+    # Flash messages
+    "FlashMixin",
+    # Page metadata
+    "PageMetadataMixin",
     # Authentication & authorization
     "LoginRequiredMixin",
     "PermissionRequiredMixin",
+    # on_mount hooks
+    "on_mount",
 ]

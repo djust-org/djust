@@ -122,6 +122,11 @@ function reinitLiveViewForTurboNav() {
         if (el._djustPollVisibilityHandler) document.removeEventListener('visibilitychange', el._djustPollVisibilityHandler);
     });
 
+    // Clean up scoped (window/document) listeners before re-binding
+    for (const el of _scopedListenerElements) {
+        _cleanupScopedListeners(el);
+    }
+
     // Re-bind events and hooks
     reinitAfterDOMUpdate();
 
