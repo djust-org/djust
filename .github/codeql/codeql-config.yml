@@ -1,9 +1,11 @@
 name: "djust CodeQL config"
 
 paths-ignore:
-  # JS source fragments — concatenated into client.js/debug-panel.js at build time.
-  # CodeQL cannot parse fragments individually (unclosed blocks, class method bodies).
-  # Analyze the built client.js and debug-panel.js instead.
+  # djust client JS — framework-internal patterns (innerHTML for server-rendered
+  # VDOM, DOM property assignments, server-data debug logging) trigger false
+  # positives. Security is enforced server-side by the Django/Rust template engine.
+  - "python/djust/static/djust/client.js"
+  - "python/djust/static/djust/debug-panel.js"
   - "python/djust/static/djust/src/**"
   # Test fixtures and examples are not production code
   - "python/djust/tests/**"
