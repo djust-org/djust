@@ -66,6 +66,8 @@ wheels/
 
 # Claude Code
 .claude/
+.pipeline-log.md
+.pipeline-state/
 pr/
 outreach/
 packages/

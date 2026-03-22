@@ -11,6 +11,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Fix 25 CodeQL code-scanning alerts in client.js and debug-panel.js** — Added UNSAFE_KEYS guard to VDOM SetAttr/RemoveAttr patches (rejects `__proto__`, `constructor`, `prototype` keys), replaced direct property assignment with `Object.defineProperty()` in debug panel state cloning, converted template literal logs to format strings to prevent log injection, and added XSS suppression comments for trusted server-rendered HTML. ([#597](https://github.com/djust-org/djust/pull/597))
 
+### Removed
+
+- **`whitenoise` dependency** — djust's `ASGIStaticFilesHandler` in `djust.asgi.get_application()` already handles static file serving at the ASGI layer, making WhiteNoise middleware redundant. Removed `whitenoise` from dependencies, scaffolded projects, and the demo project. Removed system check `C006` (daphne without WhiteNoise). ([#584](https://github.com/djust-org/djust/issues/584))
+
+### Added
+
+- **`{% dj_flash %}` template tag in Rust renderer** — Registered `DjFlashTagHandler` so the flash container renders correctly when templates are processed by the Rust engine. Previously, the tag was only registered as a Django template tag and silently dropped by the Rust renderer. ([#590](https://github.com/djust-org/djust/pull/590))
+
+### Fixed
+
+- **Flash and page_metadata not delivered over HTTP POST fallback** — `put_flash()` and `page_title`/`page_meta` side-channel commands were only flushed over WebSocket. HTTP POST responses now drain `_pending_flash` and `_pending_page_metadata` and include them as `_flash` and `_page_metadata` arrays in the JSON response. ([#590](https://github.com/djust-org/djust/pull/590))
+- **Custom tag args containing lists/objects serialized as `[List]`/`[Object]`** — `Value::List` and `Value::Object` in custom tag arguments were stringified via the `Display` trait, destroying structured data before it reached Python handlers. Now serialized as JSON via `serde_json`. ([#589](https://github.com/djust-org/djust/issues/589))
+- **Django filters not applied in custom tag arguments** — `{% tag key=var|length %}` rendered the literal string instead of the computed value because arg resolution used `context.get()` (plain lookup) instead of `get_value()` (filter-aware). ([#591](https://github.com/djust-org/djust/pull/591))
+
+## [0.4.0rc2] - 2026-03-20
+
+### Added
+
+- **Navigation lifecycle events and CSS class** — `djust:navigate-start` / `djust:navigate-end` CustomEvents and `.djust-navigating` CSS class on `[dj-root]` during `dj-navigate` transitions. Enables CSS-only page transitions without monkey-patching `pageLoading`. ([#585](https://github.com/djust-org/djust/issues/585))
+
+### Fixed
+
+- **`{% if %}` inside HTML tag after `{{ variable }}` emits `<!--dj-if-->` comment** — `is_inside_html_tag()` only checked the immediately preceding token, missing tag context when `{{ variable }}` tokens appeared between the tag opening and `{% if %}`. Added `is_inside_html_tag_at()` that scans all preceding tokens. ([#580](https://github.com/djust-org/djust/issues/580))
+
+## [0.4.0rc1] - 2026-03-19
+
+### Added
+
+- **`manage.py djust_doctor` diagnostic command** -- checks Rust extension, Python/Django versions, Channels, Redis, templates, static files, routing, and ASGI server in one command. Supports `--json`, `--quiet`, `--check NAME`, and `--verbose` flags.
+
+- **Enhanced VDOM patch error messages** -- patch failures now include patch type, `dj-id`, parent element info, and suggested causes (third-party DOM modification, `{% if %}` block changes). In `DEBUG_MODE`, a console group with full patch detail is shown. Batch failure summaries include which patch indices failed.
+
+- **DEBUG-mode enriched WebSocket errors** -- `send_error` includes `debug_detail` (unsanitized message), `traceback` (last 3 frames), and `hint` (actionable suggestion) when `settings.DEBUG=True`. `handle_mount` lists available LiveView classes when class lookup fails.
+
+- **Debug panel warning interceptor** -- intercepts `console.warn` calls matching `[LiveView]` prefix and surfaces them as a warning badge on the debug button. Configurable auto-open via `LIVEVIEW_CONFIG.debug_auto_open_on_error`.
+
+- **Latency simulator in debug panel** -- test loading states and optimistic updates with simulated network delay. Presets (Off/50/100/200/500ms), custom value, jitter control, localStorage persistence, and visual badge on the debug button. Latency is injected on both WebSocket send and receive for full round-trip simulation. Only active when `DEBUG_MODE=true`.
+
+- **Form recovery on reconnect** — After WebSocket reconnects, form fields with `dj-change` or `dj-input` automatically fire change events to restore server state. Compares DOM values against server-rendered defaults and only fires for fields that differ. Use `dj-no-recover` to opt out individual fields. Fields inside `dj-auto-recover` containers are skipped (custom handler takes precedence). Works over both WebSocket and SSE transports.
+
+- **Reconnection backoff with jitter** — Exponential backoff with random jitter (AWS full-jitter strategy) prevents thundering herd on server restart. Min delay 500ms, max delay 30s, increased from 5 to 10 max attempts. Attempt count shown in reconnection banner (`dj-reconnecting-banner` CSS class) and exposed via `data-dj-reconnect-attempt` attribute and `--dj-reconnect-attempt` CSS custom property on `<body>`. Banner and attributes cleared on successful reconnect or intentional disconnect.
+
+- **`page_title` / `page_meta` dynamic document metadata** — Update `document.title` and `<meta>` tags from any LiveView handler via property setters (`self.page_title = "..."`, `self.page_meta = {"description": "..."}`). Uses side-channel WebSocket messages (no VDOM diff needed). Supports `og:` and `twitter:` meta tags with correct `property` attribute. Works over both WebSocket and SSE transports.
+
+- **`dj-copy` enhancements** — Selector-based copy (`dj-copy="#code-block"` copies the element's `textContent`), configurable feedback text (`dj-copy-feedback="Done!"`), CSS class feedback (`dj-copy-class` adds a custom class for 2s, default `dj-copied`), and optional server event (`dj-copy-event="copied"` fires after successful copy for analytics). Backward compatible with existing literal copy behavior.
+
+- **`dj-auto-recover` attribute for reconnection recovery** — After WebSocket reconnects, elements with `dj-auto-recover="handler_name"` automatically fire a server event with serialized DOM state (form field values and `data-*` attributes from the container). Enables the server to restore custom state lost during disconnection. Does not fire on initial page load. Supports multiple independent recovery elements per page.
+
+- **`dj-debounce` / `dj-throttle` HTML attributes** — Apply debounce or throttle to any `dj-*` event attribute (`dj-click`, `dj-change`, `dj-input`, `dj-keydown`, `dj-keyup`) directly in HTML: `<button dj-click="search" dj-debounce="300">`. Takes precedence over `data-debounce`/`data-throttle`. Supports `dj-debounce="blur"` to defer until element loses focus (Phoenix parity). `dj-debounce="0"` disables default debounce on `dj-input`. Each element gets its own independent timer.
+
+- **Connection state CSS classes** — `dj-connected` and `dj-disconnected` classes are automatically applied to `<body>` based on WebSocket/SSE transport state. Enables CSS-driven UI feedback for connection status (e.g., dimming content, showing offline banners). Both classes are removed on intentional disconnect (TurboNav). Phoenix LiveView's `phx-connected`/`phx-disconnected` equivalent.
+
+- **`dj-cloak` attribute for FOUC prevention** — Elements with `dj-cloak` are hidden (`display: none !important`) until the WebSocket/SSE mount response is received, preventing flash of unconnected content. CSS is injected automatically by client.js — no user stylesheet changes needed. Phoenix LiveView's `phx-no-feedback` equivalent.
+
+- **Page loading bar for navigation transitions** — NProgress-style thin loading bar at the top of the page during TurboNav and `live_redirect` navigation. Always active by default. Exposed as `window.djust.pageLoading` with `start()`, `finish()`, and `enabled` for manual control. Disable via `window.djust.pageLoading.enabled = false` or CSS override.
+
+- **`dj-scroll-into-view` attribute for auto-scroll on render** — Elements with `dj-scroll-into-view` are automatically scrolled into view after DOM updates (mount, VDOM patch). Supports scroll behavior options: `""` (smooth/nearest, default), `"instant"`, `"center"`, `"start"`, `"end"`. One-shot per DOM node — uses WeakSet tracking so the same element isn't re-scrolled on every patch, but VDOM-replaced fresh nodes scroll correctly.
+
+- **`dj-window-*` / `dj-document-*` event scoping** — Bind event listeners on `window` or `document` while using the declaring element for context extraction (component_id, dj-value-* params). Supports `dj-window-keydown`, `dj-window-keyup`, `dj-window-scroll`, `dj-window-click`, `dj-window-resize`, `dj-document-keydown`, `dj-document-keyup`, `dj-document-click`. Key modifier filtering (e.g., `dj-window-keydown.escape="close_modal"`) works the same as `dj-keydown`. Scroll and resize events default to 150ms throttle. Phoenix LiveView's `phx-window-*` equivalent, plus `dj-document-*` as a djust extension.
+
+- **`dj-click-away` attribute** — Fire a server event when the user clicks outside an element: `<div dj-click-away="close_dropdown">`. Uses capture-phase document listener so `stopPropagation()` inside the element doesn't prevent detection. Supports `dj-confirm` for confirmation dialogs and `dj-value-*` params from the declaring element.
+
+- **`dj-shortcut` attribute for declarative keyboard shortcuts** — Bind keyboard shortcuts on any element with modifier key support: `<div dj-shortcut="ctrl+k:open_search:prevent, escape:close_modal">`. Supports `ctrl`, `alt`, `shift`, `meta` modifiers, comma-separated multiple bindings, and `prevent` modifier to suppress browser defaults. Shortcuts are automatically skipped when the user is typing in form inputs (override with `dj-shortcut-in-input` attribute). Event params include `key`, `code`, and `shortcut` (the matched binding string).
+
+- **`_target` param in form change/input events** — When multiple form fields share one `dj-change` or `dj-input` handler, the `_target` param now includes the triggering element's `name` (or `id`, or `null`), letting the server know which field changed. For `dj-submit`, includes the submitter button's name if available. Matches Phoenix LiveView's `_target` convention.
+
+- **`dj-disable-with` attribute for submit buttons** — Automatically disable submit buttons during form submission and replace their text with a loading message: `<button type="submit" dj-disable-with="Saving...">Save</button>`. Prevents double-submit and gives instant visual feedback. Works with both `dj-submit` forms and `dj-click` buttons. Original text is restored after server response.
+
+- **`dj-lock` attribute for concurrent event prevention** — Disable an element until its event handler response arrives from the server: `<button dj-click="save" dj-lock>Save</button>`. Prevents rapid double-clicks from triggering duplicate server events. For non-form elements (e.g., `<div>`), applies a `djust-locked` CSS class instead of the `disabled` property. All locked elements are unlocked on server response.
+
+- **`dj-mounted` event for element lifecycle** — Fire a server event when an element with `dj-mounted="handler_name"` enters the DOM after a VDOM patch: `<div dj-mounted="on_chart_ready" dj-value-chart-type="bar">`. Does not fire on initial page load (only after subsequent patches). Includes `dj-value-*` params from the mounted element. Uses a WeakSet to prevent duplicate fires for the same DOM node.
+
+- **Priority-aware event queue for broadcast and async updates** — Server-initiated broadcasts (`server_push`) and async completions (`_run_async_work`) are now tagged with `source="broadcast"` and `source="async"` respectively, and the client buffers them during pending user event round-trips (same as tick buffering from #560). `server_push` now acquires the render lock and yields to in-progress user events to prevent version interleaving. Client-side pending event tracking upgraded from single ref to `Set`-based tracking, supporting multiple concurrent pending events. Buffer flushes only when all pending events resolve.
+
+- **`manage.py djust_gen_live` — Model-to-LiveView scaffolding generator** — Generate a complete CRUD LiveView scaffold from a model name and field definitions: `python manage.py djust_gen_live blog Post title:string body:text`. Creates views.py (with `@event_handler` CRUD operations), urls.py (using `live_session()` routing), HTML template (with `dj-*` directives), and tests.py. Supports `--dry-run`, `--force`, `--no-tests`, `--api` (JSON mode) options. Handles all Django field types including FK relationships. Search uses `Q` objects for OR logic across text fields.
+
+- **`on_mount` hooks for cross-cutting mount logic** — Module-level hooks that run on every LiveView mount, declared via `@on_mount` decorator and `on_mount` class attribute. Use cases: authentication checks, telemetry, tenant resolution, feature flags. Hooks run after auth checks, before `mount()`. Return a redirect URL string to halt the mount pipeline. Hooks are inherited via MRO (parent-first, deduplicated). Includes V009 system check for validation. Phoenix `on_mount` v0.17+ parity.
+
+- **`put_flash(level, message)` and `clear_flash()` for ephemeral flash notifications** — Phoenix `put_flash` parity. Queue transient messages (info, success, warning, error) from any event handler; they are flushed to the client over WebSocket/SSE after each response. Includes `{% dj_flash %}` template tag with auto-dismiss and ARIA `role="status"` / `role="alert"` support. ([#568](https://github.com/djust-org/djust/pull/568))
+
+- **`handle_params` called on initial mount** — `handle_params(params, uri)` is now invoked after `mount()` on the initial WebSocket connect, not just on subsequent URL changes. This matches Phoenix LiveView's `handle_params/3` contract and eliminates the need to duplicate URL-parsing logic between `mount()` and `handle_params()`. Views that don't override `handle_params` are unaffected (default is a no-op).
+
+- **`dj-value-*` — Static event parameters** — Pass static values alongside events without `data-*` attributes or hidden inputs: `<button dj-click="delete" dj-value-id:int="{{ item.id }}" dj-value-type="soft">`. Supports type-hint suffixes (`:int`, `:float`, `:bool`, `:json`, `:list`), kebab-to-snake_case conversion, and prototype pollution prevention. Works with all event types: `dj-click`, `dj-submit`, `dj-change`, `dj-input`, `dj-keydown`, `dj-keyup`, `dj-blur`, `dj-focus`, `dj-poll`. Phoenix LiveView's `phx-value-*` equivalent.
+
+### Fixed
+
+- **Tick/event version mismatch silently drops user input** — Server-initiated ticks could collide with user events, causing VDOM version divergence that silently discarded patches. Added server-side `asyncio.Lock` to serialize tick and event render operations, priority yielding so ticks skip during user events, client-side tick patch buffering during pending event round-trips, and monotonic event ref tracking for request/response matching. ([#560](https://github.com/djust-org/djust/issues/560))
+
+- **Focus lost during VDOM patches** — When the server pushed VDOM patches (e.g., updating a counter while the user was typing), the focused input/textarea lost focus, cursor position, selection range, and scroll position. Added `saveFocusState()` / `restoreFocusState()` around the `applyPatches()` cycle to capture and restore `activeElement`, `selectionStart`/`selectionEnd`, and `scrollTop`/`scrollLeft`. Element matching uses id → name → dj-id → positional index. Broadcast (remote) updates correctly skip focus restoration.
+
+- **VDOM patching fails when `{% if %}` blocks add/remove DOM elements** — Comment node placeholders (`<!--dj-if-->`) emitted by the Rust template engine were excluded from client-side child index resolution (`getSignificantChildren` and `getNodeByPath`), causing path traversal errors and silent patch failures. Also added `#comment` handling to `createNodeFromVNode` so comment placeholders can be correctly created during `InsertChild` patches. ([#559](https://github.com/djust-org/djust/issues/559))
+
 ## [0.3.8] - 2026-03-19
 
 ### Fixed

@@ -4,25 +4,21 @@ build-backend = "maturin"
 
 [project]
 name = "djust"
-version = "0.3.8"
+version = "0.4.0rc2"
 description = "Phoenix LiveView-style reactive components for Django with Rust-powered performance. Real-time UI updates over WebSocket, no JavaScript build step required."
 authors = [{name = "djust contributors"}]
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = {text = "MIT"}
 keywords = ["django", "rust", "reactive", "server-side-rendering", "websocket"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Framework :: Django",
-    "Framework :: Django :: 3.2",
-    "Framework :: Django :: 4.0",
-    "Framework :: Django :: 4.1",
     "Framework :: Django :: 4.2",
     "Framework :: Django :: 5.0",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -33,7 +29,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "Django>=3.2",
+    "Django>=4.2.29",
     "channels[daphne]>=4.0.0",
     "msgpack>=1.0.0",
 ]
@@ -46,7 +42,8 @@ compression = [
     "zstandard>=0.22.0",  # zstd compression for state backend
 ]
 performance = [
-    "orjson>=3.9.0",  # Faster JSON serialization
+    "orjson>=3.10.15; python_version == '3.9'",  # Best available for 3.9
+    "orjson>=3.11.6; python_version >= '3.10'",  # CVE fix for 3.10+
     "zstandard>=0.22.0",
 ]
 deploy = [
@@ -60,15 +57,16 @@ dev = [
     "pytest-asyncio>=0.21",
     "pytest-xdist>=3.0",  # Parallel test execution
     "pytest-benchmark>=4.0.0",  # Performance benchmarking
-    "black>=23.0",
+    "black>=24.10.0; python_version == '3.9'",  # Best available for 3.9
+    "black>=26.3.1; python_version >= '3.10'",  # CVE fix for 3.10+
     "ruff>=0.1",
     "mypy>=1.0",
     "uvicorn[standard]>=0.30.0",
-    "whitenoise>=6.0.0",
     "redis>=5.0.0",
     "watchdog>=3.0.0",  # File system monitoring for hot reload
     "zstandard>=0.22.0",  # Compression support
-    "orjson>=3.9.0",  # Fast JSON
+    "orjson>=3.10.15; python_version == '3.9'",  # Best available for 3.9
+    "orjson>=3.11.6; python_version >= '3.10'",  # CVE fix for 3.10+
     "click>=8.0",  # Deploy CLI
     "requests>=2.28",  # Deploy CLI
     "requests-mock>=1.11",  # HTTP mocking for deploy CLI tests
@@ -122,14 +120,14 @@ asyncio_default_fixture_loop_scope = "function"
 
 [tool.black]
 line-length = 100
-target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+target-version = ['py39', 'py310', 'py311', 'py312']
 
 [tool.ruff]
 line-length = 100
-target-version = "py38"
+target-version = "py39"
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -139,6 +137,15 @@ disallow_untyped_defs = true
 # where mark_safe is expected and safe (content comes from trusted templates)
 exclude_dirs = ["tests", "python/tests", "python/djust/tests"]
 skips = ["B703", "B308"]  # mark_safe is expected in templates
+
+[tool.uv]
+constraint-dependencies = [
+    "urllib3>=2.6.3",
+    "setuptools>=78.1.1",
+    "ujson>=5.12.0",
+    "pyopenssl>=26.0.0",
+    "pyasn1>=0.6.3",
+]
 
 [tool.bandit.per_file_ignores]
 # In components, mark_safe is used for trusted template output

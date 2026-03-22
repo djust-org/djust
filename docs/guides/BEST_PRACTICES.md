@@ -1032,31 +1032,23 @@ application = ProtocolTypeRouter({
 - System check: `djust.C003` warns if WebSocket routing isn't configured
 - Deployment guide: See DEPLOYMENT.md for production ASGI setup
 
-### Missing WhiteNoise with Daphne
+### Static Files with ASGI Servers
 
-**Problem:** Using Daphne in production without WhiteNoise for static files.
+**Problem:** Static files return 404 when using Daphne or uvicorn in production.
 
-**Why it's wrong:**
-- Daphne doesn't serve static files by default (unlike `runserver`)
+**Why it happens:**
+- ASGI servers don't serve static files by default (unlike `runserver`)
 - CSS, JS, images return 404 in production
 - djust client.js fails to load → no WebSocket connection
-- Development works (DEBUG middleware) but production breaks
 
 **Solution:**
-Add WhiteNoise middleware:
+Use `djust.asgi.get_application()` in your `asgi.py`. It wraps your ASGI app with `ASGIStaticFilesHandler`, which intercepts static file requests at the ASGI layer before they reach Django middleware:
 
 ```python
-# settings.py
-MIDDLEWARE = [
-    'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',  # Add this!
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    # ... rest of middleware
-]
+# asgi.py
+from djust.asgi import get_application
 
-# Recommended: Enable compression and caching
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+application = get_application()
 ```
 
 Then collect static files before deployment:
@@ -1067,7 +1059,7 @@ python manage.py collectstatic --noinput
 
 **Related:**
 - Deployment guide: See DEPLOYMENT.md for full production checklist
-- Alternative: Use Nginx/Caddy to serve static files
+- Alternative: Use Nginx/Caddy to serve static files directly
 
 ### Search Without Debouncing
 
@@ -1292,5 +1284,5 @@ When building a djust LiveView:
 - [ ] Use `dj-confirm` for destructive actions
 - [ ] Check authentication/authorization in `mount()` and handlers
 - [ ] Configure WebSocket routing in `asgi.py` with `ProtocolTypeRouter`
-- [ ] Add WhiteNoise middleware when using Daphne/Uvicorn
+- [ ] Use `djust.asgi.get_application()` for static file serving with ASGI servers
 - [ ] Run `python manage.py check --tag djust` to catch common issues

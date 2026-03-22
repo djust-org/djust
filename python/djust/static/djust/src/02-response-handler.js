@@ -147,6 +147,9 @@ function handleServerResponse(data, eventName, triggerElement) {
             // Final cleanup
             clearOptimisticPending();
 
+            // Ensure dj-mounted is active for elements added by VDOM patches
+            if (!window.djust._mountReady) window.djust._mountReady = true;
+
             reinitAfterDOMUpdate();
         }
         // Apply full HTML update (fallback)
@@ -173,6 +176,8 @@ function handleServerResponse(data, eventName, triggerElement) {
             clearOptimisticPending();
 
             _isBroadcastUpdate = false;
+            // Ensure dj-mounted is active for elements added by HTML update
+            if (!window.djust._mountReady) window.djust._mountReady = true;
             reinitAfterDOMUpdate();
         } else {
             if (globalThis.djustDebug) console.warn('[LiveView] Response has neither patches nor html!', data);
@@ -183,6 +188,18 @@ function handleServerResponse(data, eventName, triggerElement) {
             if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
             const form = document.querySelector('[dj-root] form');
             if (form) form.reset();
+        }
+
+        // Process side-channel commands from HTTP response (flash, page metadata)
+        if (data._flash && window.djust.flash) {
+            data._flash.forEach(function(cmd) {
+                window.djust.flash.handleFlash(cmd);
+            });
+        }
+        if (data._page_metadata && window.djust.pageMetadata) {
+            data._page_metadata.forEach(function(cmd) {
+                window.djust.pageMetadata.handlePageMetadata(cmd);
+            });
         }
 
         // Forward debug info to debug panel (HTTP-only mode)
@@ -198,6 +215,24 @@ function handleServerResponse(data, eventName, triggerElement) {
             if (loadingEventName) {
                 globalLoadingManager.stopLoading(loadingEventName, triggerElement);
             }
+
+            // dj-lock: unlock all locked elements after server response
+            document.querySelectorAll('[data-djust-locked]').forEach(el => {
+                el.removeAttribute('data-djust-locked');
+                if (el.tagName === 'BUTTON' || el.tagName === 'INPUT' ||
+                    el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') {
+                    el.disabled = false;
+                } else {
+                    el.classList.remove('djust-locked');
+                }
+            });
+
+            // dj-disable-with: restore original text on all disabled-with elements
+            document.querySelectorAll('[data-djust-original-text]').forEach(el => {
+                el.textContent = el.getAttribute('data-djust-original-text');
+                el.removeAttribute('data-djust-original-text');
+                el.disabled = false;
+            });
         } else if (globalThis.djustDebug) {
             console.log('[LiveView] Keeping loading state — async work pending');
         }

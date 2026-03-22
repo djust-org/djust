@@ -1,10 +1,12 @@
 name: "djust CodeQL config"
 
 paths-ignore:
-  # Compiled build artifacts — analyzed via their source files in src/
-  - "python/djust/static/djust/client.js"
-  - "python/djust/static/djust/debug-panel.js"
+  # JS source fragments — concatenated into client.js/debug-panel.js at build time.
+  # CodeQL cannot parse fragments individually (unclosed blocks, class method bodies).
+  # Analyze the built client.js and debug-panel.js instead.
+  - "python/djust/static/djust/src/**"
   # Test fixtures and examples are not production code
   - "python/djust/tests/**"
   - "python/tests/**"
+  - "tests/**"
   - "examples/**"

@@ -38,7 +38,7 @@ class TestStartProject:
         content = settings.read_text()
         assert '"daphne"' in content
         assert '"djust"' in content
-        assert "whitenoise" in content
+        assert "whitenoise" not in content
         assert "CHANNEL_LAYERS" in content
         assert "LIVEVIEW_ALLOWED_MODULES" in content
         assert "SECRET_KEY" in content

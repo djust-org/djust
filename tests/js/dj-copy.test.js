@@ -171,3 +171,219 @@ describe('dj-copy', () => {
         expect(window.navigator.clipboard.writeText).not.toHaveBeenCalled();
     });
 });
+
+describe('dj-copy selector mode', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('copies textContent of matched element when value starts with #', async () => {
+        const { window, document } = createEnv(
+            '<pre id="code-block">const x = 42;</pre>' +
+            '<button dj-copy="#code-block">Copy Code</button>'
+        );
+
+        window.djust.bindLiveViewEvents();
+
+        const btn = document.querySelector('[dj-copy]');
+        btn.click();
+
+        await new Promise(r => setTimeout(r, 0));
+
+        expect(window.navigator.clipboard.writeText).toHaveBeenCalledWith('const x = 42;');
+    });
+
+    it('copies textContent of matched element when value starts with .', async () => {
+        const { window, document } = createEnv(
+            '<div class="output">Result: 100</div>' +
+            '<button dj-copy=".output">Copy</button>'
+        );
+
+        window.djust.bindLiveViewEvents();
+
+        const btn = document.querySelector('[dj-copy]');
+        btn.click();
+
+        await new Promise(r => setTimeout(r, 0));
+
+        expect(window.navigator.clipboard.writeText).toHaveBeenCalledWith('Result: 100');
+    });
+
+    it('copies textContent of matched element when value starts with [', async () => {
+        const { window, document } = createEnv(
+            '<div data-snippet="true">Snippet content</div>' +
+            '<button dj-copy="[data-snippet]">Copy</button>'
+        );
+
+        window.djust.bindLiveViewEvents();
+
+        const btn = document.querySelector('[dj-copy]');
+        btn.click();
+
+        await new Promise(r => setTimeout(r, 0));
+
+        expect(window.navigator.clipboard.writeText).toHaveBeenCalledWith('Snippet content');
+    });
+
+    it('falls back to literal copy when selector matches nothing', async () => {
+        const { window, document } = createEnv(
+            '<button dj-copy="#nonexistent">Copy</button>'
+        );
+
+        window.djust.bindLiveViewEvents();
+
+        const btn = document.querySelector('[dj-copy]');
+        btn.click();
+
+        await new Promise(r => setTimeout(r, 0));
+
+        expect(window.navigator.clipboard.writeText).toHaveBeenCalledWith('#nonexistent');
+    });
+});
+
+describe('dj-copy-feedback custom text', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('shows custom feedback text from dj-copy-feedback', async () => {
+        const { window, document } = createEnv(
+            '<button dj-copy="text" dj-copy-feedback="Done!">Copy</button>'
+        );
+
+        window.djust.bindLiveViewEvents();
+
+        const btn = document.querySelector('[dj-copy]');
+        btn.click();
+
+        await new Promise(r => setTimeout(r, 0));
+
+        expect(btn.textContent).toBe('Done!');
+    });
+
+    it('uses default "Copied!" when dj-copy-feedback is absent', async () => {
+        const { window, document } = createEnv(
+            '<button dj-copy="text">Copy</button>'
+        );
+
+        window.djust.bindLiveViewEvents();
+
+        const btn = document.querySelector('[dj-copy]');
+        btn.click();
+
+        await new Promise(r => setTimeout(r, 0));
+
+        expect(btn.textContent).toBe('Copied!');
+    });
+});
+
+describe('dj-copy-class CSS class feedback', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('adds dj-copied class after successful copy', async () => {
+        const { window, document } = createEnv(
+            '<button dj-copy="text">Copy</button>'
+        );
+
+        window.djust.bindLiveViewEvents();
+
+        const btn = document.querySelector('[dj-copy]');
+        btn.click();
+
+        await new Promise(r => setTimeout(r, 0));
+
+        expect(btn.classList.contains('dj-copied')).toBe(true);
+    });
+
+    it('removes dj-copied class after 2 seconds', async () => {
+        vi.useFakeTimers();
+
+        const { window, document } = createEnv(
+            '<button dj-copy="text">Copy</button>'
+        );
+
+        window.djust.bindLiveViewEvents();
+
+        const btn = document.querySelector('[dj-copy]');
+        btn.click();
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(btn.classList.contains('dj-copied')).toBe(true);
+
+        vi.advanceTimersByTime(2000);
+        expect(btn.classList.contains('dj-copied')).toBe(false);
+
+        vi.useRealTimers();
+    });
+
+    it('uses custom CSS class from dj-copy-class attribute', async () => {
+        const { window, document } = createEnv(
+            '<button dj-copy="text" dj-copy-class="copied-success">Copy</button>'
+        );
+
+        window.djust.bindLiveViewEvents();
+
+        const btn = document.querySelector('[dj-copy]');
+        btn.click();
+
+        await new Promise(r => setTimeout(r, 0));
+
+        expect(btn.classList.contains('copied-success')).toBe(true);
+        expect(btn.classList.contains('dj-copied')).toBe(false);
+    });
+});
+
+describe('dj-copy-event server event', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('fires server event via handleEvent after successful copy', async () => {
+        const dom = new JSDOM(
+            `<!DOCTYPE html><html><body>
+                <div dj-root dj-view="test.View">
+                    <button dj-copy="text" dj-copy-event="copied">Copy</button>
+                </div>
+            </body></html>`,
+            { url: 'http://localhost:8000/test/', runScripts: 'dangerously', pretendToBeVisual: true }
+        );
+        const { window } = dom;
+
+        // Suppress console
+        window.console = { log: () => {}, error: () => {}, warn: () => {}, debug: () => {}, info: () => {} };
+
+        // Mock clipboard
+        window.navigator.clipboard = {
+            writeText: vi.fn().mockResolvedValue(undefined),
+        };
+
+        // Mock fetch to track handleEvent calls (HTTP fallback path)
+        const fetchCalls = [];
+        window.fetch = vi.fn().mockImplementation(async (url, opts) => {
+            const eventName = (opts && opts.headers && opts.headers['X-Djust-Event']) || '';
+            fetchCalls.push({ eventName });
+            return { ok: true, json: async () => ({ patches: [], version: 1 }) };
+        });
+
+        // Set HTTP-only mode so handleEvent uses fetch
+        window.DJUST_USE_WEBSOCKET = false;
+
+        try {
+            window.eval(clientCode);
+        } catch (e) {
+            // client.js may throw on missing DOM APIs
+        }
+
+        window.djust.bindLiveViewEvents();
+
+        const btn = window.document.querySelector('[dj-copy]');
+        btn.click();
+
+        await new Promise(r => setTimeout(r, 50));
+
+        const copiedCalls = fetchCalls.filter(c => c.eventName === 'copied');
+        expect(copiedCalls.length).toBe(1);
+    });
+});

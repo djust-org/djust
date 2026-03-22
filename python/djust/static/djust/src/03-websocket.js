@@ -8,8 +8,10 @@ class LiveViewWebSocket {
         this.ws = null;
         this.sessionId = null;
         this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 5;
+        this.maxReconnectAttempts = 10;
         this.reconnectDelay = 1000;
+        this.minReconnectDelay = 500;
+        this.maxReconnectDelayMs = 30000;
         this.viewMounted = false;
         this.enabled = true;  // Can be disabled to use HTTP fallback
         this._intentionalDisconnect = false;  // Set by disconnect() to suppress error overlay
@@ -63,6 +65,21 @@ class LiveViewWebSocket {
         this.viewMounted = false;
         this.vdomVersion = null;
         this.stats.connectedAt = null; // Reset connection timestamp
+
+        // Remove connection state CSS classes on intentional disconnect
+        document.body.classList.remove('dj-connected');
+        document.body.classList.remove('dj-disconnected');
+
+        // Clear reconnection UI state
+        document.body.removeAttribute('data-dj-reconnect-attempt');
+        document.body.style.removeProperty('--dj-reconnect-attempt');
+        this._removeReconnectBanner();
+
+        // Event sequencing (#560): clear pending event state
+        _pendingEventRefs.clear();
+        _pendingEventNames.clear();
+        _pendingTriggerEls.clear();
+        _tickBuffer.length = 0;
     }
 
     connect(url = null) {
@@ -88,9 +105,20 @@ class LiveViewWebSocket {
             this.reconnectAttempts = 0;
             this._intentionalDisconnect = false;
 
+            // Connection state CSS classes
+            document.body.classList.add('dj-connected');
+            document.body.classList.remove('dj-disconnected');
+
+            // Clear reconnection UI state
+            document.body.removeAttribute('data-dj-reconnect-attempt');
+            document.body.style.removeProperty('--dj-reconnect-attempt');
+            this._removeReconnectBanner();
+
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
                 this.stats.reconnections++;
+                // Set reconnect flag for dj-auto-recover
+                if (window.djust) window.djust._isReconnect = true;
                 // Notify hooks of reconnection
                 if (typeof notifyHooksReconnected === 'function') notifyHooksReconnected();
             }
@@ -100,6 +128,10 @@ class LiveViewWebSocket {
         this.ws.onclose = (_event) => {
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
+
+            // Connection state CSS classes
+            document.body.classList.add('dj-disconnected');
+            document.body.classList.remove('dj-connected');
 
             // Notify hooks of disconnection
             if (typeof notifyHooksDisconnected === 'function') notifyHooksDisconnected();
@@ -125,6 +157,12 @@ class LiveViewWebSocket {
             optimisticUpdates.clear();
             pendingEvents.clear();
 
+            // Event sequencing (#560): clear pending event state
+            _pendingEventRefs.clear();
+            _pendingEventNames.clear();
+            _pendingTriggerEls.clear();
+            _tickBuffer.length = 0;
+
             // Remove loading indicators from DOM
             clearOptimisticPending();
 
@@ -136,9 +174,17 @@ class LiveViewWebSocket {
 
             if (this.reconnectAttempts < this.maxReconnectAttempts) {
                 this.reconnectAttempts++;
-                const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-                if (globalThis.djustDebug) console.log(`[LiveView] Reconnecting in ${delay}ms...`);
-                setTimeout(() => this.connect(url), delay);
+                const baseDelay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+                const cappedBase = Math.min(baseDelay, this.maxReconnectDelayMs);
+                const jitteredDelay = Math.max(this.minReconnectDelay, Math.random() * cappedBase);
+                if (globalThis.djustDebug) console.log('[LiveView] Reconnecting in ' + Math.round(jitteredDelay) + 'ms (attempt ' + this.reconnectAttempts + '/' + this.maxReconnectAttempts + ')...');
+
+                // Update reconnection UI state
+                document.body.setAttribute('data-dj-reconnect-attempt', String(this.reconnectAttempts));
+                document.body.style.setProperty('--dj-reconnect-attempt', String(this.reconnectAttempts));
+                this._showReconnectBanner(this.reconnectAttempts, this.maxReconnectAttempts);
+
+                setTimeout(() => this.connect(url), jitteredDelay);
             } else {
                 console.warn('[LiveView] Max reconnection attempts reached.');
                 this.enabled = false;
@@ -175,7 +221,15 @@ class LiveViewWebSocket {
                     data: data
                 });
 
-                this.handleMessage(data);
+                // Latency simulation on receive (DEBUG_MODE only)
+                const simLatency = window.DEBUG_MODE && window.djust && window.djust._simulatedLatency;
+                if (simLatency > 0) {
+                    const jitter = (window.djust._simulatedJitter || 0);
+                    const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
+                    setTimeout(() => this.handleMessage(data), actual);
+                } else {
+                    this.handleMessage(data);
+                }
             } catch (error) {
                 console.error('[LiveView] Failed to parse message:', error);
             }
@@ -183,7 +237,7 @@ class LiveViewWebSocket {
     }
 
     handleMessage(data) {
-        if (globalThis.djustDebug) console.log('[LiveView] Received:', data.type, data);
+        if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
 
         switch (data.type) {
             case 'connect':
@@ -194,7 +248,13 @@ class LiveViewWebSocket {
 
             case 'mount':
                 this.viewMounted = true;
-                if (globalThis.djustDebug) console.log('[LiveView] View mounted:', data.view);
+                if (globalThis.djustDebug) console.log('[LiveView] View mounted: %s', String(data.view));
+
+                // Remove dj-cloak from all elements (FOUC prevention)
+                document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
+
+                // Finish page loading bar on mount
+                if (window.djust.pageLoading) window.djust.pageLoading.finish();
 
                 // Initialize VDOM version from mount response (critical for patch generation)
                 if (data.version !== undefined) {
@@ -227,6 +287,18 @@ class LiveViewWebSocket {
                     }
                     this.skipMountHtml = false;
                     reinitAfterDOMUpdate();
+                    // Set mount ready flag so dj-mounted handlers only fire
+                    // for elements added by subsequent VDOM patches, not on initial load
+                    window.djust._mountReady = true;
+                    // Trigger form recovery and dj-auto-recover after reconnect mount
+                    if (window.djust._isReconnect) {
+                        if (typeof window.djust._processFormRecovery === 'function') {
+                            window.djust._processFormRecovery();
+                        }
+                        if (typeof window.djust._processAutoRecover === 'function') {
+                            window.djust._processAutoRecover();
+                        }
+                    }
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
@@ -242,22 +314,86 @@ class LiveViewWebSocket {
                         reinitAfterDOMUpdate();
                     }
                     this.skipMountHtml = false;
+                    // Set mount ready flag so dj-mounted handlers only fire
+                    // for elements added by subsequent VDOM patches, not on initial load
+                    window.djust._mountReady = true;
+                    // Trigger form recovery and dj-auto-recover after reconnect mount
+                    if (window.djust._isReconnect) {
+                        if (typeof window.djust._processFormRecovery === 'function') {
+                            window.djust._processFormRecovery();
+                        }
+                        if (typeof window.djust._processAutoRecover === 'function') {
+                            window.djust._processAutoRecover();
+                        }
+                    }
                 }
                 break;
 
             case 'patch':
-                // Use centralized response handler
-                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
-                this.lastEventName = null;
-                this.lastTriggerElement = null;
-                break;
+            case 'html_update': {
+                // Event sequencing (#560): if this is a server-initiated update
+                // (tick, broadcast, async) and we have pending user events,
+                // buffer it and apply after the event responses arrive. This
+                // prevents server pushes from consuming event loading state
+                // and ensures version numbers stay sequential.
+                const isServerInitiated = (
+                    data.source === 'tick' ||
+                    data.source === 'broadcast' ||
+                    data.source === 'async'
+                );
+                const isEventResponse = (
+                    data.ref != null && _pendingEventRefs.has(data.ref)
+                );
 
-            case 'html_update':
-                // Use centralized response handler
-                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
-                this.lastEventName = null;
-                this.lastTriggerElement = null;
+                if (!isEventResponse && isServerInitiated && _pendingEventRefs.size > 0) {
+                    // Buffer server-initiated patch — will be applied after
+                    // all pending event responses arrive.
+                    _tickBuffer.push(data);
+                    if (globalThis.djustDebug) {
+                        console.log('[LiveView] Buffered %s patch (v%s) — waiting for %d pending event(s)', String(data.source), String(data.version), _pendingEventRefs.size);
+                    }
+                    break;
+                }
+
+                // Determine event name and trigger for loading state
+                let evName = this.lastEventName;
+                let evTrigger = this.lastTriggerElement;
+
+                if (isEventResponse) {
+                    // This response matches a pending event — use tracked
+                    // event name/trigger and remove from pending set.
+                    evName = _pendingEventNames.get(data.ref) || this.lastEventName;
+                    evTrigger = _pendingTriggerEls.get(data.ref) || this.lastTriggerElement;
+                    _pendingEventRefs.delete(data.ref);
+                    _pendingEventNames.delete(data.ref);
+                    _pendingTriggerEls.delete(data.ref);
+                } else if (isServerInitiated) {
+                    // Server-initiated patch with no pending events — apply
+                    // without consuming event loading state.
+                    evName = null;
+                    evTrigger = null;
+                }
+
+                handleServerResponse(data, evName, evTrigger);
+
+                if (!isServerInitiated) {
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+
+                // After processing the event response, flush buffered
+                // patches only when ALL pending events have resolved.
+                if (isEventResponse && _pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
+                    if (globalThis.djustDebug) {
+                        console.log('[LiveView] Flushing ' + _tickBuffer.length + ' buffered patches');
+                    }
+                    const buffered = _tickBuffer.splice(0);
+                    for (const tickData of buffered) {
+                        handleServerResponse(tickData, null, null);
+                    }
+                }
                 break;
+            }
 
             case 'html_recovery': {
                 // Server response to request_html — morph DOM with recovered HTML.
@@ -276,7 +412,7 @@ class LiveViewWebSocket {
                 reinitAfterDOMUpdate();
                 if (globalThis.djustDebug) {
                     // codeql[js/log-injection] -- data.version is a server-controlled integer
-                    console.log('[LiveView] DOM recovered via morph, version:', data.version);
+                    console.log('[LiveView] DOM recovered via morph, version: %s', String(data.version));
                 }
                 break;
             }
@@ -306,6 +442,12 @@ class LiveViewWebSocket {
                     }
                 }));
 
+                // Clear pending event refs (#560)
+                _pendingEventRefs.clear();
+                _pendingEventNames.clear();
+                _pendingTriggerEls.clear();
+                _tickBuffer.length = 0;
+
                 // Phase 5: Stop loading state on error
                 if (this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
@@ -328,7 +470,7 @@ class LiveViewWebSocket {
             case 'upload_registered':
                 // Upload registration acknowledged
                 // codeql[js/log-injection] -- data.ref and data.upload_name are server-assigned upload identifiers
-                if (globalThis.djustDebug) console.log('[Upload] Registered:', data.ref, 'for', data.upload_name);
+                if (globalThis.djustDebug) console.log('[Upload] Registered: %s for %s', String(data.ref), String(data.upload_name));
                 break;
 
             case 'stream':
@@ -338,19 +480,40 @@ class LiveViewWebSocket {
                 }
                 break;
 
-            case 'noop':
+            case 'noop': {
                 // Server acknowledged event but no DOM changes needed (auto-detected
                 // or explicit _skip_render). Clear loading state unless async pending.
-                if (this.lastEventName) {
+                const noopEvName = (data.ref != null ? _pendingEventNames.get(data.ref) : null)
+                    || this.lastEventName;
+                const noopTrigger = (data.ref != null ? _pendingTriggerEls.get(data.ref) : null)
+                    || this.lastTriggerElement;
+
+                // Clear pending event ref (#560)
+                if (data.ref != null && _pendingEventRefs.has(data.ref)) {
+                    _pendingEventRefs.delete(data.ref);
+                    _pendingEventNames.delete(data.ref);
+                    _pendingTriggerEls.delete(data.ref);
+                }
+
+                if (noopEvName) {
                     if (!data.async_pending) {
-                        globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                        globalLoadingManager.stopLoading(noopEvName, noopTrigger);
                     } else {
                         if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
                     }
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+
+                // Flush buffered patches only when all pending events resolved
+                if (_pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
+                    const buffered = _tickBuffer.splice(0);
+                    for (const tickData of buffered) {
+                        handleServerResponse(tickData, null, null);
+                    }
+                }
                 break;
+            }
 
             case 'push_event':
                 // Server-pushed event for JS hooks
@@ -408,6 +571,20 @@ class LiveViewWebSocket {
                 // Focus command from server
                 if (window.djust.accessibility) {
                     window.djust.accessibility.processFocus([data.selector, data.options]);
+                }
+                break;
+
+            case 'flash':
+                // Flash message from server (put_flash / clear_flash)
+                if (window.djust.flash) {
+                    window.djust.flash.handleFlash(data);
+                }
+                break;
+
+            case 'page_metadata':
+                // Page metadata from server (page_title / page_meta)
+                if (window.djust.pageMetadata) {
+                    window.djust.pageMetadata.handlePageMetadata(data);
                 }
                 break;
 
@@ -476,8 +653,16 @@ class LiveViewWebSocket {
             data: data
         });
 
-        // Send the message
-        this.ws.send(message);
+        // Latency simulation (DEBUG_MODE only)
+        const simLatency = window.DEBUG_MODE && window.djust && window.djust._simulatedLatency;
+        if (simLatency > 0) {
+            const jitter = (window.djust._simulatedJitter || 0);
+            const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
+            setTimeout(() => this.ws.send(message), actual);
+        } else {
+            // Send the message
+            this.ws.send(message);
+        }
     }
 
     autoMount() {
@@ -527,10 +712,20 @@ class LiveViewWebSocket {
         this.lastEventName = eventName;
         this.lastTriggerElement = triggerElement;
 
+        // Event sequencing (#560): assign monotonic ref so we can match
+        // the server's response to this specific event and distinguish
+        // it from server-initiated patches. Uses Set to track multiple
+        // concurrent pending events.
+        const ref = ++_eventRefCounter;
+        _pendingEventRefs.add(ref);
+        _pendingEventNames.set(ref, eventName);
+        _pendingTriggerEls.set(ref, triggerElement);
+
         this.sendMessage({
             type: 'event',
             event: eventName,
-            params: params
+            params: params,
+            ref: ref
         });
         return true;
     }
@@ -565,6 +760,23 @@ class LiveViewWebSocket {
 
         // Re-bind events within the updated container
         reinitAfterDOMUpdate();
+    }
+
+    _showReconnectBanner(attempt, maxAttempts) {
+        let banner = document.getElementById('dj-reconnecting-banner');
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'dj-reconnecting-banner';
+            banner.className = 'dj-reconnecting-banner';
+            banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;background:#f59e0b;color:#1c1917;text-align:center;padding:6px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;font-weight:600;';
+            document.body.appendChild(banner);
+        }
+        banner.textContent = 'Reconnecting\u2026 (attempt ' + attempt + ' of ' + maxAttempts + ')';
+    }
+
+    _removeReconnectBanner() {
+        const banner = document.getElementById('dj-reconnecting-banner');
+        if (banner) banner.remove();
     }
 
     _showConnectionErrorOverlay() {

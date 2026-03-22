@@ -569,6 +569,9 @@ def background(func: F) -> F:
     return cast(F, wrapper)
 
 
+from .hooks import on_mount  # noqa: E402 — re-export for public API
+
+
 __all__ = [
     "event_handler",
     "event",
@@ -584,4 +587,5 @@ __all__ = [
     "cache",
     "client_state",
     "background",
+    "on_mount",
 ]
