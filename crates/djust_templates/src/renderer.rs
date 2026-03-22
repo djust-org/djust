@@ -2470,4 +2470,38 @@ mod tests {
         assert_eq!(Value::Bool(true).to_string(), "true");
         assert_eq!(Value::String("hello".to_string()).to_string(), "hello");
     }
+
+    #[test]
+    fn test_get_value_with_filter() {
+        // get_value should resolve variables and apply pipe filters
+        let mut context = Context::new();
+        context.set(
+            "items".to_string(),
+            Value::List(vec![
+                Value::String("a".to_string()),
+                Value::String("b".to_string()),
+                Value::String("c".to_string()),
+            ]),
+        );
+        let result = get_value("items|length", &context).unwrap();
+        assert_eq!(result.to_string(), "3");
+    }
+
+    #[test]
+    fn test_get_value_with_chained_filters() {
+        // get_value should handle chained filters like var|filter1|filter2
+        let mut context = Context::new();
+        context.set("name".to_string(), Value::String("hello".to_string()));
+        let result = get_value("name|upper", &context).unwrap();
+        assert_eq!(result.to_string(), "HELLO");
+    }
+
+    #[test]
+    fn test_get_value_without_filter() {
+        // get_value should still resolve plain variables
+        let mut context = Context::new();
+        context.set("count".to_string(), Value::Integer(42));
+        let result = get_value("count", &context).unwrap();
+        assert_eq!(result.to_string(), "42");
+    }
 }
