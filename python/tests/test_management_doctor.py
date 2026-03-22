@@ -5,33 +5,7 @@ Each diagnostic check is tested with mocked dependencies so the tests
 run without a full Django/Channels/Redis stack.
 """
 
-# Configure Django settings BEFORE any djust imports
 import django
-from django.conf import settings
-
-if not settings.configured:
-    settings.configure(
-        DEBUG=True,
-        SECRET_KEY="test-secret-key",
-        INSTALLED_APPS=[
-            "django.contrib.contenttypes",
-            "django.contrib.auth",
-            "django.contrib.staticfiles",
-            "channels",
-            "djust",
-        ],
-        DATABASES={
-            "default": {
-                "ENGINE": "django.db.backends.sqlite3",
-                "NAME": ":memory:",
-            }
-        },
-        SESSION_ENGINE="django.contrib.sessions.backends.signed_cookies",
-        CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}},
-        TEMPLATES=[],
-    )
-    django.setup()
-
 import json
 import sys
 from io import StringIO

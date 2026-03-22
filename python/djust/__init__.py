@@ -31,6 +31,7 @@ from .routing import live_session, get_route_map_script, DjustMiddlewareStack
 from .streaming import StreamingMixin
 from .uploads import UploadMixin
 from .mixins.flash import FlashMixin
+from .mixins.page_metadata import PageMetadataMixin
 
 # Import Rust functions
 try:
@@ -229,6 +230,8 @@ __all__ = [
     "UploadMixin",
     # Flash messages
     "FlashMixin",
+    # Page metadata
+    "PageMetadataMixin",
     # Authentication & authorization
     "LoginRequiredMixin",
     "PermissionRequiredMixin",

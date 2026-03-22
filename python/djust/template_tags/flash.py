@@ -12,7 +12,10 @@ Usage in templates::
 """
 
 import logging
+import re
 from typing import Any, Dict, List
+
+from django.utils.html import format_html
 
 from . import TagHandler, register
 
@@ -46,9 +49,13 @@ class DjFlashTagHandler(TagHandler):
 
         css_class = "dj-flash-container"
         if position:
-            css_class = f"{css_class} dj-flash-{position}"
+            # Sanitize position: only allow alphanumeric and hyphens
+            safe_position = re.sub(r"[^a-zA-Z0-9-]", "", position)
+            css_class = f"{css_class} dj-flash-{safe_position}"
 
-        return (
-            f'<div id="dj-flash-container" class="{css_class}" dj-update="ignore"'
-            f' data-dj-auto-dismiss="{auto_dismiss}" aria-live="polite" role="status"></div>'
+        return format_html(
+            '<div id="dj-flash-container" class="{}" dj-update="ignore"'
+            ' data-dj-auto-dismiss="{}" aria-live="polite" role="status"></div>',
+            css_class,
+            auto_dismiss,
         )

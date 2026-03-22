@@ -6,31 +6,6 @@ debug_detail) when ``settings.DEBUG=True`` and omits it in production.
 Also tests the did-you-mean handler suggestions in ``_format_handler_not_found_error``.
 """
 
-# Configure Django settings BEFORE any djust imports
-import django
-from django.conf import settings
-
-if not settings.configured:
-    settings.configure(
-        DEBUG=True,
-        SECRET_KEY="test-secret-key",
-        INSTALLED_APPS=[
-            "django.contrib.contenttypes",
-            "django.contrib.auth",
-            "channels",
-            "djust",
-        ],
-        DATABASES={
-            "default": {
-                "ENGINE": "django.db.backends.sqlite3",
-                "NAME": ":memory:",
-            }
-        },
-        SESSION_ENGINE="django.contrib.sessions.backends.signed_cookies",
-        CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}},
-    )
-    django.setup()
-
 from unittest.mock import MagicMock
 from django.test import SimpleTestCase, override_settings
 
