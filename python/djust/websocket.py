@@ -959,6 +959,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         # Import the view class
         module = None
+        module_path = ""
+        class_name = ""
         try:
             module_path, class_name = view_path.rsplit(".", 1)
             module = __import__(module_path, fromlist=[class_name])

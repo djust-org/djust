@@ -566,15 +566,6 @@ def create_server():
             r"create_|add_|remove_|save_|cancel_|submit_|close_|open_)"
         )
 
-        # Patterns indicating service/client instantiation
-        _service_call_names = {
-            "client",
-            "Client",
-            "Session",
-            "session",
-            "connect",
-            "Connection",
-        }
         _service_module_names = {"boto3", "requests", "httpx", "redis", "paramiko"}
 
         for node in _ast.walk(tree):

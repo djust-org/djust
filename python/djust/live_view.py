@@ -47,15 +47,13 @@ logger = logging.getLogger(__name__)
 try:
     from ._rust import (
         RustLiveView,
-        create_session_actor,
         SessionActorHandle,
-        extract_template_variables,
+        extract_template_variables,  # noqa: F401 — re-exported, used by JIT tests
     )
 except ImportError:
     RustLiveView = None
-    create_session_actor = None
     SessionActorHandle = None
-    extract_template_variables = None
+    extract_template_variables = None  # noqa: F841
 
 
 class LiveView(

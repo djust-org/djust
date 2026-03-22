@@ -1363,8 +1363,8 @@ function applyPatches(patches) {
             return false;
         }
         // Update hooks and model bindings after DOM patches
-        if (typeof updateHooks === 'function') { updateHooks(); }
-        if (typeof bindModelElements === 'function') { bindModelElements(); }
+        updateHooks();
+        bindModelElements();
         restoreFocusState(focusState);
         return true;
     }
@@ -1446,8 +1446,8 @@ function applyPatches(patches) {
     }
 
     // Update hooks and model bindings after DOM patches
-    if (typeof updateHooks === 'function') { updateHooks(); }
-    if (typeof bindModelElements === 'function') { bindModelElements(); }
+    updateHooks();
+    bindModelElements();
 
     restoreFocusState(focusState);
     return true;
