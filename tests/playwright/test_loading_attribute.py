@@ -33,11 +33,12 @@ async def test_loading_attribute():
 
         # Wait for LiveView to mount
         print("⏳ Waiting for LiveView to mount...")
-        await asyncio.sleep(1)
+        await asyncio.sleep(2)
 
-        # Wait for automated tests to start
+        # Wait for automated tests to complete
+        # Client tests: 2s initial delay + 0.5s test3 start + 0.1s check + 1.2s slow op = ~3.8s
         print("⏳ Waiting for automated tests to run...")
-        await asyncio.sleep(3)  # 2s delay + 1s for test execution
+        await asyncio.sleep(5)
 
         # Get test results from the page
         try:
