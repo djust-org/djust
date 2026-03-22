@@ -43,7 +43,7 @@ class DjFlashTagHandler(TagHandler):
                     try:
                         auto_dismiss = int(value)
                     except (ValueError, TypeError):
-                        pass
+                        pass  # Keep default auto_dismiss if value isn't numeric
                 elif key == "position":
                     position = str(value).strip("'\"")
 

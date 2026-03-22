@@ -6,7 +6,7 @@
  * state CSS classes.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
@@ -192,7 +192,7 @@ describe('LiveViewSSE', () => {
 
     describe('handleMessage', () => {
         it('handles mount message and sets viewMounted', () => {
-            const { window, document } = createEnv('<div dj-root></div>');
+            const { window } = createEnv('<div dj-root></div>');
             const sse = new window.djust.LiveViewSSE();
 
             sse.handleMessage({

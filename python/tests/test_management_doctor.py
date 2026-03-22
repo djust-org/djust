@@ -199,20 +199,20 @@ class TestCommandOutput(SimpleTestCase):
         try:
             call_command("djust_doctor", "--json", stdout=out, stderr=StringIO())
         except SystemExit:
-            pass
+            pass  # djust_doctor exits non-zero when checks fail  # djust_doctor exits non-zero when checks fail
         output = out.getvalue()
         data = json.loads(output)
         self.assertIn("status", data)
         self.assertIn("checks", data)
         self.assertIsInstance(data["checks"], list)
-        self.assertTrue(len(data["checks"]) > 0)
+        self.assertGreater(len(data["checks"]), 0)
 
     def test_quiet_mode(self):
         out = StringIO()
         try:
             call_command("djust_doctor", "--quiet", stdout=out, stderr=StringIO())
         except SystemExit:
-            pass
+            pass  # djust_doctor exits non-zero when checks fail
         self.assertEqual(out.getvalue(), "")
 
     def test_pretty_output(self):
@@ -220,7 +220,7 @@ class TestCommandOutput(SimpleTestCase):
         try:
             call_command("djust_doctor", stdout=out, stderr=StringIO())
         except SystemExit:
-            pass
+            pass  # djust_doctor exits non-zero when checks fail
         output = out.getvalue()
         self.assertIn("djust doctor", output)
 
@@ -231,7 +231,7 @@ class TestCommandOutput(SimpleTestCase):
                 "djust_doctor", "--json", "--check", "python_version", stdout=out, stderr=StringIO()
             )
         except SystemExit:
-            pass
+            pass  # djust_doctor exits non-zero when checks fail
         data = json.loads(out.getvalue())
         self.assertEqual(len(data["checks"]), 1)
         self.assertEqual(data["checks"][0]["name"], "python_version")
@@ -246,7 +246,7 @@ class TestCommandOutput(SimpleTestCase):
         try:
             call_command("djust_doctor", "--verbose", stdout=out, stderr=StringIO())
         except SystemExit:
-            pass
+            pass  # djust_doctor exits non-zero when checks fail
         output = out.getvalue()
         self.assertIn("djust doctor", output)
 
