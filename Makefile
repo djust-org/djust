@@ -124,7 +124,31 @@ dev-build: ## Build Rust extensions in development mode
 ##@ Testing & Quality
 
 .PHONY: test
-test: test-python test-js test-rust ## Run all tests (Python + JavaScript + Rust)
+test: ## Run all tests (Python + JavaScript + Rust) in parallel
+	@echo "$(GREEN)Running all tests in parallel...$(NC)"
+	@PY_EXIT=0; RS_EXIT=0; JS_EXIT=0; \
+	PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ -n auto -q > /tmp/djust-test-py.log 2>&1 & PY_PID=$$!; \
+	PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo test --workspace --exclude djust_live -q > /tmp/djust-test-rs.log 2>&1 & RS_PID=$$!; \
+	npm test > /tmp/djust-test-js.log 2>&1 & JS_PID=$$!; \
+	wait $$PY_PID || PY_EXIT=$$?; \
+	wait $$RS_PID || RS_EXIT=$$?; \
+	wait $$JS_PID || JS_EXIT=$$?; \
+	echo ""; \
+	echo "$(GREEN)Python tests:$(NC)"; tail -3 /tmp/djust-test-py.log; \
+	echo "$(GREEN)Rust tests:$(NC)"; tail -3 /tmp/djust-test-rs.log; \
+	echo "$(GREEN)JavaScript tests:$(NC)"; tail -5 /tmp/djust-test-js.log; \
+	if [ $$PY_EXIT -ne 0 ] || [ $$RS_EXIT -ne 0 ] || [ $$JS_EXIT -ne 0 ]; then \
+		echo ""; \
+		echo "$(RED)Some tests failed (Python=$$PY_EXIT, Rust=$$RS_EXIT, JS=$$JS_EXIT)$(NC)"; \
+		[ $$PY_EXIT -ne 0 ] && echo "$(YELLOW)Full Python output:$(NC) cat /tmp/djust-test-py.log"; \
+		[ $$RS_EXIT -ne 0 ] && echo "$(YELLOW)Full Rust output:$(NC) cat /tmp/djust-test-rs.log"; \
+		[ $$JS_EXIT -ne 0 ] && echo "$(YELLOW)Full JS output:$(NC) cat /tmp/djust-test-js.log"; \
+		exit 1; \
+	fi; \
+	echo ""; echo "$(GREEN)All tests passed!$(NC)"
+
+.PHONY: test-sequential
+test-sequential: test-python test-js test-rust ## Run all tests sequentially (fallback)
 
 .PHONY: test-rust
 test-rust: ## Run Rust tests

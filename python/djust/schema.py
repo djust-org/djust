@@ -948,14 +948,15 @@ BEST_PRACTICES = {
         },
         {
             "id": 5,
-            "problem": "Missing WhiteNoise middleware when using Daphne/uvicorn",
+            "problem": "Static files returning 404 with ASGI servers",
             "why": (
-                "ASGI servers don't serve static files by default. Without WhiteNoise, "
-                "client.js and other static assets return 404."
+                "ASGI servers like Daphne and uvicorn don't serve static files by default. "
+                "Without proper static file handling, client.js and other assets return 404."
             ),
             "solution": (
-                "Add 'whitenoise.middleware.WhiteNoiseMiddleware' to MIDDLEWARE after "
-                "SecurityMiddleware. Run collectstatic for production."
+                "Use djust's built-in ASGIStaticFilesHandler via djust.asgi.get_application(). "
+                "This intercepts static file requests at the ASGI layer before they reach "
+                "Django middleware. Run collectstatic for production."
             ),
             "related_doc": "docs/guides/error-codes.md",
         },

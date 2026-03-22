@@ -49,6 +49,7 @@ Every LiveView template needs these two things:
 | `dj-click="handler"` | Click | `data-*` attributes as kwargs |
 | `dj-submit="handler"` | Form submit | All named form fields as kwargs |
 | `dj-copy="text"` | Click | Client-only clipboard copy, no server round-trip |
+| `dj-copy="#selector"` | Click | Copy `textContent` of matched element |
 
 ```html
 <!-- Simple click -->
@@ -70,9 +71,23 @@ Every LiveView template needs these two things:
     <button type="submit">Save</button>
 </form>
 
-<!-- Client-side clipboard copy -->
+<!-- Client-side clipboard copy (literal text) -->
 <button dj-copy="{{ share_url }}">Copy link</button>
+
+<!-- Copy from another element -->
+<button dj-copy="#code-block">Copy Code</button>
+
+<!-- Copy with feedback and server event -->
+<button dj-copy="{{ api_key }}" dj-copy-feedback="Done!" dj-copy-event="copied">Copy</button>
 ```
+
+#### `dj-copy` options
+
+| Attribute | Description |
+|---|---|
+| `dj-copy-feedback="text"` | Button text shown for 2s after copy (default: `"Copied!"`) |
+| `dj-copy-class="class"` | CSS class added for 2s after copy (default: `dj-copied`) |
+| `dj-copy-event="handler"` | Server event fired after successful copy |
 
 ### Input & Change
 
@@ -88,10 +103,20 @@ Every LiveView template needs these two things:
 <!-- Live search -->
 <input type="text" dj-input="search" value="{{ query }}" />
 
-<!-- Debounce override (default: 300ms for text inputs) -->
-<input dj-input="search" data-debounce="500" />
+<!-- Debounce via HTML attribute (preferred) -->
+<input dj-input="search" dj-debounce="300" />
 
-<!-- Throttle instead of debounce -->
+<!-- Throttle via HTML attribute -->
+<button dj-click="poll" dj-throttle="500">Refresh</button>
+
+<!-- Defer until blur -->
+<input dj-input="validate" dj-debounce="blur" />
+
+<!-- Disable default debounce on dj-input -->
+<input dj-input="on_change" dj-debounce="0" />
+
+<!-- Legacy data-* attributes (still supported) -->
+<input dj-input="search" data-debounce="500" />
 <input dj-input="on_resize" data-throttle="100" />
 
 <!-- Select change -->
@@ -119,6 +144,58 @@ Every LiveView template needs these two things:
 
 Supported key modifiers: `.enter`, `.escape`, `.space`
 
+### Window & Document Events
+
+| Attribute | Target | Event |
+|---|---|---|
+| `dj-window-keydown="handler"` | `window` | `keydown` |
+| `dj-window-keyup="handler"` | `window` | `keyup` |
+| `dj-window-scroll="handler"` | `window` | `scroll` (150ms throttle) |
+| `dj-window-click="handler"` | `window` | `click` |
+| `dj-window-resize="handler"` | `window` | `resize` (150ms throttle) |
+| `dj-document-keydown="handler"` | `document` | `keydown` |
+| `dj-document-keyup="handler"` | `document` | `keyup` |
+| `dj-document-click="handler"` | `document` | `click` |
+
+```html
+<!-- Close modal on Escape anywhere -->
+<div dj-window-keydown.escape="close_modal">
+
+<!-- Track scroll position -->
+<div dj-window-scroll="on_scroll">
+
+<!-- Detect background clicks -->
+<div dj-document-click="on_click">
+```
+
+Key modifier filtering works: `dj-window-keydown.escape="handler"`. The element provides context (`dj-value-*`, component ID) but the listener attaches to `window`/`document`.
+
+### Click Away
+
+```html
+<!-- Fire event when user clicks outside this element -->
+<div dj-click-away="close_dropdown" class="dropdown">
+    ...
+</div>
+```
+
+Uses capture-phase document listener (works even if inner elements call `stopPropagation()`). Supports `dj-confirm` and `dj-value-*`.
+
+### Keyboard Shortcuts
+
+```html
+<!-- Single shortcut -->
+<div dj-shortcut="escape:close_modal">
+
+<!-- Multiple shortcuts, modifier keys -->
+<div dj-shortcut="ctrl+k:open_search:prevent, escape:close_modal">
+
+<!-- Modifiers: ctrl, alt, shift, meta (cmd on Mac) -->
+<div dj-shortcut="ctrl+shift+s:save:prevent">
+```
+
+Syntax: `[modifier+...]key:handler[:prevent]` (comma-separated for multiple). The `prevent` suffix calls `preventDefault()`. Shortcuts skip form inputs by default; add `dj-shortcut-in-input` to override.
+
 ### Navigation
 
 | Attribute | Description |
@@ -142,6 +219,159 @@ Supported key modifiers: `.enter`, `.escape`, `.space`
 
 <!-- Poll every 10 seconds -->
 <div dj-poll="refresh" dj-poll-interval="10000"></div>
+```
+
+### Submit Protection
+
+| Attribute | Description |
+|---|---|
+| `dj-disable-with="text"` | Disable button + replace text during submission |
+| `dj-lock` | Block event until server responds (prevents double-fire) |
+
+```html
+<!-- Disable + replace text while submitting -->
+<button type="submit" dj-disable-with="Saving...">Save</button>
+
+<!-- Lock to prevent concurrent events -->
+<button dj-click="save" dj-lock>Save</button>
+
+<!-- Combined: lock + visual feedback -->
+<button dj-click="save" dj-lock dj-disable-with="Saving...">Save</button>
+```
+
+### Lifecycle & Reconnection
+
+| Attribute | Fires On | Handler Receives |
+|---|---|---|
+| `dj-mounted="handler"` | Element enters DOM (after VDOM patch) | `dj-value-*` attrs as kwargs |
+| `dj-auto-recover="handler"` | WebSocket reconnects | Form values + `data-*` from container |
+| `dj-no-recover` | — | Opts field out of automatic form recovery on reconnect |
+
+```html
+<!-- Fire event when element appears after a VDOM patch -->
+<div dj-mounted="on_widget_ready" dj-value-widget-id="{{ widget.id }}">
+    ...
+</div>
+
+<!-- Restore complex state after reconnection -->
+<div dj-auto-recover="restore_state" dj-value-canvas-id="main">
+    <input name="brush_size" value="5" />
+</div>
+
+<!-- Opt out of automatic form recovery -->
+<input name="scratch" dj-change="on_change" dj-no-recover />
+```
+
+`dj-mounted` does not fire on initial page load — only after subsequent VDOM patches insert the element.
+
+`dj-auto-recover` does not fire on initial page load — only after WebSocket reconnection. Serializes form field values and `data-*` attributes from the container.
+
+`dj-no-recover` prevents a field from being auto-recovered on reconnect. Useful for ephemeral search fields or fields where server state is the source of truth. Fields inside `dj-auto-recover` containers are automatically skipped (custom handler takes precedence).
+
+---
+
+## UI Feedback Attributes
+
+### Connection State CSS Classes
+
+djust automatically applies CSS classes to `<body>` based on WebSocket/SSE connection state:
+
+| Class | Applied when |
+|---|---|
+| `dj-connected` | WebSocket/SSE connection is open |
+| `dj-disconnected` | WebSocket/SSE connection is lost |
+
+Both classes are removed on intentional disconnect (e.g., TurboNav navigation). Use these for CSS-driven connection feedback:
+
+```css
+/* Dim content when disconnected */
+body.dj-disconnected dj-root { opacity: 0.5; }
+
+/* Show an offline banner */
+.offline-banner { display: none; }
+body.dj-disconnected .offline-banner { display: block; }
+```
+
+### `dj-cloak` (FOUC Prevention)
+
+Hide elements until the WebSocket/SSE connection is established, preventing flash of unconnected content:
+
+```html
+<!-- Hidden until mount response is received -->
+<div dj-cloak>
+    <button dj-click="increment">+</button>
+</div>
+```
+
+The CSS rule `[dj-cloak] { display: none !important; }` is injected automatically by client.js. The `dj-cloak` attribute is removed from all elements when the mount response arrives.
+
+**Note:** If the WebSocket never connects, cloaked elements stay hidden. Only cloak elements that are WebSocket-dependent.
+
+### `dj-scroll-into-view` (Auto-scroll on Render)
+
+Automatically scroll an element into view after it appears in the DOM (via mount or VDOM patch):
+
+```html
+<!-- Smooth scroll (default) -->
+<div dj-scroll-into-view>New message</div>
+
+<!-- Instant scroll (no animation) -->
+<div dj-scroll-into-view="instant">Alert</div>
+
+<!-- Scroll to center of viewport -->
+<div dj-scroll-into-view="center">Highlighted item</div>
+
+<!-- Scroll to start or end -->
+<div dj-scroll-into-view="start">Section header</div>
+<div dj-scroll-into-view="end">Latest entry</div>
+```
+
+| Value | Behavior |
+|---|---|
+| `""` (default) | `{ behavior: 'smooth', block: 'nearest' }` |
+| `"instant"` | `{ behavior: 'instant', block: 'nearest' }` |
+| `"center"` | `{ behavior: 'smooth', block: 'center' }` |
+| `"start"` | `{ behavior: 'smooth', block: 'start' }` |
+| `"end"` | `{ behavior: 'smooth', block: 'end' }` |
+
+One-shot per DOM node: each element scrolls only once. VDOM-replaced elements (fresh nodes) scroll again correctly.
+
+### Page Loading Bar
+
+An NProgress-style thin loading bar at the top of the page during TurboNav and `live_redirect` navigation. Always active by default -- no opt-in attribute needed.
+
+Control programmatically:
+
+```javascript
+// Manual control
+window.djust.pageLoading.start();
+window.djust.pageLoading.finish();
+
+// Disable entirely
+window.djust.pageLoading.enabled = false;
+```
+
+Or hide via CSS:
+
+```css
+.djust-page-loading-bar { display: none !important; }
+```
+
+Navigation lifecycle events and CSS class for page transitions:
+
+```css
+/* CSS-only page transition (zero JS) */
+[dj-root].djust-navigating main {
+    opacity: 0.3;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+}
+```
+
+```javascript
+// JS hooks for advanced use cases
+document.addEventListener('djust:navigate-start', () => showSkeleton());
+document.addEventListener('djust:navigate-end', () => hideSkeleton());
 ```
 
 ---
@@ -204,6 +434,17 @@ Type coercion rules:
     Edit
 </button>
 ```
+
+### `_target` (automatic)
+
+For `dj-change` and `dj-input`, the `_target` parameter is included automatically with the triggering element's `name` attribute. Useful when multiple fields share one handler:
+
+```html
+<input name="email" dj-change="validate" />
+<input name="username" dj-change="validate" />
+```
+
+Handler receives `_target="email"` or `_target="username"`.
 
 ---
 
@@ -428,7 +669,34 @@ Event attributes:
   dj-click        dj-submit       dj-change       dj-input
   dj-blur         dj-focus        dj-keydown      dj-keyup
   dj-poll         dj-patch        dj-navigate     dj-copy
-  dj-confirm      dj-model
+  dj-confirm      dj-model        dj-mounted      dj-auto-recover
+  dj-click-away   dj-shortcut     dj-no-recover
+
+Window/document scoping:
+  dj-window-keydown               (keydown on window)
+  dj-window-keyup                 (keyup on window)
+  dj-window-scroll                (scroll on window, 150ms throttle)
+  dj-window-click                 (click on window)
+  dj-window-resize                (resize on window, 150ms throttle)
+  dj-document-keydown             (keydown on document)
+  dj-document-keyup               (keyup on document)
+  dj-document-click               (click on document)
+
+Rate limiting (HTML attributes):
+  dj-debounce="300"               (debounce ms, per element)
+  dj-debounce="blur"              (defer until blur)
+  dj-debounce="0"                 (disable default debounce)
+  dj-throttle="500"               (throttle ms, per element)
+
+Copy enhancements:
+  dj-copy="#selector"             (copy element textContent)
+  dj-copy-feedback="Done!"        (custom feedback text, 2s)
+  dj-copy-class="btn-success"     (custom CSS class, 2s)
+  dj-copy-event="handler"         (server event after copy)
+
+Submit protection:
+  dj-disable-with="text"          (disable + replace text during submit)
+  dj-lock                         (block event until server responds)
 
 Loading directives:
   dj-loading                      (toggle djust-loading class)
@@ -437,6 +705,32 @@ Loading directives:
   dj-loading.show                 (show only while loading)
   dj-loading.disable              (disable while loading)
   dj-loading.target=#id           (apply to target element)
+
+UI feedback:
+  dj-cloak                        (hide until WS/SSE mount completes)
+  dj-scroll-into-view             (auto-scroll on render, smooth default)
+  dj-scroll-into-view="instant"   (auto-scroll, no animation)
+  dj-scroll-into-view="center"    (auto-scroll to viewport center)
+
+Connection state (auto on <body>):
+  .dj-connected                   (body class when connected)
+  .dj-disconnected                (body class when disconnected)
+
+Reconnection UI (auto on <body>):
+  data-dj-reconnect-attempt       (current attempt number)
+  --dj-reconnect-attempt          (CSS custom property, attempt number)
+  .dj-reconnecting-banner         (auto-shown banner with attempt count)
+
+Page loading bar:
+  Always active for TurboNav / live_redirect
+  window.djust.pageLoading.start/finish  (manual control)
+  .djust-navigating             (on [dj-root] during navigation)
+  djust:navigate-start          (CustomEvent on document)
+  djust:navigate-end            (CustomEvent on document)
+
+Document metadata (Python-side, no template directive):
+  self.page_title = "..."              (update document.title)
+  self.page_meta = {"key": "value"}    (update/create <meta> tags)
 
 VDOM identity:
   dj-view="{{ dj_view_id }}"      (on body — required)

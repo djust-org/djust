@@ -24,6 +24,15 @@ window._djustClientLoaded = true;
 const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
 
 // ============================================================================
+// dj-cloak CSS injection — hide [dj-cloak] elements until mount completes
+// ============================================================================
+(function() {
+    const style = document.createElement('style');
+    style.textContent = '[dj-cloak] { display: none !important; }';
+    document.head.appendChild(style);
+})();
+
+// ============================================================================
 // DOM Helper Functions
 // ============================================================================
 
@@ -145,6 +154,11 @@ function reinitLiveViewForTurboNav() {
         if (el._djustPollIntervalId) clearInterval(el._djustPollIntervalId);
         if (el._djustPollVisibilityHandler) document.removeEventListener('visibilitychange', el._djustPollVisibilityHandler);
     });
+
+    // Clean up scoped (window/document) listeners before re-binding
+    for (const el of _scopedListenerElements) {
+        _cleanupScopedListeners(el);
+    }
 
     // Re-bind events and hooks
     reinitAfterDOMUpdate();
@@ -303,6 +317,9 @@ function handleServerResponse(data, eventName, triggerElement) {
             // Final cleanup
             clearOptimisticPending();
 
+            // Ensure dj-mounted is active for elements added by VDOM patches
+            if (!window.djust._mountReady) window.djust._mountReady = true;
+
             reinitAfterDOMUpdate();
         }
         // Apply full HTML update (fallback)
@@ -328,6 +345,8 @@ function handleServerResponse(data, eventName, triggerElement) {
             clearOptimisticPending();
 
             _isBroadcastUpdate = false;
+            // Ensure dj-mounted is active for elements added by HTML update
+            if (!window.djust._mountReady) window.djust._mountReady = true;
             reinitAfterDOMUpdate();
         } else {
             if (globalThis.djustDebug) console.warn('[LiveView] Response has neither patches nor html!', data);
@@ -338,6 +357,18 @@ function handleServerResponse(data, eventName, triggerElement) {
             if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
             const form = document.querySelector('[dj-root] form');
             if (form) form.reset();
+        }
+
+        // Process side-channel commands from HTTP response (flash, page metadata)
+        if (data._flash && window.djust.flash) {
+            data._flash.forEach(function(cmd) {
+                window.djust.flash.handleFlash(cmd);
+            });
+        }
+        if (data._page_metadata && window.djust.pageMetadata) {
+            data._page_metadata.forEach(function(cmd) {
+                window.djust.pageMetadata.handlePageMetadata(cmd);
+            });
         }
 
         // Forward debug info to debug panel (HTTP-only mode)
@@ -353,6 +384,24 @@ function handleServerResponse(data, eventName, triggerElement) {
             if (loadingEventName) {
                 globalLoadingManager.stopLoading(loadingEventName, triggerElement);
             }
+
+            // dj-lock: unlock all locked elements after server response
+            document.querySelectorAll('[data-djust-locked]').forEach(el => {
+                el.removeAttribute('data-djust-locked');
+                if (el.tagName === 'BUTTON' || el.tagName === 'INPUT' ||
+                    el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') {
+                    el.disabled = false;
+                } else {
+                    el.classList.remove('djust-locked');
+                }
+            });
+
+            // dj-disable-with: restore original text on all disabled-with elements
+            document.querySelectorAll('[data-djust-original-text]').forEach(el => {
+                el.textContent = el.getAttribute('data-djust-original-text');
+                el.removeAttribute('data-djust-original-text');
+                el.disabled = false;
+            });
         } else if (globalThis.djustDebug) {
             console.log('[LiveView] Keeping loading state — async work pending');
         }
@@ -374,8 +423,10 @@ class LiveViewWebSocket {
         this.ws = null;
         this.sessionId = null;
         this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 5;
+        this.maxReconnectAttempts = 10;
         this.reconnectDelay = 1000;
+        this.minReconnectDelay = 500;
+        this.maxReconnectDelayMs = 30000;
         this.viewMounted = false;
         this.enabled = true;  // Can be disabled to use HTTP fallback
         this._intentionalDisconnect = false;  // Set by disconnect() to suppress error overlay
@@ -429,6 +480,21 @@ class LiveViewWebSocket {
         this.viewMounted = false;
         this.vdomVersion = null;
         this.stats.connectedAt = null; // Reset connection timestamp
+
+        // Remove connection state CSS classes on intentional disconnect
+        document.body.classList.remove('dj-connected');
+        document.body.classList.remove('dj-disconnected');
+
+        // Clear reconnection UI state
+        document.body.removeAttribute('data-dj-reconnect-attempt');
+        document.body.style.removeProperty('--dj-reconnect-attempt');
+        this._removeReconnectBanner();
+
+        // Event sequencing (#560): clear pending event state
+        _pendingEventRefs.clear();
+        _pendingEventNames.clear();
+        _pendingTriggerEls.clear();
+        _tickBuffer.length = 0;
     }
 
     connect(url = null) {
@@ -454,9 +520,20 @@ class LiveViewWebSocket {
             this.reconnectAttempts = 0;
             this._intentionalDisconnect = false;
 
+            // Connection state CSS classes
+            document.body.classList.add('dj-connected');
+            document.body.classList.remove('dj-disconnected');
+
+            // Clear reconnection UI state
+            document.body.removeAttribute('data-dj-reconnect-attempt');
+            document.body.style.removeProperty('--dj-reconnect-attempt');
+            this._removeReconnectBanner();
+
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
                 this.stats.reconnections++;
+                // Set reconnect flag for dj-auto-recover
+                if (window.djust) window.djust._isReconnect = true;
                 // Notify hooks of reconnection
                 if (typeof notifyHooksReconnected === 'function') notifyHooksReconnected();
             }
@@ -466,6 +543,10 @@ class LiveViewWebSocket {
         this.ws.onclose = (_event) => {
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
+
+            // Connection state CSS classes
+            document.body.classList.add('dj-disconnected');
+            document.body.classList.remove('dj-connected');
 
             // Notify hooks of disconnection
             if (typeof notifyHooksDisconnected === 'function') notifyHooksDisconnected();
@@ -491,6 +572,12 @@ class LiveViewWebSocket {
             optimisticUpdates.clear();
             pendingEvents.clear();
 
+            // Event sequencing (#560): clear pending event state
+            _pendingEventRefs.clear();
+            _pendingEventNames.clear();
+            _pendingTriggerEls.clear();
+            _tickBuffer.length = 0;
+
             // Remove loading indicators from DOM
             clearOptimisticPending();
 
@@ -502,9 +589,17 @@ class LiveViewWebSocket {
 
             if (this.reconnectAttempts < this.maxReconnectAttempts) {
                 this.reconnectAttempts++;
-                const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-                if (globalThis.djustDebug) console.log(`[LiveView] Reconnecting in ${delay}ms...`);
-                setTimeout(() => this.connect(url), delay);
+                const baseDelay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+                const cappedBase = Math.min(baseDelay, this.maxReconnectDelayMs);
+                const jitteredDelay = Math.max(this.minReconnectDelay, Math.random() * cappedBase);
+                if (globalThis.djustDebug) console.log('[LiveView] Reconnecting in ' + Math.round(jitteredDelay) + 'ms (attempt ' + this.reconnectAttempts + '/' + this.maxReconnectAttempts + ')...');
+
+                // Update reconnection UI state
+                document.body.setAttribute('data-dj-reconnect-attempt', String(this.reconnectAttempts));
+                document.body.style.setProperty('--dj-reconnect-attempt', String(this.reconnectAttempts));
+                this._showReconnectBanner(this.reconnectAttempts, this.maxReconnectAttempts);
+
+                setTimeout(() => this.connect(url), jitteredDelay);
             } else {
                 console.warn('[LiveView] Max reconnection attempts reached.');
                 this.enabled = false;
@@ -541,7 +636,15 @@ class LiveViewWebSocket {
                     data: data
                 });
 
-                this.handleMessage(data);
+                // Latency simulation on receive (DEBUG_MODE only)
+                const simLatency = window.DEBUG_MODE && window.djust && window.djust._simulatedLatency;
+                if (simLatency > 0) {
+                    const jitter = (window.djust._simulatedJitter || 0);
+                    const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
+                    setTimeout(() => this.handleMessage(data), actual);
+                } else {
+                    this.handleMessage(data);
+                }
             } catch (error) {
                 console.error('[LiveView] Failed to parse message:', error);
             }
@@ -549,7 +652,7 @@ class LiveViewWebSocket {
     }
 
     handleMessage(data) {
-        if (globalThis.djustDebug) console.log('[LiveView] Received:', data.type, data);
+        if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
 
         switch (data.type) {
             case 'connect':
@@ -560,7 +663,13 @@ class LiveViewWebSocket {
 
             case 'mount':
                 this.viewMounted = true;
-                if (globalThis.djustDebug) console.log('[LiveView] View mounted:', data.view);
+                if (globalThis.djustDebug) console.log('[LiveView] View mounted: %s', String(data.view));
+
+                // Remove dj-cloak from all elements (FOUC prevention)
+                document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
+
+                // Finish page loading bar on mount
+                if (window.djust.pageLoading) window.djust.pageLoading.finish();
 
                 // Initialize VDOM version from mount response (critical for patch generation)
                 if (data.version !== undefined) {
@@ -593,6 +702,18 @@ class LiveViewWebSocket {
                     }
                     this.skipMountHtml = false;
                     reinitAfterDOMUpdate();
+                    // Set mount ready flag so dj-mounted handlers only fire
+                    // for elements added by subsequent VDOM patches, not on initial load
+                    window.djust._mountReady = true;
+                    // Trigger form recovery and dj-auto-recover after reconnect mount
+                    if (window.djust._isReconnect) {
+                        if (typeof window.djust._processFormRecovery === 'function') {
+                            window.djust._processFormRecovery();
+                        }
+                        if (typeof window.djust._processAutoRecover === 'function') {
+                            window.djust._processAutoRecover();
+                        }
+                    }
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
@@ -608,22 +729,86 @@ class LiveViewWebSocket {
                         reinitAfterDOMUpdate();
                     }
                     this.skipMountHtml = false;
+                    // Set mount ready flag so dj-mounted handlers only fire
+                    // for elements added by subsequent VDOM patches, not on initial load
+                    window.djust._mountReady = true;
+                    // Trigger form recovery and dj-auto-recover after reconnect mount
+                    if (window.djust._isReconnect) {
+                        if (typeof window.djust._processFormRecovery === 'function') {
+                            window.djust._processFormRecovery();
+                        }
+                        if (typeof window.djust._processAutoRecover === 'function') {
+                            window.djust._processAutoRecover();
+                        }
+                    }
                 }
                 break;
 
             case 'patch':
-                // Use centralized response handler
-                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
-                this.lastEventName = null;
-                this.lastTriggerElement = null;
-                break;
+            case 'html_update': {
+                // Event sequencing (#560): if this is a server-initiated update
+                // (tick, broadcast, async) and we have pending user events,
+                // buffer it and apply after the event responses arrive. This
+                // prevents server pushes from consuming event loading state
+                // and ensures version numbers stay sequential.
+                const isServerInitiated = (
+                    data.source === 'tick' ||
+                    data.source === 'broadcast' ||
+                    data.source === 'async'
+                );
+                const isEventResponse = (
+                    data.ref != null && _pendingEventRefs.has(data.ref)
+                );
 
-            case 'html_update':
-                // Use centralized response handler
-                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
-                this.lastEventName = null;
-                this.lastTriggerElement = null;
+                if (!isEventResponse && isServerInitiated && _pendingEventRefs.size > 0) {
+                    // Buffer server-initiated patch — will be applied after
+                    // all pending event responses arrive.
+                    _tickBuffer.push(data);
+                    if (globalThis.djustDebug) {
+                        console.log('[LiveView] Buffered %s patch (v%s) — waiting for %d pending event(s)', String(data.source), String(data.version), _pendingEventRefs.size);
+                    }
+                    break;
+                }
+
+                // Determine event name and trigger for loading state
+                let evName = this.lastEventName;
+                let evTrigger = this.lastTriggerElement;
+
+                if (isEventResponse) {
+                    // This response matches a pending event — use tracked
+                    // event name/trigger and remove from pending set.
+                    evName = _pendingEventNames.get(data.ref) || this.lastEventName;
+                    evTrigger = _pendingTriggerEls.get(data.ref) || this.lastTriggerElement;
+                    _pendingEventRefs.delete(data.ref);
+                    _pendingEventNames.delete(data.ref);
+                    _pendingTriggerEls.delete(data.ref);
+                } else if (isServerInitiated) {
+                    // Server-initiated patch with no pending events — apply
+                    // without consuming event loading state.
+                    evName = null;
+                    evTrigger = null;
+                }
+
+                handleServerResponse(data, evName, evTrigger);
+
+                if (!isServerInitiated) {
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+
+                // After processing the event response, flush buffered
+                // patches only when ALL pending events have resolved.
+                if (isEventResponse && _pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
+                    if (globalThis.djustDebug) {
+                        console.log('[LiveView] Flushing ' + _tickBuffer.length + ' buffered patches');
+                    }
+                    const buffered = _tickBuffer.splice(0);
+                    for (const tickData of buffered) {
+                        handleServerResponse(tickData, null, null);
+                    }
+                }
                 break;
+            }
 
             case 'html_recovery': {
                 // Server response to request_html — morph DOM with recovered HTML.
@@ -642,7 +827,7 @@ class LiveViewWebSocket {
                 reinitAfterDOMUpdate();
                 if (globalThis.djustDebug) {
                     // codeql[js/log-injection] -- data.version is a server-controlled integer
-                    console.log('[LiveView] DOM recovered via morph, version:', data.version);
+                    console.log('[LiveView] DOM recovered via morph, version: %s', String(data.version));
                 }
                 break;
             }
@@ -672,6 +857,12 @@ class LiveViewWebSocket {
                     }
                 }));
 
+                // Clear pending event refs (#560)
+                _pendingEventRefs.clear();
+                _pendingEventNames.clear();
+                _pendingTriggerEls.clear();
+                _tickBuffer.length = 0;
+
                 // Phase 5: Stop loading state on error
                 if (this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
@@ -694,7 +885,7 @@ class LiveViewWebSocket {
             case 'upload_registered':
                 // Upload registration acknowledged
                 // codeql[js/log-injection] -- data.ref and data.upload_name are server-assigned upload identifiers
-                if (globalThis.djustDebug) console.log('[Upload] Registered:', data.ref, 'for', data.upload_name);
+                if (globalThis.djustDebug) console.log('[Upload] Registered: %s for %s', String(data.ref), String(data.upload_name));
                 break;
 
             case 'stream':
@@ -704,19 +895,40 @@ class LiveViewWebSocket {
                 }
                 break;
 
-            case 'noop':
+            case 'noop': {
                 // Server acknowledged event but no DOM changes needed (auto-detected
                 // or explicit _skip_render). Clear loading state unless async pending.
-                if (this.lastEventName) {
+                const noopEvName = (data.ref != null ? _pendingEventNames.get(data.ref) : null)
+                    || this.lastEventName;
+                const noopTrigger = (data.ref != null ? _pendingTriggerEls.get(data.ref) : null)
+                    || this.lastTriggerElement;
+
+                // Clear pending event ref (#560)
+                if (data.ref != null && _pendingEventRefs.has(data.ref)) {
+                    _pendingEventRefs.delete(data.ref);
+                    _pendingEventNames.delete(data.ref);
+                    _pendingTriggerEls.delete(data.ref);
+                }
+
+                if (noopEvName) {
                     if (!data.async_pending) {
-                        globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                        globalLoadingManager.stopLoading(noopEvName, noopTrigger);
                     } else {
                         if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
                     }
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+
+                // Flush buffered patches only when all pending events resolved
+                if (_pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
+                    const buffered = _tickBuffer.splice(0);
+                    for (const tickData of buffered) {
+                        handleServerResponse(tickData, null, null);
+                    }
+                }
                 break;
+            }
 
             case 'push_event':
                 // Server-pushed event for JS hooks
@@ -774,6 +986,20 @@ class LiveViewWebSocket {
                 // Focus command from server
                 if (window.djust.accessibility) {
                     window.djust.accessibility.processFocus([data.selector, data.options]);
+                }
+                break;
+
+            case 'flash':
+                // Flash message from server (put_flash / clear_flash)
+                if (window.djust.flash) {
+                    window.djust.flash.handleFlash(data);
+                }
+                break;
+
+            case 'page_metadata':
+                // Page metadata from server (page_title / page_meta)
+                if (window.djust.pageMetadata) {
+                    window.djust.pageMetadata.handlePageMetadata(data);
                 }
                 break;
 
@@ -842,8 +1068,16 @@ class LiveViewWebSocket {
             data: data
         });
 
-        // Send the message
-        this.ws.send(message);
+        // Latency simulation (DEBUG_MODE only)
+        const simLatency = window.DEBUG_MODE && window.djust && window.djust._simulatedLatency;
+        if (simLatency > 0) {
+            const jitter = (window.djust._simulatedJitter || 0);
+            const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
+            setTimeout(() => this.ws.send(message), actual);
+        } else {
+            // Send the message
+            this.ws.send(message);
+        }
     }
 
     autoMount() {
@@ -893,10 +1127,20 @@ class LiveViewWebSocket {
         this.lastEventName = eventName;
         this.lastTriggerElement = triggerElement;
 
+        // Event sequencing (#560): assign monotonic ref so we can match
+        // the server's response to this specific event and distinguish
+        // it from server-initiated patches. Uses Set to track multiple
+        // concurrent pending events.
+        const ref = ++_eventRefCounter;
+        _pendingEventRefs.add(ref);
+        _pendingEventNames.set(ref, eventName);
+        _pendingTriggerEls.set(ref, triggerElement);
+
         this.sendMessage({
             type: 'event',
             event: eventName,
-            params: params
+            params: params,
+            ref: ref
         });
         return true;
     }
@@ -933,6 +1177,23 @@ class LiveViewWebSocket {
 
         // Re-bind events within the updated container
         reinitAfterDOMUpdate();
+    }
+
+    _showReconnectBanner(attempt, maxAttempts) {
+        let banner = document.getElementById('dj-reconnecting-banner');
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'dj-reconnecting-banner';
+            banner.className = 'dj-reconnecting-banner';
+            banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;background:#f59e0b;color:#1c1917;text-align:center;padding:6px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;font-weight:600;';
+            document.body.appendChild(banner);
+        }
+        banner.textContent = 'Reconnecting\u2026 (attempt ' + attempt + ' of ' + maxAttempts + ')';
+    }
+
+    _removeReconnectBanner() {
+        const banner = document.getElementById('dj-reconnecting-banner');
+        if (banner) banner.remove();
     }
 
     _showConnectionErrorOverlay() {
@@ -1046,6 +1307,7 @@ class LiveViewSSE {
         this.sseBaseUrl = null;
         this.enabled = true;
         this.viewMounted = false;
+        this._hasConnectedBefore = false;
         this.lastEventName = null;
         this.lastTriggerElement = null;
         // Mirror LiveViewWebSocket interface for interoperability
@@ -1073,6 +1335,18 @@ class LiveViewSSE {
 
         this.eventSource = new EventSource(streamUrl);
 
+        this.eventSource.onopen = () => {
+            // Connection state CSS classes
+            document.body.classList.add('dj-connected');
+            document.body.classList.remove('dj-disconnected');
+
+            // Track reconnections for form recovery
+            if (this._hasConnectedBefore) {
+                if (window.djust) window.djust._isReconnect = true;
+            }
+            this._hasConnectedBefore = true;
+        };
+
         this.eventSource.onmessage = (event) => {
             try {
                 this.stats.received++;
@@ -1090,6 +1364,9 @@ class LiveViewSSE {
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED) {
                 console.warn('[SSE] EventSource closed unexpectedly.');
                 this.enabled = false;
+                // Connection state CSS classes
+                document.body.classList.add('dj-disconnected');
+                document.body.classList.remove('dj-connected');
             }
         };
     }
@@ -1104,6 +1381,11 @@ class LiveViewSSE {
         }
         this.viewMounted = false;
         this.sessionId = null;
+
+        // Remove connection state CSS classes on intentional disconnect
+        document.body.classList.remove('dj-connected');
+        document.body.classList.remove('dj-disconnected');
+
         if (globalThis.djustDebug) console.log('[SSE] Disconnected');
     }
 
@@ -1128,6 +1410,12 @@ class LiveViewSSE {
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
 
+                // Remove dj-cloak from all elements (FOUC prevention)
+                document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
+
+                // Finish page loading bar on mount
+                if (window.djust.pageLoading) window.djust.pageLoading.finish();
+
                 if (data.version !== undefined) {
                     clientVdomVersion = data.version;
                 }
@@ -1147,6 +1435,18 @@ class LiveViewSSE {
                             container.innerHTML = data.html;
                         }
                         reinitAfterDOMUpdate();
+                        // Set mount ready flag so dj-mounted handlers only fire
+                        // for elements added by subsequent VDOM patches, not on initial load
+                        window.djust._mountReady = true;
+                    }
+                }
+                // Trigger form recovery and dj-auto-recover after reconnect mount
+                if (window.djust._isReconnect) {
+                    if (typeof window.djust._processFormRecovery === 'function') {
+                        window.djust._processFormRecovery();
+                    }
+                    if (typeof window.djust._processAutoRecover === 'function') {
+                        window.djust._processAutoRecover();
                     }
                 }
                 break;
@@ -1221,6 +1521,20 @@ class LiveViewSSE {
             case 'focus':
                 if (window.djust.accessibility) {
                     window.djust.accessibility.processFocus([data.selector, data.options]);
+                }
+                break;
+
+            case 'flash':
+                // Flash message from server (put_flash / clear_flash)
+                if (window.djust.flash) {
+                    window.djust.flash.handleFlash(data);
+                }
+                break;
+
+            case 'page_metadata':
+                // Page metadata from server (page_title / page_meta)
+                if (window.djust.pageMetadata) {
+                    window.djust.pageMetadata.handlePageMetadata(data);
                 }
                 break;
 
@@ -1312,6 +1626,15 @@ window.djust.LiveViewSSE = LiveViewSSE;
 
 // Track VDOM version for synchronization
 let clientVdomVersion = null;
+
+// Event sequencing (#560): monotonic ref counter for matching event
+// responses to requests, and buffering server-initiated pushes during
+// pending events. Uses a Set to track multiple concurrent pending refs.
+let _eventRefCounter = 0;
+let _pendingEventRefs = new Set();     // refs of events awaiting server response
+let _pendingEventNames = new Map();    // ref -> event name for pending events
+let _pendingTriggerEls = new Map();    // ref -> trigger element for loading state
+let _tickBuffer = [];                  // buffered server-initiated patches during pending events
 
 // State management for decorators
 const debounceTimers = new Map(); // Map<handlerName, {timerId, firstCallTime}>
@@ -1486,6 +1809,24 @@ function invalidateCache(pattern) {
 // Expose cache invalidation API under djust namespace
 window.djust.clearCache = clearCache;
 window.djust.invalidateCache = invalidateCache;
+
+// Event sequencing (#560): expose accessors for testing
+window.djust._getEventSeqState = function() {
+    return {
+        // Legacy scalar accessors (null when empty, first ref when non-empty)
+        pendingEventRef: _pendingEventRefs.size > 0 ? Array.from(_pendingEventRefs)[0] : null,
+        pendingEventName: _pendingEventRefs.size > 0
+            ? _pendingEventNames.get(Array.from(_pendingEventRefs)[0]) || null
+            : null,
+        // Set-based accessors
+        pendingEventRefs: Array.from(_pendingEventRefs),
+        tickBufferLength: _tickBuffer.length,
+        eventRefCounter: _eventRefCounter,
+    };
+};
+window.djust._pushTickBuffer = function(data) {
+    _tickBuffer.push(data);
+};
 
 // StateBus - Client-side State Coordination (Phase 5)
 class StateBus {
@@ -2155,12 +2496,109 @@ function extractTypedParams(element) {
         }
     }
 
+    // Merge dj-value-* attributes. dj-value-* takes precedence over data-*
+    // and dj-params, matching Phoenix's phx-value-* semantics.
+    const djValues = collectDjValues(element);
+    for (const [k, v] of Object.entries(djValues)) {
+        params[k] = v;
+    }
+
     return params;
+}
+
+/**
+ * Collect dj-value-* attributes from an element and return as a params object.
+ *
+ * dj-value-* is the standard way to pass static context alongside events
+ * (Phoenix LiveView's phx-value-* equivalent). Supports the same type-hint
+ * suffixes as data-* attributes.
+ *
+ * Examples:
+ *   dj-value-id="42"             -> { id: "42" }
+ *   dj-value-id:int="42"        -> { id: 42 }
+ *   dj-value-item-type="soft"   -> { item_type: "soft" }
+ *   dj-value-active:bool="true" -> { active: true }
+ *   dj-value-tags:list="a,b,c"  -> { tags: ["a", "b", "c"] }
+ *
+ * @param {HTMLElement} element - Element to extract dj-value-* from
+ * @returns {Object} - Collected params with coerced types
+ */
+function collectDjValues(element) {
+    const values = Object.create(null);
+
+    for (const attr of element.attributes) {
+        if (!attr.name.startsWith('dj-value-')) continue;
+
+        // Parse: dj-value-item-id:int -> key="item_id", type="int"
+        const nameWithoutPrefix = attr.name.slice(9); // Remove "dj-value-"
+        const colonIndex = nameWithoutPrefix.lastIndexOf(':');
+        let rawKey, typeHint;
+
+        if (colonIndex !== -1) {
+            rawKey = nameWithoutPrefix.slice(0, colonIndex);
+            typeHint = nameWithoutPrefix.slice(colonIndex + 1);
+        } else {
+            rawKey = nameWithoutPrefix;
+            typeHint = null;
+        }
+
+        // Convert kebab-case to snake_case
+        const key = rawKey.replace(/-/g, '_');
+
+        // Prevent prototype pollution
+        if (UNSAFE_KEYS.includes(key)) continue;
+
+        let value = attr.value;
+
+        // Apply type coercion (same logic as extractTypedParams)
+        if (typeHint) {
+            switch (typeHint) {
+                case 'int':
+                case 'integer': {
+                    if (value === '') { value = 0; }
+                    else {
+                        const parsed = parseInt(value, 10);
+                        value = isNaN(parsed) ? null : parsed;
+                    }
+                    break;
+                }
+                case 'float':
+                case 'number': {
+                    if (value === '') { value = 0.0; }
+                    else {
+                        const parsed = parseFloat(value);
+                        value = isNaN(parsed) ? null : parsed;
+                    }
+                    break;
+                }
+                case 'bool':
+                case 'boolean':
+                    value = ['true', '1', 'yes', 'on', 'checked'].includes(value.toLowerCase());
+                    break;
+                case 'json':
+                case 'object':
+                case 'array':
+                    try { value = JSON.parse(value); }
+                    catch { /* keep as string */ }
+                    break;
+                case 'list':
+                    value = value ? value.split(',').map(v => v.trim()).filter(v => v) : [];
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        values[key] = value;
+    }
+
+    return values;
 }
 
 // Export for global access
 window.djust = window.djust || {};
 window.djust.extractTypedParams = extractTypedParams;
+window.djust.collectDjValues = collectDjValues;
 /**
  * Check if element has dj-confirm and show confirmation dialog.
  * @param {HTMLElement} element - Element with potential dj-confirm attribute
@@ -2197,6 +2635,80 @@ function _markHandlerBound(element, type) {
     set.add(type);
 }
 
+// ============================================================================
+// Scoped Listener Helpers (window/document event binding)
+// ============================================================================
+
+// Track all elements that have scoped (window/document) listeners so we can
+// sweep and clean up listeners for elements removed from the DOM.
+const _scopedListenerElements = new Set();
+
+/**
+ * Clean up all scoped (window/document) listeners stored on an element.
+ * Each listener is stored as { target, eventType, handler, capture } in
+ * element._djustScopedListeners.
+ * @param {HTMLElement} element
+ */
+function _cleanupScopedListeners(element) {
+    if (!element._djustScopedListeners) return;
+    for (const entry of element._djustScopedListeners) {
+        entry.target.removeEventListener(entry.eventType, entry.handler, entry.capture || false);
+    }
+    element._djustScopedListeners = [];
+    _scopedListenerElements.delete(element);
+}
+
+/**
+ * Register a scoped listener on an element. Stores the reference for cleanup.
+ * @param {HTMLElement} element - Declaring element (anchor)
+ * @param {EventTarget} target - window or document
+ * @param {string} eventType - DOM event type (e.g. 'keydown')
+ * @param {Function} handler - Event handler function
+ * @param {boolean} [capture=false] - Use capture phase
+ */
+function _addScopedListener(element, target, eventType, handler, capture) {
+    if (!element._djustScopedListeners) element._djustScopedListeners = [];
+    const useCapture = capture || false;
+    element._djustScopedListeners.push({ target, eventType, handler, capture: useCapture });
+    target.addEventListener(eventType, handler, useCapture);
+    _scopedListenerElements.add(element);
+}
+
+/**
+ * Sweep all tracked scoped-listener elements and remove listeners for any
+ * elements that are no longer in the DOM. Called before binding new scoped
+ * listeners to prevent accumulation from conditional rendering.
+ */
+function _sweepOrphanedScopedListeners() {
+    for (const element of _scopedListenerElements) {
+        if (!document.contains(element)) {
+            _cleanupScopedListeners(element);
+        }
+    }
+}
+
+/**
+ * Normalize a key name to match KeyboardEvent.key values.
+ * @param {string} name - Key name from attribute (e.g. 'escape', 'enter', 'k')
+ * @returns {string} - Normalized key name
+ */
+function _normalizeKeyName(name) {
+    const lower = name.toLowerCase();
+    const keyMap = {
+        'escape': 'Escape',
+        'enter': 'Enter',
+        'tab': 'Tab',
+        'space': ' ',
+        'backspace': 'Backspace',
+        'delete': 'Delete',
+        'arrowup': 'ArrowUp',
+        'arrowdown': 'ArrowDown',
+        'arrowleft': 'ArrowLeft',
+        'arrowright': 'ArrowRight',
+    };
+    return keyMap[lower] || name;
+}
+
 /**
  * Add component and embedded view context to event params.
  * Extracts component_id and view_id from the element's ancestry.
@@ -2208,6 +2720,64 @@ function addEventContext(params, element) {
     if (componentId) params.component_id = componentId;
     const embeddedViewId = getEmbeddedViewId(element);
     if (embeddedViewId) params.view_id = embeddedViewId;
+}
+
+// WeakSet to track elements whose dj-mounted handler has already fired.
+// Using WeakSet means entries are GC'd when the DOM node is replaced,
+// allowing the handler to fire again for genuinely new elements.
+const _mountedElements = new WeakSet();
+
+/**
+ * Check if element is a form element that supports the disabled property.
+ * @param {HTMLElement} element
+ * @returns {boolean}
+ */
+function _isFormElement(element) {
+    const tag = element.tagName;
+    return tag === 'BUTTON' || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+}
+
+/**
+ * Lock an element: set data-djust-locked marker and disable/style it.
+ * For form elements (button, input, select, textarea): sets disabled = true.
+ * For non-form elements: adds CSS class 'djust-locked'.
+ * @param {HTMLElement} element
+ */
+function _lockElement(element) {
+    element.setAttribute('data-djust-locked', '');
+    if (_isFormElement(element)) {
+        element.disabled = true;
+    } else {
+        element.classList.add('djust-locked');
+    }
+}
+
+/**
+ * Check if element has dj-lock and is already locked. If locked, return true
+ * to signal the caller to skip the event. If not locked but has dj-lock, lock it.
+ * @param {HTMLElement} element
+ * @returns {boolean} true if event should be skipped (already locked)
+ */
+function _checkAndLock(element) {
+    if (!element.hasAttribute('dj-lock')) return false;
+    if (element.hasAttribute('data-djust-locked')) return true; // Already locked, skip
+    _lockElement(element);
+    return false;
+}
+
+/**
+ * Apply dj-disable-with: save original text and replace with loading text.
+ * Only saves original text if not already saved (prevents overwrite on double-submit).
+ * @param {HTMLElement} element - Element with dj-disable-with attribute
+ */
+function _applyDisableWith(element) {
+    const disableText = element.getAttribute('dj-disable-with');
+    if (!disableText) return;
+    if (!element.hasAttribute('data-djust-original-text')) {
+        element.setAttribute('data-djust-original-text', element.textContent);
+    }
+    element.textContent = disableText;
+    element.disabled = true;
 }
 
 function bindLiveViewEvents() {
@@ -2232,6 +2802,9 @@ function bindLiveViewEvents() {
             const clickHandlerFn = async (e) => {
                 e.preventDefault();
 
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
                 // Read attribute at fire time so morphElement attribute updates take effect
                 const parsed = parseEventHandler(element.getAttribute('dj-click') || '');
 
@@ -2239,6 +2812,9 @@ function bindLiveViewEvents() {
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
                 }
+
+                // dj-disable-with: disable and show loading text
+                _applyDisableWith(element);
 
                 // Apply optimistic update if specified
                 let optimisticUpdateId = null;
@@ -2270,10 +2846,11 @@ function bindLiveViewEvents() {
                 await handleEvent(parsed.name, params);
             };
 
-            // Apply rate limiting if specified
-            const wrappedHandler = window.djust.rateLimit
-                ? window.djust.rateLimit.wrapWithRateLimit(element, 'click', clickHandlerFn)
-                : clickHandlerFn;
+            // Apply dj-debounce/dj-throttle HTML attributes first, then server rate limit
+            let wrappedHandler = _applyRateLimitAttrs(element, clickHandlerFn);
+            if (wrappedHandler === clickHandlerFn && window.djust.rateLimit) {
+                wrappedHandler = window.djust.rateLimit.wrapWithRateLimit(element, 'click', clickHandlerFn);
+            }
 
             element.addEventListener('click', wrappedHandler);
         }
@@ -2286,10 +2863,37 @@ function bindLiveViewEvents() {
                 // Read attribute at click time (not bind time) so morph updates take effect
                 var currentValue = element.getAttribute('dj-copy');
                 if (!currentValue) return;
-                navigator.clipboard.writeText(currentValue).then(function() {
+
+                // Selector-based copy: if value starts with #, . or [, try querySelector
+                var textToCopy = currentValue;
+                if (currentValue.charAt(0) === '#' || currentValue.charAt(0) === '.' || currentValue.charAt(0) === '[') {
+                    try {
+                        var target = document.querySelector(currentValue);
+                        if (target) {
+                            textToCopy = target.textContent;
+                        }
+                    } catch (err) {
+                        // Invalid selector — fall back to literal copy
+                    }
+                }
+
+                navigator.clipboard.writeText(textToCopy).then(function() {
+                    // CSS class feedback: add class and remove after 2s
+                    var cssClass = element.getAttribute('dj-copy-class') || 'dj-copied';
+                    element.classList.add(cssClass);
+                    setTimeout(function() { element.classList.remove(cssClass); }, 2000);
+
+                    // Text feedback: custom or default "Copied!"
+                    var feedbackText = element.getAttribute('dj-copy-feedback') || 'Copied!';
                     var original = element.textContent;
-                    element.textContent = 'Copied!';
+                    element.textContent = feedbackText;
                     setTimeout(function() { element.textContent = original; }, 1500);
+
+                    // Optional server event for analytics
+                    var copyEvent = element.getAttribute('dj-copy-event');
+                    if (copyEvent && typeof handleEvent === 'function') {
+                        handleEvent(copyEvent, { text: textToCopy });
+                    }
                 });
             });
         }
@@ -2301,15 +2905,32 @@ function bindLiveViewEvents() {
             element.addEventListener('submit', async (e) => {
                 e.preventDefault();
 
+                // dj-lock: skip if already locked
+                if (_checkAndLock(e.target)) return;
+
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(e.target)) {
                     return; // User cancelled
                 }
 
+                // dj-disable-with: disable submit buttons within the form
+                const submitBtns = e.target.querySelectorAll('button[type="submit"][dj-disable-with]');
+                submitBtns.forEach(btn => _applyDisableWith(btn));
+                // Also check the submitter if it has dj-disable-with
+                if (e.submitter && e.submitter.hasAttribute('dj-disable-with')) {
+                    _applyDisableWith(e.submitter);
+                }
+
                 const formData = new FormData(e.target);
                 const params = Object.fromEntries(formData.entries());
 
+                // Merge dj-value-* attributes from the form element
+                Object.assign(params, collectDjValues(e.target));
+
                 addEventContext(params, e.target);
+
+                // _target: include submitter name if available
+                params._target = (e.submitter && (e.submitter.name || e.submitter.id)) || null;
 
                 // Pass target element for optimistic updates (Phase 3)
                 params._targetElement = e.target;
@@ -2344,6 +2965,8 @@ function bindLiveViewEvents() {
         function buildFormEventParams(element, value) {
             const fieldName = getFieldName(element);
             const params = { value, field: fieldName };
+            // Merge dj-value-* attributes from the triggering element
+            Object.assign(params, collectDjValues(element));
             addEventContext(params, element);
             return params;
         }
@@ -2356,6 +2979,9 @@ function bindLiveViewEvents() {
             const parsedChange = parseEventHandler(changeHandler);
 
             const changeHandlerFn = async (e) => {
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
@@ -2369,6 +2995,9 @@ function bindLiveViewEvents() {
                 if (parsedChange.args.length > 0) {
                     params._args = parsedChange.args;
                 }
+
+                // _target: include triggering field's name (or id, or null)
+                params._target = e.target.name || e.target.id || null;
 
                 // Add target element for loading state (consistent with other handlers)
                 params._targetElement = e.target;
@@ -2385,12 +3014,13 @@ function bindLiveViewEvents() {
                 await handleEvent(parsedChange.name, params);
             };
 
-            // Apply rate limiting if specified
-            const wrappedHandler = window.djust.rateLimit
-                ? window.djust.rateLimit.wrapWithRateLimit(element, 'change', changeHandlerFn)
-                : changeHandlerFn;
+            // Apply dj-debounce/dj-throttle HTML attributes first, then server rate limit
+            let wrappedChangeHandler = _applyRateLimitAttrs(element, changeHandlerFn);
+            if (wrappedChangeHandler === changeHandlerFn && window.djust.rateLimit) {
+                wrappedChangeHandler = window.djust.rateLimit.wrapWithRateLimit(element, 'change', changeHandlerFn);
+            }
 
-            element.addEventListener('change', wrappedHandler);
+            element.addEventListener('change', wrappedChangeHandler);
         }
 
         // Handle dj-input events (with smart debouncing/throttling)
@@ -2404,8 +3034,20 @@ function bindLiveViewEvents() {
             const inputType = element.type || element.tagName.toLowerCase();
             const rateLimit = Object.prototype.hasOwnProperty.call(DEFAULT_RATE_LIMITS, inputType) ? DEFAULT_RATE_LIMITS[inputType] : { type: 'debounce', ms: 300 };
 
-            // Check for explicit overrides
-            if (element.hasAttribute('data-debounce')) {
+            // Check for explicit overrides: dj-* attributes take precedence
+            if (element.hasAttribute('dj-debounce')) {
+                const djVal = element.getAttribute('dj-debounce');
+                if (djVal === 'blur') {
+                    rateLimit.type = 'blur';
+                    rateLimit.ms = 0;
+                } else {
+                    rateLimit.type = 'debounce';
+                    rateLimit.ms = parseInt(djVal, 10);
+                }
+            } else if (element.hasAttribute('dj-throttle')) {
+                rateLimit.type = 'throttle';
+                rateLimit.ms = parseInt(element.getAttribute('dj-throttle'), 10);
+            } else if (element.hasAttribute('data-debounce')) {
                 rateLimit.type = 'debounce';
                 rateLimit.ms = parseInt(element.getAttribute('data-debounce'));
             } else if (element.hasAttribute('data-throttle')) {
@@ -2414,6 +3056,9 @@ function bindLiveViewEvents() {
             }
 
             const handler = async (e) => {
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
@@ -2423,12 +3068,28 @@ function bindLiveViewEvents() {
                 if (parsedInput.args.length > 0) {
                     params._args = parsedInput.args;
                 }
+
+                // _target: include triggering field's name (or id, or null)
+                params._target = e.target.name || e.target.id || null;
+
                 await handleEvent(parsedInput.name, params);
             };
 
             // Apply rate limiting wrapper
             let wrappedHandler;
-            if (rateLimit.type === 'throttle') {
+            if (rateLimit.type === 'blur') {
+                // dj-debounce="blur": defer until element loses focus
+                let latestArgs = null;
+                wrappedHandler = function (...args) {
+                    latestArgs = args;
+                };
+                element.addEventListener('blur', function () {
+                    if (latestArgs !== null) {
+                        handler(...latestArgs);
+                        latestArgs = null;
+                    }
+                });
+            } else if (rateLimit.type === 'throttle') {
                 wrappedHandler = throttle(handler, rateLimit.ms);
             } else {
                 wrappedHandler = debounce(handler, rateLimit.ms);
@@ -2443,6 +3104,9 @@ function bindLiveViewEvents() {
             _markHandlerBound(element, 'blur');
             const parsedBlur = parseEventHandler(blurHandler);
             element.addEventListener('blur', async (e) => {
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
@@ -2462,6 +3126,9 @@ function bindLiveViewEvents() {
             _markHandlerBound(element, 'focus');
             const parsedFocus = parseEventHandler(focusHandler);
             element.addEventListener('focus', async (e) => {
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
                 // dj-confirm: show confirmation dialog before sending event
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
@@ -2494,6 +3161,9 @@ function bindLiveViewEvents() {
                         // Add more key mappings as needed
                     }
 
+                    // dj-lock: skip if already locked
+                    if (_checkAndLock(element)) return;
+
                     // dj-confirm: show confirmation dialog before sending event
                     if (!checkDjConfirm(element)) {
                         return; // User cancelled
@@ -2507,6 +3177,9 @@ function bindLiveViewEvents() {
                         field: fieldName
                     };
 
+                    // Merge dj-value-* attributes from the element
+                    Object.assign(params, collectDjValues(element));
+
                     addEventContext(params, e.target);
 
                     // Add target element and handle dj-target
@@ -2519,12 +3192,13 @@ function bindLiveViewEvents() {
                     await handleEvent(handlerName, params);
                 };
 
-                // Apply rate limiting if specified
-                const wrappedHandler = window.djust.rateLimit
-                    ? window.djust.rateLimit.wrapWithRateLimit(element, eventType, keyHandlerFn)
-                    : keyHandlerFn;
+                // Apply dj-debounce/dj-throttle HTML attributes first, then server rate limit
+                let wrappedKeyHandler = _applyRateLimitAttrs(element, keyHandlerFn);
+                if (wrappedKeyHandler === keyHandlerFn && window.djust.rateLimit) {
+                    wrappedKeyHandler = window.djust.rateLimit.wrapWithRateLimit(element, eventType, keyHandlerFn);
+                }
 
-                element.addEventListener(eventType, wrappedHandler);
+                element.addEventListener(eventType, wrappedKeyHandler);
             }
         });
 
@@ -2554,9 +3228,252 @@ function bindLiveViewEvents() {
         }
     });
 
+    // ================================================================
+    // Scoped listeners: dj-window-*, dj-document-*, dj-click-away, dj-shortcut
+    // ================================================================
+
+    // Sweep orphaned scoped listeners (elements removed from DOM by conditional rendering)
+    _sweepOrphanedScopedListeners();
+
+    // --- Feature 1: dj-window-* and dj-document-* event scoping ---
+    const scopedPrefixes = [
+        { prefix: 'dj-window-', target: window },
+        { prefix: 'dj-document-', target: document },
+    ];
+    const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
+
+    // Collect all elements that have any dj-window-* or dj-document-* attributes
+    // by scanning once through allElements (already queried above).
+    for (const { prefix, target } of scopedPrefixes) {
+        for (const evtType of scopedEventTypes) {
+            // scroll and resize only make sense on window
+            if (target === document && (evtType === 'scroll' || evtType === 'resize')) continue;
+
+            const attrBase = prefix + evtType;
+            // Scan all elements for attributes starting with this prefix+eventType
+            // (covers both exact matches and key-modifier variants like dj-window-keydown.escape)
+            allElements.forEach(element => {
+                for (const attr of element.attributes) {
+                    if (!attr.name.startsWith(attrBase)) continue;
+                    const bindType = attr.name; // e.g. 'dj-window-keydown' or 'dj-window-keydown.escape'
+                    if (_isHandlerBound(element, bindType)) continue;
+                    _markHandlerBound(element, bindType);
+
+                    // Parse handler name and optional key modifier
+                    const attrValue = attr.value;
+                    const suffix = attr.name.slice(attrBase.length); // '' or '.escape'
+                    const requiredKey = suffix.startsWith('.') ? _normalizeKeyName(suffix.slice(1)) : null;
+
+                    // Parse handler name (supports handler(args) syntax)
+                    const parsed = parseEventHandler(attrValue);
+
+                    const scopedHandler = async (e) => {
+                        // Key filtering for keydown/keyup
+                        if (requiredKey && e.key !== requiredKey) return;
+
+                        // Build params from the declaring element
+                        const params = extractTypedParams(element);
+                        addEventContext(params, element);
+
+                        // Add event-specific params
+                        if (evtType === 'keydown' || evtType === 'keyup') {
+                            params.key = e.key;
+                            params.code = e.code;
+                        } else if (evtType === 'click') {
+                            params.clientX = e.clientX;
+                            params.clientY = e.clientY;
+                        } else if (evtType === 'scroll') {
+                            params.scrollY = window.scrollY;
+                            params.scrollX = window.scrollX;
+                        } else if (evtType === 'resize') {
+                            params.innerWidth = window.innerWidth;
+                            params.innerHeight = window.innerHeight;
+                        }
+
+                        if (parsed.args.length > 0) {
+                            params._args = parsed.args;
+                        }
+
+                        await handleEvent(parsed.name, params);
+                    };
+
+                    // Apply default throttle for scroll/resize
+                    let finalHandler = scopedHandler;
+                    if (evtType === 'scroll' || evtType === 'resize') {
+                        const throttleMs = parseInt(element.getAttribute('data-throttle'), 10) || 150;
+                        finalHandler = throttle(scopedHandler, throttleMs);
+                    } else if (element.hasAttribute('data-debounce')) {
+                        finalHandler = debounce(scopedHandler, parseInt(element.getAttribute('data-debounce'), 10));
+                    } else if (element.hasAttribute('data-throttle')) {
+                        finalHandler = throttle(scopedHandler, parseInt(element.getAttribute('data-throttle'), 10));
+                    }
+
+                    _addScopedListener(element, target, evtType, finalHandler, false);
+                }
+            });
+        }
+    }
+
+    // --- Feature 2: dj-click-away ---
+    document.querySelectorAll('[dj-click-away]').forEach(element => {
+        if (_isHandlerBound(element, 'click-away')) return;
+        _markHandlerBound(element, 'click-away');
+
+        const handlerName = element.getAttribute('dj-click-away');
+
+        const clickAwayHandler = async (e) => {
+            // Only fire if click is outside the element
+            if (element.contains(e.target)) return;
+
+            // dj-confirm support
+            if (!checkDjConfirm(element)) return;
+
+            const params = extractTypedParams(element);
+            addEventContext(params, element);
+
+            await handleEvent(handlerName, params);
+        };
+
+        // Use capture phase so stopPropagation inside doesn't prevent detection
+        _addScopedListener(element, document, 'click', clickAwayHandler, true);
+    });
+
+    // --- Feature 3: dj-shortcut ---
+    document.querySelectorAll('[dj-shortcut]').forEach(element => {
+        if (_isHandlerBound(element, 'shortcut')) return;
+        _markHandlerBound(element, 'shortcut');
+
+        const attrValue = element.getAttribute('dj-shortcut');
+        const allowInInput = element.hasAttribute('dj-shortcut-in-input');
+
+        // Parse comma-separated bindings
+        // Each binding: [modifier+...]key:handler[:prevent]
+        const bindings = attrValue.split(',').map(b => b.trim()).filter(b => b).map(binding => {
+            const parts = binding.split(':');
+            const keyCombo = parts[0].trim(); // e.g. 'ctrl+k' or 'escape'
+            const handler = parts[1] ? parts[1].trim() : '';
+            const preventDefault = parts[2] ? parts[2].trim() === 'prevent' : false;
+
+            // Parse key combo into modifiers + key
+            const comboParts = keyCombo.split('+');
+            const key = _normalizeKeyName(comboParts[comboParts.length - 1]);
+            const modifiers = new Set();
+            for (let i = 0; i < comboParts.length - 1; i++) {
+                modifiers.add(comboParts[i].toLowerCase());
+            }
+
+            return { key, modifiers, handler, preventDefault, comboString: keyCombo };
+        });
+
+        const shortcutHandler = async (e) => {
+            // Skip if active element is a form input (unless opt-out)
+            if (!allowInInput) {
+                const active = document.activeElement;
+                if (active) {
+                    const tag = active.tagName;
+                    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || active.isContentEditable) {
+                        return;
+                    }
+                }
+            }
+
+            // Skip if element is not visible (hidden modals etc.)
+            // Check hidden attribute and display:none; offsetParent is used as
+            // a secondary check when available (not in JSDOM/SSR environments).
+            if (element.hidden || element.style.display === 'none') return;
+            if (!document.contains(element)) return;
+
+            for (const binding of bindings) {
+                if (e.key !== binding.key) continue;
+
+                // Check modifiers
+                const ctrlMatch = binding.modifiers.has('ctrl') === e.ctrlKey;
+                const altMatch = binding.modifiers.has('alt') === e.altKey;
+                const shiftMatch = binding.modifiers.has('shift') === e.shiftKey;
+                const metaMatch = binding.modifiers.has('meta') === e.metaKey;
+
+                if (!ctrlMatch || !altMatch || !shiftMatch || !metaMatch) continue;
+
+                // Match found
+                if (binding.preventDefault) {
+                    e.preventDefault();
+                }
+
+                const params = extractTypedParams(element);
+                addEventContext(params, element);
+                params.key = e.key;
+                params.code = e.code;
+                params.shortcut = binding.comboString;
+
+                await handleEvent(binding.handler, params);
+                return; // Fire first match only
+            }
+        };
+
+        _addScopedListener(element, document, 'keydown', shortcutHandler, false);
+    });
+
     // Re-scan dj-loading attributes after DOM updates so dynamically
     // added elements (e.g. inside modals) get registered.
     globalLoadingManager.scanAndRegister();
+
+    // dj-mounted: fire event for elements that have entered the DOM after
+    // initial mount. Uses WeakSet to track already-fired elements so each
+    // DOM node only triggers once (replaced nodes are new objects and will fire again).
+    if (window.djust._mountReady) {
+        document.querySelectorAll('[dj-mounted]').forEach(el => {
+            if (_mountedElements.has(el)) return;
+            _mountedElements.add(el);
+
+            const handlerName = el.getAttribute('dj-mounted');
+            if (!handlerName) return;
+
+            // Collect dj-value-* and data-* params from the mounted element
+            const params = extractTypedParams(el);
+            addEventContext(params, el);
+
+            handleEvent(handlerName, params);
+        });
+    }
+}
+
+/**
+ * Apply dj-debounce / dj-throttle HTML attributes to an event handler.
+ * If the element has dj-debounce or dj-throttle, wraps the handler accordingly.
+ * dj-debounce="blur" is a special value that defers until the element loses focus.
+ * Returns the (potentially wrapped) handler.
+ * @param {HTMLElement} element - Element with potential dj-debounce/dj-throttle
+ * @param {Function} handler - Original event handler
+ * @returns {Function} - Wrapped or original handler
+ */
+function _applyRateLimitAttrs(element, handler) {
+    if (element.hasAttribute('dj-debounce')) {
+        const val = element.getAttribute('dj-debounce');
+        if (val === 'blur') {
+            // Special: defer event until element loses focus
+            let latestArgs = null;
+            const blurWrapper = function (...args) {
+                latestArgs = args;
+            };
+            element.addEventListener('blur', function () {
+                if (latestArgs !== null) {
+                    handler(...latestArgs);
+                    latestArgs = null;
+                }
+            });
+            return blurWrapper;
+        }
+        const ms = parseInt(val, 10);
+        if (ms === 0) {
+            return handler; // dj-debounce="0" means no debounce
+        }
+        return debounce(handler, ms);
+    }
+    if (element.hasAttribute('dj-throttle')) {
+        const ms = parseInt(element.getAttribute('dj-throttle'), 10);
+        return throttle(handler, ms);
+    }
+    return handler;
 }
 
 // Helper: Debounce function
@@ -2606,11 +3523,192 @@ function clearOptimisticState(eventName) {
  * instead of manually calling initReactCounters + initTodoItems +
  * bindLiveViewEvents + updateHooks individually.
  */
+// WeakSet to track elements that have already been scrolled into view.
+// Fresh DOM nodes (from VDOM replacement) won't be in the set, so they
+// will scroll again — correct behavior for newly inserted content.
+const _scrolledElements = new WeakSet();
+
 function reinitAfterDOMUpdate() {
     initReactCounters();
     initTodoItems();
     bindLiveViewEvents();
     if (typeof updateHooks === 'function') { updateHooks(); }
+
+    // dj-scroll-into-view: auto-scroll elements into view after DOM updates
+    document.querySelectorAll('[dj-scroll-into-view]').forEach(el => {
+        if (_scrolledElements.has(el)) return;
+        _scrolledElements.add(el);
+
+        const value = el.getAttribute('dj-scroll-into-view') || '';
+        let options;
+        switch (value) {
+            case 'instant':
+                options = { behavior: 'instant', block: 'nearest' };
+                break;
+            case 'center':
+                options = { behavior: 'smooth', block: 'center' };
+                break;
+            case 'start':
+                options = { behavior: 'smooth', block: 'start' };
+                break;
+            case 'end':
+                options = { behavior: 'smooth', block: 'end' };
+                break;
+            default:
+                options = { behavior: 'smooth', block: 'nearest' };
+                break;
+        }
+        el.scrollIntoView(options);
+    });
+}
+
+/**
+ * Process dj-auto-recover elements after a WebSocket reconnect.
+ * Scans for [dj-auto-recover] elements, serializes their DOM state
+ * (form values + data-* attributes), and fires the named event.
+ * Only fires when _isReconnect flag is set; clears the flag after processing.
+ */
+function _processAutoRecover() {
+    if (!window.djust._isReconnect) return;
+    window.djust._isReconnect = false;
+
+    document.querySelectorAll('[dj-auto-recover]').forEach(function(container) {
+        var handlerName = container.getAttribute('dj-auto-recover');
+        if (!handlerName) return;
+
+        // Serialize form field values within the container
+        var formValues = {};
+        container.querySelectorAll('input, textarea, select').forEach(function(field) {
+            var name = field.name;
+            if (!name) return;
+            if (field.type === 'checkbox') {
+                formValues[name] = field.checked;
+            } else if (field.type === 'radio') {
+                if (field.checked) formValues[name] = field.value;
+            } else {
+                formValues[name] = field.value;
+            }
+        });
+
+        // Collect data-* attributes from the container element
+        var dataAttrs = {};
+        for (var i = 0; i < container.attributes.length; i++) {
+            var attr = container.attributes[i];
+            if (attr.name.startsWith('data-')) {
+                var key = attr.name.slice(5); // Strip 'data-' prefix
+                dataAttrs[key] = attr.value;
+            }
+        }
+
+        var params = {
+            _form_values: formValues,
+            _data_attrs: dataAttrs
+        };
+
+        if (typeof handleEvent === 'function') {
+            handleEvent(handlerName, params);
+        }
+    });
+}
+
+/**
+ * Process automatic form recovery after a WebSocket reconnect.
+ * Scans all form fields with dj-change or dj-input inside [dj-view] and
+ * fires synthetic change events when the DOM value differs from the
+ * server-rendered default, restoring server state transparently.
+ *
+ * Skips fields with dj-no-recover or fields inside dj-auto-recover
+ * containers (custom handlers take precedence).
+ *
+ * Fires events sequentially (batched) via handleEvent() to avoid
+ * race conditions on the server.
+ */
+function _processFormRecovery() {
+    if (!window.djust._isReconnect) return;
+
+    var root = document.querySelector('[dj-view]');
+    if (!root) root = document.querySelector('[dj-root]');
+    if (!root) return;
+
+    // Collect fields to recover
+    var fields = root.querySelectorAll('input[dj-change], textarea[dj-change], select[dj-change], input[dj-input], textarea[dj-input], select[dj-input]');
+    var pendingEvents = [];
+
+    for (var i = 0; i < fields.length; i++) {
+        var field = fields[i];
+
+        // Skip fields with dj-no-recover
+        if (field.hasAttribute('dj-no-recover')) continue;
+
+        // Skip fields inside dj-auto-recover containers (custom handler takes precedence)
+        if (field.closest('[dj-auto-recover]')) continue;
+
+        // Determine handler name — prefer dj-change, fall back to dj-input
+        var handlerAttr = field.hasAttribute('dj-change') ? 'dj-change' : 'dj-input';
+        var handlerString = field.getAttribute(handlerAttr);
+        if (!handlerString) continue;
+
+        // Parse handler string to extract function name
+        var parsed = parseEventHandler(handlerString);
+        var handlerName = parsed.name;
+
+        // Determine current DOM value and server default
+        var tagName = field.tagName.toLowerCase();
+        var fieldType = (field.type || '').toLowerCase();
+        var domValue;
+        var serverDefault;
+
+        if (fieldType === 'checkbox') {
+            domValue = field.checked;
+            serverDefault = field.hasAttribute('checked');
+        } else if (fieldType === 'radio') {
+            domValue = field.checked;
+            serverDefault = field.hasAttribute('checked');
+        } else if (tagName === 'select') {
+            domValue = field.value;
+            // Server default: the option with 'selected' attribute, or the first option
+            var selectedOption = field.querySelector('option[selected]');
+            serverDefault = selectedOption ? selectedOption.value : (field.options.length > 0 ? field.options[0].value : '');
+        } else {
+            // text, textarea, number, email, etc.
+            domValue = field.value;
+            serverDefault = field.getAttribute('value') || (tagName === 'textarea' ? field.defaultValue : '');
+        }
+
+        // Skip if DOM value matches server default (avoid unnecessary server work)
+        if (domValue === serverDefault) continue;
+
+        // Build event params matching dj-change param structure
+        var value = (fieldType === 'checkbox' || fieldType === 'radio') ? domValue : domValue;
+        var fieldName = field.name || field.id || null;
+        var params = { value: value, field: fieldName };
+
+        // Add positional arguments from handler syntax if present
+        if (parsed.args.length > 0) {
+            params._args = parsed.args;
+        }
+
+        // _target: include triggering field's name
+        params._target = fieldName;
+
+        pendingEvents.push({ handlerName: handlerName, params: params });
+    }
+
+    // Fire events sequentially to avoid server race conditions
+    if (pendingEvents.length > 0 && typeof handleEvent === 'function') {
+        if (globalThis.djustDebug) console.log('[LiveView] Form recovery: restoring ' + pendingEvents.length + ' field(s)');
+        var fireSequentially = function(index) {
+            if (index >= pendingEvents.length) return;
+            var evt = pendingEvents[index];
+            var result = handleEvent(evt.handlerName, evt.params);
+            if (result && typeof result.then === 'function') {
+                void result.then(function() { fireSequentially(index + 1); });
+            } else {
+                fireSequentially(index + 1);
+            }
+        };
+        fireSequentially(0);
+    }
 }
 
 // Export for testing and for createNodeFromVNode to mark VDOM-created elements as bound
@@ -2618,6 +3716,9 @@ window.djust.bindLiveViewEvents = bindLiveViewEvents;
 window.djust.reinitAfterDOMUpdate = reinitAfterDOMUpdate;
 window.djust._isHandlerBound = _isHandlerBound;
 window.djust._markHandlerBound = _markHandlerBound;
+window.djust._processAutoRecover = _processAutoRecover;
+window.djust._processFormRecovery = _processFormRecovery;
+window.djust._isReconnect = false;
 
 // Global Loading Manager (Phase 5)
 // Handles dj-loading.disable, dj-loading.class, dj-loading.show, dj-loading.hide attributes
@@ -2941,6 +4042,108 @@ function sanitizeIdForLog(id) {
 }
 
 /**
+ * Save the current focus state (active element, selection, scroll position).
+ * Call before DOM mutations that may destroy focus. Pairs with restoreFocusState().
+ *
+ * @returns {Object|null} Saved focus state, or null if no form element is focused.
+ */
+function saveFocusState() {
+    const active = document.activeElement;
+    if (!active || active === document.body || active === document.documentElement) {
+        return null;
+    }
+
+    // Only save state for form elements and contenteditable
+    const isFormEl = (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT');
+    const isEditable = active.isContentEditable;
+    if (!isFormEl && !isEditable) {
+        return null;
+    }
+
+    // Skip saving during broadcast updates — remote content should take effect.
+    if (_isBroadcastUpdate) {
+        return null;
+    }
+
+    const state = { tag: active.tagName };
+
+    // Build a matching key: prefer id, then name, then dj-id, then positional index
+    if (active.id) {
+        state.findBy = 'id';
+        state.key = active.id;
+    } else if (active.name) {
+        state.findBy = 'name';
+        state.key = active.name;
+    } else if (active.getAttribute && active.getAttribute('dj-id')) {
+        state.findBy = 'dj-id';
+        state.key = active.getAttribute('dj-id');
+    } else {
+        // Positional: index among same-tag siblings in the nearest dj-view
+        state.findBy = 'index';
+        const root = active.closest('[dj-view]') || document.body;
+        const siblings = root.querySelectorAll(active.tagName.toLowerCase());
+        state.key = Array.from(siblings).indexOf(active);
+    }
+
+    // Save value and selection state
+    if (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && !['checkbox', 'radio'].includes(active.type))) {
+        state.selStart = active.selectionStart;
+        state.selEnd = active.selectionEnd;
+        state.scrollTop = active.scrollTop;
+        state.scrollLeft = active.scrollLeft;
+    }
+
+    return state;
+}
+
+/**
+ * Restore focus state saved by saveFocusState().
+ * Re-finds the element in the DOM (it may have been replaced) and restores
+ * focus, selection range, and scroll position.
+ *
+ * @param {Object|null} state - Saved state from saveFocusState()
+ */
+function restoreFocusState(state) {
+    if (!state) return;
+
+    let el = null;
+    if (state.findBy === 'id') {
+        el = document.getElementById(state.key);
+    } else if (state.findBy === 'name') {
+        el = document.querySelector(`[name="${CSS.escape(state.key)}"]`);
+    } else if (state.findBy === 'dj-id') {
+        el = document.querySelector(`[dj-id="${CSS.escape(state.key)}"]`);
+    } else {
+        // Positional fallback
+        const root = document.querySelector('[dj-view]') || document.body;
+        const candidates = root.querySelectorAll(state.tag.toLowerCase());
+        el = candidates[state.key] || null;
+    }
+
+    if (!el) return;
+
+    // Re-focus the element (won't re-trigger focus event if already focused)
+    if (document.activeElement !== el) {
+        el.focus({ preventScroll: true });
+    }
+
+    // Restore selection range for text inputs/textareas
+    if (state.selStart !== undefined && typeof el.setSelectionRange === 'function') {
+        try {
+            el.setSelectionRange(state.selStart, state.selEnd);
+        } catch (e) {
+            // setSelectionRange throws on some input types (email, number)
+        }
+    }
+
+    // Restore scroll position within the element
+    if (state.scrollTop !== undefined) {
+        el.scrollTop = state.scrollTop;
+        el.scrollLeft = state.scrollLeft;
+    }
+}
+
+/**
  * Resolve a DOM node using ID-based lookup (primary) or path traversal (fallback).
  *
  * Resolution strategy:
@@ -2959,9 +4162,9 @@ function getNodeByPath(path, djustId = null) {
             return byId;
         }
         // ID not found - fall through to path-based
-        if (globalThis.djustDebug) {
+        if (globalThis.djustDebug || window.DEBUG_MODE) {
             // Log without user data to avoid log injection
-            console.log('[LiveView] ID lookup failed, trying path fallback');
+            if (globalThis.djustDebug) console.log('[LiveView] ID lookup failed, trying path fallback');
         }
     }
 
@@ -2982,15 +4185,21 @@ function getNodeByPath(path, djustId = null) {
                 // JS \s includes \u00A0, so we use an explicit ASCII whitespace pattern instead.
                 return (/[^ \t\n\r\f]/.test(child.textContent));
             }
+            // Include comment nodes — the Rust VDOM parser preserves <!--dj-if-->
+            // placeholders and counts them when computing child indices (#559).
+            if (child.nodeType === Node.COMMENT_NODE) return true;
             return false;
         });
 
         if (index >= children.length) {
-            if (globalThis.djustDebug) {
+            if (globalThis.djustDebug || window.DEBUG_MODE) {
                 // Explicit number coercion for safe logging
                 const safeIndex = Number(index) || 0;
                 const safeLen = Number(children.length) || 0;
-                console.warn(`[LiveView] Path traversal failed at index ${safeIndex}, only ${safeLen} children`);
+                const parentTag = node.tagName || '#text';
+                const parentId = node.getAttribute ? (node.getAttribute('dj-id') || node.id || '') : '';
+                const parentDesc = parentId ? `${parentTag}#${parentId}` : parentTag;
+                console.warn(`[LiveView] Path traversal failed at index ${safeIndex}, only ${safeLen} children (parent: ${parentDesc}). The DOM may have been modified by third-party JS, or a {% if %} block changed the node count.`);
             }
             return null;
         }
@@ -3232,6 +4441,11 @@ function createHtmlElement(tagLower) {
 function createNodeFromVNode(vnode, inSvgContext = false) {
     if (vnode.tag === '#text') {
         return document.createTextNode(vnode.text || '');
+    }
+    // Handle comment nodes — Rust emits <!--dj-if--> placeholders for
+    // {% if %} blocks that evaluate to False (#559).
+    if (vnode.tag === '#comment') {
+        return document.createComment(vnode.text || '');
     }
 
     // Validate tag name against whitelist (security: prevents script injection)
@@ -3539,6 +4753,8 @@ function morphElement(existing, desired) {
                 document.removeEventListener('visibilitychange', existing._djustPollVisibilityHandler);
             }
         }
+        // Clean up scoped (window/document) listeners before replacing
+        _cleanupScopedListeners(existing);
         existing.parentNode.replaceChild(desired.cloneNode(true), existing);
         return;
     }
@@ -3814,6 +5030,9 @@ function getSignificantChildren(node) {
             // Only filter out ASCII whitespace-only text nodes.
             return (/[^ \t\n\r\f]/.test(child.textContent));
         }
+        // Include comment nodes — the Rust VDOM parser preserves <!--dj-if-->
+        // placeholders and counts them in child indices (#559).
+        if (child.nodeType === Node.COMMENT_NODE) return true;
         return false;
     });
 }
@@ -3841,6 +5060,8 @@ window.djust._stampDjIds = _stampDjIds;
 window.djust._getNodeByPath = getNodeByPath;
 window.djust.createNodeFromVNode = createNodeFromVNode;
 window.djust.preserveFormValues = preserveFormValues;
+window.djust.saveFocusState = saveFocusState;
+window.djust.restoreFocusState = restoreFocusState;
 window.djust.morphChildren = morphChildren;
 window.djust.morphElement = morphElement;
 
@@ -3949,7 +5170,14 @@ function applySinglePatch(patch) {
     if (!node) {
         // Sanitize for logging (patches come from trusted server, but log defensively)
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
-        console.warn(`[LiveView] Failed to find node: path=${safePath}, id=${sanitizeIdForLog(patch.d)}`);
+        const patchType = patch.type || 'Unknown';
+        console.warn(`[LiveView] Patch failed (${patchType}): node not found at path=${safePath}, dj-id=${sanitizeIdForLog(patch.d)}`);
+        if (window.DEBUG_MODE) {
+            console.groupCollapsed(`[LiveView] Patch detail (${patchType})`);
+            if (globalThis.djustDebug) console.log('[LiveView] Full patch object:', JSON.stringify(patch));
+            if (globalThis.djustDebug) console.log(`[LiveView] Suggested causes:\n  - The DOM may have been modified by third-party JS\n  - A template {% if %} block may have changed the node count\n  - A conditional rendering path produced a different DOM structure`);
+            console.groupEnd();
+        }
         return false;
     }
 
@@ -4133,24 +5361,31 @@ function applyPatches(patches) {
         return true;
     }
 
+    // Save focus state before any DOM mutations (#559 follow-up: focus preservation)
+    const focusState = saveFocusState();
+
     // Sort patches in 4-phase order for correct DOM mutation sequencing
     _sortPatches(patches);
 
     // For small patch sets, apply directly without batching overhead
     if (patches.length <= 10) {
         let failedCount = 0;
-        for (const patch of patches) {
-            if (!applySinglePatch(patch)) {
+        const failedIndices = [];
+        for (let _pi = 0; _pi < patches.length; _pi++) {
+            if (!applySinglePatch(patches[_pi])) {
                 failedCount++;
+                failedIndices.push(_pi);
             }
         }
         if (failedCount > 0) {
-            console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
+            console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (indices: ${failedIndices.join(', ')})`);
+            restoreFocusState(focusState);
             return false;
         }
         // Update hooks and model bindings after DOM patches
         if (typeof updateHooks === 'function') { updateHooks(); }
         if (typeof bindModelElements === 'function') { bindModelElements(); }
+        restoreFocusState(focusState);
         return true;
     }
 
@@ -4225,7 +5460,8 @@ function applyPatches(patches) {
     }
 
     if (failedCount > 0) {
-        console.error(`[LiveView] ${failedCount}/${patches.length} patches failed`);
+        console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (${successCount} succeeded)`);
+        restoreFocusState(focusState);
         return false;
     }
 
@@ -4233,6 +5469,7 @@ function applyPatches(patches) {
     if (typeof updateHooks === 'function') { updateHooks(); }
     if (typeof bindModelElements === 'function') { bindModelElements(); }
 
+    restoreFocusState(focusState);
     return true;
 }
 
@@ -5534,6 +6771,11 @@ window.djust.getActiveStreams = getActiveStreams;
      * Updates URL, then sends a mount message for the new view.
      */
     function handleLiveRedirect(data) {
+        // Start page loading bar for live_redirect navigation
+        if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
+            window.djust.pageLoading.start();
+        }
+
         const newUrl = new URL(data.path, window.location.origin);
 
         if (data.params) {
@@ -6273,4 +7515,274 @@ window.djust.bindModelElements = bindModelElements;
         _shouldPrefetch: _shouldPrefetch,
         clear: function () { _prefetched.clear(); }
     };
+})();
+
+// ============================================================================
+// Flash Messages — Server-to-client transient notifications (put_flash)
+// ============================================================================
+
+(function () {
+
+    var CONTAINER_ID = 'dj-flash-container';
+    var DEFAULT_AUTO_DISMISS = 5000;
+    var REMOVE_TRANSITION_MS = 300;
+
+    /**
+     * Get or create the flash container element.
+     * Returns null if the container doesn't exist in the DOM (tag not used).
+     */
+    function getContainer() {
+        return document.getElementById(CONTAINER_ID);
+    }
+
+    /**
+     * Handle a flash message from the server.
+     *
+     * data.action === 'put':   render a new flash message
+     * data.action === 'clear': remove existing messages (optionally by level)
+     */
+    function handleFlash(data) {
+        if (globalThis.djustDebug) console.log('[LiveView] flash: %o', data);
+
+        if (data.action === 'clear') {
+            clearFlash(data.level);
+            return;
+        }
+
+        if (data.action === 'put') {
+            showFlash(data.level, data.message);
+        }
+    }
+
+    /**
+     * Render a flash message into the container.
+     */
+    function showFlash(level, message) {
+        var container = getContainer();
+        if (!container) {
+            if (globalThis.djustDebug) console.log('[LiveView] flash: no #dj-flash-container found, skipping');
+            return;
+        }
+
+        var el = document.createElement('div');
+        el.className = 'dj-flash dj-flash-' + level;
+        el.setAttribute('role', 'alert');
+        el.setAttribute('data-dj-flash-level', level);
+        el.textContent = message;
+
+        container.appendChild(el);
+
+        // Auto-dismiss
+        var timeout = parseInt(container.getAttribute('data-dj-auto-dismiss'), 10);
+        if (isNaN(timeout)) {
+            timeout = DEFAULT_AUTO_DISMISS;
+        }
+        if (timeout > 0) {
+            setTimeout(function () {
+                dismissFlash(el);
+            }, timeout);
+        }
+    }
+
+    /**
+     * Dismiss a single flash element with a removal animation.
+     */
+    function dismissFlash(el) {
+        if (!el || !el.parentNode) return;
+        el.classList.add('dj-flash-removing');
+        setTimeout(function () {
+            if (el.parentNode) {
+                el.parentNode.removeChild(el);
+            }
+        }, REMOVE_TRANSITION_MS);
+    }
+
+    /**
+     * Clear flash messages from the container.
+     * If level is provided, only clear messages with that level.
+     */
+    function clearFlash(level) {
+        var container = getContainer();
+        if (!container) return;
+
+        var selector = level
+            ? '.dj-flash[data-dj-flash-level="' + level + '"]'
+            : '.dj-flash';
+        var elements = container.querySelectorAll(selector);
+        for (var i = 0; i < elements.length; i++) {
+            dismissFlash(elements[i]);
+        }
+    }
+
+    // Expose to djust namespace
+    window.djust.flash = {
+        handleFlash: handleFlash,
+        show: showFlash,
+        clear: clearFlash,
+        dismiss: dismissFlash,
+    };
+
+})();
+
+// ============================================================================
+// Page Loading Bar — NProgress-style loading indicator for navigation
+//
+// Lifecycle events:
+//   djust:navigate-start  — dispatched when navigation begins
+//   djust:navigate-end    — dispatched when navigation completes
+//
+// CSS class:
+//   .djust-navigating     — added to [dj-root] during navigation
+//
+// Example (zero-JS page transition):
+//   [dj-root].djust-navigating main {
+//       opacity: 0.3;
+//       transition: opacity 0.15s ease;
+//       pointer-events: none;
+//   }
+// ============================================================================
+
+(function () {
+    // Inject CSS for the loading bar
+    const style = document.createElement('style');
+    style.textContent = `
+        #djust-page-loading-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #818cf8, #6366f1, #4f46e5);
+            z-index: 99999;
+            transition: width 2s ease-out, opacity 0.3s ease;
+            pointer-events: none;
+        }
+    `;
+    document.head.appendChild(style);
+
+    let barElement = null;
+    let finishTimeout = null;
+
+    function start() {
+        // Clean up any existing bar
+        if (barElement) {
+            barElement.remove();
+            barElement = null;
+        }
+        if (finishTimeout) {
+            clearTimeout(finishTimeout);
+            finishTimeout = null;
+        }
+
+        barElement = document.createElement('div');
+        barElement.id = 'djust-page-loading-bar';
+        barElement.style.width = '0%';
+        barElement.style.opacity = '1';
+        document.body.appendChild(barElement);
+
+        // Animate to 90% (never completes until finish() is called)
+        requestAnimationFrame(() => {
+            if (barElement) {
+                barElement.style.width = '90%';
+            }
+        });
+
+        // Add navigating class to dj-root for CSS-based transitions
+        const root = document.querySelector('[dj-root]');
+        if (root) root.classList.add('djust-navigating');
+
+        // Dispatch lifecycle event
+        document.dispatchEvent(new CustomEvent('djust:navigate-start'));
+    }
+
+    function finish() {
+        if (!barElement) return;
+
+        // Remove navigating class from dj-root
+        const root = document.querySelector('[dj-root]');
+        if (root) root.classList.remove('djust-navigating');
+
+        // Dispatch lifecycle event
+        document.dispatchEvent(new CustomEvent('djust:navigate-end'));
+
+        // Snap to 100%
+        barElement.style.transition = 'width 0.2s ease, opacity 0.3s ease 0.2s';
+        barElement.style.width = '100%';
+        barElement.style.opacity = '0';
+
+        const bar = barElement;
+        finishTimeout = setTimeout(() => {
+            bar.remove();
+            if (barElement === bar) {
+                barElement = null;
+            }
+            finishTimeout = null;
+        }, 500);
+    }
+
+    window.djust.pageLoading = {
+        start: start,
+        finish: finish,
+        enabled: true,
+    };
+
+    // Hook into TurboNav: start bar before navigation
+    window.addEventListener('turbo:before-visit', function () {
+        if (window.djust.pageLoading.enabled) {
+            start();
+        }
+    });
+
+    // Hook into TurboNav: finish bar after load
+    window.addEventListener('turbo:load', function () {
+        if (window.djust.pageLoading.enabled) {
+            finish();
+        }
+    });
+})();
+
+// ============================================================================
+// Page Metadata — Dynamic document title and meta tag updates
+// ============================================================================
+
+(function () {
+
+    // CSS.escape fallback for environments that don't support it (e.g., older browsers)
+    var cssEscape = (typeof CSS !== 'undefined' && CSS.escape)
+        ? CSS.escape
+        : function (s) { return s.replace(/([^\w-])/g, '\\$1'); };
+
+    /**
+     * Handle a page metadata command from the server.
+     *
+     * data.action === 'title': update document.title
+     * data.action === 'meta':  update or create a <meta> tag
+     */
+    function handlePageMetadata(data) {
+        if (globalThis.djustDebug) console.log('[LiveView] page_metadata: %o', data);
+
+        if (data.action === 'title') {
+            document.title = data.value;
+        } else if (data.action === 'meta') {
+            var name = data.name;
+            // Support both name= and property= attributes (og: and twitter: use property)
+            var isOg = name.indexOf('og:') === 0 || name.indexOf('twitter:') === 0;
+            var attr = isOg ? 'property' : 'name';
+            var selector = 'meta[' + attr + '="' + cssEscape(name) + '"]';
+            var el = document.querySelector(selector);
+            if (el) {
+                el.setAttribute('content', data.content);
+            } else {
+                el = document.createElement('meta');
+                el.setAttribute(attr, name);
+                el.setAttribute('content', data.content);
+                document.head.appendChild(el);
+            }
+        }
+    }
+
+    // Expose to djust namespace
+    window.djust.pageMetadata = {
+        handlePageMetadata: handlePageMetadata,
+    };
+
 })();

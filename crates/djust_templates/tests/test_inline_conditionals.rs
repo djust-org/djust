@@ -316,3 +316,38 @@ fn block_if_in_class_attr_does_not_shift_vdom_paths() {
     );
     assert!(result2.contains("<span>2</span>"), "got: {result2}");
 }
+
+/// `{% if %}` producing a whole attribute (e.g. `selected`) after a `{{ variable }}`
+/// in the same tag must NOT emit `<!--dj-if-->`. The Variable token between
+/// `<option value="` and `{% if %}` previously broke the single-token context check.
+/// Regression test for issue #389.
+#[test]
+fn block_if_whole_attr_after_variable_no_comment() {
+    let src = r#"<option value="{{ id }}" {% if id == selected %}selected{% endif %}>{{ name }}</option>"#;
+
+    // false case: must not emit <!--dj-if--> inside the tag
+    let mut c = Context::new();
+    c.set("id".to_string(), Value::String("abc".into()));
+    c.set("selected".to_string(), Value::String("xyz".into()));
+    c.set("name".to_string(), Value::String("Test".into()));
+    let result = render(src, &c);
+    assert!(
+        !result.contains("<!--dj-if-->"),
+        "{{% if %}} producing attribute after variable must not emit comment: {result}"
+    );
+    assert!(
+        result.contains(r#"<option value="abc">"#) || result.contains(r#"<option value="abc" >"#),
+        "false branch must render clean option tag: {result}"
+    );
+
+    // true case: must render the selected attribute
+    let mut c2 = Context::new();
+    c2.set("id".to_string(), Value::String("abc".into()));
+    c2.set("selected".to_string(), Value::String("abc".into()));
+    c2.set("name".to_string(), Value::String("Test".into()));
+    let result2 = render(src, &c2);
+    assert!(
+        result2.contains("selected"),
+        "true branch must include selected attribute: {result2}"
+    );
+}

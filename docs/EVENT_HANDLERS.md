@@ -73,6 +73,22 @@ def search(self, query: str = "", **kwargs):
     self.search_query = query  # Will always be "" (default)
 ```
 
+### `_target` parameter for shared handlers
+
+When multiple form fields share one `dj-change` or `dj-input` handler, the `_target` parameter identifies which field triggered the event (the element's `name` attribute, falling back to `id`, then `null`):
+
+```python
+@event_handler()
+def validate(self, value: str = "", _target: str = "", **kwargs):
+    """_target tells you which field triggered the event"""
+    if _target == "email":
+        self.email_error = "" if "@" in value else "Invalid email"
+    elif _target == "username":
+        self.username_error = "" if len(value) >= 3 else "Too short"
+```
+
+For `dj-submit`, `_target` is the submitter button's `name` (if available). Matches Phoenix LiveView's `_target` convention.
+
 ### Custom event parameters
 
 For custom events (not form inputs), pass parameters via `data-dj-*` attributes.

@@ -4,14 +4,19 @@ djust uses `dj-*` HTML attributes to bind server-side Python handlers to client-
 
 ## Event Bindings
 
-| Attribute                     | Fires when                  | Handler receives           |
-| ----------------------------- | --------------------------- | -------------------------- |
-| `dj-click="handler"`          | Element is clicked          | `data-*` attrs as kwargs   |
-| `dj-input="handler"`          | Input value changes (keyup) | `value=` string            |
-| `dj-change="handler"`         | Input/select loses focus    | `value=` string            |
-| `dj-submit="handler"`         | Form is submitted           | All named fields as kwargs |
-| `dj-keydown.enter="handler"`  | Enter key pressed           | `**kwargs`                 |
-| `dj-keydown.escape="handler"` | Escape key pressed          | `**kwargs`                 |
+| Attribute                     | Fires when                       | Handler receives                  |
+| ----------------------------- | -------------------------------- | --------------------------------- |
+| `dj-click="handler"`          | Element is clicked               | `data-*` attrs as kwargs          |
+| `dj-input="handler"`          | Input value changes (keyup)      | `value=` string, `_target=` name  |
+| `dj-change="handler"`         | Input/select loses focus         | `value=` string, `_target=` name  |
+| `dj-submit="handler"`         | Form is submitted                | All named fields as kwargs        |
+| `dj-keydown.enter="handler"`  | Enter key pressed                | `**kwargs`                        |
+| `dj-keydown.escape="handler"` | Escape key pressed               | `**kwargs`                        |
+| `dj-window-keydown="handler"` | Keydown on `window`              | `key`, `code` + `dj-value-*`     |
+| `dj-document-click="handler"` | Click on `document`              | `clientX`, `clientY` + `dj-value-*` |
+| `dj-click-away="handler"`     | Click outside element            | `dj-value-*` attrs as kwargs      |
+| `dj-shortcut="bindings"`      | Keyboard shortcut matched        | `key`, `code`, `shortcut`         |
+| `dj-mounted="handler"`        | Element enters DOM (after patch) | `dj-value-*` attrs as kwargs      |
 
 ## Defining Handlers
 
@@ -98,9 +103,187 @@ class MyView(LiveView):
 <input dj-keydown.enter="submit_search" dj-keydown.escape="clear_search" />
 ```
 
+### Window & Document Events
+
+Bind event listeners on `window` or `document` instead of the element itself. The declaring element provides context (component ID, `dj-value-*` params) but the listener is attached to the global target.
+
+```html
+<!-- Close modal on Escape (anywhere on page) -->
+<div dj-window-keydown.escape="close_modal">
+
+<!-- Track scroll position -->
+<div dj-window-scroll="on_scroll" dj-value-section="hero">
+
+<!-- Detect clicks anywhere on page -->
+<div dj-document-click="on_background_click">
+
+<!-- Handle window resize -->
+<div dj-window-resize="on_resize">
+```
+
+Supported attributes:
+
+| Attribute | Target | Event |
+|---|---|---|
+| `dj-window-keydown` | `window` | `keydown` |
+| `dj-window-keyup` | `window` | `keyup` |
+| `dj-window-scroll` | `window` | `scroll` |
+| `dj-window-click` | `window` | `click` |
+| `dj-window-resize` | `window` | `resize` |
+| `dj-document-keydown` | `document` | `keydown` |
+| `dj-document-keyup` | `document` | `keyup` |
+| `dj-document-click` | `document` | `click` |
+
+Key modifier filtering works the same as `dj-keydown`: `dj-window-keydown.escape="close"`.
+
+`dj-window-scroll` and `dj-window-resize` default to 150ms throttle to prevent flooding. Override with `data-throttle` or `data-debounce` on the element.
+
+### Click Away
+
+Fire an event when the user clicks outside an element. Common for dropdowns, modals, and popovers:
+
+```html
+<div dj-click-away="close_dropdown" class="dropdown-menu">
+    <!-- clicking outside this div fires close_dropdown -->
+</div>
+```
+
+Uses a capture-phase document listener, so `stopPropagation()` inside the element does not prevent detection. Supports `dj-confirm` for confirmation dialogs and `dj-value-*` params.
+
+### Keyboard Shortcuts (`dj-shortcut`)
+
+Declarative keyboard shortcuts with modifier key support:
+
+```html
+<!-- Single shortcut -->
+<div dj-shortcut="escape:close_modal">
+
+<!-- Multiple shortcuts on one element -->
+<div dj-shortcut="ctrl+k:open_search:prevent, escape:close_modal">
+
+<!-- Modifier keys: ctrl, alt, shift, meta (cmd on Mac) -->
+<button dj-shortcut="ctrl+shift+s:save_draft:prevent">Save</button>
+```
+
+Syntax: `[modifier+...]key:handler[:prevent]`, comma-separated for multiple bindings.
+
+The `prevent` modifier calls `e.preventDefault()` to suppress browser defaults (e.g., `ctrl+k` normally opens the browser URL bar).
+
+Shortcuts are automatically skipped when the user is typing in form inputs (input, textarea, select, contenteditable). Add `dj-shortcut-in-input` to force shortcuts even in inputs.
+
+Handler receives `key`, `code`, and `shortcut` (the matched binding string, e.g., `"ctrl+k"`) as event params, along with any `dj-value-*` attributes.
+
+## Form Field Targeting (`_target`)
+
+When multiple form fields share one handler (e.g., `dj-change="validate"`), the `_target` parameter tells the server which field triggered the event. This enables efficient per-field validation without needing a separate handler per field.
+
+```html
+<form>
+    <input name="email" dj-change="validate" />
+    <input name="username" dj-change="validate" />
+</form>
+```
+
+```python
+@event_handler()
+def validate(self, value: str = "", _target: str = "", **kwargs):
+    if _target == "email":
+        self.email_error = "" if "@" in value else "Invalid email"
+    elif _target == "username":
+        self.username_error = "" if len(value) >= 3 else "Too short"
+```
+
+`_target` is the triggering element's `name` attribute (falling back to `id`, then `null`). It is included automatically in `dj-change`, `dj-input`, and `dj-submit` (submitter button name) events. Matches Phoenix LiveView's `_target` convention.
+
+## Preventing Double Submits
+
+### `dj-disable-with`
+
+Automatically disable a submit button and replace its text during form submission:
+
+```html
+<form dj-submit="save">
+    {% csrf_token %}
+    <input name="title" value="{{ title }}" />
+    <button type="submit" dj-disable-with="Saving...">Save</button>
+</form>
+```
+
+While the server processes the event, the button shows "Saving..." and is disabled. After the server responds, the original text and enabled state are restored. Also works with `dj-click`:
+
+```html
+<button dj-click="generate" dj-disable-with="Generating...">Generate Report</button>
+```
+
+### `dj-lock`
+
+Prevent an element from firing its event again until the server responds:
+
+```html
+<button dj-click="save" dj-lock>Save</button>
+```
+
+Unlike `dj-disable-with` (which is cosmetic feedback), `dj-lock` blocks the event from firing at all while a previous invocation is in flight. For form elements (button, input, select, textarea), the element is disabled. For non-form elements (e.g., `<div dj-click="..." dj-lock>`), a `djust-locked` CSS class is applied instead.
+
+Combine both for the full pattern:
+
+```html
+<button dj-click="save" dj-lock dj-disable-with="Saving...">Save</button>
+```
+
+All locked elements are unlocked when any server response arrives.
+
+## Mounted Event (`dj-mounted`)
+
+Fire a server event when an element enters the DOM after a VDOM patch:
+
+```html
+{% if show_chart %}
+<div dj-mounted="on_chart_ready" dj-value-chart-type="bar">
+    <canvas id="my-chart"></canvas>
+</div>
+{% endif %}
+```
+
+```python
+@event_handler()
+def on_chart_ready(self, chart_type: str = "", **kwargs):
+    self.chart_data = load_chart_data(chart_type)
+```
+
+Key behavior:
+- Only fires after VDOM patches (not on initial page load)
+- Includes `dj-value-*` attributes from the mounted element as event params
+- Uses a WeakSet internally to prevent duplicate fires for the same DOM node
+- Handlers should be idempotent (if the element is replaced by a patch, it fires again for the new node)
+
+Use cases: trigger data loading when a tab becomes active, initialize third-party widgets, scroll new elements into view, animate elements on appearance.
+
 ## Rate Limiting
 
-Use decorators to control how often handlers fire:
+### HTML Attributes (`dj-debounce` / `dj-throttle`)
+
+Apply debounce or throttle to any `dj-*` event attribute directly in HTML, giving per-element control without changing the Python handler:
+
+```html
+<!-- Debounce: wait 300ms after last keystroke before firing -->
+<input dj-input="search" dj-debounce="300" />
+
+<!-- Throttle: fire at most every 500ms -->
+<button dj-click="poll_status" dj-throttle="500">Refresh</button>
+
+<!-- Disable default debounce on dj-input (fires immediately) -->
+<input dj-input="on_change" dj-debounce="0" />
+
+<!-- Defer until blur (Phoenix parity) -->
+<input dj-input="validate" dj-debounce="blur" />
+```
+
+`dj-debounce` and `dj-throttle` work with all event types: `dj-click`, `dj-change`, `dj-input`, `dj-keydown`, `dj-keyup`. Each element gets its own independent timer. HTML attributes take precedence over `data-debounce`/`data-throttle`.
+
+### Python Decorators
+
+Use decorators to control how often handlers fire server-side:
 
 ```python
 from djust.decorators import event_handler, debounce, throttle
@@ -118,6 +301,8 @@ def search(self, value: str = "", **kwargs):
 def on_scroll(self, position: int = 0, **kwargs):
     self.scroll_pos = position
 ```
+
+HTML attributes and Python decorators can be combined: the HTML attribute controls client-side timing, the decorator controls server-side timing.
 
 ## Loading States
 
@@ -164,8 +349,134 @@ If a subtree is managed by external JavaScript (charts, editors), prevent djust 
 <div dj-update="ignore" id="my-chart"></div>
 ```
 
+## UI Feedback Attributes
+
+### Connection State CSS Classes
+
+djust automatically applies CSS classes to `<body>` based on transport state:
+
+- `dj-connected` — WebSocket/SSE connection is open
+- `dj-disconnected` — WebSocket/SSE connection is lost
+
+Both classes are removed on intentional disconnect (TurboNav navigation). Use these for CSS-driven connection indicators:
+
+```css
+body.dj-disconnected [dj-root] { opacity: 0.5; }
+.offline-banner { display: none; }
+body.dj-disconnected .offline-banner { display: block; }
+```
+
+### `dj-cloak` (FOUC Prevention)
+
+Hide elements until the WebSocket/SSE mount completes:
+
+```html
+<div dj-cloak>
+    <button dj-click="increment">+</button>
+</div>
+```
+
+The CSS rule is injected automatically by client.js. The `dj-cloak` attribute is removed when the mount response arrives.
+
+### `dj-scroll-into-view`
+
+Auto-scroll an element into view after it appears in the DOM (mount or VDOM patch):
+
+```html
+<div dj-scroll-into-view>New chat message</div>
+<div dj-scroll-into-view="instant">Alert</div>
+<div dj-scroll-into-view="center">Highlighted item</div>
+```
+
+One-shot per DOM node. Supports values: `""` (smooth/nearest), `"instant"`, `"center"`, `"start"`, `"end"`.
+
+### Page Loading Bar
+
+An NProgress-style loading bar appears automatically during TurboNav and `live_redirect` navigation. Control via `window.djust.pageLoading.start()` / `.finish()` or disable with `window.djust.pageLoading.enabled = false`.
+
+**Navigation lifecycle events** are dispatched during `dj-navigate` transitions:
+
+- `djust:navigate-start` — fires when navigation begins
+- `djust:navigate-end` — fires when the new page renders
+
+The `.djust-navigating` CSS class is added to `[dj-root]` during navigation, enabling CSS-only page transitions:
+
+```css
+[dj-root].djust-navigating main {
+    opacity: 0.3;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+}
+```
+
+For advanced use cases, listen for the events in JS:
+
+```javascript
+document.addEventListener('djust:navigate-start', () => showSkeleton());
+document.addEventListener('djust:navigate-end', () => hideSkeleton());
+```
+
+## Clipboard Copy (`dj-copy`)
+
+Copy text to the clipboard on click without a server round-trip:
+
+```html
+<!-- Copy literal text -->
+<button dj-copy="{{ share_url }}">Copy Link</button>
+
+<!-- Copy text content from another element -->
+<button dj-copy="#code-block">Copy Code</button>
+
+<!-- Custom feedback text (default: "Copied!") -->
+<button dj-copy="{{ api_key }}" dj-copy-feedback="Done!">Copy Key</button>
+
+<!-- Custom CSS class feedback (adds class for 2 seconds) -->
+<button dj-copy="{{ token }}" dj-copy-class="btn-success">Copy</button>
+
+<!-- Fire a server event after successful copy (e.g., for analytics) -->
+<button dj-copy="#snippet" dj-copy-event="copied" dj-value-snippet-id="{{ snippet.id }}">Copy</button>
+```
+
+| Attribute | Description |
+|---|---|
+| `dj-copy="text"` | Literal text to copy |
+| `dj-copy="#selector"` | Copy `textContent` of the matched element |
+| `dj-copy-feedback="text"` | Button text shown for 2s after copy (default: `"Copied!"`) |
+| `dj-copy-class="class"` | CSS class added for 2s after copy (default: `dj-copied`) |
+| `dj-copy-event="handler"` | Server event fired after successful copy |
+
+All enhancements are backward compatible with existing `dj-copy` usage.
+
+## Reconnection Recovery (`dj-auto-recover`)
+
+After a WebSocket reconnect, elements with `dj-auto-recover` automatically fire a server event with serialized DOM state, enabling the server to restore state that the default form-value replay cannot:
+
+```html
+<div dj-auto-recover="restore_canvas" dj-value-canvas-id="main">
+    <canvas id="drawing-canvas"></canvas>
+    <input name="brush_size" value="5" />
+</div>
+```
+
+```python
+@event_handler()
+def restore_canvas(self, brush_size: str = "", canvas_id: str = "", **kwargs):
+    """Called automatically after reconnect with DOM state from the container."""
+    self.brush_size = int(brush_size) if brush_size else 5
+    self.canvas_id = canvas_id
+```
+
+Key behavior:
+- Does **not** fire on initial page load — only after reconnection
+- Serializes form field values and `data-*` attributes from the container element
+- Multiple independent `dj-auto-recover` elements can coexist on the same page
+- Use for complex state (drag positions, canvas state, multi-step wizard progress) that form replay cannot restore
+
 ## Next Steps
 
 - [Templates](./templates.md) — full template directives reference
+- [Template Cheat Sheet](../guides/template-cheatsheet.md) — quick reference for all `dj-*` attributes
+- [Document Metadata](../guides/document-metadata.md) — dynamic page titles and meta tags
+- [Loading States](../guides/loading-states.md) — loading directives, `dj-disable-with`, background work
 - [State Management](../state/index.md) — debounce, throttle, loading states, optimistic updates
 - [Hooks](../guides/hooks.md) — client-side JavaScript lifecycle hooks

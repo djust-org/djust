@@ -60,9 +60,16 @@
                             <div class="stat-label">Uptime</div>
                             <div class="stat-value">${uptimeStr}</div>
                         </div>
+                        ${(window.djust && window.djust._simulatedLatency > 0) ? `
+                        <div class="stat-item">
+                            <div class="stat-label">Sim. Latency</div>
+                            <div class="stat-value" style="color: #f59e0b;">~${window.djust._simulatedLatency}ms</div>
+                        </div>
+                        ` : ''}
                     </div>
                 </div>
                 ` : ''}
+                ${(typeof this.renderLatencyControls === 'function') ? this.renderLatencyControls() : ''}
                 <div class="network-list">
                     <div class="network-header-row">
                         <span class="network-title">Recent Messages (${countLabel})</span>

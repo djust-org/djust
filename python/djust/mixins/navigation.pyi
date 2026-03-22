@@ -45,12 +45,12 @@ class NavigationMixin:
 
     def handle_params(self, params: Dict[str, Any], uri: str) -> None:
         """
-        Called when URL params change (via live_patch or browser back/forward).
+        Called after mount() on initial render AND on every subsequent URL change.
 
         Override this to update view state based on URL params.
 
         Args:
-            params: The new URL query parameters as a dict.
-            uri: The full URI string.
+            params: The URL query parameters as a dict.
+            uri: The full URI string (path + query string).
         """
         ...

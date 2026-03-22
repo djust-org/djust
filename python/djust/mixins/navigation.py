@@ -108,13 +108,20 @@ class NavigationMixin:
 
     def handle_params(self, params: Dict[str, Any], uri: str) -> None:
         """
-        Called when URL params change (via live_patch or browser back/forward).
+        Called after mount() on initial render AND on every subsequent URL change.
 
-        Override this to update view state based on URL params.
+        This is the standard place to derive view state from URL parameters.
+        It fires:
+        1. After ``mount()`` completes during the initial WebSocket connect.
+        2. On ``live_patch`` (server-initiated URL change without remount).
+        3. On browser back/forward navigation (popstate).
+
+        Override this to update view state based on URL params.  This avoids
+        duplicating URL-parsing logic between ``mount()`` and event handlers.
 
         Args:
-            params: The new URL query parameters as a dict.
-            uri: The full URI string.
+            params: The URL query parameters as a dict.
+            uri: The full URI string (path + query string).
 
         Example::
 

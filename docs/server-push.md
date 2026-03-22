@@ -71,6 +71,14 @@ class StockTickerView(LiveView):
 
 The view re-renders and sends patches to all connected clients after each tick. No external task runner needed.
 
+## Event Sequencing
+
+Server pushes, ticks, and async completions are all treated as *background* updates. If a user event (click, submit, etc.) is in flight when a server push arrives, the push is buffered on the client and applied after the user event round-trip completes. This prevents version interleaving where a background update would silently discard the user's action.
+
+On the server side, `server_push` acquires a render lock and yields to in-progress user events — if a user event is being processed, the broadcast is skipped entirely to avoid contention.
+
+This is automatic and requires no developer action.
+
 ## How It Works
 
 1. When a client connects to a LiveView, the consumer joins a channel-layer group named `djust_view_<view_path>` (dots replaced with underscores).

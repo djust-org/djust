@@ -21,6 +21,7 @@ class LiveViewSSE {
         this.sseBaseUrl = null;
         this.enabled = true;
         this.viewMounted = false;
+        this._hasConnectedBefore = false;
         this.lastEventName = null;
         this.lastTriggerElement = null;
         // Mirror LiveViewWebSocket interface for interoperability
@@ -48,6 +49,18 @@ class LiveViewSSE {
 
         this.eventSource = new EventSource(streamUrl);
 
+        this.eventSource.onopen = () => {
+            // Connection state CSS classes
+            document.body.classList.add('dj-connected');
+            document.body.classList.remove('dj-disconnected');
+
+            // Track reconnections for form recovery
+            if (this._hasConnectedBefore) {
+                if (window.djust) window.djust._isReconnect = true;
+            }
+            this._hasConnectedBefore = true;
+        };
+
         this.eventSource.onmessage = (event) => {
             try {
                 this.stats.received++;
@@ -65,6 +78,9 @@ class LiveViewSSE {
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED) {
                 console.warn('[SSE] EventSource closed unexpectedly.');
                 this.enabled = false;
+                // Connection state CSS classes
+                document.body.classList.add('dj-disconnected');
+                document.body.classList.remove('dj-connected');
             }
         };
     }
@@ -79,6 +95,11 @@ class LiveViewSSE {
         }
         this.viewMounted = false;
         this.sessionId = null;
+
+        // Remove connection state CSS classes on intentional disconnect
+        document.body.classList.remove('dj-connected');
+        document.body.classList.remove('dj-disconnected');
+
         if (globalThis.djustDebug) console.log('[SSE] Disconnected');
     }
 
@@ -103,6 +124,12 @@ class LiveViewSSE {
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[SSE] View mounted:', data.view);
 
+                // Remove dj-cloak from all elements (FOUC prevention)
+                document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
+
+                // Finish page loading bar on mount
+                if (window.djust.pageLoading) window.djust.pageLoading.finish();
+
                 if (data.version !== undefined) {
                     clientVdomVersion = data.version;
                 }
@@ -122,6 +149,18 @@ class LiveViewSSE {
                             container.innerHTML = data.html;
                         }
                         reinitAfterDOMUpdate();
+                        // Set mount ready flag so dj-mounted handlers only fire
+                        // for elements added by subsequent VDOM patches, not on initial load
+                        window.djust._mountReady = true;
+                    }
+                }
+                // Trigger form recovery and dj-auto-recover after reconnect mount
+                if (window.djust._isReconnect) {
+                    if (typeof window.djust._processFormRecovery === 'function') {
+                        window.djust._processFormRecovery();
+                    }
+                    if (typeof window.djust._processAutoRecover === 'function') {
+                        window.djust._processAutoRecover();
                     }
                 }
                 break;
@@ -196,6 +235,20 @@ class LiveViewSSE {
             case 'focus':
                 if (window.djust.accessibility) {
                     window.djust.accessibility.processFocus([data.selector, data.options]);
+                }
+                break;
+
+            case 'flash':
+                // Flash message from server (put_flash / clear_flash)
+                if (window.djust.flash) {
+                    window.djust.flash.handleFlash(data);
+                }
+                break;
+
+            case 'page_metadata':
+                // Page metadata from server (page_title / page_meta)
+                if (window.djust.pageMetadata) {
+                    window.djust.pageMetadata.handlePageMetadata(data);
                 }
                 break;
 

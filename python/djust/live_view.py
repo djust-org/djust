@@ -37,6 +37,8 @@ from .mixins import (
     ModelBindingMixin,
     PushEventMixin,
     NavigationMixin,
+    FlashMixin,
+    PageMetadataMixin,
 )
 
 # Configure logger
@@ -70,6 +72,8 @@ class LiveView(
     ModelBindingMixin,
     PushEventMixin,
     NavigationMixin,
+    FlashMixin,
+    PageMetadataMixin,
     AsyncWorkMixin,
     View,
 ):
@@ -205,6 +209,9 @@ class LiveView(
     login_required: Optional[bool] = None  # True = must be authenticated
     permission_required: Optional[Union[str, List[str]]] = None  # Django permission string(s)
     login_url: Optional[str] = None  # Override settings.LOGIN_URL
+
+    # on_mount hooks — cross-cutting mount logic (Phoenix on_mount parity)
+    on_mount: List[Any] = []
 
     # ============================================================================
     # INITIALIZATION & SETUP

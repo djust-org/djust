@@ -456,29 +456,6 @@ def check_configuration(app_configs, **kwargs):
         except Exception:
             pass  # Don't fail the check if ASGI app can't be introspected
 
-    # C006 -- daphne without whitenoise for static file serving
-    if has_daphne:
-        middleware = list(getattr(settings, "MIDDLEWARE", []))
-        has_whitenoise = any("whitenoise" in m.lower() for m in middleware)
-        if not has_whitenoise:
-            errors.append(
-                DjustWarning(
-                    "Daphne does not serve static files. "
-                    "Without WhiteNoise, djust's client JS and CSS will return 404.",
-                    hint=(
-                        "Add 'whitenoise.middleware.WhiteNoiseMiddleware' to MIDDLEWARE "
-                        "after SecurityMiddleware, add 'django.contrib.staticfiles' to "
-                        "INSTALLED_APPS, set STATIC_ROOT, and run 'collectstatic'."
-                    ),
-                    id="djust.C006",
-                    fix_hint=(
-                        "Add `'whitenoise.middleware.WhiteNoiseMiddleware'` to MIDDLEWARE "
-                        "after `'django.middleware.security.SecurityMiddleware'` in your "
-                        "Django settings file."
-                    ),
-                )
-            )
-
     # S004 -- DEBUG=True with non-localhost ALLOWED_HOSTS
     if getattr(settings, "DEBUG", False):
         allowed = getattr(settings, "ALLOWED_HOSTS", [])
@@ -833,6 +810,52 @@ def check_liveviews(app_configs, **kwargs):
                         line_number=method_line,
                     )
                 )
+
+        # V009 -- on_mount contains non-callable items
+        on_mount_hooks = cls.__dict__.get("on_mount")
+        if on_mount_hooks is not None:
+            if not isinstance(on_mount_hooks, (list, tuple)):
+                cls_file = ""
+                cls_line = None
+                try:
+                    cls_file = inspect.getfile(cls)
+                    cls_line = inspect.getsourcelines(cls)[1]
+                except (OSError, TypeError):
+                    pass  # Fall back to empty file/line for built-in or C-extension classes
+                errors.append(
+                    DjustWarning(
+                        "%s: 'on_mount' should be a list of hook functions." % cls_label,
+                        hint="Set on_mount = [hook1, hook2, ...] on your LiveView class.",
+                        id="djust.V009",
+                        fix_hint=("Change `on_mount` to a list in `%s`." % cls.__qualname__),
+                        file_path=cls_file,
+                        line_number=cls_line,
+                    )
+                )
+            else:
+                for i, hook in enumerate(on_mount_hooks):
+                    if not callable(hook):
+                        cls_file = ""
+                        cls_line = None
+                        try:
+                            cls_file = inspect.getfile(cls)
+                            cls_line = inspect.getsourcelines(cls)[1]
+                        except (OSError, TypeError):
+                            pass  # Fall back to empty file/line for built-in or C-extension classes
+                        errors.append(
+                            DjustWarning(
+                                "%s: on_mount[%d] is not callable (%s)."
+                                % (cls_label, i, type(hook).__name__),
+                                hint="Each on_mount entry must be a callable hook function.",
+                                id="djust.V009",
+                                fix_hint=(
+                                    "Ensure all items in `on_mount` are callable "
+                                    "in `%s`." % cls.__qualname__
+                                ),
+                                file_path=cls_file,
+                                line_number=cls_line,
+                            )
+                        )
 
     # V006 -- service instance in mount() (AST-based scan of project files)
     _check_service_instances_in_mount(errors)
@@ -1417,7 +1440,7 @@ _LIVEVIEW_CONTENT_RE = re.compile(r"\{\{\s*liveview_content\s*\|\s*safe\s*\}\}")
 _DOC_DJUST_EVENT_RE = re.compile(r"""document\s*\.\s*addEventListener\s*\(\s*['"]djust:""")
 _NAV_DATA_ATTRS = re.compile(r"data-(view|tab|page|section)")  # Navigation-style data attributes
 _DJ_EVENT_DIRECTIVES_RE = re.compile(
-    r"dj-(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave)="
+    r"dj-(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave|window-\w+|document-\w+|click-away|shortcut)="
 )
 _DJ_COMPONENT_RE = re.compile(r"dj-component")
 _DEPRECATED_DATA_DJ_ID_RE = re.compile(r"""data-dj-id\s*=\s*["'][^"']*["']""")
