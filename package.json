@@ -20,6 +20,9 @@
     "jsdom": "^28.1.0",
     "vitest": "^4.0.18"
   },
+  "overrides": {
+    "flatted": ">=3.4.2"
+  },
   "keywords": [
     "django",
     "rust",
