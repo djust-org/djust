@@ -3948,7 +3948,7 @@ function applySinglePatch(patch) {
     if (!node) {
         // Sanitize for logging (patches come from trusted server, but log defensively)
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
-        console.warn(`[LiveView] Failed to find node: path=${safePath}, id=${sanitizeIdForLog(patch.d)}`);
+        console.warn('[LiveView] Failed to find node: path=%s, id=%s', safePath, sanitizeIdForLog(patch.d));
         return false;
     }
 

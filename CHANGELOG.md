@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Fix 25 CodeQL code-scanning alerts in client.js and debug-panel.js** — Added UNSAFE_KEYS guard to VDOM SetAttr/RemoveAttr patches (rejects `__proto__`, `constructor`, `prototype` keys), replaced direct property assignment with `Object.defineProperty()` in debug panel state cloning, converted template literal logs to format strings to prevent log injection, and added XSS suppression comments for trusted server-rendered HTML. ([#597](https://github.com/djust-org/djust/pull/597))
+
 ## [0.3.8] - 2026-03-19
 
 ### Fixed
