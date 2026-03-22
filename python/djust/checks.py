@@ -456,29 +456,6 @@ def check_configuration(app_configs, **kwargs):
         except Exception:
             pass  # Don't fail the check if ASGI app can't be introspected
 
-    # C006 -- daphne without whitenoise for static file serving
-    if has_daphne:
-        middleware = list(getattr(settings, "MIDDLEWARE", []))
-        has_whitenoise = any("whitenoise" in m.lower() for m in middleware)
-        if not has_whitenoise:
-            errors.append(
-                DjustWarning(
-                    "Daphne does not serve static files. "
-                    "Without WhiteNoise, djust's client JS and CSS will return 404.",
-                    hint=(
-                        "Add 'whitenoise.middleware.WhiteNoiseMiddleware' to MIDDLEWARE "
-                        "after SecurityMiddleware, add 'django.contrib.staticfiles' to "
-                        "INSTALLED_APPS, set STATIC_ROOT, and run 'collectstatic'."
-                    ),
-                    id="djust.C006",
-                    fix_hint=(
-                        "Add `'whitenoise.middleware.WhiteNoiseMiddleware'` to MIDDLEWARE "
-                        "after `'django.middleware.security.SecurityMiddleware'` in your "
-                        "Django settings file."
-                    ),
-                )
-            )
-
     # S004 -- DEBUG=True with non-localhost ALLOWED_HOSTS
     if getattr(settings, "DEBUG", False):
         allowed = getattr(settings, "ALLOWED_HOSTS", [])

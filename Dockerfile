@@ -38,7 +38,6 @@ RUN pip install --no-cache-dir \
     channels[daphne]>=4.0.0 \
     msgpack>=1.0.0 \
     uvicorn[standard]>=0.30.0 \
-    whitenoise>=6.0.0 \
     gunicorn>=21.0.0
 
 # Copy and install built wheel from builder

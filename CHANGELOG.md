@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`whitenoise` dependency** — djust's `ASGIStaticFilesHandler` in `djust.asgi.get_application()` already handles static file serving at the ASGI layer, making WhiteNoise middleware redundant. Removed `whitenoise` from dependencies, scaffolded projects, and the demo project. Removed system check `C006` (daphne without WhiteNoise). ([#584](https://github.com/djust-org/djust/issues/584))
+
 ### Added
 
 - **`{% dj_flash %}` template tag in Rust renderer** — Registered `DjFlashTagHandler` so the flash container renders correctly when templates are processed by the Rust engine. Previously, the tag was only registered as a Django template tag and silently dropped by the Rust renderer. ([#590](https://github.com/djust-org/djust/pull/590))

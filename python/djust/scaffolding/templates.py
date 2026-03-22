@@ -90,7 +90,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
-    "whitenoise.middleware.WhiteNoiseMiddleware",
+
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -439,7 +439,6 @@ django>=5.1
 djust>=0.3.0
 channels>=4.0
 daphne>=4.0
-whitenoise>=6.6
 """
 
 # ---------------------------------------------------------------------------

@@ -141,29 +141,6 @@ application = ProtocolTypeRouter({
 
 ---
 
-### C006: daphne without WhiteNoise
-
-**Severity**: Warning
-
-**What causes it**: You are using daphne (ASGI server) but WhiteNoise is not in your middleware. Daphne does not serve static files by default.
-
-**What you see**: 404 errors for djust's client JavaScript and CSS files. The page loads but is not interactive.
-
-**Fix**:
-
-```python
-# settings.py
-MIDDLEWARE = [
-    "django.middleware.security.SecurityMiddleware",
-    "whitenoise.middleware.WhiteNoiseMiddleware",   # Add after SecurityMiddleware
-    # ...
-]
-```
-
-Then run `python manage.py collectstatic`.
-
----
-
 ### C010: Tailwind CDN in production
 
 **Severity**: Warning

@@ -64,7 +64,7 @@ dev = [
     "ruff>=0.1",
     "mypy>=1.0",
     "uvicorn[standard]>=0.30.0",
-    "whitenoise>=6.0.0",
+
     "redis>=5.0.0",
     "watchdog>=3.0.0",  # File system monitoring for hot reload
     "zstandard>=0.22.0",  # Compression support
