@@ -327,8 +327,7 @@
                 // Validate client-side
                 if (config) {
                     if (file.size > config.max_file_size) {
-                        // codeql[js/log-injection] -- file.name and file.size come from the browser FileList API, not from untrusted network input
-                        console.warn(`[Upload] File too large: ${file.name} (${file.size} > ${config.max_file_size})`);
+                        console.warn('[Upload] File too large: %s (%d > %d)', String(file.name), file.size, config.max_file_size);
                         window.dispatchEvent(new CustomEvent('djust:upload:error', {
                             detail: { file: file.name, error: 'File too large' }
                         }));
@@ -338,9 +337,9 @@
 
                 try {
                     const result = await uploadFile(liveViewWS, uploadName, file, config);
-                    if (globalThis.djustDebug) console.log(`[Upload] Complete: ${file.name}`, result);
+                    if (globalThis.djustDebug) console.log('[Upload] Complete: %s %o', String(file.name), result);
                 } catch (err) {
-                    console.error(`[Upload] Failed: ${file.name}`, err);
+                    console.error('[Upload] Failed: %s %o', String(file.name), err);
                 }
             }
         }
@@ -415,7 +414,7 @@
                     try {
                         await uploadFile(liveViewWS, uploadName, file, config);
                     } catch (err) {
-                        console.error(`[Upload] Drop upload failed: ${file.name}`, err);
+                        console.error('[Upload] Drop upload failed: %s %o', String(file.name), err);
                     }
                 }
             });

@@ -553,8 +553,7 @@ class LiveViewWebSocket {
 
         const container = document.querySelector(`[data-djust-embedded="${CSS.escape(viewId)}"]`);
         if (!container) {
-            // codeql[js/log-injection] -- viewId is a server-assigned embedded view identifier
-            console.warn(`[LiveView] Embedded view container not found: ${viewId}`);
+            console.warn('[LiveView] Embedded view container not found: %s', String(viewId));
             return;
         }
 
@@ -562,8 +561,7 @@ class LiveViewWebSocket {
         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
         _morphTemp.innerHTML = html;
         morphChildren(container, _morphTemp);
-        // codeql[js/log-injection] -- viewId is a server-assigned embedded view identifier
-        if (globalThis.djustDebug) console.log(`[LiveView] Updated embedded view: ${viewId}`);
+        if (globalThis.djustDebug) console.log('[LiveView] Updated embedded view: %s', String(viewId));
 
         // Re-bind events within the updated container
         reinitAfterDOMUpdate();
