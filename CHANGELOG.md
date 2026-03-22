@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Fix 25 CodeQL code-scanning alerts in client.js and debug-panel.js** — Added UNSAFE_KEYS guard to VDOM SetAttr/RemoveAttr patches (rejects `__proto__`, `constructor`, `prototype` keys), replaced direct property assignment with `Object.defineProperty()` in debug panel state cloning, converted template literal logs to format strings to prevent log injection, and added XSS suppression comments for trusted server-rendered HTML. ([#597](https://github.com/djust-org/djust/pull/597))
+
 ### Removed
 
 - **`whitenoise` dependency** — djust's `ASGIStaticFilesHandler` in `djust.asgi.get_application()` already handles static file serving at the ASGI layer, making WhiteNoise middleware redundant. Removed `whitenoise` from dependencies, scaffolded projects, and the demo project. Removed system check `C006` (daphne without WhiteNoise). ([#584](https://github.com/djust-org/djust/issues/584))

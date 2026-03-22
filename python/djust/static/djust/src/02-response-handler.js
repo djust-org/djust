@@ -157,6 +157,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             if (globalThis.djustDebug) console.log('[LiveView] Applying full HTML update');
             _isBroadcastUpdate = !!data.broadcast;
             const parser = new DOMParser();
+            // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine; DOMParser creates an inert document
             const doc = parser.parseFromString(data.html, 'text/html');
             const liveviewRoot = getLiveViewRoot();
             if (!liveviewRoot) {

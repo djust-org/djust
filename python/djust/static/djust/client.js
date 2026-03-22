@@ -327,6 +327,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             if (globalThis.djustDebug) console.log('[LiveView] Applying full HTML update');
             _isBroadcastUpdate = !!data.broadcast;
             const parser = new DOMParser();
+            // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine; DOMParser creates an inert document
             const doc = parser.parseFromString(data.html, 'text/html');
             const liveviewRoot = getLiveViewRoot();
             if (!liveviewRoot) {
@@ -1163,8 +1164,7 @@ class LiveViewWebSocket {
 
         const container = document.querySelector(`[data-djust-embedded="${CSS.escape(viewId)}"]`);
         if (!container) {
-            // codeql[js/log-injection] -- viewId is a server-assigned embedded view identifier
-            console.warn(`[LiveView] Embedded view container not found: ${viewId}`);
+            console.warn('[LiveView] Embedded view container not found: %s', String(viewId));
             return;
         }
 
@@ -1172,8 +1172,7 @@ class LiveViewWebSocket {
         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
         _morphTemp.innerHTML = html;
         morphChildren(container, _morphTemp);
-        // codeql[js/log-injection] -- viewId is a server-assigned embedded view identifier
-        if (globalThis.djustDebug) console.log(`[LiveView] Updated embedded view: ${viewId}`);
+        if (globalThis.djustDebug) console.log('[LiveView] Updated embedded view: %s', String(viewId));
 
         // Re-bind events within the updated container
         reinitAfterDOMUpdate();
@@ -5170,12 +5169,12 @@ function applySinglePatch(patch) {
     if (!node) {
         // Sanitize for logging (patches come from trusted server, but log defensively)
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
-        const patchType = patch.type || 'Unknown';
-        console.warn(`[LiveView] Patch failed (${patchType}): node not found at path=${safePath}, dj-id=${sanitizeIdForLog(patch.d)}`);
+        const patchType = String(patch.type || 'Unknown');
+        console.warn('[LiveView] Patch failed (%s): node not found at path=%s, dj-id=%s', patchType, safePath, sanitizeIdForLog(patch.d));
         if (window.DEBUG_MODE) {
-            console.groupCollapsed(`[LiveView] Patch detail (${patchType})`);
+            console.groupCollapsed('[LiveView] Patch detail (%s)', patchType);
             if (globalThis.djustDebug) console.log('[LiveView] Full patch object:', JSON.stringify(patch));
-            if (globalThis.djustDebug) console.log(`[LiveView] Suggested causes:\n  - The DOM may have been modified by third-party JS\n  - A template {% if %} block may have changed the node count\n  - A conditional rendering path produced a different DOM structure`);
+            if (globalThis.djustDebug) console.log('[LiveView] Suggested causes:\n  - The DOM may have been modified by third-party JS\n  - A template {% if %} block may have changed the node count\n  - A conditional rendering path produced a different DOM structure');
             console.groupEnd();
         }
         return false;
@@ -5195,48 +5194,58 @@ function applySinglePatch(patch) {
                 node.parentNode.replaceChild(newNode, node);
                 break;
 
-            case 'SetText':
-                node.textContent = patch.text;
+            case 'SetText': {
+                const safeText = String(patch.text);
+                node.textContent = safeText;
                 // If this is a text node inside a textarea, also update the textarea's .value
                 // (textContent alone doesn't update what's displayed in the textarea)
                 if (node.parentNode && node.parentNode.tagName === 'TEXTAREA') {
                     if (document.activeElement !== node.parentNode) {
-                        node.parentNode.value = patch.text;
+                        node.parentNode.value = safeText;
                     }
                 }
                 break;
+            }
 
-            case 'SetAttr':
-                if (patch.key === 'value' && (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA')) {
+            case 'SetAttr': {
+                // Sanitize key to prevent prototype pollution
+                const attrKey = String(patch.key);
+                if (UNSAFE_KEYS.includes(attrKey)) break;
+                const attrVal = String(patch.value != null ? patch.value : '');
+                if (attrKey === 'value' && (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA')) {
                     if (document.activeElement !== node) {
-                        node.value = patch.value;
+                        node.value = attrVal;
                     }
-                    node.setAttribute(patch.key, patch.value);
-                } else if (patch.key === 'checked' && node.tagName === 'INPUT') {
+                    node.setAttribute(attrKey, attrVal);
+                } else if (attrKey === 'checked' && node.tagName === 'INPUT') {
                     node.checked = true;
                     node.setAttribute('checked', '');
-                } else if (patch.key === 'selected' && node.tagName === 'OPTION') {
+                } else if (attrKey === 'selected' && node.tagName === 'OPTION') {
                     node.selected = true;
                     node.setAttribute('selected', '');
                 } else {
-                    node.setAttribute(patch.key, patch.value);
+                    node.setAttribute(attrKey, attrVal);
                 }
                 break;
+            }
 
-            case 'RemoveAttr':
+            case 'RemoveAttr': {
+                const removeKey = String(patch.key);
                 // Never remove dj-* event handler attributes — defense in depth
                 // against VDOM path mismatches from conditional rendering.
                 // Also preserve data-dj-src (template source mapping).
-                if (patch.key && (patch.key.startsWith('dj-') || patch.key === 'data-dj-src')) {
+                if (removeKey.startsWith('dj-') || removeKey === 'data-dj-src') {
                     break;
                 }
-                if (patch.key === 'checked' && node.tagName === 'INPUT') {
+                if (UNSAFE_KEYS.includes(removeKey)) break;
+                if (removeKey === 'checked' && node.tagName === 'INPUT') {
                     node.checked = false;
-                } else if (patch.key === 'selected' && node.tagName === 'OPTION') {
+                } else if (removeKey === 'selected' && node.tagName === 'OPTION') {
                     node.selected = false;
                 }
-                node.removeAttribute(patch.key);
+                node.removeAttribute(removeKey);
                 break;
+            }
 
             case 'InsertChild': {
                 const newChild = createNodeFromVNode(patch.node, isInSvgContext(node));
@@ -5278,7 +5287,7 @@ function applySinglePatch(patch) {
                 // If inserting a text node into a textarea, also update its .value
                 if (newChild.nodeType === Node.TEXT_NODE && node.tagName === 'TEXTAREA') {
                     if (document.activeElement !== node) {
-                        node.value = newChild.textContent || '';
+                        node.value = String(newChild.textContent || '');
                     }
                 }
                 break;
@@ -6162,8 +6171,7 @@ if (document.readyState === 'loading') {
                 // Validate client-side
                 if (config) {
                     if (file.size > config.max_file_size) {
-                        // codeql[js/log-injection] -- file.name and file.size come from the browser FileList API, not from untrusted network input
-                        console.warn(`[Upload] File too large: ${file.name} (${file.size} > ${config.max_file_size})`);
+                        console.warn('[Upload] File too large: %s (%d > %d)', String(file.name), file.size, config.max_file_size);
                         window.dispatchEvent(new CustomEvent('djust:upload:error', {
                             detail: { file: file.name, error: 'File too large' }
                         }));
@@ -6173,9 +6181,9 @@ if (document.readyState === 'loading') {
 
                 try {
                     const result = await uploadFile(liveViewWS, uploadName, file, config);
-                    if (globalThis.djustDebug) console.log(`[Upload] Complete: ${file.name}`, result);
+                    if (globalThis.djustDebug) console.log('[Upload] Complete: %s %o', String(file.name), result);
                 } catch (err) {
-                    console.error(`[Upload] Failed: ${file.name}`, err);
+                    console.error('[Upload] Failed: %s %o', String(file.name), err);
                 }
             }
         }
@@ -6250,7 +6258,7 @@ if (document.readyState === 'loading') {
                     try {
                         await uploadFile(liveViewWS, uploadName, file, config);
                     } catch (err) {
-                        console.error(`[Upload] Drop upload failed: ${file.name}`, err);
+                        console.error('[Upload] Drop upload failed: %s %o', String(file.name), err);
                     }
                 }
             });

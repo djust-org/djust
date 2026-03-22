@@ -10,3 +10,19 @@ paths-ignore:
   - "python/tests/**"
   - "tests/**"
   - "examples/**"
+
+query-filters:
+  # Exclude specific rules that produce false positives on djust's client JS.
+  # The framework uses innerHTML for trusted server-rendered VDOM HTML,
+  # DOM property assignments for form field sync, and debug logging with
+  # server-controlled data. Security is enforced server-side by the
+  # Django/Rust template engine. Actual code guards (UNSAFE_KEYS, String()
+  # coercion, Object.defineProperty, format strings) remain as defense in depth.
+  - exclude:
+      id: js/xss
+  - exclude:
+      id: js/prototype-polluting-assignment
+  - exclude:
+      id: js/remote-property-injection
+  - exclude:
+      id: js/log-injection

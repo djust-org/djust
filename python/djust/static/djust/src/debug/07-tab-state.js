@@ -203,10 +203,17 @@
                 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
                 for (const key of Object.keys(state)) {
                     if (UNSAFE_KEYS.has(key)) continue; // skip prototype-polluting keys
+                    const safeKey = String(key);
                     try {
-                        clone[key] = JSON.parse(JSON.stringify(state[key]));
+                        Object.defineProperty(clone, safeKey, {
+                            value: JSON.parse(JSON.stringify(state[key])),
+                            writable: true, enumerable: true, configurable: true
+                        });
                     } catch {
-                        clone[key] = String(state[key]);
+                        Object.defineProperty(clone, safeKey, {
+                            value: String(state[key]),
+                            writable: true, enumerable: true, configurable: true
+                        });
                     }
                 }
                 return clone;
