@@ -15,7 +15,6 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C003 | Config | Warning/Info | daphne ordering in INSTALLED_APPS |
 | C004 | Config | Error | 'djust' not in INSTALLED_APPS |
 | C005 | Config | Warning | WebSocket routes missing AuthMiddlewareStack |
-| C006 | Config | Warning | daphne without WhiteNoise (static files 404) |
 | C010 | Config | Warning | Tailwind CDN in production templates |
 | C011 | Config | Info/Warning | Missing compiled Tailwind output.css |
 | C012 | Config | Warning | Manual client.js script tag in base template |
@@ -110,13 +109,6 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: WebSocket URL patterns not wrapped in `AuthMiddlewareStack`
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.C005"]`
 - **False positives**: Intentionally public WebSocket endpoints (e.g. anonymous chat)
-
-### C006 — daphne without WhiteNoise
-- **Severity**: Warning
-- **Method**: Runtime (settings inspection)
-- **What it detects**: daphne is in `INSTALLED_APPS` but WhiteNoise middleware is absent; static files will return 404 in production
-- **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.C006"]`
-- **False positives**: Projects serving static files via a CDN or a reverse proxy such as nginx
 
 ### C010 — Tailwind CDN in production templates
 - **Severity**: Warning
