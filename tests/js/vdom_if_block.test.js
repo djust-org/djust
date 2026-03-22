@@ -6,7 +6,7 @@
  * count comment nodes to keep indices aligned.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { JSDOM } from 'jsdom';
 
 const fs = await import('fs');

@@ -1101,7 +1101,7 @@ function _processFormRecovery() {
             var evt = pendingEvents[index];
             var result = handleEvent(evt.handlerName, evt.params);
             if (result && typeof result.then === 'function') {
-                result.then(function() { fireSequentially(index + 1); });
+                void result.then(function() { fireSequentially(index + 1); });
             } else {
                 fireSequentially(index + 1);
             }

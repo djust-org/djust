@@ -43,14 +43,6 @@ function createDom() {
     return { dom, MockWebSocket };
 }
 
-function makeWS(dom) {
-    const ws = new dom.window.djust.LiveViewWebSocket();
-    ws.enabled = true;
-    ws.ws = new dom.window.WebSocket();
-    ws.viewMounted = true;
-    return ws;
-}
-
 describe('Connection State CSS Classes', () => {
     beforeEach(() => {
         vi.restoreAllMocks();

@@ -24,7 +24,7 @@
      * data.action === 'clear': remove existing messages (optionally by level)
      */
     function handleFlash(data) {
-        if (globalThis.djustDebug) console.log('[LiveView] flash:', data);
+        if (globalThis.djustDebug) console.log('[LiveView] flash: %o', data);
 
         if (data.action === 'clear') {
             clearFlash(data.level);

@@ -821,7 +821,7 @@ def check_liveviews(app_configs, **kwargs):
                     cls_file = inspect.getfile(cls)
                     cls_line = inspect.getsourcelines(cls)[1]
                 except (OSError, TypeError):
-                    pass
+                    pass  # Fall back to empty file/line for built-in or C-extension classes
                 errors.append(
                     DjustWarning(
                         "%s: 'on_mount' should be a list of hook functions." % cls_label,
@@ -841,7 +841,7 @@ def check_liveviews(app_configs, **kwargs):
                             cls_file = inspect.getfile(cls)
                             cls_line = inspect.getsourcelines(cls)[1]
                         except (OSError, TypeError):
-                            pass
+                            pass  # Fall back to empty file/line for built-in or C-extension classes
                         errors.append(
                             DjustWarning(
                                 "%s: on_mount[%d] is not callable (%s)."

@@ -157,7 +157,6 @@ describe('_target param', () => {
         initClient(dom);
 
         const form = dom.window.document.querySelector('form');
-        const btn = dom.window.document.querySelector('button[name="save_btn"]');
 
         // JSDOM SubmitEvent may not support submitter, so we create a regular submit event
         // and check that when submitter is absent, _target falls back gracefully

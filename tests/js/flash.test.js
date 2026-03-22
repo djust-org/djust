@@ -195,7 +195,7 @@ describe('flash clear command', () => {
 
 describe('flash debug logging', () => {
     it('logs when djustDebug is enabled', () => {
-        const { window, document } = createEnv(
+        const { window } = createEnv(
             '<div id="dj-flash-container" data-dj-auto-dismiss="0"></div>'
         );
 
@@ -209,7 +209,7 @@ describe('flash debug logging', () => {
     });
 
     it('does not log when djustDebug is not set', () => {
-        const { window, document } = createEnv(
+        const { window } = createEnv(
             '<div id="dj-flash-container" data-dj-auto-dismiss="0"></div>'
         );
 

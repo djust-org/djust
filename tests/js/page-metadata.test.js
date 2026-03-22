@@ -2,7 +2,7 @@
  * Tests for page metadata — 25-page-metadata.js
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 

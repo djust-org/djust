@@ -6,7 +6,7 @@
  * and CSS data attribute tracking.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 

@@ -368,7 +368,7 @@ class TestGenerateLiveview(TestCase):
         self.assertFalse(os.path.exists(urls_path))
         # Should return the files that would be created
         self.assertIsInstance(result, list)
-        self.assertTrue(len(result) > 0)
+        self.assertGreater(len(result), 0)
 
     def test_force_overwrites_existing(self):
         views_path = os.path.join(self.app_dir, "views.py")
@@ -548,8 +548,12 @@ class TestGenLiveEndToEnd(TestCase):
 
     def test_module_imports_without_error(self):
         """Module loads cleanly."""
-        import djust.scaffolding.gen_live  # noqa: F401
-        import djust.scaffolding.gen_live_templates  # noqa: F401
+        from importlib import import_module
+
+        mod = import_module("djust.scaffolding.gen_live")
+        self.assertTrue(hasattr(mod, "generate_liveview"))
+        mod2 = import_module("djust.scaffolding.gen_live_templates")
+        self.assertTrue(hasattr(mod2, "__name__"))
 
     def test_parse_all_documented_types(self):
         all_types = [

@@ -394,13 +394,13 @@ def check_asgi_server():
 
         servers.append("daphne")
     except ImportError:
-        pass
+        pass  # daphne not installed
     try:
         import uvicorn  # noqa: F401
 
         servers.append("uvicorn")
     except ImportError:
-        pass
+        pass  # uvicorn not installed
 
     if servers:
         return _CheckResult(

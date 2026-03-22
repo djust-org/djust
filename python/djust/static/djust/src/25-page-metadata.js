@@ -17,7 +17,7 @@
      * data.action === 'meta':  update or create a <meta> tag
      */
     function handlePageMetadata(data) {
-        if (globalThis.djustDebug) console.log('[LiveView] page_metadata:', data);
+        if (globalThis.djustDebug) console.log('[LiveView] page_metadata: %o', data);
 
         if (data.action === 'title') {
             document.title = data.value;

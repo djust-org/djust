@@ -5,7 +5,7 @@
  * actionable suggestions in DEBUG_MODE.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { JSDOM } from 'jsdom';
 
 const fs = await import('fs');
@@ -66,7 +66,6 @@ describe('VDOM patch error messages', () => {
             { type: 'SetText', path: [99], text: 'new text' }
         ];
 
-        const root = dom.window.document.querySelector('[dj-root]');
         const result = dom.window.applyPatches(patches);
 
         // Should have failed

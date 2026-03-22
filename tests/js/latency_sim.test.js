@@ -5,7 +5,7 @@
  * amount, jitter stays within bounds, and settings persist via localStorage.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { JSDOM } from 'jsdom';
 
 const fs = await import('fs');

@@ -431,7 +431,6 @@ function collectDjValues(element) {
 
         // Apply type coercion (same logic as extractTypedParams)
         if (typeHint) {
-            const safeAttrName = String(attr.name).slice(0, 50).replace(/[^a-z0-9-:]/gi, '_');
             switch (typeHint) {
                 case 'int':
                 case 'integer': {

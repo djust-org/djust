@@ -237,7 +237,7 @@ class LiveViewWebSocket {
     }
 
     handleMessage(data) {
-        if (globalThis.djustDebug) console.log('[LiveView] Received:', data.type, data);
+        if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
 
         switch (data.type) {
             case 'connect':
@@ -248,7 +248,7 @@ class LiveViewWebSocket {
 
             case 'mount':
                 this.viewMounted = true;
-                if (globalThis.djustDebug) console.log('[LiveView] View mounted:', data.view);
+                if (globalThis.djustDebug) console.log('[LiveView] View mounted: %s', String(data.view));
 
                 // Remove dj-cloak from all elements (FOUC prevention)
                 document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
@@ -350,7 +350,7 @@ class LiveViewWebSocket {
                     // all pending event responses arrive.
                     _tickBuffer.push(data);
                     if (globalThis.djustDebug) {
-                        console.log('[LiveView] Buffered ' + data.source + ' patch (v' + data.version + ') — waiting for ' + _pendingEventRefs.size + ' pending event(s)');
+                        console.log('[LiveView] Buffered %s patch (v%s) — waiting for %d pending event(s)', String(data.source), String(data.version), _pendingEventRefs.size);
                     }
                     break;
                 }
@@ -412,7 +412,7 @@ class LiveViewWebSocket {
                 reinitAfterDOMUpdate();
                 if (globalThis.djustDebug) {
                     // codeql[js/log-injection] -- data.version is a server-controlled integer
-                    console.log('[LiveView] DOM recovered via morph, version:', data.version);
+                    console.log('[LiveView] DOM recovered via morph, version: %s', String(data.version));
                 }
                 break;
             }
@@ -470,7 +470,7 @@ class LiveViewWebSocket {
             case 'upload_registered':
                 // Upload registration acknowledged
                 // codeql[js/log-injection] -- data.ref and data.upload_name are server-assigned upload identifiers
-                if (globalThis.djustDebug) console.log('[Upload] Registered:', data.ref, 'for', data.upload_name);
+                if (globalThis.djustDebug) console.log('[Upload] Registered: %s for %s', String(data.ref), String(data.upload_name));
                 break;
 
             case 'stream':
