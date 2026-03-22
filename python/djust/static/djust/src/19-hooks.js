@@ -286,7 +286,7 @@ function dispatchPushEventToHooks(eventName, payload) {
  */
 function destroyAllHooks() {
     _ensureHooksInit();
-    for (const [elId, entry] of _activeHooks) {
+    for (const [, entry] of _activeHooks) {
         if (typeof entry.instance.destroyed === 'function') {
             try {
                 entry.instance.destroyed();

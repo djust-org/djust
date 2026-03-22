@@ -121,10 +121,10 @@ function djustInit() {
     bindLiveViewEvents();
 
     // Mount dj-hook elements
-    if (typeof mountHooks === 'function') mountHooks();
+    mountHooks();
 
     // Bind dj-model elements
-    if (typeof bindModelElements === 'function') bindModelElements();
+    bindModelElements();
 
     // Initialize Draft Mode
     initDraftMode();

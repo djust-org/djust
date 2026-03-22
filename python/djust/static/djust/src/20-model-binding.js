@@ -82,9 +82,7 @@ function _sendModelUpdate(field, value) {
         return;
     }
     // Fallback: handleEvent (includes HTTP fallback, loading states)
-    if (typeof handleEvent === 'function') {
-        handleEvent('update_model', { field, value });
-    }
+    handleEvent('update_model', { field, value });
 }
 
 /**

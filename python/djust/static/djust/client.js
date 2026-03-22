@@ -937,9 +937,7 @@ class LiveViewWebSocket {
                     detail: { event: data.event, payload: data.payload }
                 }));
                 // Dispatch to dj-hook instances that registered via handleEvent
-                if (typeof dispatchPushEventToHooks === 'function') {
-                    dispatchPushEventToHooks(data.event, data.payload);
-                }
+                dispatchPushEventToHooks(data.event, data.payload);
                 // Clear loading state — when _skip_render is used, this is the
                 // only response the client gets (no patch/html_update follows).
                 globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
@@ -1488,9 +1486,7 @@ class LiveViewSSE {
                 window.dispatchEvent(new CustomEvent('djust:push_event', {
                     detail: { event: data.event, payload: data.payload }
                 }));
-                if (typeof dispatchPushEventToHooks === 'function') {
-                    dispatchPushEventToHooks(data.event, data.payload);
-                }
+                dispatchPushEventToHooks(data.event, data.payload);
                 globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                 break;
 
@@ -2890,7 +2886,7 @@ function bindLiveViewEvents() {
 
                     // Optional server event for analytics
                     var copyEvent = element.getAttribute('dj-copy-event');
-                    if (copyEvent && typeof handleEvent === 'function') {
+                    if (copyEvent) {
                         handleEvent(copyEvent, { text: textToCopy });
                     }
                 });
@@ -3531,7 +3527,7 @@ function reinitAfterDOMUpdate() {
     initReactCounters();
     initTodoItems();
     bindLiveViewEvents();
-    if (typeof updateHooks === 'function') { updateHooks(); }
+    updateHooks();
 
     // dj-scroll-into-view: auto-scroll elements into view after DOM updates
     document.querySelectorAll('[dj-scroll-into-view]').forEach(el => {
@@ -3604,9 +3600,7 @@ function _processAutoRecover() {
             _data_attrs: dataAttrs
         };
 
-        if (typeof handleEvent === 'function') {
-            handleEvent(handlerName, params);
-        }
+        handleEvent(handlerName, params);
     });
 }
 
@@ -3694,17 +3688,12 @@ function _processFormRecovery() {
     }
 
     // Fire events sequentially to avoid server race conditions
-    if (pendingEvents.length > 0 && typeof handleEvent === 'function') {
+    if (pendingEvents.length > 0) {
         if (globalThis.djustDebug) console.log('[LiveView] Form recovery: restoring ' + pendingEvents.length + ' field(s)');
         var fireSequentially = function(index) {
             if (index >= pendingEvents.length) return;
             var evt = pendingEvents[index];
-            var result = handleEvent(evt.handlerName, evt.params);
-            if (result && typeof result.then === 'function') {
-                void result.then(function() { fireSequentially(index + 1); });
-            } else {
-                fireSequentially(index + 1);
-            }
+            void handleEvent(evt.handlerName, evt.params).then(function() { fireSequentially(index + 1); });
         };
         fireSequentially(0);
     }
@@ -5392,8 +5381,8 @@ function applyPatches(patches) {
             return false;
         }
         // Update hooks and model bindings after DOM patches
-        if (typeof updateHooks === 'function') { updateHooks(); }
-        if (typeof bindModelElements === 'function') { bindModelElements(); }
+        updateHooks();
+        bindModelElements();
         restoreFocusState(focusState);
         return true;
     }
@@ -5475,8 +5464,8 @@ function applyPatches(patches) {
     }
 
     // Update hooks and model bindings after DOM patches
-    if (typeof updateHooks === 'function') { updateHooks(); }
-    if (typeof bindModelElements === 'function') { bindModelElements(); }
+    updateHooks();
+    bindModelElements();
 
     restoreFocusState(focusState);
     return true;
@@ -5814,10 +5803,10 @@ function djustInit() {
     bindLiveViewEvents();
 
     // Mount dj-hook elements
-    if (typeof mountHooks === 'function') mountHooks();
+    mountHooks();
 
     // Bind dj-model elements
-    if (typeof bindModelElements === 'function') bindModelElements();
+    bindModelElements();
 
     // Initialize Draft Mode
     initDraftMode();
@@ -6112,27 +6101,6 @@ if (document.readyState === 'loading') {
         }
     }
 
-    /**
-     * Create progress bar HTML for an upload.
-     */
-    function createProgressBar(ref, fileName) {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'upload-progress-item';
-        wrapper.setAttribute('data-upload-ref', ref);
-
-        wrapper.innerHTML = `
-            <div class="upload-progress-name">${escapeHtml(fileName)}</div>
-            <div class="upload-progress-track">
-                <div class="upload-progress-bar" role="progressbar"
-                     aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"
-                     style="width: 0%"></div>
-            </div>
-            <span class="upload-progress-text">0%</span>
-        `;
-
-        return wrapper;
-    }
-
     function formatSize(bytes) {
         if (bytes < 1024) return bytes + ' B';
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -6156,9 +6124,6 @@ if (document.readyState === 'loading') {
 
         // Show previews
         await showPreviews(uploadName, files);
-
-        // Create progress bars
-        const progressContainers = document.querySelectorAll(`[dj-upload-progress="${uploadName}"]`);
 
         // Auto-upload if configured (default)
         if (!config || config.auto_upload !== false) {
@@ -6531,9 +6496,7 @@ function handleStreamMessage(data) {
     }
 
     // Re-bind events and hooks on new DOM content
-    if (typeof reinitAfterDOMUpdate === 'function') {
-        reinitAfterDOMUpdate();
-    }
+    reinitAfterDOMUpdate();
 }
 
 /**
@@ -7287,7 +7250,7 @@ function dispatchPushEventToHooks(eventName, payload) {
  */
 function destroyAllHooks() {
     _ensureHooksInit();
-    for (const [elId, entry] of _activeHooks) {
+    for (const [, entry] of _activeHooks) {
         if (typeof entry.instance.destroyed === 'function') {
             try {
                 entry.instance.destroyed();
@@ -7396,9 +7359,7 @@ function _sendModelUpdate(field, value) {
         return;
     }
     // Fallback: handleEvent (includes HTTP fallback, loading states)
-    if (typeof handleEvent === 'function') {
-        handleEvent('update_model', { field, value });
-    }
+    handleEvent('update_model', { field, value });
 }
 
 /**

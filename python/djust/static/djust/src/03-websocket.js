@@ -521,9 +521,7 @@ class LiveViewWebSocket {
                     detail: { event: data.event, payload: data.payload }
                 }));
                 // Dispatch to dj-hook instances that registered via handleEvent
-                if (typeof dispatchPushEventToHooks === 'function') {
-                    dispatchPushEventToHooks(data.event, data.payload);
-                }
+                dispatchPushEventToHooks(data.event, data.payload);
                 // Clear loading state — when _skip_render is used, this is the
                 // only response the client gets (no patch/html_update follows).
                 globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);

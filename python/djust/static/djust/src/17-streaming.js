@@ -46,9 +46,7 @@ function handleStreamMessage(data) {
     }
 
     // Re-bind events and hooks on new DOM content
-    if (typeof reinitAfterDOMUpdate === 'function') {
-        reinitAfterDOMUpdate();
-    }
+    reinitAfterDOMUpdate();
 }
 
 /**

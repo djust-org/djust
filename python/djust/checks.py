@@ -977,25 +977,6 @@ def _check_non_primitive_assignments_in_mount(errors):
         "Tuple",
     }
 
-    # Primitive return-type annotation names — functions annotated with these
-    # return serialisable values even if their name looks non-primitive.
-    _PRIMITIVE_RETURN_ANNOTATIONS = {
-        "str",
-        "int",
-        "float",
-        "bool",
-        "list",
-        "dict",
-        "tuple",
-        "set",
-        "None",
-        "List",
-        "Dict",
-        "Tuple",
-        "Set",
-        "Optional",
-    }
-
     for filepath in _iter_python_files(app_dirs):
         tree, source_lines = _parse_python_file(filepath)
         if tree is None:

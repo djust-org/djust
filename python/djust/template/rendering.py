@@ -33,7 +33,6 @@ try:
     from djust.serialization import DjangoJSONEncoder, normalize_django_value
     from djust.live_view import (
         _get_model_hash,
-        clear_jit_cache,  # noqa: F401 - exported for external use
         _jit_serializer_cache,  # Shared cache - cleared by clear_jit_cache()
     )
 
@@ -42,7 +41,6 @@ except ImportError:
     JIT_AVAILABLE = False
     DjangoJSONEncoder = None
     _get_model_hash = None
-    clear_jit_cache = None
     _jit_serializer_cache = {}  # Fallback empty cache when JIT not available
 
 

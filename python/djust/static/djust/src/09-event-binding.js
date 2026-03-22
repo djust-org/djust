@@ -290,7 +290,7 @@ function bindLiveViewEvents() {
 
                     // Optional server event for analytics
                     var copyEvent = element.getAttribute('dj-copy-event');
-                    if (copyEvent && typeof handleEvent === 'function') {
+                    if (copyEvent) {
                         handleEvent(copyEvent, { text: textToCopy });
                     }
                 });
@@ -931,7 +931,7 @@ function reinitAfterDOMUpdate() {
     initReactCounters();
     initTodoItems();
     bindLiveViewEvents();
-    if (typeof updateHooks === 'function') { updateHooks(); }
+    updateHooks();
 
     // dj-scroll-into-view: auto-scroll elements into view after DOM updates
     document.querySelectorAll('[dj-scroll-into-view]').forEach(el => {
@@ -1004,9 +1004,7 @@ function _processAutoRecover() {
             _data_attrs: dataAttrs
         };
 
-        if (typeof handleEvent === 'function') {
-            handleEvent(handlerName, params);
-        }
+        handleEvent(handlerName, params);
     });
 }
 
@@ -1094,17 +1092,12 @@ function _processFormRecovery() {
     }
 
     // Fire events sequentially to avoid server race conditions
-    if (pendingEvents.length > 0 && typeof handleEvent === 'function') {
+    if (pendingEvents.length > 0) {
         if (globalThis.djustDebug) console.log('[LiveView] Form recovery: restoring ' + pendingEvents.length + ' field(s)');
         var fireSequentially = function(index) {
             if (index >= pendingEvents.length) return;
             var evt = pendingEvents[index];
-            var result = handleEvent(evt.handlerName, evt.params);
-            if (result && typeof result.then === 'function') {
-                void result.then(function() { fireSequentially(index + 1); });
-            } else {
-                fireSequentially(index + 1);
-            }
+            void handleEvent(evt.handlerName, evt.params).then(function() { fireSequentially(index + 1); });
         };
         fireSequentially(0);
     }
