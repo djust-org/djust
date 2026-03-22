@@ -15,7 +15,6 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C003 | Config | Warning/Info | daphne ordering in INSTALLED_APPS |
 | C004 | Config | Error | 'djust' not in INSTALLED_APPS |
 | C005 | Config | Warning | WebSocket routes missing AuthMiddlewareStack |
-
 | C010 | Config | Warning | Tailwind CDN in production templates |
 | C011 | Config | Info/Warning | Missing compiled Tailwind output.css |
 | C012 | Config | Warning | Manual client.js script tag in base template |
