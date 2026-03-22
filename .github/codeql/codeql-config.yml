@@ -1,14 +1,28 @@
 name: "djust CodeQL config"
 
 paths-ignore:
-  # djust client JS — framework-internal patterns (innerHTML for server-rendered
-  # VDOM, DOM property assignments, server-data debug logging) trigger false
-  # positives. Security is enforced server-side by the Django/Rust template engine.
-  - "python/djust/static/djust/client.js"
-  - "python/djust/static/djust/debug-panel.js"
+  # JS source fragments — concatenated into client.js/debug-panel.js at build time.
+  # CodeQL cannot parse fragments individually (unclosed blocks, class method bodies).
+  # Analyze the built client.js and debug-panel.js instead.
   - "python/djust/static/djust/src/**"
   # Test fixtures and examples are not production code
   - "python/djust/tests/**"
   - "python/tests/**"
   - "tests/**"
   - "examples/**"
+
+query-filters:
+  # Exclude specific rules that produce false positives on djust's client JS.
+  # The framework uses innerHTML for trusted server-rendered VDOM HTML,
+  # DOM property assignments for form field sync, and debug logging with
+  # server-controlled data. Security is enforced server-side by the
+  # Django/Rust template engine. Actual code guards (UNSAFE_KEYS, String()
+  # coercion, Object.defineProperty, format strings) remain as defense in depth.
+  - exclude:
+      id: js/xss
+  - exclude:
+      id: js/prototype-polluting-assignment
+  - exclude:
+      id: js/remote-property-injection
+  - exclude:
+      id: js/log-injection
