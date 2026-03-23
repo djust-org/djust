@@ -48,12 +48,12 @@ try:
     from ._rust import (
         RustLiveView,
         SessionActorHandle,
-        extract_template_variables,  # noqa: F401 — re-exported, used by JIT tests
+        extract_template_variables,  # noqa: F401 — re-exported, used by JIT and template tests
     )
 except ImportError:
     RustLiveView = None
     SessionActorHandle = None
-    extract_template_variables = None  # noqa: F841
+    extract_template_variables = None  # noqa: F401 — fallback for re-export
 
 
 class LiveView(
@@ -265,7 +265,7 @@ class LiveView(
             if isinstance(value, (models.Model, QuerySet)):
                 return True
         except ImportError:
-            pass
+            pass  # Django ORM not available; skip model/queryset check
 
         # Non-serializable types: file handles, threads, locks, sockets
         _non_serializable = (io.IOBase, threading.Thread, socket.socket)
@@ -275,7 +275,7 @@ class LiveView(
 
             _non_serializable = _non_serializable + (_thread.LockType,)
         except (ImportError, AttributeError):
-            pass
+            pass  # _thread.LockType unavailable on some platforms; skip lock detection
         if isinstance(value, _non_serializable):
             return False
 

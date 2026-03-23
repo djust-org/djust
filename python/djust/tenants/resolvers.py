@@ -105,7 +105,6 @@ class TenantResolver(ABC):
         Returns:
             TenantInfo if tenant found, None otherwise
         """
-        ...
 
     def get_config(self, key: str, default: Any = None) -> Any:
         """Get a value from DJUST_CONFIG."""

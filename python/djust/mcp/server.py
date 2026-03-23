@@ -241,7 +241,7 @@ def create_server():
         try:
             import djust.checks  # noqa: F401 — ensure checks are registered
         except ImportError:
-            pass
+            pass  # djust.checks may not be importable if Django isn't fully configured
 
         from django.core.checks import Error, Warning, run_checks
 

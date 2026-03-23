@@ -605,7 +605,7 @@ def check_liveviews(app_configs, **kwargs):
                     cls_file = inspect.getfile(cls)
                     cls_line = inspect.getsourcelines(cls)[1]
                 except (OSError, TypeError):
-                    pass
+                    pass  # Source introspection may fail for built-in or C-extension classes
                 errors.append(
                     DjustWarning(
                         "%s: missing 'template_name' attribute." % cls_label,
@@ -637,7 +637,7 @@ def check_liveviews(app_configs, **kwargs):
                     cls_file = inspect.getfile(cls)
                     cls_line = inspect.getsourcelines(cls)[1]
                 except (OSError, TypeError):
-                    pass
+                    pass  # Source introspection may fail for built-in or C-extension classes
                 errors.append(
                     DjustInfo(
                         "%s: no mount() method defined." % cls_label,
@@ -665,7 +665,7 @@ def check_liveviews(app_configs, **kwargs):
                     cls_file = inspect.getfile(cls)
                     cls_line = inspect.getsourcelines(mount_method)[1]
                 except (OSError, TypeError):
-                    pass
+                    pass  # Source introspection may fail for built-in or C-extension classes
                 errors.append(
                     DjustError(
                         "%s: mount() should accept (self, request, **kwargs)." % cls_label,
@@ -710,7 +710,7 @@ def check_liveviews(app_configs, **kwargs):
                     method_file = inspect.getfile(method)
                     method_line = inspect.getsourcelines(method)[1]
                 except (OSError, TypeError):
-                    pass
+                    pass  # Source introspection may fail for built-in or C-extension classes
                 errors.append(
                     DjustInfo(
                         "%s.%s() looks like an event handler but is missing @event_handler."
@@ -737,7 +737,7 @@ def check_liveviews(app_configs, **kwargs):
                 cls_file = inspect.getfile(cls)
                 cls_line = inspect.getsourcelines(cls)[1]
             except (OSError, TypeError):
-                pass
+                pass  # Source introspection may fail for built-in or C-extension classes
             errors.append(
                 DjustWarning(
                     "%s: keys %s appear in both static_assigns and temporary_assigns."
@@ -796,7 +796,7 @@ def check_liveviews(app_configs, **kwargs):
                     method_file = inspect.getfile(sig_target)
                     method_line = inspect.getsourcelines(sig_target)[1]
                 except (OSError, TypeError):
-                    pass
+                    pass  # Source introspection may fail for built-in or C-extension classes
                 errors.append(
                     DjustWarning(
                         "%s.%s() event handler missing **kwargs in signature." % (cls_label, name),

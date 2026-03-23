@@ -1854,7 +1854,6 @@
         }
 
         showReplayStatus(btnElement, status, message) {
-            const original = btnElement.textContent;
             if (status === 'pending') {
                 btnElement.textContent = '⏳';
                 btnElement.classList.add('replay-pending');
@@ -3429,7 +3428,6 @@
             }
 
             const renderNode = (node, depth = 0) => {
-                const indent = '│  '.repeat(depth);
                 const isLast = false; // Can be enhanced to track last child
                 const prefix = depth === 0 ? '' : isLast ? '└─ ' : '├─ ';
 
