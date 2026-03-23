@@ -268,27 +268,6 @@
         }
     }
 
-    /**
-     * Create progress bar HTML for an upload.
-     */
-    function createProgressBar(ref, fileName) {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'upload-progress-item';
-        wrapper.setAttribute('data-upload-ref', ref);
-
-        wrapper.innerHTML = `
-            <div class="upload-progress-name">${escapeHtml(fileName)}</div>
-            <div class="upload-progress-track">
-                <div class="upload-progress-bar" role="progressbar"
-                     aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"
-                     style="width: 0%"></div>
-            </div>
-            <span class="upload-progress-text">0%</span>
-        `;
-
-        return wrapper;
-    }
-
     function formatSize(bytes) {
         if (bytes < 1024) return bytes + ' B';
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -312,9 +291,6 @@
 
         // Show previews
         await showPreviews(uploadName, files);
-
-        // Create progress bars
-        const progressContainers = document.querySelectorAll(`[dj-upload-progress="${uploadName}"]`);
 
         // Auto-upload if configured (default)
         if (!config || config.auto_upload !== false) {

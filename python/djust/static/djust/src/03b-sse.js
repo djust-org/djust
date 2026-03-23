@@ -203,9 +203,7 @@ class LiveViewSSE {
                 window.dispatchEvent(new CustomEvent('djust:push_event', {
                     detail: { event: data.event, payload: data.payload }
                 }));
-                if (typeof dispatchPushEventToHooks === 'function') {
-                    dispatchPushEventToHooks(data.event, data.payload);
-                }
+                dispatchPushEventToHooks(data.event, data.payload);
                 globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                 break;
 
