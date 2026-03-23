@@ -2514,4 +2514,52 @@ mod tests {
         let result = get_value("count", &context).unwrap();
         assert_eq!(result.to_string(), "42");
     }
+
+    #[test]
+    fn test_get_value_boolean_true_literal() {
+        let context = Context::new();
+        let val = get_value("True", &context).unwrap();
+        assert!(
+            matches!(val, Value::Bool(true)),
+            "True should resolve to Bool(true)"
+        );
+        let val = get_value("true", &context).unwrap();
+        assert!(
+            matches!(val, Value::Bool(true)),
+            "true should resolve to Bool(true)"
+        );
+    }
+
+    #[test]
+    fn test_get_value_boolean_false_literal() {
+        let context = Context::new();
+        let val = get_value("False", &context).unwrap();
+        assert!(
+            matches!(val, Value::Bool(false)),
+            "False should resolve to Bool(false)"
+        );
+        let val = get_value("false", &context).unwrap();
+        assert!(
+            matches!(val, Value::Bool(false)),
+            "false should resolve to Bool(false)"
+        );
+    }
+
+    #[test]
+    fn test_get_value_none_literal() {
+        let context = Context::new();
+        let val = get_value("None", &context).unwrap();
+        assert!(matches!(val, Value::Null), "None should resolve to Null");
+        let val = get_value("none", &context).unwrap();
+        assert!(matches!(val, Value::Null), "none should resolve to Null");
+    }
+
+    #[test]
+    fn test_get_value_context_shadows_literal() {
+        // A context variable named "True" should take precedence over the literal
+        let mut context = Context::new();
+        context.set("True".to_string(), Value::String("not a bool".to_string()));
+        let val = get_value("True", &context).unwrap();
+        assert_eq!(val.to_string(), "not a bool");
+    }
 }
