@@ -142,7 +142,6 @@
         }
 
         showReplayStatus(btnElement, status, message) {
-            const original = btnElement.textContent;
             if (status === 'pending') {
                 btnElement.textContent = '⏳';
                 btnElement.classList.add('replay-pending');

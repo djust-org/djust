@@ -11,7 +11,6 @@
             }
 
             const renderNode = (node, depth = 0) => {
-                const indent = '│  '.repeat(depth);
                 const isLast = false; // Can be enhanced to track last child
                 const prefix = depth === 0 ? '' : isLast ? '└─ ' : '├─ ';
 

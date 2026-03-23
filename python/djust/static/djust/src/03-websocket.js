@@ -120,7 +120,7 @@ class LiveViewWebSocket {
                 // Set reconnect flag for dj-auto-recover
                 if (window.djust) window.djust._isReconnect = true;
                 // Notify hooks of reconnection
-                if (typeof notifyHooksReconnected === 'function') notifyHooksReconnected();
+                notifyHooksReconnected();
             }
             this.stats.connectedAt = Date.now();
         };
@@ -134,7 +134,7 @@ class LiveViewWebSocket {
             document.body.classList.remove('dj-connected');
 
             // Notify hooks of disconnection
-            if (typeof notifyHooksDisconnected === 'function') notifyHooksDisconnected();
+            notifyHooksDisconnected();
 
             // Clear all decorator state on disconnect
             // Phase 2: Debounce timers

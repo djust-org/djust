@@ -1204,7 +1204,7 @@ def _walk_url_patterns(patterns: list, prefix: str, routes: List[Dict[str, str]]
                             }
                         )
                 except (ImportError, TypeError):
-                    pass
+                    pass  # Skip routes where LiveView import or subclass check fails
 
 
 def _get_version() -> str:

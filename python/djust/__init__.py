@@ -55,10 +55,10 @@ except ImportError:
 
 # Import Rust components (optional, requires separate build)
 try:
-    from . import rust_components
+    from . import rust_components  # noqa: F401 — re-exported as djust.rust_components
 except ImportError:
     # Rust components not yet built - this is optional
-    rust_components = None
+    rust_components = None  # noqa: F841 — accessed as djust.rust_components by user code
 
 __version__ = "0.4.0rc2"
 

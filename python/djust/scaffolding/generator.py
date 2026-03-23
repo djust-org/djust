@@ -20,22 +20,6 @@ from . import templates as T
 
 logger = logging.getLogger(__name__)
 
-# Django field type mapping for --from-schema
-_SCHEMA_FIELD_MAP = {
-    "string": "models.CharField(max_length=%(max_length)s)",
-    "text": "models.TextField(%(blank)s)",
-    "integer": "models.IntegerField(%(default)s)",
-    "float": "models.FloatField(%(default)s)",
-    "decimal": "models.DecimalField(max_digits=%(max_digits)s, decimal_places=%(decimal_places)s)",
-    "boolean": "models.BooleanField(default=%(default)s)",
-    "date": "models.DateField(%(null)s)",
-    "datetime": "models.DateTimeField(%(null)s)",
-    "email": "models.EmailField(%(blank)s)",
-    "url": "models.URLField(%(blank)s)",
-    "slug": "models.SlugField(unique=True)",
-    "foreignkey": "models.ForeignKey(%(related_model)s, on_delete=models.CASCADE)",
-}
-
 
 def generate_project(
     app_name: str,

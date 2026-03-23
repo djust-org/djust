@@ -274,12 +274,6 @@
         return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     }
 
-    function escapeHtml(str) {
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-    }
-
     /**
      * Handle file selection from dj-upload input.
      */
